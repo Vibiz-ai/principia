@@ -25,8 +25,8 @@ import { collapseExited, firstLine, runTitle, sessionEndLabel } from './format'
 
 export const NODE_W = 168
 export const NODE_H = 44
-export const AGENT_NODE_W = 260
-export const AGENT_NODE_H = 168
+export const AGENT_NODE_W = 240
+export const AGENT_NODE_H = 124
 const GAP = 16
 const FRAME_PAD = 12
 const FRAME_LABEL = 22
@@ -46,6 +46,8 @@ export type NodeRef =
 export interface CardData extends Record<string, unknown> {
   /** Canvas agent tree only; editor cards retain their original dimensions and layout. */
   hierarchy?: boolean
+  rootAgent?: boolean
+  nestedAgent?: boolean
   role?: string
   model?: string | null
   task?: string | null
@@ -256,7 +258,7 @@ export function agentHierarchyGraph(
     nodes.push({
       id, type: 'card', position: { x: 0, y: 0 }, width: AGENT_NODE_W, height: AGENT_NODE_H, draggable: false,
       data: {
-        hierarchy: true, label: agentLabel(agent), sub: activityLine(agent, isSeen(agent, seen)),
+        hierarchy: true, rootAgent: !parent, nestedAgent: !!parent && parent.id !== agent.rootId, label: agentLabel(agent), sub: activityLine(agent, isSeen(agent, seen)),
         status: visual === 'needs' ? 'idle' : visual, waiting: visual === 'needs' || needs > 0,
         adapter: agent.provider, ref, agentId: agent.id, role: agent.agentType ?? (agent.kind === 'subagent' ? 'Subagent' : agent.kind === 'session' ? 'Session' : 'Workflow step'),
         model: agent.model, task: agent.activity ?? agent.report ?? null,
@@ -266,7 +268,7 @@ export function agentHierarchyGraph(
         needs: needs || undefined, stalled: isStalled(agent) || undefined
       }
     })
-    if (parent) edges.push({ id: `agent-edge:${parent.id}:${agent.id}`, source: `agent:${parent.id}`, target: id, sourceHandle: 'children', targetHandle: 'parent', type: 'smoothstep', animated: agent.status === 'working', style: { stroke: agent.status === 'working' ? RUNNING_COLOR : EDGE_COLOR, strokeWidth: 1.5 } })
+    if (parent) edges.push({ id: `agent-edge:${parent.id}:${agent.id}`, source: `agent:${parent.id}`, target: id, sourceHandle: 'children', targetHandle: 'parent', type: 'smoothstep', style: { stroke: '#587f9d', strokeWidth: 1 } })
     if (!collapsed.has(agent.id)) for (const child of children) visit(child, ref, agent)
   }
   for (const root of live.idx.roots) {
@@ -274,17 +276,50 @@ export function agentHierarchyGraph(
     if (ref) visit(root, ref)
   }
   if (!nodes.length) return { nodes, edges, width: 0, height: 0 }
-  const graph = new dagre.graphlib.Graph()
-  graph.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 72, marginx: 24, marginy: 24 })
-  graph.setDefaultEdgeLabel(() => ({}))
-  for (const node of nodes) graph.setNode(node.id, { width: AGENT_NODE_W, height: AGENT_NODE_H })
-  for (const edge of edges) graph.setEdge(edge.source, edge.target)
-  dagre.layout(graph)
-  let width = 0
-  let height = 0
+  // First-level agents form columns; each column keeps its descendants in an
+  // indented stack, like the running team in the reference. Sizes include the
+  // whole subtree so deep or wide teams and separate roots never overlap.
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const childrenById = new Map<string, CardNode[]>()
+  const targets = new Set(edges.map(edge => edge.target))
+  for (const edge of edges) {
+    const child = byId.get(edge.target)!
+    childrenById.set(edge.source, [...(childrenById.get(edge.source) ?? []), child])
+  }
+  const indent = 20, rowGap = 12, columnGap = 28, rootGap = 42
+  const sizes = new Map<string, { width: number; height: number }>()
+  const measure = (node: CardNode): { width: number; height: number } => {
+    const children = childrenById.get(node.id) ?? []
+    const childSizes = children.map(measure)
+    const size = {
+      width: Math.max(AGENT_NODE_W, ...childSizes.map(size => indent + size.width)),
+      height: AGENT_NODE_H + childSizes.reduce((sum, size) => sum + rowGap + size.height, 0)
+    }
+    sizes.set(node.id, size)
+    return size
+  }
+  const placeStack = (node: CardNode, x: number, y: number): void => {
+    node.position = { x, y }
+    let nextY = y + AGENT_NODE_H + rowGap
+    for (const child of childrenById.get(node.id) ?? []) {
+      placeStack(child, x + indent, nextY)
+      nextY += sizes.get(child.id)!.height + rowGap
+    }
+  }
+  let width = 0, height = 0, nextX = 24
+  for (const root of nodes.filter(node => !targets.has(node.id))) {
+    const children = childrenById.get(root.id) ?? []
+    children.forEach(measure)
+    const span = Math.max(AGENT_NODE_W, children.reduce((sum, child) => sum + sizes.get(child.id)!.width, 0) + Math.max(0, children.length - 1) * columnGap)
+    root.position = { x: nextX + (span - AGENT_NODE_W) / 2, y: 24 }
+    let childX = nextX
+    for (const child of children) {
+      placeStack(child, childX, 24 + AGENT_NODE_H + rootGap)
+      childX += sizes.get(child.id)!.width + columnGap
+    }
+    nextX += span + 64
+  }
   for (const node of nodes) {
-    const position = graph.node(node.id) as { x: number; y: number }
-    node.position = { x: position.x - AGENT_NODE_W / 2, y: position.y - AGENT_NODE_H / 2 }
     width = Math.max(width, node.position.x + AGENT_NODE_W + 24)
     height = Math.max(height, node.position.y + AGENT_NODE_H + 24)
   }

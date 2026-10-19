@@ -1,0 +1,1 @@
+Provider marks from https://github.com/lobehub/lobe-icons/tree/master/packages/static-svg/icons (MIT, license alongside). Claude and OpenAI fills adapted for the dark canvas. Marks identify the actual provider; they do not imply endorsement. Bundled locally; no runtime network requests.

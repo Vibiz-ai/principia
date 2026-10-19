@@ -581,51 +581,37 @@ button.pane__footer-item:hover { background: var(--row-hover); color: var(--text
 .gateway__message { min-height: 18px; font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 800px) { .gateway__fields { grid-template-columns: 1fr; } .gateway__preset, .gateway__footer { flex-wrap: wrap; } }
 
-/* Agent hierarchy cards: workflow/editor nodes retain their compact presentation. */
-.gnode--agent { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 13px 15px 0; color: var(--text-primary); background: linear-gradient(155deg, rgba(255,255,255,.025), transparent 68%), #222326; border: 1px solid #41444b; border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.2); font-size: 12px; opacity: 1; }
-.gnode--agent .gnode__agent-handle { width: 6px; height: 6px; min-width: 6px; min-height: 6px; background: #7aafff; border: 1px solid #222326; }
-.gnode--agent.is-selected { border-color: #83b4ff; box-shadow: 0 0 0 2px rgba(90,155,255,.18), 0 6px 20px rgba(0,0,0,.28); }
-.gnode--agent-running { border-color: rgba(103,164,255,.65); }
-.gnode--agent-passed { border-color: rgba(83,183,136,.44); }
-.gnode--agent-failed { border-color: rgba(240,105,105,.65); }
-.gnode--agent-needs, .gnode--agent-stalled { border-color: rgba(224,171,75,.7); }
-.gnode__agent-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; margin-bottom: 8px; }
-.gnode__agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9299a6; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; }
-.gnode__agent-status { display: inline-flex; align-items: center; gap: 5px; flex: none; min-height: 18px; padding: 1px 6px; color: #a2a9b5; background: rgba(150,160,180,.09); border: 1px solid rgba(150,160,180,.13); border-radius: 5px; font: 9px var(--font-sans); line-height: 14px; }
-.gnode__agent-status > span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
-.gnode__agent-status--running { color: #88b8ff; background: rgba(83,144,235,.12); border-color: rgba(83,144,235,.2); }
-.gnode__agent-status--passed { color: #7ed5aa; background: rgba(73,180,127,.1); border-color: rgba(73,180,127,.18); }
-.gnode__agent-status--failed { color: #ff9898; background: rgba(233,94,94,.1); border-color: rgba(233,94,94,.2); }
-.gnode__agent-status--needs { color: #e8bd73; background: rgba(226,168,64,.1); border-color: rgba(226,168,64,.2); cursor: pointer; }
-.gnode__agent-title { color: #f0f0f1; font-size: 13px; line-height: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gnode__agent-provider { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 3px; color: #8d96a6; font-size: 10px; line-height: 15px; }
-.gnode__agent-provider > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gnode__agent-task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 30px; overflow: hidden; margin: 9px 0 8px; color: #b3b7c0; font-size: 10px; line-height: 15px; overflow-wrap: anywhere; }
-.gnode__agent-task--empty { color: #737b88; }
-.gnode__agent-footer { display: flex; align-items: center; gap: 9px; min-height: 30px; margin-top: auto; border-top: 1px solid rgba(255,255,255,.065); color: #8c95a4; font-size: 9px; font-variant-numeric: tabular-nums; }
-.gnode__agent-cost { color: #a8b0bd; }
-.gnode__agent-stalled { color: #e8bd73; }
-.gnode__agent-children { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px 4px; color: #a7b4c9; background: transparent; border: 0; border-radius: 3px; font: inherit; cursor: pointer; }
-.gnode__agent-children:hover { color: #dae8ff; background: rgba(116,166,244,.1); }
-.gnode__agent-children:focus-visible, .gnode__agent-status:focus-visible { outline: 1px solid #83b4ff; outline-offset: 2px; }
+/* Compact agent cards: provider identity, task, then a quiet metrics row. */
+.gnode--agent { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 12px; color: #e5e5e7; background: #232427; border: 1px solid rgba(255,255,255,.055); border-radius: 7px; box-shadow: 0 2px 4px rgba(0,0,0,.1); font-size: 12px; opacity: 1; }
+.react-flow__node:hover .gnode--agent { transform: none; background: #28292c; border-color: rgba(255,255,255,.14); box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+.gnode--agent .gnode__agent-handle { width: 4px; height: 4px; min-width: 4px; min-height: 4px; background: #202124; border: 1px solid #6e96b5; border-radius: 50%; }
+.gnode--agent.is-selected { border-color: #6c92b1; box-shadow: 0 0 0 2px rgba(108,146,177,.12); }
+.gnode__agent-top { display: flex; align-items: flex-start; gap: 8px; min-height: 31px; }
+.gnode__agent-mark { display: flex; align-items: center; flex: none; width: 17px; height: 23px; color: #bbbfc6; }
+.gnode__agent-mark img { display: block; width: 17px; height: 17px; }
+.gnode__agent-identity-text { min-width: 0; flex: 1; }
+.gnode__agent-status { display: inline-flex; align-items: center; gap: 3px; flex: none; margin-top: 1px; min-height: 16px; padding: 0 4px; color: #9a9da3; background: rgba(150,160,180,.06); border: 0; border-radius: 3px; font: 9px var(--font-sans); line-height: 16px; }
+.gnode__agent-status--running { color: #91bbdc; background: #273642; }
+.gnode__agent-status--passed { color: #8bc3a0; background: #23362c; }
+.gnode__agent-status--failed { color: #e5a09e; background: #3b292a; }
+.gnode__agent-status--needs { color: #d8bc85; background: #393326; cursor: pointer; }
+.gnode__agent-title { color: #ededee; font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gnode__agent-provider { color: #8c8e95; font-size: 9px; line-height: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gnode__agent-task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 30px; overflow: hidden; margin: 8px 0 6px; color: #b9bbc1; font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+.gnode__agent-task--empty { color: #73767f; }
+.gnode__agent-footer { display: flex; align-items: center; gap: 4px; min-height: 18px; margin-top: auto; color: #81848c; font-size: 10px; font-variant-numeric: tabular-nums; }
+.gnode__agent-cost { color: #d1d2d5; }
+.gnode__agent-stalled { color: #d8bc85; margin-left: 5px; }
+.gnode__agent-children { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 1px 3px; color: #999ca4; background: transparent; border: 0; border-radius: 3px; font: inherit; cursor: pointer; }
+.gnode__agent-children:hover { color: #e0e5ec; background: rgba(255,255,255,.07); }
+.gnode__agent-children:focus-visible, .gnode__agent-status:focus-visible { outline: 1px solid #91bbdc; outline-offset: 3px; }
 .gnode__agent-children:disabled { cursor: default; opacity: .5; }
+.gnode__agent-status--running > .icon { animation: agent-card-spin 3s linear infinite; }
+@keyframes agent-card-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .gnode__agent-status--running > .icon { animation: none; } }
 
 /* Canvas hierarchy and workflow mode share the same inspection drawer. */
 .canvas-modes { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 7px; }
 .canvas-agent-summary { margin-right: auto; font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 @media (max-width: 1050px) { .canvas-agent-summary { display: none; } }
 @media (prefers-reduced-motion: reduce) { .graph .react-flow__edge.animated path { animation: none; } }
-
-/* Compact icon hierarchy: role, harness identity, state, and metrics. */
-.gnode__agent-role { display: flex; align-items: center; gap: 6px; }
-.gnode__agent-identity { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.gnode__agent-identity-text { min-width: 0; flex: 1; }
-.gnode__agent-avatar { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: #333941; color: #c6d5e9; border: 1px solid rgba(255,255,255,.08); }
-.gnode__agent-avatar--claude { color: #e8ad91; background: #3b302d; }
-.gnode__agent-avatar--codex { color: #b0d9cb; background: #293a35; }
-.gnode__agent-provider { margin-top: 1px; }
-.gnode__agent-footer > span { display: inline-flex; align-items: center; gap: 4px; }
-.gnode__agent-status > .icon { flex: none; }
-.gnode__agent-status--running > .icon { animation: agent-card-spin 3s linear infinite; }
-@keyframes agent-card-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .gnode__agent-status--running > .icon { animation: none; } }

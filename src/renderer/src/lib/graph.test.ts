@@ -229,6 +229,21 @@ describe('canvas live agent hierarchy', () => {
       expect(overlapX && overlapY).toBe(false)
     }
   })
+  it('keeps nested siblings in a vertical lane without overlapping deeper branches', () => {
+    const graph = agentHierarchyGraph({ idx: indexAgents([
+      agent('root'), child('a', 'root'), child('b', 'root'),
+      child('a1', 'a'), child('a2', 'a'), child('a11', 'a1')
+    ]), asks: [] })
+    const get = (id: string) => graph.nodes.find(node => node.id === `agent:${id}`)!
+    expect(get('a').position.y).toBe(get('b').position.y)
+    expect(get('a1').position.x).toBe(get('a2').position.x)
+    expect(get('a11').position.x).toBeGreaterThan(get('a1').position.x)
+    expect(get('a2').position.y).toBeGreaterThan(get('a11').position.y + AGENT_NODE_H)
+    expect(get('b').position.x).toBeGreaterThan(get('a11').position.x + AGENT_NODE_W)
+    expect(get('root').data.rootAgent).toBe(true)
+    expect(get('a').data.nestedAgent).toBe(false)
+    expect(get('a1').data.nestedAgent).toBe(true)
+  })
   it('collapses any branch while keeping its true child and hidden open-ask counts', () => {
     const idx = indexAgents([agent('root'), child('branch', 'root'), child('leaf', 'branch')])
     const asks = [{ id: 'ask', agentId: 'leaf', rootId: 'root', status: 'open' }] as Ask[]

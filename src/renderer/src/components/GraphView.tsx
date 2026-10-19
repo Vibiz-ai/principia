@@ -11,6 +11,9 @@ import { StatusGlyph, useTick } from './ui'
 import { duration } from '../lib/time'
 import { Icon } from './Icon'
 import { AgentGlyph } from './agents/AgentBits'
+import claudeMark from '../assets/providers/claude.svg'
+import openaiMark from '../assets/providers/openai.svg'
+import geminiMark from '../assets/providers/gemini.svg'
 
 /** Canvas-only: clicking a subagent pill selects that agent (drawer agent tree). Editor preview leaves it unset. */
 export const PillContext = createContext<((nodeId: string, ref: NodeRef, agentId: string) => void) | null>(null)
@@ -90,6 +93,10 @@ const CardView = memo(function CardView({ id, data, selected }: NodeProps<CardNo
 
 const PROVIDER_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', shell: 'Shell' }
 const CARD_STATUS: Record<string, string> = { idle: 'Idle', queued: 'Starting', running: 'Running', passed: 'Done', failed: 'Failed', canceled: 'Stopped', scheduled: 'Scheduled', exited: 'Ended' }
+function modelLabel(model: string): string {
+  if (model.startsWith('claude-')) return model.slice(7).replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/^(sonnet|opus|haiku)/, word => word[0].toUpperCase() + word.slice(1))
+  return model.replace(/^gpt-/, 'GPT-').replace(/-codex$/, ' Codex')
+}
 function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
   id: string
   data: CardNode['data']
@@ -104,30 +111,29 @@ function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
   const childCount = data.childCount ?? 0
   const title = data.task || data.sub
   const cost = typeof data.costUsd === 'number' && Number.isFinite(data.costUsd) ? `$${data.costUsd.toFixed(data.costUsd > 0 && data.costUsd < .01 ? 3 : 2)}` : null
-  const declaredRole = (data.role ?? '').toLowerCase()
-  const role = declaredRole && !['agent', 'subagent', 'session', 'workflow step'].includes(declaredRole) ? declaredRole : data.label.toLowerCase()
-  const roleIcon = /research|search|audit/.test(role) ? 'search' : /test|review|check/.test(role) ? 'shield' : /writ|edit|copy/.test(role) ? 'edit' : /cod|engineer|develop/.test(role) ? 'code' : 'agents'
-  const providerIcon = data.adapter === 'claude' ? 'spark' : data.adapter === 'codex' ? 'code' : data.adapter === 'shell' ? 'terminal' : 'grid'
-  const statusIcon = needs ? 'warning' : data.status === 'passed' ? 'check' : data.status === 'failed' ? 'close' : data.status === 'running' ? 'refresh' : 'pause'
+  const providerMark = data.adapter === 'claude' ? claudeMark : data.adapter === 'codex' ? openaiMark : data.adapter === 'gemini' ? geminiMark : null
+  const statusIcon = needs ? 'warning' : data.status === 'passed' ? 'check' : data.status === 'failed' ? 'warning' : data.status === 'running' ? 'refresh' : 'pause'
   return <div
     className={`gnode gnode--agent gnode--agent-${state} ${selected ? 'is-selected' : ''} ${data.stalled ? 'gnode--agent-stalled' : ''}`}
     style={{ width: cardWidth(data), height: cardHeight(data) }}
     title={`${data.label}${title ? `\n${title}` : ''}\nClick to inspect · double-click to open`}
   >
-    <Handle id="parent" type="target" position={Position.Top} className="gnode__agent-handle" isConnectable={false} />
-    <Handle id="children" type="source" position={Position.Bottom} className="gnode__agent-handle" isConnectable={false} />
+    <Handle id="parent" type="target" position={data.nestedAgent ? Position.Left : Position.Top} className="gnode__agent-handle" isConnectable={false} />
+    <Handle id="children" type="source" position={Position.Bottom} className="gnode__agent-handle" style={data.rootAgent ? undefined : { left: 12 }} isConnectable={false} />
     <div className="gnode__agent-top">
-      <span className="gnode__agent-role"><Icon name={roleIcon} size={12}/>{data.role || 'Agent'}</span>
+      <span className="gnode__agent-mark" title={provider ?? 'Agent'}>{providerMark ? <img src={providerMark} alt={provider ?? 'Agent'} width={17} height={17}/> : <Icon name={data.adapter === 'shell' ? 'terminal' : 'agents'} size={17}/>}</span>
+      <div className="gnode__agent-identity-text">
+        <div className="gnode__agent-title" title={data.label}>{data.label}</div>
+        <div className="gnode__agent-provider" title={data.model ?? provider ?? undefined}>{data.model ? modelLabel(data.model) : provider || 'Agent'}</div>
+      </div>
       {needs && onPill && data.agentId ? <button type="button" className="gnode__agent-status gnode__agent-status--needs nodrag nopan" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onPill(id, data.ref, data.agentId!) }} title="Open this agent's requests"><Icon name="warning" size={11}/> Needs you{data.needs && data.needs > 1 ? ` · ${data.needs}` : ''}</button> : <span className={`gnode__agent-status gnode__agent-status--${state}`}><Icon name={statusIcon} size={11}/>{needs ? 'Needs you' : CARD_STATUS[data.status] ?? data.status}</span>}
     </div>
-    <div className="gnode__agent-identity"><span className={`gnode__agent-avatar gnode__agent-avatar--${data.adapter ?? 'other'}`} title={provider ?? 'Agent'}><Icon name={providerIcon} size={19}/></span><div className="gnode__agent-identity-text"><div className="gnode__agent-title">{data.label}</div>
-    {(provider || data.model) && <div className="gnode__agent-provider">{provider && <span>{provider}</span>}{provider && data.model && <span aria-hidden="true">·</span>}{data.model && <span title={data.model}>{data.model}</span>}</div>}</div></div>
     <p className={`gnode__agent-task ${title ? '' : 'gnode__agent-task--empty'}`}>{title || 'No task details captured'}</p>
     <div className="gnode__agent-footer">
-      <span title={data.startedAt ? `Started ${new Date(data.startedAt).toLocaleString()}${data.endedAt ? ` · Ended ${new Date(data.endedAt).toLocaleString()}` : ''}` : undefined}><Icon name="clock" size={11}/>{data.startedAt ? duration(data.startedAt, data.endedAt ?? null) : '—'}</span>
+      {cost && <span className="gnode__agent-cost" title="Reported model spend">{cost}</span>}
+      <span className="gnode__agent-time" title={data.startedAt ? `Started ${new Date(data.startedAt).toLocaleString()}${data.endedAt ? ` · Ended ${new Date(data.endedAt).toLocaleString()}` : ''}` : undefined}>{cost && <span aria-hidden="true">· </span>}{data.startedAt ? duration(data.startedAt, data.endedAt ?? null) : '—'}</span>
       {data.stalled && <span className="gnode__agent-stalled">Stalled?</span>}
-      {cost && <span className="gnode__agent-cost" title="Reported model spend"><Icon name="coins" size={11}/>{cost}</span>}
-      {childCount > 0 && <button type="button" className="gnode__agent-children nodrag nopan" onDoubleClick={event => event.stopPropagation()} disabled={!onToggleBranch || !data.agentId} aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${childCount} child agent${childCount === 1 ? '' : 's'} of ${data.label}`} onClick={event => { event.stopPropagation(); if (data.agentId) onToggleBranch?.(data.agentId) }}><Icon name="agents" size={12}/>{childCount} {childCount === 1 ? 'agent' : 'agents'}<Icon name={data.collapsed ? 'chevronRight' : 'chevronDown'} size={11}/></button>}
+      {childCount > 0 && <button type="button" className="gnode__agent-children nodrag nopan" onDoubleClick={event => event.stopPropagation()} disabled={!onToggleBranch || !data.agentId} aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${childCount} child agent${childCount === 1 ? '' : 's'} of ${data.label}`} onClick={event => { event.stopPropagation(); if (data.agentId) onToggleBranch?.(data.agentId) }}>{childCount}<Icon name={data.collapsed ? 'chevronRight' : 'chevronDown'} size={11}/></button>}
     </div>
   </div>
 }
@@ -228,8 +234,8 @@ function withStaticSize(n: GraphNode): GraphNode {
     n.type === 'frame'
       ? [{ id: null, type: 'target', position: Position.Left, x: 0, y: midY, width: 1, height: 1 }]
       : n.data.hierarchy ? [
-          { id: 'parent', type: 'target', position: Position.Top, x: width / 2 - .5, y: 0, width: 6, height: 6 },
-          { id: 'children', type: 'source', position: Position.Bottom, x: width / 2 - .5, y: height - 1, width: 6, height: 6 }
+          { id: 'parent', type: 'target', position: n.data.nestedAgent ? Position.Left : Position.Top, x: n.data.nestedAgent ? 0 : width / 2, y: n.data.nestedAgent ? height / 2 : 0, width: 4, height: 4 },
+          { id: 'children', type: 'source', position: Position.Bottom, x: n.data.rootAgent ? width / 2 : 12, y: height, width: 4, height: 4 }
         ] : [
           { id: null, type: 'target', position: Position.Left, x: 0, y: midY, width: 1, height: 1 },
           { id: null, type: 'source', position: Position.Right, x: width - 1, y: midY, width: 1, height: 1 },
@@ -367,7 +373,7 @@ function Inner(props: GraphViewProps): React.JSX.Element {
         }
       }}
     >
-      <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="rgba(255,255,255,0.08)" />
+      {!nodes.some(node => node.data.hierarchy) && <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="rgba(255,255,255,0.08)" />}
     </ReactFlow>
   )
 }
