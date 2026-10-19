@@ -54,7 +54,7 @@ export class OAuthConnection {
       clientInformation: () => { current(); return this.opts.load()?.client },
       saveClientInformation: client => { current(); this.update({ client }) },
       tokens: () => { current(); return this.opts.load()?.tokens },
-      saveTokens: tokens => { current(); this.update({ tokens, expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined }); this.opts.onStatus('connected') },
+      saveTokens: tokens => { current(); this.update({ tokens, expiresAt: tokens.expires_in !== undefined ? Date.now() + tokens.expires_in * 1000 : undefined }); this.opts.onStatus('connected') },
       redirectToAuthorization: async url => { current(); this.checkedUrl(url); if (!this.browser) throw new Error('Sign in again from Principia settings'); await this.browser(url.toString()) },
       saveCodeVerifier: verifier => { current(); this.verifier = verifier },
       codeVerifier: () => { current(); if (!this.verifier) throw new Error('OAuth verifier expired'); return this.verifier },

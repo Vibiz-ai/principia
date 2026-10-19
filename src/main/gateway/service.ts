@@ -16,6 +16,7 @@ export class GatewayService {
   private timer: NodeJS.Timeout
   private file: string
   private oauth = new Map<string, OAuthConnection>()
+  private oauthRedacted = new Set<string>()
   private authState = new Map<string, { authStatus: import('../../shared/gateway').GatewayAuthStatus; authError?: string }>()
   constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string> }) {
     this.file = path.join(opts.userData, 'mcp-connections.json')
@@ -28,14 +29,17 @@ export class GatewayService {
     try { connected = !!this.readOAuth(s)?.tokens?.access_token } catch {}
     return { ...s.config, authStatus: connected ? 'connected' as const : 'disconnected' as const, ...(this.authState.get(s.config.id) ?? {}) }
   }) }
-  private readOAuth(s: Saved): OAuthSaved | undefined { return s.oauthCipher ? JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.oauthCipher, 'base64'))) : undefined }
+  private redactOAuth(id: string, value: OAuthSaved): void {
+    for (const [key, secret] of Object.entries({ access_token: value.tokens?.access_token, refresh_token: value.tokens?.refresh_token, client_secret: value.client?.client_secret })) if (typeof secret === 'string' && !this.oauthRedacted.has(secret)) { this.oauthRedacted.add(secret); this.opts.vault.addRedactions('MCP_OAUTH_' + id + '_' + key + '_' + crypto.randomBytes(8).toString('hex'), secret) }
+  }
+  private readOAuth(s: Saved): OAuthSaved | undefined { if (!s.oauthCipher) return undefined; const value = JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.oauthCipher, 'base64'))) as OAuthSaved; this.redactOAuth(s.config.id, value); return value }
   private oauthConnection(id: string): OAuthConnection {
     let oauth = this.oauth.get(id); if (oauth) return oauth
     const saved = this.saved.find(s => s.config.id === id)
     if (!saved || saved.config.transport !== 'http' || saved.config.authentication !== 'oauth') throw new Error('This HTTP connection does not use OAuth')
     oauth = new OAuthConnection({ serverUrl: saved.config.url!, load: () => { const s = this.saved.find(s => s.config.id === id); return s ? this.readOAuth(s) : undefined }, save: value => {
       const s = this.saved.find(s => s.config.id === id); if (!s) return
-      if (value) { if (!this.opts.cipher.available()) throw new Error('Credential encryption unavailable'); for (const [key, secret] of Object.entries({ access_token: value.tokens?.access_token, refresh_token: value.tokens?.refresh_token, client_secret: value.client?.client_secret })) if (typeof secret === 'string') this.opts.vault.addRedactions('MCP_OAUTH_' + id + '_' + key + '_' + crypto.randomBytes(8).toString('hex'), secret); s.oauthCipher = this.opts.cipher.encrypt(JSON.stringify(value)).toString('base64') } else delete s.oauthCipher
+      if (value) { if (!this.opts.cipher.available()) throw new Error('Credential encryption unavailable'); this.redactOAuth(id, value); s.oauthCipher = this.opts.cipher.encrypt(JSON.stringify(value)).toString('base64') } else delete s.oauthCipher
       this.persist()
     }, onStatus: (authStatus, authError) => this.authState.set(id, { authStatus, ...(authError ? { authError } : {}) }) })
     this.oauth.set(id, oauth); return oauth
