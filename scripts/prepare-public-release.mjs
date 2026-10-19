@@ -59,7 +59,7 @@ for (const relative of candidates) {
     .replaceAll(`/Users/${privateUser}/`, '/Users/example/')
     .replaceAll(privateAccount, 'example-user')
     .replaceAll(privateOrg, 'example-org')
-    .replace(/https:\/\/github\.com\/example-org\/principia(?:\.git)?(?=[/#?\s)'"<>]|$)/g, url => url.replace('example-org', privateOrg))
+    .replace(/https:\/\/github\.com\/example-org\/principia(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
     .replaceAll(privateProject, 'example-project'))
 }
 console.log(`Exported ${candidates.length} screened files. Git history, screenshots, internal research, and runtime data excluded.`)

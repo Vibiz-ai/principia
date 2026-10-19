@@ -59,3 +59,11 @@ test('refuses to overwrite an existing destination', async () => fixture(async (
   assert.notEqual(run().status, 0)
   assert.equal(await readFile(path.join(dest, 'keep.txt'), 'utf8'), 'keep')
 }))
+
+test('preserves the public clone URL before an escaped newline in website source', async () => fixture(async ({ dest, put, run }) => {
+  await put('LICENSE', 'MIT')
+  const source = JSON.stringify(`git clone https://github.com/${privateOrg}/principia.git\ncd principia`)
+  await put('website/src/install.ts', source)
+  assert.equal(run().status, 0)
+  assert.equal(await readFile(path.join(dest, 'website/src/install.ts'), 'utf8'), source)
+}))
