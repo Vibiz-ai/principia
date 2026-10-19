@@ -1,0 +1,52 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Fix a bug, tests must pass",
+    "description": "An agent fixes the bug in your repo; a check runs your test command and sends it back until the tests pass.",
+    "inputs": [
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "repo"
+      },
+      {
+        "name": "bug",
+        "label": "What is broken?",
+        "type": "multiline"
+      },
+      {
+        "name": "test",
+        "label": "Test command",
+        "default": "npm test"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "fix",
+        "type": "agent",
+        "label": "Fix the bug",
+        "after": [],
+        "cwd": "{{inputs.repo}}",
+        "timeoutMin": 45,
+        "profileId": "prof_claude",
+        "prompt": "Fix this bug in the current repository. Find the root cause, make the smallest correct change, and add or update a test that covers it. Do not commit.\n\nBug: {{inputs.bug}}"
+      },
+      {
+        "id": "tests",
+        "type": "check",
+        "label": "Tests pass",
+        "after": [
+          "fix"
+        ],
+        "cwd": "{{inputs.repo}}",
+        "timeoutMin": 20,
+        "profileId": null,
+        "command": "{{inputs.test}}",
+        "target": "fix",
+        "criteria": "",
+        "maxRetries": 3
+      }
+    ]
+  }
+}

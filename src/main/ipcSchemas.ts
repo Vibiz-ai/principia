@@ -1,0 +1,575 @@
+/**
+ * zod request schemas for every invoke channel (CONTRACT §4.2). Main validates every renderer request before the
+ * handler runs; failures answer `bad_request` with per-field errors. `satisfies` keeps this map exhaustive.
+ */
+import { z } from 'zod'
+import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
+import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
+import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
+import { AGENT_STATUSES } from '../shared/live'
+
+const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
+const none = z.unknown().transform(() => undefined)
+const adapter = z.enum(ADAPTER_IDS)
+const iso = z.string().min(1).max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'invalid date')
+const absPath = z.string().min(1).max(4096).refine((s) => s.startsWith('/'), 'must be an absolute path')
+const optObj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).nullish().transform((v) => v ?? undefined)
+
+const memoryMode = z.enum(MEMORY_MODES)
+const marketRef = z.object({ source: z.enum(['builtin', 'remote']), id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/) })
+const slug = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'id must be a lowercase slug').max(64)
+const nodeBase = {
+  id: slug,
+  label: z.string().max(200),
+  after: z.array(z.string().max(64)).max(100),
+  cwd: z.string().max(4096).nullable(),
+  timeoutMin: z.number().int().min(1).max(24 * 60),
+  memory: memoryMode.optional(),
+  isolate: z.literal('worktree').nullish()
+}
+const workflowNode = z.discriminatedUnion('type', [
+  z.object({ ...nodeBase, type: z.literal('agent'), profileId: z.string().max(64), prompt: z.string().max(200_000) }),
+  z.object({
+    ...nodeBase,
+    type: z.literal('room'),
+    participants: z.array(z.object({ profileId: z.string().max(64), label: z.string().max(80) })).max(12),
+    topic: z.string().max(200_000),
+    rounds: z.number().int().min(1).max(10),
+    final: z.enum(['last', 'summary'])
+  }),
+  z.object({
+    ...nodeBase,
+    type: z.literal('check'),
+    profileId: z.string().max(64).nullable(),
+    command: z.string().max(20_000).nullable(),
+    target: z.string().max(64),
+    criteria: z.string().max(200_000),
+    maxRetries: z.number().int().min(0).max(5)
+  }),
+  z.object({ ...nodeBase, type: z.literal('shell'), command: z.string().max(200_000), lang: z.enum(SCRIPT_LANGS).nullish() }),
+  // AUTHORING.md §4
+  z.object({
+    ...nodeBase,
+    type: z.literal('wait'),
+    command: z.string().max(20_000),
+    until: z.enum(['exit0', 'match']),
+    pattern: z.string().max(500).nullable(),
+    intervalSec: z.number().int().min(5).max(3600),
+    onTimeout: z.enum(['fail', 'continue'])
+  }),
+  z.object({
+    ...nodeBase,
+    type: z.literal('notify'),
+    title: z.string().max(200),
+    message: z.string().max(20_000),
+    // SLACK.md §10 (SA3): `slack` replaces iMessage; a legacy `imessage` is accepted and converted by normalizeDraft
+    slack: z
+      .union([z.object({ kind: z.literal('me') }).strict(), z.object({ kind: z.literal('channel'), channel: z.string().regex(/^[CGD][A-Z0-9]{1,20}$/, 'channel id') }).strict()])
+      .nullish(),
+    migratedFrom: z.literal('imessage').nullish(),
+    imessage: z.boolean().optional()
+  })
+])
+export const workflowDraft = z.object({
+  name: z.string().max(200),
+  description: z.string().max(10_000).default(''),
+  inputs: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, 'input name must be an identifier').max(64),
+        label: z.string().max(200),
+        default: z.string().max(100_000).optional(),
+        type: z.enum(['text', 'multiline', 'repo', 'boolean']).optional()
+      })
+    )
+    .max(50)
+    .default([]),
+  nodes: z.array(workflowNode).max(200),
+  worktree: z.object({ repo: z.string().min(1).max(4096), base: z.string().max(200).nullish(), pushBranches: z.array(z.string().regex(/^[A-Za-z0-9._/*-]{1,100}$/, 'branch pattern: letters, digits, . _ / - and *')).max(20).nullish() }).nullish(),
+  // SLACK.md §9.4: headless claude steps get the slack toolset
+  slackTools: z.boolean().optional()
+})
+export const workflowFile = z.object({ hive: z.literal('workflow'), version: z.literal(1), workflow: workflowDraft })
+
+const runTarget = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('prompt'),
+    profileId: z.string().max(64),
+    repoId: z.string().max(64).nullable(),
+    prompt: z.string().min(1, 'Prompt is empty').max(200_000),
+    secretNames: z.array(z.string().max(128)).max(200).optional(),
+    memory: memoryMode.optional()
+  }),
+  z.object({
+    kind: z.literal('workflow'),
+    workflowId: z.string().max(64),
+    inputs: z.record(z.string().max(64), z.string().max(200_000))
+  })
+])
+const when = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cron'), cron: z.string().min(1).max(200), tz: z.string().min(1).max(64) }),
+  z.object({ kind: z.literal('at'), at: iso })
+])
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+const preset = z
+  .discriminatedUnion('kind', [
+    z.object({ kind: z.literal('weekdays'), time: hhmm }),
+    z.object({ kind: z.literal('daily'), time: hhmm }),
+    z.object({ kind: z.literal('hourly'), minute: z.number().int().min(0).max(59) }),
+    z.object({ kind: z.literal('everyNMinutes'), n: z.number().int().min(1).max(1440) }),
+    z.object({ kind: z.literal('once'), at: iso }),
+    z.object({ kind: z.literal('cron') })
+  ])
+  .nullable()
+const scheduleInput = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(200),
+  target: runTarget,
+  when,
+  preset: preset.optional(),
+  enabled: z.boolean().optional()
+})
+const profileFields = {
+  name: z.string().trim().min(1).max(100),
+  adapter,
+  model: z.string().max(200).nullable(),
+  extraArgs: z.array(z.string().max(1000)).max(50),
+  permissionMode: z.enum(['default', 'bypass']),
+  secretNames: z.array(z.string().max(128)).max(500),
+  useApiKeyAuth: z.boolean()
+}
+const settingsPatch = z
+  .object({
+    launchAtLogin: z.boolean(),
+    notifyOnSuccess: z.enum(['never', 'scheduled', 'always']),
+    notifyOnFailure: z.boolean(),
+    notificationSound: z.boolean(),
+    keepAwake: z.boolean(),
+    concurrency: z.number().int().min(1).max(16),
+    defaultAdapter: adapter,
+    lastRepoId: z.string().max(64).nullable(),
+    schedulesPaused: z.boolean(),
+    onboardingDone: z.boolean(),
+    sidebarCollapsed: z.boolean(),
+    terminalFontSize: z.number().int().min(9).max(24),
+    interactiveBypass: z.boolean(),
+    sessionMemory: memoryMode,
+    autoRetryRateLimit: z.boolean(),
+    stallMinutes: z.number().int().min(1).max(240),
+    claudeHistory: z.boolean(),
+    // SLACK.md §7.1 (imessageHandle removed, SA3: a patch carrying it is rejected by .strict())
+    slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
+    slackMirrorNeedsYou: z.boolean(),
+    slackBackfillDays: z.number().int().min(0).max(90),
+    slackTriggerCatchupMin: z.number().int().min(0).max(120),
+    slackAutoPaused: z.boolean(),
+    marketplaceUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .url()
+      .refine((u) => u.startsWith('https://'), 'Use an https:// link')
+      .nullable()
+  })
+  .partial()
+  .strict()
+const menuItem: z.ZodType<unknown> = z.lazy(() =>
+  z.object({
+    id: z.string().max(200).optional(),
+    label: z.string().max(500).optional(),
+    type: z.enum(['normal', 'separator', 'checkbox']).optional(),
+    checked: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    accelerator: z.string().max(64).optional(),
+    submenu: z.array(menuItem).max(100).optional()
+  })
+)
+const secretName = z.string().min(1).max(128)
+
+// ---------- Slack (CONTRACT "Slack.5") ----------
+const slackChannelId = z.string().regex(/^[CGD][A-Z0-9]{1,20}$/, 'Slack channel id')
+const slackUserId = z.string().regex(/^[UW][A-Z0-9]{1,20}$/, 'Slack user id')
+const slackTs = z.string().regex(/^\d{1,12}\.\d{1,6}$/, 'Slack ts')
+const slackTriggerInput = z.object({
+  name: z.string().max(120),
+  workflowId: id,
+  enabled: z.boolean().optional(),
+  match: z.object({
+    on: z.array(z.enum(['mention', 'dm', 'message'])).min(1).max(3),
+    channels: z.array(slackChannelId).max(50).default([]),
+    keywords: z.array(z.string().min(1).max(100)).max(20).default([]),
+    regex: z.string().max(300).nullable().default(null),
+    fromUsers: z.array(slackUserId).max(50).default([]),
+    fallback: z.boolean().optional()
+  }),
+  reply: z.object({
+    mode: z.enum(['draft', 'auto', 'none']),
+    autoChannels: z.array(z.union([slackChannelId, z.literal('dm'), z.literal('*')])).max(20).default([]),
+    replyNode: z.string().max(64).nullable().optional()
+  }),
+  limits: z.object({ debounceSec: z.number().int().min(0).max(600).optional(), maxRunsPerThreadPerHour: z.number().int().min(1).max(30).optional() }).optional(),
+  inputs: z.record(z.string().max(64), z.string().max(2000)).optional(),
+  // SLACK.md SA2: absent = restricted agents, no vault keys
+  access: z
+    .object({
+      fullPermissions: z.boolean(),
+      secretNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)).max(50),
+      // reads beyond the triggering conversation: channels only (never DMs); absent = none
+      readChannels: z.array(z.string().regex(/^[CG][A-Z0-9]{1,20}$/, 'Read channels are channel ids (C…/G…), never DMs')).max(50).optional()
+    })
+    .optional()
+})
+
+
+// ---------- memory (CONTRACT §11.5; limits from MEMORY.md §4.2) ----------
+const memId = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[0-9a-z]{1,32}$`), 'invalid id')
+const entityId = memId('ment')
+const factId = memId('mfa')
+const relId = memId('mrel')
+const memIds = <T extends z.ZodType>(t: T) => z.array(t).min(1).max(1000)
+const memScopeSel = z.union([z.literal('all'), z.literal('global'), z.object({ repoId: id })])
+const memFilter = {
+  scope: memScopeSel,
+  kinds: z.array(z.enum(MEMORY_FACT_KINDS)).max(4).optional(),
+  adapters: z.array(adapter).max(5).optional(),
+  actors: z.array(z.enum(['agent', 'user'])).max(2).optional(),
+  statuses: z.array(z.enum(MEMORY_STATUSES)).max(3).optional(),
+  unreviewedOnly: z.boolean().optional(),
+  runId: id.optional(),
+  sessionId: id.optional()
+}
+const memName = z.string().trim().min(1).max(120)
+const memType = z.string().trim().min(1).max(40)
+const memRelType = z.string().trim().min(2).max(40)
+const memFactText = z.string().trim().min(3).max(1000)
+const memAliases = z.array(z.string().trim().min(1).max(120)).max(20)
+const memFactOrRel = z.enum(['fact', 'relation'])
+const memoryMutation = z.union([
+  z.object({
+    op: z.literal('create'),
+    target: z.literal('entity'),
+    input: z.object({ repoId: id.nullable(), name: memName, type: memType.optional(), summary: z.string().max(500).optional(), aliases: memAliases.optional() })
+  }),
+  z.object({
+    op: z.literal('create'),
+    target: z.literal('fact'),
+    input: z.object({
+      entityId,
+      text: memFactText,
+      kind: z.enum(MEMORY_FACT_KINDS).optional(),
+      scope: z.enum(MEMORY_SCOPES),
+      repoId: id.nullish(),
+      pinned: z.boolean().optional(),
+      supersedes: z.array(factId).max(10).optional()
+    })
+  }),
+  z.object({
+    op: z.literal('create'),
+    target: z.literal('relation'),
+    input: z.object({ fromId: entityId, toId: entityId, type: memRelType, scope: z.enum(MEMORY_SCOPES) })
+  }),
+  z.object({ op: z.literal('edit'), target: z.literal('fact'), id: factId, text: memFactText.optional(), kind: z.enum(MEMORY_FACT_KINDS).optional() }),
+  z.object({
+    op: z.literal('edit'),
+    target: z.literal('entity'),
+    id: entityId,
+    type: memType.optional(),
+    summary: z.string().max(500).optional(),
+    aliases: memAliases.optional()
+  }),
+  z.object({ op: z.literal('edit'), target: z.literal('relation'), id: relId, type: memRelType }),
+  z.object({ op: z.literal('rename'), id: entityId, name: memName }),
+  z.object({ op: z.enum(['pin', 'unpin']), ids: memIds(factId) }),
+  z.object({ op: z.literal('approve'), target: memFactOrRel, ids: memIds(z.string().max(64)) }),
+  z.object({ op: z.literal('invalidate'), target: memFactOrRel, ids: memIds(z.string().max(64)), reason: z.string().trim().min(1).max(200) }),
+  z.object({ op: z.literal('restore'), target: memFactOrRel, ids: memIds(z.string().max(64)) }),
+  z.object({ op: z.literal('toGlobal'), ids: memIds(factId) }),
+  z.object({ op: z.literal('merge'), sourceIds: z.array(entityId).min(1).max(50), targetId: entityId })
+])
+
+export const REQUEST_SCHEMAS = {
+  'gateway:list': none,
+  'gateway:remove': z.object({ id: slug }),
+  'gateway:test': z.object({ id: slug }),
+  'gateway:save': z.object({ id: slug, name: z.string().min(1).max(100), transport: z.enum(['stdio', 'http']), command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(), url: z.string().url().max(4096).optional(), enabled: z.boolean(), roots: z.array(absPath).max(100), credentials: z.record(z.string().min(1).max(100), z.string().max(20000)).optional() }).strict(),
+  'app:info': none,
+  'app:status': none,
+  'app:home': none,
+  'app:canvas': none,
+  'app:quit': none,
+  'app:openExternal': z.object({ url: z.string().url().max(4096) }),
+  'app:showItemInFolder': z.object({ path: absPath }),
+  'app:hideWindow': none,
+  'settings:get': none,
+  'settings:update': settingsPatch,
+  'providers:list': optObj({ refresh: z.boolean().optional() }),
+  'repos:list': none,
+  'repos:pick': none,
+  'repos:add': z.object({ paths: z.array(absPath).min(1).max(200) }),
+  'repos:update': z.object({ id, name: z.string().trim().min(1).max(200) }),
+  'repos:remove': z.object({ id }),
+  'repos:siblings': z.object({ id }),
+  'profiles:list': none,
+  'profiles:create': z.object({
+    name: profileFields.name,
+    adapter,
+    model: profileFields.model.optional(),
+    extraArgs: profileFields.extraArgs.optional(),
+    permissionMode: profileFields.permissionMode.optional(),
+    secretNames: profileFields.secretNames.optional(),
+    useApiKeyAuth: profileFields.useApiKeyAuth.optional()
+  }),
+  'profiles:update': z.object({ id, ...profileFields }).partial().required({ id: true }),
+  'profiles:remove': z.object({ id }),
+  'sessions:list': optObj({ status: z.enum(['running', 'exited', 'all']).optional() }),
+  'sessions:create': z.object({
+    profileId: id.optional(),
+    adapter: adapter.optional(),
+    repoId: id.nullish(),
+    cwd: absPath.optional(),
+    cols: z.number().int().min(1).max(1000),
+    rows: z.number().int().min(1).max(1000),
+    title: z.string().max(200).optional(),
+    memory: memoryMode.optional()
+  }),
+  'sessions:attach': z.object({ id }),
+  'sessions:kill': z.object({ id }),
+  'sessions:remove': z.object({ id }),
+  'sessions:rename': z.object({ id, title: z.string().trim().min(1).max(200) }),
+  'sessions:restart': z.object({ id }),
+  'sessions:handoff': z.object({ id, adapter: z.enum(['claude', 'codex']) }),
+  'sessions:saveImage': z.object({
+    id,
+    data: z.instanceof(Uint8Array).refine((d) => d.byteLength > 0 && d.byteLength <= 20 * 1024 * 1024, 'Image is empty or over 20 MB'),
+    type: z.enum(PASTED_IMAGE_TYPES)
+  }),
+  'workflows:list': none,
+  'workflows:get': z.object({ id }),
+  'workflows:create': workflowDraft,
+  'workflows:update': z.object({ id, draft: workflowDraft }),
+  'workflows:remove': z.object({ id }),
+  'workflows:duplicate': z.object({ id }),
+  'workflows:validate': workflowDraft,
+  'workflows:export': z.object({ id }),
+  'workflows:import': none,
+  'marketplace:list': optObj({ refresh: z.boolean().optional() }),
+  'marketplace:preview': marketRef,
+  'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional() }),
+  'runs:start': z.object({ target: runTarget }),
+  'runs:list': optObj({
+    status: z.array(z.enum(['queued', 'running', 'passed', 'failed', 'canceled'])).max(5).optional(),
+    workflowId: id.optional(),
+    scheduleId: id.optional(),
+    since: iso.optional(),
+    limit: z.number().int().min(1).max(1000).optional()
+  }),
+  'runs:get': z.object({ id }),
+  'runs:cancel': z.object({ id }),
+  'runs:rerun': z.object({ id }),
+  'runs:stepLog': z.object({ runId: id, stepId: id, tailBytes: z.number().int().min(1).max(50 * 1024 * 1024).optional(), view: z.enum(['raw', 'readable']).optional() }),
+  'runs:openAsSession': z.object({ runId: id, stepId: id.optional() }),
+  'schedules:list': none,
+  'schedules:create': scheduleInput,
+  'schedules:update': z.object({ id, input: scheduleInput }),
+  'schedules:remove': z.object({ id }),
+  'schedules:setEnabled': z.object({ id, enabled: z.boolean() }),
+  'schedules:runNow': z.object({ id }),
+  'schedules:preview': z.object({ when }),
+  'schedules:events': z.object({ scheduleId: id, limit: z.number().int().min(1).max(500).optional() }),
+  'schedules:pauseAll': z.object({ paused: z.boolean() }),
+  'secrets:list': none,
+  'secrets:set': z.object({ name: secretName, value: z.string().min(1, 'Value is empty').max(64 * 1024), label: z.string().max(200).optional() }),
+  'secrets:remove': z.object({ name: secretName }),
+  'secrets:reveal': z.object({ name: secretName }),
+  'secrets:copy': z.object({ name: secretName }),
+  'secrets:parseEnv': z.object({ text: z.string().max(1024 * 1024) }),
+  'secrets:importEnv': z.object({ text: z.string().max(1024 * 1024), names: z.array(secretName).max(1000) }),
+  'secrets:pickEnvFile': none,
+  'artifacts:list': optObj({
+    runId: id.optional(),
+    sessionId: id.optional(),
+    kind: z.enum(ARTIFACT_KINDS).optional(),
+    limit: z.number().int().min(1).max(5000).optional()
+  }),
+  'artifacts:thumbnail': z.object({ id, size: z.number().int().min(16).max(1024).optional() }),
+  'artifacts:peek': z.object({ id, bytes: z.number().int().min(64).max(16384).optional() }),
+  'artifacts:trash': z.object({ id }),
+  'artifacts:quickLook': z.object({ id }),
+  'artifacts:open': z.object({ id }),
+  'artifacts:reveal': z.object({ id }),
+  'artifacts:copyPath': z.object({ id }),
+  'artifacts:openDir': z
+    .object({ runId: id.optional(), sessionId: id.optional() })
+    .refine((v) => !!v.runId !== !!v.sessionId, 'pass exactly one of runId or sessionId'),
+  'ui:contextMenu': z.object({ items: z.array(menuItem).min(1).max(100) }),
+  'ui:confirm': z.object({
+    message: z.string().min(1).max(500),
+    detail: z.string().max(4000).optional(),
+    confirmLabel: z.string().min(1).max(60),
+    destructive: z.boolean().optional(),
+    suppressKey: z.string().regex(/^[a-zA-Z0-9_.:-]+$/).max(100).optional()
+  }),
+  'ui:setEdited': z.object({ edited: z.boolean() }),
+  'clipboard:writeText': z.object({ text: z.string().max(10 * 1024 * 1024) }),
+  'memory:overview': none,
+  'memory:graph': z.object({
+    ...memFilter,
+    centerId: entityId.optional(),
+    hops: z.union([z.literal(1), z.literal(2)]).optional(),
+    limit: z.number().int().min(1).max(150).optional()
+  }),
+  'memory:entity': z.object({ id: entityId }),
+  'memory:search': z.object({
+    ...memFilter,
+    query: z.string().trim().min(1).max(300),
+    includeHistory: z.boolean().optional(),
+    limit: z.number().int().min(1).max(50).optional()
+  }),
+  'memory:facts': z.object({
+    ...memFilter,
+    entityId: entityId.optional(),
+    text: z.string().max(300).optional(),
+    offset: z.number().int().min(0).max(1_000_000).optional(),
+    limit: z.number().int().min(1).max(1000).optional()
+  }),
+  'memory:mutate': memoryMutation,
+  'memory:delete': z.object({ kind: z.enum(['entity', 'fact', 'relation']), ids: memIds(z.string().max(64)) }),
+  'memory:revertRun': z.object({ runId: id }),
+  'memory:grants': z.object({ runId: id.optional(), sessionId: id.optional() }),
+  'memory:setPaused': z.object({ paused: z.boolean() }),
+  'memory:export': z.object({ scope: memScopeSel }),
+  // live agents (CONTRACT §12.6): text <= 8 KB, message <= 2 KB, limit <= 1000
+  'agents:list': optObj({
+    status: z.array(z.enum(AGENT_STATUSES)).max(7).optional(),
+    runId: id.optional(),
+    sessionId: id.optional(),
+    rootsOnly: z.boolean().optional(),
+    since: iso.optional(),
+    limit: z.number().int().min(1).max(1000).optional()
+  }),
+  'agents:get': z.object({ id, eventsLimit: z.number().int().min(1).max(1000).optional() }),
+  'agents:events': z.object({ agentId: id, beforeSeq: z.number().int().min(1).optional(), limit: z.number().int().min(1).max(1000).optional() }),
+  'agents:reply': z.object({ agentId: id, text: z.string().min(1).max(8192) }),
+  'asks:list': optObj({
+    status: z.enum(['open', 'all']).optional(),
+    runId: id.optional(),
+    sessionId: id.optional(),
+    limit: z.number().int().min(1).max(1000).optional()
+  }),
+  'asks:answer': z.object({
+    askId: id,
+    optionId: z.string().min(1).max(64).optional(),
+    text: z.string().max(8192).optional(),
+    message: z.string().max(2048).optional()
+  }),
+  'app:dashboard': optObj({ since: iso.optional() }),
+  'app:markSeen': none,
+  'schedules:skipNext': z.object({ id }),
+  // CONTRACT §13
+  'runs:retryAt': z.object({ id, when: z.enum(['reset', 'cancel']) }),
+  'sessions:retry': z.object({ id, when: z.enum(['now', 'reset', 'cancel']) }),
+  'processes:leftovers': none,
+  'processes:stop': z.object({ pids: z.array(z.number().int().min(2).max(99_999_999)).min(1).max(500) }),
+  // authoring (CONTRACT §14.5): note <= 2 KB, draft <= 256 KB
+  'author:list': optObj({
+    status: z.array(z.enum(['pending', 'approved', 'rejected', 'expired'])).max(4).optional(),
+    limit: z.number().int().min(1).max(500).optional()
+  }),
+  'author:get': z.object({ id }),
+  'author:decide': z.object({
+    id,
+    decision: z.enum(['approve', 'reject']),
+    note: z.string().max(2048).optional(),
+    allowRun: z.boolean().optional(),
+    draft: workflowDraft.optional().refine((d) => d === undefined || JSON.stringify(d).length <= 256 * 1024, 'Workflow too large')
+  }),
+  'author:grants': none,
+  'author:revokeRun': z.object({ workflowId: id, ownerKey: z.string().min(1).max(200) }),
+  'worktrees:list': optObj({ status: z.array(z.enum(['creating', 'active', 'kept', 'removed', 'error'])).max(5).optional() }),
+  'worktrees:remove': z.object({ id, discardWork: z.boolean().optional() }),
+  'worktrees:branches': z.object({ runId: id }),
+  'worktrees:deleteBranches': z.object({
+    runId: id,
+    branches: z
+      .array(z.object({ repoPath: z.string().min(1).max(4096).refine((p) => p.startsWith('/'), 'absolute path'), name: z.string().min(1).max(255).refine((n) => !n.startsWith('-'), 'bad branch name') }))
+      .min(1)
+      .max(200)
+  }),
+  'history:list': optObj({
+    query: z.string().max(200).optional(),
+    repoId: id.optional(),
+    since: iso.optional(),
+    includeInHive: z.boolean().optional(),
+    limit: z.number().int().min(1).max(500).optional()
+  }),
+  'history:get': z.object({ id: z.string().regex(/^[0-9a-zA-Z-]{8,64}$/, 'invalid session id') }),
+  'history:resume': z.object({
+    id: z.string().regex(/^[0-9a-zA-Z-]{8,64}$/, 'invalid session id'),
+    profileId: id.optional(),
+    cols: z.number().int().min(1).max(1000),
+    rows: z.number().int().min(1).max(1000)
+  }),
+  // ---------- Slack (CONTRACT "Slack.5"): tokens <= 300 chars, text <= 3000, regex <= 300, <= 50 ids per list ----------
+  'slack:status': none,
+  'slack:manifest': optObj({ name: z.string().trim().max(35).optional() }),
+  'slack:connect': z.object({ botToken: z.string().trim().min(1).max(300), appToken: z.string().trim().min(1).max(300) }).strict(),
+  'slack:test': none,
+  'slack:retry': none,
+  'slack:disconnect': z.object({ purge: z.boolean() }),
+  'slack:channels': optObj({ query: z.string().max(100).optional() }),
+  'slack:join': z.object({ channelId: slackChannelId }),
+  'slack:joinAll': none,
+  'slack:markRead': z.object({ channelId: slackChannelId, ts: slackTs }),
+  'slack:users': optObj({ query: z.string().max(100).optional(), includeBots: z.boolean().optional() }),
+  'slack:messages': z.object({ channelId: slackChannelId, beforeTs: slackTs.optional(), limit: z.number().int().min(1).max(200).optional() }),
+  'slack:thread': z.object({ channelId: slackChannelId, threadTs: slackTs }),
+  'slack:search': z.object({
+    query: z.string().trim().min(1).max(200),
+    channelId: slackChannelId.optional(),
+    userId: slackUserId.optional(),
+    after: iso.optional(),
+    before: iso.optional(),
+    limit: z.number().int().min(1).max(100).optional()
+  }),
+  'slack:backfill': z.object({ channelId: slackChannelId.optional(), days: z.number().int().min(1).max(365) }),
+  'slack:askAgent': z.object({
+    channelId: slackChannelId,
+    threadTs: slackTs,
+    profileId: id.optional(),
+    repoId: id.nullish(),
+    cols: z.number().int().min(1).max(1000),
+    rows: z.number().int().min(1).max(1000)
+  }),
+  'slack:drafts': optObj({
+    status: z.array(z.enum(['pending', 'sending', 'sent', 'discarded', 'failed', 'expired'])).max(6).optional(),
+    channelId: slackChannelId.optional(),
+    threadTs: slackTs.optional(),
+    runId: id.optional()
+  }),
+  'slack:draftGet': z.object({ id }),
+  'slack:draftDecide': z.object({ id, decision: z.enum(['send', 'discard']), text: z.string().min(1).max(3000).optional() }),
+  'slack:testAlert': none,
+  'slack:permalink': z.object({ channelId: slackChannelId, ts: slackTs }),
+  'slackTriggers:list': optObj({ workflowId: id.optional() }),
+  'slackTriggers:create': slackTriggerInput,
+  'slackTriggers:update': z.object({ id, input: slackTriggerInput }),
+  'slackTriggers:remove': z.object({ id }),
+  'slackTriggers:setEnabled': z.object({ id, enabled: z.boolean() }),
+  'slackTriggers:test': z.object({
+    input: slackTriggerInput,
+    sample: z.union([z.object({ permalink: z.string().url().max(500) }), z.object({ channelId: slackChannelId, ts: slackTs })])
+  }),
+  'slackTriggers:events': z.object({ triggerId: id, limit: z.number().int().min(1).max(500).optional() })
+} satisfies Record<InvokeChannel, z.ZodType>
+
+export const SEND_SCHEMAS = {
+  'sessions:write': z.object({ id, data: z.string().max(1024 * 1024), typed: z.boolean().optional() }),
+  'sessions:resize': z.object({ id, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  'artifacts:startDrag': z.object({ id }),
+  'ui:ready': none,
+  'ui:visibleOwner': z.object({ sessionId: id.nullish(), runId: id.nullish() })
+}
+
+/** zod issues -> contract ValidationError[] */
+export function zodErrors(e: z.ZodError): { path: string; message: string }[] {
+  return e.issues.map((i) => ({ path: i.path.length ? i.path.join('.') : 'request', message: i.message }))
+}

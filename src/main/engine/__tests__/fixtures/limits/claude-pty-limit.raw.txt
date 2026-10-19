@@ -1,0 +1,9 @@
+[2K[1G[38;2;215;119;87m⏺[39m I will now run the tests and look at the rate limiter.
+
+[2K[38;5;196m  ⎿  5-hour limit reached ∙ resets 3pm[39m
+     /upgrade to increase your usage limit.
+
+[2K╭──────────────────────────────────────────╮
+│ > [7m [27m                                      │
+╰──────────────────────────────────────────╯
+  ? for shortcuts

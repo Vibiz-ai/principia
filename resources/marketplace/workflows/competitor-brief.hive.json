@@ -1,0 +1,42 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Competitor research brief",
+    "description": "Crawls a competitor's site with Firecrawl and writes a positioning brief (offer, pricing, audience, gaps).",
+    "inputs": [
+      {
+        "name": "url",
+        "label": "Competitor homepage"
+      },
+      {
+        "name": "us",
+        "label": "What we sell (one line)"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "crawl",
+        "type": "agent",
+        "label": "Crawl the site",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 20,
+        "profileId": "prof_claude",
+        "prompt": "Use the Firecrawl API to read the most important pages of {{inputs.url}} (home, pricing, product/features, about).\n\nPOST https://api.firecrawl.dev/v1/scrape with `Authorization: Bearer $FIRECRAWL_API_KEY` and {\"url\": <page>, \"formats\":[\"markdown\"]} for each page (find page URLs from the homepage links). Never print the key. Save each page to \"$ARTIFACTS_DIR/<slug>.md\".\n\nOutput: the key facts you found, per page, as terse notes."
+      },
+      {
+        "id": "brief",
+        "type": "agent",
+        "label": "Write the brief",
+        "after": [
+          "crawl"
+        ],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Write a one-page competitor brief in Markdown and save it to \"$ARTIFACTS_DIR/brief.md\". Sections: Who they target, Offer & pricing, Positioning claims, Strengths, Weaknesses / gaps we can use, 3 angles for us. We sell: {{inputs.us}}.\n\nNotes:\n{{crawl.output}}"
+      }
+    ]
+  }
+}

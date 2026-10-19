@@ -1,0 +1,44 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Generate an image (fal)",
+    "description": "Turns a short idea into a detailed prompt and renders it with fal.ai FLUX. The PNG lands in Artifacts.",
+    "inputs": [
+      {
+        "name": "idea",
+        "label": "What should the image show?",
+        "type": "multiline"
+      },
+      {
+        "name": "size",
+        "label": "Size (square_hd, landscape_16_9, portrait_16_9)",
+        "default": "landscape_16_9"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "prompt",
+        "type": "agent",
+        "label": "Write the prompt",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Write one image-generation prompt (max 80 words) for this idea. Be concrete about subject, composition, lighting, style and lens. Output only the prompt text, nothing else.\n\nIdea: {{inputs.idea}}"
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render with fal",
+        "after": [
+          "prompt"
+        ],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Generate an image with the fal.ai REST API and save it.\n\n1. POST https://fal.run/fal-ai/flux/dev with header `Authorization: Key $FAL_KEY` and JSON body {\"prompt\": <the prompt below>, \"image_size\": \"{{inputs.size}}\", \"num_images\": 1}. Use curl; read the key from the FAL_KEY environment variable, never print it.\n2. Download images[0].url into \"$ARTIFACTS_DIR/image.png\".\n3. Reply with the saved path and the prompt used.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive \u203a Keys.\n\nPrompt:\n{{prompt.output}}"
+      }
+    ]
+  }
+}

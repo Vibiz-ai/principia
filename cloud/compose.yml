@@ -1,0 +1,18 @@
+services:
+  principia:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '127.0.0.1:8787:8787'
+    volumes:
+      - principia-data:/data
+      - ./workspace:/workspace
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  principia-data:

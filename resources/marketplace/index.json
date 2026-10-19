@@ -1,0 +1,221 @@
+{
+  "hive": "marketplace",
+  "version": 1,
+  "name": "Hive built-in",
+  "items": [
+    {
+      "id": "generate-image-fal",
+      "kind": "workflow",
+      "name": "Generate an image (fal)",
+      "description": "Turns an idea into a detailed prompt and renders it with fal.ai FLUX. The PNG lands in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "design"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/generate-image-fal.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "generate-image-openai",
+      "kind": "workflow",
+      "name": "Generate an image (OpenAI)",
+      "description": "Renders an image with OpenAI gpt-image-1 and saves it to Artifacts.",
+      "tags": [
+        "image",
+        "openai",
+        "design"
+      ],
+      "keys": [
+        "OPENAI_API_KEY"
+      ],
+      "path": "workflows/generate-image-openai.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "scrape-site-firecrawl",
+      "kind": "workflow",
+      "name": "Scrape a site to Markdown (Firecrawl)",
+      "description": "Scrapes a URL with Firecrawl, saves the Markdown to Artifacts and summarizes it.",
+      "tags": [
+        "scraping",
+        "web",
+        "firecrawl"
+      ],
+      "keys": [
+        "FIRECRAWL_API_KEY"
+      ],
+      "path": "workflows/scrape-site-firecrawl.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "competitor-brief",
+      "kind": "workflow",
+      "name": "Competitor research brief",
+      "description": "Reads a competitor's site with Firecrawl and writes a one-page positioning brief.",
+      "tags": [
+        "research",
+        "marketing",
+        "firecrawl"
+      ],
+      "keys": [
+        "FIRECRAWL_API_KEY"
+      ],
+      "path": "workflows/competitor-brief.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "fix-bug-with-tests",
+      "kind": "workflow",
+      "name": "Fix a bug, tests must pass",
+      "description": "An agent fixes the bug; a check runs your test command and sends it back until the tests pass.",
+      "tags": [
+        "coding",
+        "tests"
+      ],
+      "path": "workflows/fix-bug-with-tests.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "second-opinion-review",
+      "kind": "workflow",
+      "name": "Code review: Claude + Codex",
+      "description": "Claude and Codex review your uncommitted changes together and agree on the real problems.",
+      "tags": [
+        "coding",
+        "review"
+      ],
+      "adapters": [
+        "codex"
+      ],
+      "path": "workflows/second-opinion-review.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "apify-actor",
+      "kind": "script",
+      "name": "Run an Apify actor",
+      "description": "Runs any Apify actor with your APIFY_API_KEY and saves the dataset to Artifacts. Python, no agent.",
+      "tags": [
+        "scraping",
+        "apify",
+        "data"
+      ],
+      "keys": [
+        "APIFY_API_KEY"
+      ],
+      "path": "scripts/apify-actor.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "resize-images",
+      "kind": "script",
+      "name": "Resize images in a folder",
+      "description": "Shrinks every image in a folder with macOS sips; copies land in Artifacts. Shell, no installs.",
+      "tags": [
+        "image",
+        "files"
+      ],
+      "path": "scripts/resize-images.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "fetch-json",
+      "kind": "script",
+      "name": "Fetch a JSON API",
+      "description": "GETs a JSON endpoint, optionally with a key from Hive › Keys, and saves the response. Node.",
+      "tags": [
+        "api",
+        "data"
+      ],
+      "path": "scripts/fetch-json.hive.json",
+      "author": "Hive"
+    },
+    {
+      "id": "code-reviewer",
+      "kind": "agent",
+      "name": "Code reviewer",
+      "description": "Claude Code subagent that reviews a diff for real bugs with file:line and a failing scenario.",
+      "tags": [
+        "coding",
+        "review"
+      ],
+      "path": "agents/code-reviewer.md",
+      "author": "Hive"
+    },
+    {
+      "id": "test-writer",
+      "kind": "agent",
+      "name": "Test writer",
+      "description": "Claude Code subagent that writes focused tests in your project's existing style.",
+      "tags": [
+        "coding",
+        "tests"
+      ],
+      "path": "agents/test-writer.md",
+      "author": "Hive"
+    },
+    {
+      "id": "screenshot-critic",
+      "kind": "agent",
+      "name": "Screenshot critic",
+      "description": "Claude Code subagent that critiques UI screenshots and gives exact visual fixes.",
+      "tags": [
+        "design",
+        "image",
+        "ui"
+      ],
+      "path": "agents/screenshot-critic.md",
+      "author": "Hive"
+    },
+    {
+      "id": "firecrawl",
+      "kind": "skill",
+      "name": "Firecrawl",
+      "description": "Teaches Claude to scrape, crawl and search the web with your FIRECRAWL_API_KEY.",
+      "tags": [
+        "scraping",
+        "web",
+        "firecrawl"
+      ],
+      "keys": [
+        "FIRECRAWL_API_KEY"
+      ],
+      "path": "skills/firecrawl/SKILL.md",
+      "author": "Hive"
+    },
+    {
+      "id": "fal-image",
+      "kind": "skill",
+      "name": "fal.ai images",
+      "description": "Teaches Claude to generate images with fal.ai FLUX using your FAL_KEY.",
+      "tags": [
+        "image",
+        "fal",
+        "design"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "skills/fal-image/SKILL.md",
+      "author": "Hive"
+    },
+    {
+      "id": "screenshot-to-code",
+      "kind": "skill",
+      "name": "Screenshot to code",
+      "description": "Rebuild a UI from a dropped screenshot using your project's own components.",
+      "tags": [
+        "design",
+        "image",
+        "ui",
+        "coding"
+      ],
+      "path": "skills/screenshot-to-code/SKILL.md",
+      "author": "Hive"
+    }
+  ]
+}

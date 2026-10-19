@@ -1,0 +1,33 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Run an Apify actor",
+    "description": "Runs any Apify actor (scrapers for Google Maps, Instagram, TikTok, websites…) with your APIFY_API_KEY and saves the results as JSON in Artifacts.",
+    "inputs": [
+      {
+        "name": "actor",
+        "label": "Actor (e.g. apify/website-content-crawler)",
+        "default": "apify/website-content-crawler"
+      },
+      {
+        "name": "input",
+        "label": "Actor input (JSON)",
+        "type": "multiline",
+        "default": "{\"startUrls\": [{\"url\": \"https://example.com\"}], \"maxCrawlPages\": 5}"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "run",
+        "type": "shell",
+        "label": "Run actor",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 60,
+        "command": "import json, os, sys, urllib.parse, urllib.request\n\n# Runs an Apify actor and waits for its dataset. Key: Hive › Keys › APIFY_API_KEY.\ntoken = os.environ.get(\"APIFY_API_KEY\")\nif not token:\n    sys.exit(\"APIFY_API_KEY is not set: add it in Hive › Keys\")\nactor = os.environ[\"HIVE_INPUT_ACTOR\"].strip().replace(\"/\", \"~\")\nrun_input = json.loads(os.environ.get(\"HIVE_INPUT_INPUT\") or \"{}\")\n\nurl = f\"https://api.apify.com/v2/acts/{urllib.parse.quote(actor, safe='~')}/run-sync-get-dataset-items?format=json\"\nreq = urllib.request.Request(url, data=json.dumps(run_input).encode(), method=\"POST\",\n                             headers={\"Content-Type\": \"application/json\", \"Authorization\": f\"Bearer {token}\"})\nwith urllib.request.urlopen(req, timeout=600) as r:\n    items = json.load(r)\n\nout = os.path.join(os.environ[\"ARTIFACTS_DIR\"], \"items.json\")\nwith open(out, \"w\") as f:\n    json.dump(items, f, indent=2, ensure_ascii=False)\nprint(f\"{len(items)} items from {actor} -> {out}\")\n",
+        "lang": "python"
+      }
+    ]
+  }
+}

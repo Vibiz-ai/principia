@@ -1,0 +1,472 @@
+/**
+ * Hive main process. Native macOS app: window via loadFile, Electron IPC only, zero network listeners.
+ * Startup order (CONTRACT §8): userData override -> single-instance lock -> ready -> paths -> login env -> db ->
+ * boot recovery + seeds -> engine -> IPC -> artifacts indexer -> tray + menu -> window -> scheduler.
+ */
+import { GatewayService } from './gateway/service'
+import { app, BrowserWindow, crashReporter, nativeTheme, powerMonitor, safeStorage } from 'electron'
+import fs from 'node:fs'
+import * as pty from 'node-pty'
+import { Reaper, StallMonitor, createEngine, stallThresholdMs } from './engine'
+import { applyUserDataOverride, resolvePaths } from './paths'
+import { baseChildEnv, resolveLoginEnv } from './loginEnv'
+import { openDatabase } from './db'
+import { Store } from './db/store'
+import { createEngineStore } from './db/engineStore'
+import { Vault } from './vault'
+import { SessionManager } from './sessions'
+import { ArtifactIndexer } from './artifacts'
+import { removeThumbs } from './thumbnails'
+import { WindowManager } from './windowManager'
+import { HiveTray } from './tray'
+import { buildAppMenu } from './menu'
+import { Hive } from './hive'
+import { emit, setEventTargets, setTrustedSender } from './ipc'
+import { registerAllHandlers } from './handlers'
+import { importWorkflowFromDialog } from './handlers/workflows'
+import { closeLog, initLog, log, setLogRedactor } from './log'
+import { claudeConversationExists, trustFolderForClaude } from './claudeTrust'
+import { MemoryService, resolveServerScript } from './memory/service'
+import { LiveStore } from './db/liveStore'
+import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
+import { SessionLiveHub } from './live/sessionLive'
+import { bootAuthoring, wireAuthoring } from './author/wire'
+import { SlackService } from './connectors/slack/service'
+
+applyUserDataOverride()
+app.setName('Hive')
+// Local minidumps only (<userData>/Crashpad), never uploaded: lets us see why a renderer or GPU process died.
+crashReporter.start({ uploadToServer: false })
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  let hive: Hive | null = null
+  let pendingShow = false
+
+  app.on('second-instance', () => {
+    if (hive) hive.windows.show()
+    else pendingShow = true
+  })
+  app.on('activate', () => hive?.windows.show())
+
+  app.on('before-quit', (e) => {
+    if (!hive || hive.shutdownDone) return
+    e.preventDefault()
+    void hive.requestQuit()
+  })
+  app.on('window-all-closed', () => {
+    // Hive keeps running in the menu bar; quit only via Cmd+Q / tray / app:quit.
+  })
+  app.on('will-quit', () => {
+    // Last point where native modules may be touched: ptys are already gone (requestQuit / guarded exit).
+    try {
+      hive?.db.close()
+    } catch {
+      /* already closed */
+    }
+    closeLog()
+  })
+
+  // Every exit (including app.exit() from tooling such as Playwright) waits for live ptys to be killed and their
+  // exit callbacks delivered first. Exiting with a live node-pty aborts the process ("libc++abi: terminating due to
+  // uncaught exception of type Napi::Error"), which macOS reports as "Hive quit unexpectedly".
+  const realExit = app.exit.bind(app)
+  let exiting = false
+  const guardedExit = (code = 0): void => {
+    const sessions = hive?.sessions
+    const reapTagged = (): void => {
+      // CONTRACT §13: every exit path reaps what this Hive tagged (dev servers, watchers)
+      try {
+        hive?.reaper?.reapAllSync()
+      } catch {
+        /* best effort */
+      }
+    }
+    if (exiting || !sessions || sessions.runningCount() === 0) {
+      exiting = true
+      reapTagged()
+      return realExit(code)
+    }
+    exiting = true
+    const fallback = setTimeout(() => {
+      sessions.killAllNow()
+      reapTagged()
+      setTimeout(() => realExit(code), 300)
+    }, 2500)
+    void sessions
+      .shutdown()
+      .catch(() => undefined)
+      .finally(() => {
+        clearTimeout(fallback)
+        reapTagged()
+        realExit(code)
+      })
+  }
+  try {
+    ;(app as { exit: (code?: number) => void }).exit = guardedExit
+  } catch {
+    /* non-writable in some Electron build: requestQuit still stops ptys before quitting */
+  }
+
+  // SIGTERM/SIGINT (kill, launchctl, dev tooling): same graceful path as Cmd+Q minus the confirm dialog, so agent
+  // process groups are killed instead of orphaned. Registered after 'ready' on purpose: Chromium installs its own
+  // SIGTERM/SIGINT handlers during startup (they call app.quit(), which the hide-to-tray/before-quit path swallowed),
+  // and libuv only installs its sigaction when the first JS listener for a signal is added — so a listener added at
+  // module load is silently overridden. Hard exit after 3.5 s if graceful shutdown hangs; a second signal exits now.
+  let signaled = false
+  const onSignal = (sig: NodeJS.Signals): void => {
+    log.info('received signal, shutting down', { sig })
+    if (signaled || !hive) return guardedExit(signaled ? 1 : 0)
+    signaled = true
+    hive.forceQuit = true
+    setTimeout(() => {
+      log.warn('graceful shutdown timed out; forcing exit', { sig })
+      guardedExit(0)
+    }, 3500)
+    if (hive.shutdownDone) app.quit()
+    else void hive.requestQuit()
+  }
+  const installSignalHandlers = (): void => {
+    for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+      process.removeListener(sig, onSignal)
+      process.on(sig, onSignal)
+    }
+  }
+  app.on('web-contents-created', (_e, wc) => {
+    wc.on('will-attach-webview', (ev) => ev.preventDefault())
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }))
+  })
+
+  app.whenReady().then(async () => {
+    installSignalHandlers()
+    nativeTheme.themeSource = 'dark'
+    const paths = resolvePaths()
+    initLog(paths.mainLog)
+    log.info('Hive starting', { version: app.getVersion(), userData: paths.userData, packaged: app.isPackaged })
+    const envState = await resolveLoginEnv()
+    if (!envState.ok) log.warn('login shell env resolution failed; using fallback PATH', { shell: envState.shell })
+
+    const db = openDatabase(paths.dbPath)
+    const store = new Store(db)
+    const cipher = {
+      available: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (s: string) => safeStorage.encryptString(s),
+      decrypt: (b: Buffer) => safeStorage.decryptString(b)
+    }
+    const vault = new Vault(db, {
+      ...cipher
+    })
+    setLogRedactor((s) => vault.redact(s))
+
+    const h = new Hive(db, store, vault, paths)
+    hive = h
+    h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv() })
+    app.on('will-quit', () => h.gateway?.close())
+
+    // shared memory (MEMORY.md): separate memory.db, opened + migrated by main only. Failure = memory off, Hive runs.
+    try {
+      const memory = new MemoryService({
+        userData: paths.userData,
+        serverScript: resolveServerScript(__dirname),
+        execPath: process.execPath,
+        listRepos: () => store.listRepos(),
+        // AUTHORING.md §6.3: a Hive worktree's cwd maps back to its source repo (project memory still applies)
+        mapCwd: (cwd) => hive?.worktrees?.sourceRepoFor(cwd) ?? null,
+        redact: (t) => vault.redact(t),
+        secretValues: () => vault.secretValues(),
+        emit: (e) => emit('memory:changed', e),
+        log
+      })
+      memory.start()
+      vault.setChangeListener(() => memory.refreshFingerprints())
+      h.memory = memory
+    } catch (e) {
+      log.error('memory.db unavailable; shared memory is off', { e: String(e) })
+    }
+
+    // boot recovery (CONTRACT §3): no zombie sessions
+    const recovered = store.recoverSessions()
+    if (recovered.length) log.info('marked interrupted sessions exited', { count: recovered.length })
+
+    // live agents (LIVE.md §1.2, §2, §5): live agents -> failed "Hive quit", open asks -> canceled, live dirs swept
+    const live = new LiveStore(db, (t) => vault.redact(t))
+    h.live = live
+    try {
+      const rec = live.bootRecover()
+      const ret = live.retention()
+      const swept = sweepLiveDirs(paths.userData)
+      if (rec.agents || rec.asks || ret.agents || swept) log.info('live boot recovery', { ...rec, retention: ret, swept })
+    } catch (e) {
+      log.warn('live boot recovery failed', { e: String(e) })
+    }
+    const liveBridge = createLiveBridge({
+      userData: paths.userData,
+      execPath: process.execPath,
+      hookScript: resolveHookScript(__dirname),
+      log,
+      // AUTHORING.md §1.2: `hive` tool calls arrive in the caller's own live dir; identity = that channel's owner
+      onAuthor: (owner, line, writeAnswer) => {
+        if (!h.author) return writeAnswer(String(line.call_id ?? ''), { ok: false, error: 'Hive authoring is not available' })
+        if (line.hive === 'author_cancelled') h.author.handleCancel(owner, line)
+        else h.author.handleCall(owner, line, writeAnswer)
+      }
+    })
+    h.initLive()
+    // CONTRACT §13: one reaper for sessions, steps, quit and leftovers; tags carry this userData so other Hives are safe
+    const reaper = new Reaper({ userData: paths.userData, log })
+    h.reaper = reaper
+    // AUTHORING.md: broker, worktrees, notify nodes, Claude history (failure = authoring off, Hive runs)
+    try {
+      wireAuthoring(h, { mainDir: __dirname, reaper })
+    } catch (e) {
+      log.error('authoring unavailable', { e: String(e) })
+    }
+    // SLACK.md §2.3: the Slack connector (no tokens = zero outbound requests). The dev-only fake transport exists only
+    // in a build made with HIVE_BUILD_FAKE_SLACK=1 (the define removes this branch from every normal build).
+    try {
+      let transport: ConstructorParameters<typeof SlackService>[1]['transport'] = null
+      if (__HIVE_FAKE_SLACK__ && !app.isPackaged && process.env.HIVE_FAKE_SLACK) {
+        const { createDevFakeTransport } = await import('./connectors/slack/devFake')
+        transport = createDevFakeTransport(process.env.HIVE_FAKE_SLACK)
+      }
+      h.slack = new SlackService(h, { cipher, mainDir: __dirname, transport })
+    } catch (e) {
+      log.error('slack unavailable', { e: String(e) })
+    }
+    const sessionStall = new StallMonitor({ thresholdMs: () => stallThresholdMs(store.getSettings().stallMinutes) })
+    sessionStall.startTimer(15_000)
+    h.sessionLive = new SessionLiveHub({
+      store: live,
+      emit: (e) => h.onLiveEvent(e),
+      writePty: (sid, data) => {
+        h.sessions.writeKeys(sid, data)
+      },
+      isVisible: (sid) => h.sessionVisible(sid),
+      onIdle: (root, turnMs) => h.notifier.idle(root, turnMs),
+      onNeedsChanged: () => h.statusChanged(),
+      stall: sessionStall,
+      onLimit: (root, hit) => h.onSessionLimit(root, hit),
+      onLimitCleared: (sid) => h.onSessionLimitCleared(sid),
+      log
+    })
+
+    const engineStore = createEngineStore(db, { describe: () => (w) => h.engine.scheduler.describe(w), live, slackTriggers: h.slack?.triggers })
+    h.engine = createEngine({
+      paths: {
+        userData: paths.userData,
+        artifactsRoot: paths.artifactsRoot,
+        runLogsDir: paths.runLogsDir,
+        scratchDir: paths.scratchDir
+      },
+      store: engineStore,
+      baseEnv: () => baseChildEnv(),
+      secrets: { resolve: (names) => vault.resolve(names), redact: (t) => vault.redact(t), names: (n) => vault.names(n) },
+      getSettings: () => store.getSettings(),
+      getProfile: (id) => store.getProfile(id),
+      getRepo: (id) => store.getRepo(id, (rid) => h.sessions?.liveCountForRepo(rid) ?? 0),
+      listRepos: () => store.listRepos(),
+      getWorkflow: (id) => store.getWorkflow(id),
+      emit: (e) => h.onEngineEvent(e),
+      log,
+      gateway: h.gateway ?? undefined,
+      memory: h.memory ?? undefined,
+      live: liveBridge,
+      reaper,
+      worktrees: h.worktrees ?? undefined,
+      notifier: h.notifyNode ?? undefined,
+      slack: h.slack?.bridge()
+    })
+    store.setDescribe((w) => h.engine.scheduler.describe(w))
+
+    h.sessions = new SessionManager({
+      store,
+      paths,
+      spawnPty: (file, args, opts) => pty.spawn(file, args, opts),
+      interactiveSpawn: (profile, opts) => h.engine.providers.interactiveSpawn(profile, opts),
+      baseEnv: () => baseChildEnv(),
+      secrets: { resolve: (n) => vault.resolve(n), redact: (t) => vault.redact(t), names: (n) => vault.names(n) },
+      trustFolder: (cwd, env) => {
+        if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
+      },
+      conversationExists: (adapter, id) => (adapter === 'claude' ? claudeConversationExists(id, baseChildEnv()) : true),
+      memory: h.memory
+        ? {
+            grant: (req) => h.memory?.grant(req) ?? null,
+            release: (gid) => h.memory?.release(gid),
+            transportFor: (adapter) => h.safe(() => h.engine.providers.cached().find((p) => p.id === adapter)?.memory ?? null, null),
+            lastMode: (sid) => {
+              const g = h.memory?.store.listGrants({ sessionId: sid }).pop()
+              return g ? g.mode : null
+            }
+          }
+        : undefined,
+      live: {
+        open: (sid, adapter) => (adapter === 'shell' ? null : liveBridge.open({ sessionId: sid })),
+        start: (s, channel) => {
+          h.sessionLive.open(s, channel)
+        },
+        data: (sid, data) => h.sessionLive.get(sid)?.onPtyData(data),
+        input: (sid, data, typed) => h.sessionLive.get(sid)?.onUserInput(data, typed),
+        exit: (sid, code, byHive) => h.sessionLive.exited(sid, code, byHive)
+      },
+      author: h.authorAttach ?? undefined,
+      emitData: (sessionId, data) => emit('pty:data', { sessionId, data }),
+      emitExit: (sessionId, exitCode, signal) => emit('pty:exit', { sessionId, exitCode, signal }),
+      emitUpdated: (s) => {
+        emit('session:updated', s)
+        h.statusChanged()
+      },
+      onExited: (s) => {
+        h.safe(() => h.indexer.rescan(s.artifactsDir.replace(/\/$/, '')), undefined)
+        h.safe(() => h.slack?.sessionExited(s.id), undefined)
+        h.statusChanged()
+      },
+      reaper
+    })
+    // Hive's scratch dir (New chat, no repo) is Hive's own: pre-accept Claude's folder-trust prompt for it.
+    try {
+      fs.mkdirSync(paths.scratchDir, { recursive: true })
+      trustFolderForClaude(paths.scratchDir, baseChildEnv())
+    } catch {
+      /* best effort; sessions retry on spawn */
+    }
+    const pruned = h.sessions.pruneOld(7)
+    if (pruned) log.info('pruned old exited sessions', { count: pruned })
+    // agent trees of sessions pruneOld just deleted (LIVE.md §2 retention)
+    if (pruned) h.safe(() => live.retention(), undefined)
+
+    try {
+      await h.engine.init()
+    } catch (e) {
+      log.error('engine.init failed', { e: String(e) })
+    }
+    h.safe(() => h.engine.scheduler.setPaused(store.getSettings().schedulesPaused), undefined)
+    // seeds: profiles per available adapter + three workflows (first launch; deleted seeds stay deleted)
+    try {
+      await h.engine.providers.list()
+    } catch (e) {
+      log.warn('provider detection failed', { e: String(e) })
+    }
+    h.ensureSeeds()
+    if (!store.getMeta('seeded')) store.setMeta('seeded', '1')
+    bootAuthoring(h)
+
+    // window (created before handlers so senders can be trusted)
+    h.windows = new WindowManager({
+      loadBounds: () => {
+        try {
+          return JSON.parse(store.getMeta('window_bounds') ?? 'null')
+        } catch {
+          return null
+        }
+      },
+      saveBounds: (b) => store.setMeta('window_bounds', JSON.stringify(b)),
+      onState: (s) => {
+        emit('window:state', s)
+        h.setVisibleOwner(null) // focus changed: a visible idle session becomes seen (A3)
+      },
+      onFocus: () => {
+        h.clearUnseen()
+        // PO9: Claude history refreshes on window focus (stat pass + lazy queue), never on a timer
+        h.safe(() => h.history?.refresh(), undefined)
+      },
+      sendCommand: (cmd) => emit('ui:command', cmd),
+      onReadyToShow: process.env.HIVE_SMOKE === '1' ? runSmoke : undefined
+    })
+    setEventTargets(() => {
+      const w = h.windows.get()
+      return w ? [w.webContents] : []
+    })
+    setTrustedSender((wc) => {
+      const w = h.windows.get()
+      return !!w && wc.id === w.webContents.id
+    })
+    registerAllHandlers(h)
+
+    // artifacts indexer
+    h.indexer = new ArtifactIndexer(
+      paths.artifactsRoot,
+      store,
+      { added: (a) => emit('artifact:added', a), removed: (id) => emit('artifact:removed', { id }) },
+      (a) => removeThumbs(paths.thumbsDir, a.id)
+    )
+    setTimeout(() => {
+      try {
+        const r = h.indexer.rescan()
+        if (r.added || r.removed) log.info('artifacts rescan', r)
+      } catch (e) {
+        log.warn('artifacts rescan failed', { e: String(e) })
+      }
+      h.indexer.start()
+    }, 500)
+
+    // tray + menu
+    h.tray = new HiveTray(
+      () => h.trayInput(),
+      (a) => h.onTrayAction(a)
+    )
+    h.tray.create()
+    h.rebuildMenu = () =>
+      buildAppMenu({
+        ui: (cmd) => h.ui(cmd),
+        hideWindow: () => h.windows.hide(),
+        importWorkflow: () => {
+          importWorkflowFromDialog(h, h.windows.get())
+            .then((wf) => wf && h.ui({ kind: 'navigate', view: 'workflows' }))
+            .catch((e) => log.warn('import workflow failed', { e: String(e) }))
+        },
+        togglePause: () => h.updateSettings({ schedulesPaused: !store.getSettings().schedulesPaused }),
+        paused: () => store.getSettings().schedulesPaused,
+        dataDir: paths.userData,
+        logsDir: paths.logsDir
+      })
+    h.rebuildMenu()
+
+    // power: catch up missed fires after sleep (SPEC 8.2); never block OS shutdown with a confirm
+    powerMonitor.on('resume', () => {
+      h.safe(() => h.engine.scheduler.catchUp('resume'), undefined)
+      // SLACK.md §4.6: the socket is probably half-open after sleep: reconnect at once, then gap-fill
+      h.slack?.resume('wake')
+      h.statusChanged()
+    })
+    powerMonitor.on('suspend', () => h.slack?.pause())
+    powerMonitor.on('shutdown', () => {
+      h.forceQuit = true
+    })
+
+    // window: hidden when launched at login (SPEC A13)
+    const hidden = h.launchedAtLogin() && process.env.HIVE_SMOKE !== '1'
+    h.windows.create(!hidden || pendingShow)
+    if (hidden) log.info('launched at login: starting hidden in the menu bar')
+
+    if (process.env.HIVE_NO_SCHEDULER !== '1') {
+      h.safe(() => h.engine.scheduler.start(), undefined)
+      // SLACK.md §9: Slack triggers start with the scheduler (schedulesPaused is read live by the engine)
+      h.safe(() => h.engine.slackTriggers?.start(), undefined)
+    }
+    // connects only when both tokens exist
+    void h.slack?.start().catch((e) => log.error('slack start failed', { e: String(e) }))
+    h.statusChanged()
+    // CONTRACT §13: list (never kill) processes an earlier Hive run left behind
+    setTimeout(() => void h.scanLeftovers(), 1500)
+  })
+}
+
+/** HIVE_SMOKE=1: prove renderer -> preload -> main IPC works through the real bridge, print, exit. */
+function runSmoke(win: BrowserWindow): void {
+  const go = async () => {
+    try {
+      const r = await win.webContents.executeJavaScript(
+        `Promise.all([window.hive.app.info(), window.hive.app.status(), window.hive.settings.get(), window.hive.repos.list(), window.hive.profiles.list(), window.hive.workflows.list()]).then(([info, status, settings, repos, profiles, workflows]) => JSON.stringify({ ok: true, hive: typeof window.hive, require: typeof require, info, status, settings, repos: repos.length, profiles: profiles.length, workflows: workflows.length }))`
+      )
+      console.log(`HIVE_SMOKE ${r}`)
+      app.exit(0)
+    } catch (e) {
+      console.log(`HIVE_SMOKE FAIL ${String(e)}`)
+      app.exit(1)
+    }
+  }
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', go)
+  else void go()
+}

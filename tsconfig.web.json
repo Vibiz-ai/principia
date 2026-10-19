@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "composite": true,
+    "baseUrl": ".",
+    "paths": { "@shared/*": ["src/shared/*"], "@renderer/*": ["src/renderer/src/*"] }
+  },
+  "include": ["src/renderer/src/**/*", "src/preload/index.d.ts", "src/shared/types.ts", "src/shared/ipc.ts", "src/shared/errors.ts", "src/shared/ids.ts", "src/shared/memory.ts", "src/shared/live.ts", "src/shared/authoring.ts", "src/shared/inputs.ts", "src/shared/slack.ts", "src/shared/marketplace.ts", "src/shared/externalLinks.ts", "src/shared/gateway.ts"]
+}

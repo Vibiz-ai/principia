@@ -1,0 +1,218 @@
+/*
+ * Hive design tokens — native macOS app (Electron renderer).
+ * Copy to src/renderer/styles/tokens.css. Dark is the only MVP theme
+ * (main sets nativeTheme.themeSource = 'dark'). Fonts are bundled locally
+ * from the `geist` npm package — no CDN, no network.
+ */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../assets/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- Surfaces ---------- */
+  --bg: #1e1f22;                         /* main content */
+  --sidebar-bg: rgba(30, 31, 34, 0.72);  /* over window vibrancy 'sidebar' */
+  --surface-0: #1a1b1e;                  /* opaque sidebar (reduced transparency) */
+  --surface-1: #232427;                  /* grouped lists, cards, status bar */
+  --surface-2: #2a2b2f;                  /* sheets, popovers, drawer, graph nodes */
+  --surface-3: #313237;                  /* hover inside surfaces */
+  --term-bg: #17181b;                    /* xterm background */
+  --canvas-bg: #1b1c1f;
+  --canvas-dot: rgba(255, 255, 255, 0.06);
+  --overlay: rgba(0, 0, 0, 0.45);        /* behind sheets */
+
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+  --sidebar-selected: rgba(255, 255, 255, 0.09);
+  --row-hover: rgba(255, 255, 255, 0.04);
+  --row-selected: rgba(110, 140, 255, 0.16);
+
+  /* ---------- Borders ---------- */
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --border-focus: #6e8cff;
+  --edge: rgba(255, 255, 255, 0.22);     /* canvas dependency edges */
+
+  /* ---------- Text ---------- */
+  --text-primary: #e6e6e9;
+  --text-secondary: #a1a1a9;
+  --text-tertiary: #6d6e76;
+  --text-disabled: #4a4b52;
+  --text-on-accent: #ffffff;
+
+  /* ---------- Accent ---------- */
+  --accent: #6e8cff;
+  --accent-hover: #8299ff;
+  --accent-pressed: #5a78ee;
+  --accent-soft: rgba(110, 140, 255, 0.14);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px rgba(110, 140, 255, 0.7);
+
+  /* ---------- Status (always paired with a glyph) ---------- */
+  --status-idle: #8b8d96;
+  --status-idle-soft: rgba(139, 141, 150, 0.14);
+  --status-running: #4c9cff;
+  --status-running-soft: rgba(76, 156, 255, 0.14);
+  --status-success: #3ecf8e;
+  --status-success-soft: rgba(62, 207, 142, 0.14);
+  --status-failed: #f25c5c;
+  --status-failed-soft: rgba(242, 92, 92, 0.14);
+  --status-scheduled: #b28cff;
+  --status-scheduled-soft: rgba(178, 140, 255, 0.14);
+  --status-warning: #f0b54a;              /* paused, LIVE keys, missed */
+  --status-warning-soft: rgba(240, 181, 74, 0.14);
+  --status-canceled: #6d6e76;
+  --status-canceled-soft: rgba(109, 110, 118, 0.14);
+  --status-needs: #f5a524;                /* Needs you: asks, idle turns (LIVE.md §11) */
+  --status-needs-soft: rgba(245, 165, 36, 0.14);
+
+  /* ---------- Chart series (categorical, fixed order; validated on the dark surface) ---------- */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #9085e9;
+  --series-5: #d55181;
+  --series-other: #8b8d96;
+
+  /* ---------- Providers (dots, segment tints only) ---------- */
+  --provider-claude: #d97757;
+  --provider-codex: #10a37f;
+  --provider-cursor: #e6e6e9;
+  --provider-gemini: #4f8df5;
+  --provider-shell: #a1a1a9;
+
+  /* ---------- Typography ---------- */
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-mono: 'Geist Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+
+  --text-xs: 11px;   /* labels, section headers (uppercase, +0.04em) */
+  --text-sm: 12px;   /* secondary, captions, status bar */
+  --text-md: 13px;   /* base UI text */
+  --text-lg: 15px;   /* toolbar titles, sheet titles */
+  --text-xl: 20px;   /* empty-state / onboarding headings */
+  --text-2xl: 28px;  /* reserved: welcome title */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --tracking-caps: 0.04em;
+
+  /* ---------- Spacing (8px grid, 4px half-step) ---------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ---------- Radii ---------- */
+  --radius-xs: 4px;    /* chips, kbd */
+  --radius-sm: 6px;    /* controls, rows, sidebar items */
+  --radius-md: 8px;    /* cards, graph nodes, tiles */
+  --radius-lg: 12px;   /* sheets, drawers, group frames */
+  --radius-full: 999px;
+
+  /* ---------- Sizes ---------- */
+  --control-h-sm: 22px;
+  --control-h: 28px;
+  --control-h-lg: 32px;
+  --row-h: 32px;
+  --sidebar-row-h: 28px;
+  --toolbar-h: 52px;          /* matches hiddenInset traffic-light band */
+  --tabstrip-h: 32px;
+  --statusbar-h: 24px;
+  --sidebar-w: 232px;
+  --sidebar-w-min: 200px;
+  --sidebar-w-max: 320px;
+  --drawer-w: 400px;
+  --sheet-w: 560px;
+  --traffic-light-inset: 80px; /* left padding for toolbar when sidebar collapsed */
+  --icon-sm: 14px;
+  --icon: 16px;
+  --node-w: 168px;
+  --node-h: 44px;
+  --tile-w: 160px;
+  --tile-h: 120px;
+
+  /* ---------- Elevation (floating layers only) ---------- */
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border-strong);
+  --shadow-sheet: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-strong);
+  --shadow-node: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  /* ---------- Motion ---------- */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --dur-pulse: 1600ms;
+
+  /* ---------- Z layers ---------- */
+  --z-drawer: 20;
+  --z-sheet: 30;
+  --z-popover: 40;
+  --z-palette: 50;
+  --z-tooltip: 60;
+}
+
+/* macOS "Reduce transparency" */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --sidebar-bg: var(--surface-0); }
+}
+
+/* macOS "Reduce motion" */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-med: 0ms; --dur-pulse: 0ms; }
+}
+
+/* Window lost focus: selection/accent go grey like native lists */
+:root.is-inactive {
+  --sidebar-selected: rgba(255, 255, 255, 0.06);
+  --row-selected: rgba(255, 255, 255, 0.07);
+}
+
+/* ---------- Base (native-app behaviour) ---------- */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;              /* no page scroll; panes scroll */
+  background: var(--bg);
+  color: var(--text-primary);
+  font: var(--weight-regular) var(--text-md) / var(--leading-normal) var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  cursor: default;
+  user-select: none;             /* chrome is not selectable */
+}
+.selectable, input, textarea, .xterm, pre, code, [contenteditable] { user-select: text; }
+code, pre, kbd, .mono { font-family: var(--font-mono); }
+
+.drag { -webkit-app-region: drag; }
+.no-drag, .drag button, .drag input, .drag select, .drag a, .drag [role='button'] { -webkit-app-region: no-drag; }
+
+:focus { outline: none; }
+:focus-visible { box-shadow: var(--focus); border-radius: var(--radius-sm); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes hive-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.status-dot--running { animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }

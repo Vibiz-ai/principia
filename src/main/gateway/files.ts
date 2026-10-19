@@ -1,0 +1,36 @@
+import fs from 'node:fs'
+import crypto from 'node:crypto'
+
+/** Open once and validate that descriptor, avoiding lstat/read symlink races. */
+export function readPrivateJson(file: string, limit: number): unknown {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile() || stat.size > limit) throw new Error('Invalid gateway message')
+    // Read at most limit + 1 bytes even if the peer grows the file after fstat.
+    const bytes = Buffer.alloc(limit + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const n = fs.readSync(fd, bytes, offset, bytes.length - offset, null)
+      if (!n) break
+      offset += n
+    }
+    if (offset > limit) throw new Error('Gateway message too large')
+    return JSON.parse(bytes.subarray(0, offset).toString('utf8'))
+  } finally { fs.closeSync(fd) }
+}
+
+/** A peer cannot preplant a predictable temporary symlink to redirect writes. */
+export function writePrivateJson(file: string, value: unknown): void {
+  const temp = `${file}.${crypto.randomBytes(16).toString('hex')}.tmp`
+  let fd: number | undefined
+  try {
+    fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600)
+    fs.writeFileSync(fd, JSON.stringify(value))
+    fs.closeSync(fd); fd = undefined
+    fs.renameSync(temp, file)
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+    try { fs.unlinkSync(temp) } catch {}
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Generate an image (OpenAI)",
+    "description": "Renders an image with OpenAI gpt-image-1 and saves it to Artifacts.",
+    "inputs": [
+      {
+        "name": "prompt",
+        "label": "Image prompt",
+        "type": "multiline"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render with OpenAI",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Generate an image with the OpenAI Images API and save it.\n\n1. POST https://api.openai.com/v1/images/generations with `Authorization: Bearer $OPENAI_API_KEY`, JSON {\"model\":\"gpt-image-1\",\"prompt\": <prompt>, \"size\":\"1536x1024\"}. Use curl; never print the key.\n2. Decode data[0].b64_json into \"$ARTIFACTS_DIR/image.png\".\n3. Reply with the saved path.\n\nIf OPENAI_API_KEY is not set, stop and say: add OPENAI_API_KEY in Hive \u203a Keys.\n\nPrompt:\n{{inputs.prompt}}"
+      }
+    ]
+  }
+}

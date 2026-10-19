@@ -1,0 +1,30 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Resize images in a folder",
+    "description": "Shrinks every image in a folder to a max size with macOS sips. Originals stay; copies land in Artifacts.",
+    "inputs": [
+      {
+        "name": "folder",
+        "label": "Folder with images"
+      },
+      {
+        "name": "max",
+        "label": "Max width/height (px)",
+        "default": "1600"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "resize",
+        "type": "shell",
+        "label": "Resize",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "command": "#!/bin/sh\n# Resizes every image in a folder with macOS sips (no installs). Originals are kept.\nset -eu\nsrc=\"$HIVE_INPUT_FOLDER\"\nmax=\"${HIVE_INPUT_MAX:-1600}\"\nout=\"$ARTIFACTS_DIR/resized\"\nmkdir -p \"$out\"\nn=0\nfor f in \"$src\"/*; do\n  case \"$(printf %s \"$f\" | tr 'A-Z' 'a-z')\" in\n    *.png|*.jpg|*.jpeg|*.heic|*.webp|*.tif|*.tiff) ;;\n    *) continue ;;\n  esac\n  sips -Z \"$max\" \"$f\" --out \"$out/$(basename \"$f\")\" >/dev/null\n  n=$((n + 1))\ndone\necho \"$n images resized to max ${max}px -> $out\"\n"
+      }
+    ]
+  }
+}

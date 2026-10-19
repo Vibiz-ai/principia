@@ -1,0 +1,15 @@
+node_modules
+out/
+release/
+dist/
+*.log
+.DS_Store
+.hive-dev-data/
+*.tsbuildinfo
+out-fakeslack
+out-cloud/
+principia-data/
+cloud/.env
+cloud/workspace/
+.env
+.env.local

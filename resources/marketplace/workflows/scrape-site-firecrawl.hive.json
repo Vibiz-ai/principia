@@ -1,0 +1,26 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Scrape a site to Markdown (Firecrawl)",
+    "description": "Scrapes a URL with Firecrawl, saves the Markdown to Artifacts and writes a short summary.",
+    "inputs": [
+      {
+        "name": "url",
+        "label": "URL to scrape"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "scrape",
+        "type": "agent",
+        "label": "Scrape with Firecrawl",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Scrape {{inputs.url}} with the Firecrawl API.\n\n1. POST https://api.firecrawl.dev/v1/scrape with `Authorization: Bearer $FIRECRAWL_API_KEY`, JSON {\"url\":\"{{inputs.url}}\",\"formats\":[\"markdown\"]}. Use curl; never print the key.\n2. Save data.markdown to \"$ARTIFACTS_DIR/page.md\".\n3. Reply with a 5-bullet summary of the page and the saved path.\n\nIf FIRECRAWL_API_KEY is not set, stop and say: add FIRECRAWL_API_KEY in Hive \u203a Keys."
+      }
+    ]
+  }
+}

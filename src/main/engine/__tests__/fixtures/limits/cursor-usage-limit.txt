@@ -1,0 +1,1 @@
+Error: You've hit your usage limit for Claude Sonnet. Try again at 3:05 PM or switch to Auto.

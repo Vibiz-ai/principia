@@ -1,0 +1,31 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Fetch a JSON API",
+    "description": "GETs a JSON endpoint (optionally with a key from Hive › Keys as a bearer token) and saves the response to Artifacts.",
+    "inputs": [
+      {
+        "name": "url",
+        "label": "URL"
+      },
+      {
+        "name": "key_name",
+        "label": "Key name in Hive › Keys (optional)",
+        "default": ""
+      }
+    ],
+    "nodes": [
+      {
+        "id": "fetch",
+        "type": "shell",
+        "label": "Fetch",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 5,
+        "command": "// Fetches a JSON API (GET) and saves the response; optional bearer key from Hive › Keys by name.\nconst url = process.env.HIVE_INPUT_URL\nconst keyName = (process.env.HIVE_INPUT_KEY_NAME || '').trim()\nconst headers = { Accept: 'application/json' }\nif (keyName) {\n  const key = process.env[keyName]\n  if (!key) throw new Error(`${keyName} is not set: add it in Hive › Keys`)\n  headers.Authorization = `Bearer ${key}`\n}\nconst res = await fetch(url, { headers })\nif (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`)\nconst body = await res.json()\nconst { writeFileSync } = await import('node:fs')\nconst out = `${process.env.ARTIFACTS_DIR}/response.json`\nwriteFileSync(out, JSON.stringify(body, null, 2))\nconsole.log(`saved ${Array.isArray(body) ? body.length + ' items' : 'response'} -> ${out}`)\n",
+        "lang": "node"
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","cwd":"/tmp/x","session_id":"7d3c1f2e-0000-4000-8000-000000000001","tools":["Read"],"model":"claude-haiku-4-5"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792155600,"rateLimitType":"five_hour"},"uuid":"1","session_id":"7d3c1f2e-0000-4000-8000-000000000001"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I added a retry for 429 Too Many Requests and a RESOURCE_EXHAUSTED handler. When the API says \"usage limit reached\" we back off."}]},"parent_tool_use_id":null,"session_id":"7d3c1f2e-0000-4000-8000-000000000001"}
+{"type":"result","subtype":"success","is_error":false,"result":"Done: rate limiting now backs off on 429.","session_id":"7d3c1f2e-0000-4000-8000-000000000001","total_cost_usd":0.002}

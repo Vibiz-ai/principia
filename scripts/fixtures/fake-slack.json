@@ -1,0 +1,17 @@
+{
+  "team": { "id": "T0FAKE", "name": "Acme (fake)", "domain": "acme-fake" },
+  "bot": { "userId": "UHIVEBOT", "botId": "BHIVEBOT", "appId": "AFAKE01" },
+  "tokens": { "bot": "xoxb-fake-0000000000-0000000000000-fakefakefakefakefake", "app": "xapp-1-AFAKE01-0000000000-fakefakefakefakefakefake" },
+  "users": [
+    { "id": "UDANA", "name": "dana", "real_name": "Dana Lee" },
+    { "id": "USAM", "name": "sam", "real_name": "Sam Roe" }
+  ],
+  "channels": [
+    { "id": "CSUPPORT", "name": "support", "kind": "channel", "members": ["UHIVEBOT", "UDANA", "USAM"] },
+    { "id": "CRANDOM", "name": "random", "kind": "channel", "members": ["UDANA"] },
+    { "id": "DDANA", "name": "UDANA", "kind": "dm", "members": ["UHIVEBOT", "UDANA"], "user": "UDANA" }
+  ],
+  "messages": {
+    "CSUPPORT": [{ "user": "UDANA", "text": "Is the deploy done?" }, { "user": "USAM", "text": "Checking now" }]
+  }
+}

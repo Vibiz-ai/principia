@@ -1,0 +1,35 @@
+appId: ai.vibiz.hive
+productName: Principia
+copyright: Copyright © 2026 Vibiz
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!**/node_modules/*/{test,tests,__tests__,docs,example,examples}/**'
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+  - '**/node_modules/node-pty/**'
+npmRebuild: false # @electron/rebuild already ran in postinstall
+extraResources:
+  - from: resources
+    to: resources
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: dir
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  darkModeSupport: true
+  hardenedRuntime: false
+  identity: null # unsigned (right-click -> Open on first launch)
+  extendInfo:
+    CFBundleName: Principia
+    CFBundleDisplayName: Principia
+    LSApplicationCategoryType: public.app-category.developer-tools
+    NSAppleEventsUsageDescription: Principia opens files and folders in Finder.
+dmg:
+  artifactName: Principia-${version}-${arch}.${ext}

@@ -1,0 +1,38 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Code review: Claude + Codex",
+    "description": "Claude and Codex review your uncommitted changes together and agree on a list of real problems.",
+    "inputs": [
+      {
+        "name": "repo",
+        "label": "Repository",
+        "type": "repo"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "review",
+        "type": "room",
+        "label": "Review the diff",
+        "after": [],
+        "cwd": "{{inputs.repo}}",
+        "timeoutMin": 30,
+        "participants": [
+          {
+            "profileId": "prof_claude",
+            "label": "Claude"
+          },
+          {
+            "profileId": "prof_codex",
+            "label": "Codex"
+          }
+        ],
+        "topic": "Review the uncommitted changes in this repository (git diff HEAD). List only real bugs, with file:line and a concrete failing scenario. Challenge each other's findings; drop anything you can't defend.",
+        "rounds": 2,
+        "final": "summary"
+      }
+    ]
+  }
+}
