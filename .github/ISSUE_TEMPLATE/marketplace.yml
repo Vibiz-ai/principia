@@ -1,0 +1,43 @@
+name: Marketplace contribution
+description: Propose a workflow, skill, script or agent for the Principia library.
+title: "[Marketplace] "
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Capability type
+      options:
+        - Workflow
+        - Skill
+        - Script
+        - Agent
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What does it help a company do?
+      description: Describe the task, who uses it and the output they receive.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source and example
+      description: Link a public file or pull request, and include sample inputs and expected output. Use fictional data and never include credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements and external actions
+      description: List agent compatibility, local tools, connection or API key names, and anything it sends or changes outside the workspace.
+    validations:
+      required: true
+  - type: textarea
+    id: testing
+    attributes:
+      label: How was it tested?
+      description: Describe the environment, checks performed and any limitations.
+    validations:
+      required: true

@@ -35,6 +35,7 @@ export type ViewState =
   | { name: 'session'; missing?: { adapter: AdapterId; repoId: Id | null } | null; missingRepoId?: Id | null }
   | { name: 'canvas'; focusRunId?: Id }
   | { name: 'workflows' }
+  | { name: 'marketplace' }
   | { name: 'editor'; workflowId: Id | null; nonce: number; approvalDraftId?: Id; script?: boolean }
   | { name: 'run'; runId: Id; stepId?: Id; agentId?: Id }
   | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }

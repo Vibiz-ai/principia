@@ -37,6 +37,7 @@ const NAV: { key: ViewState['name']; label: string; icon: string; kbd?: string }
   { key: 'home', label: 'Home', icon: 'home', kbd: '⌘1' },
   { key: 'canvas', label: 'Canvas', icon: 'canvas', kbd: '⌘2' },
   { key: 'workflows', label: 'Workflows', icon: 'workflows', kbd: '⌘3' },
+  { key: 'marketplace', label: 'Marketplace', icon: 'marketplace' },
   { key: 'schedules', label: 'Schedules', icon: 'schedules', kbd: '⌘4' },
   { key: 'artifacts', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5' },
   { key: 'keys', label: 'Keys', icon: 'keys', kbd: '⌘6' },

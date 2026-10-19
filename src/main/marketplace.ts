@@ -53,7 +53,7 @@ export interface MarketplaceDeps {
   /** Parses + validates a .hive.json object and saves it (same path as Workflows › Import). */
   importWorkflow: (raw: unknown) => { id: Id }
   /** Draft nodes of a parsed .hive.json (for the preview); throws when it is not one. */
-  workflowNodes: (raw: unknown) => { id: string; type: string; label: string; command: string | null }[]
+  workflowNodes: (raw: unknown) => { id: string; type: string; label: string; command: string | null; prompt?: string }[]
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))

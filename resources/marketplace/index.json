@@ -1,8 +1,85 @@
 {
   "hive": "marketplace",
   "version": 1,
-  "name": "Hive built-in",
+  "name": "Principia library",
   "items": [
+    {
+      "id": "meeting-to-actions",
+      "kind": "workflow",
+      "name": "Meeting notes to action plan",
+      "description": "Turn pasted meeting notes into decisions, owners, open questions and a follow-up draft.",
+      "tags": [
+        "operations",
+        "meetings",
+        "planning"
+      ],
+      "path": "workflows/meeting-to-actions.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "weekly-company-review",
+      "kind": "workflow",
+      "name": "Weekly company review",
+      "description": "Bring your weekly updates together into a company brief with blockers and next steps.",
+      "tags": [
+        "operations",
+        "planning",
+        "reporting"
+      ],
+      "path": "workflows/weekly-company-review.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "customer-follow-up",
+      "kind": "workflow",
+      "name": "Customer conversation follow-up",
+      "description": "Find unanswered customer requests and prepare a reply for your review.",
+      "tags": [
+        "customers",
+        "sales",
+        "operations"
+      ],
+      "path": "workflows/customer-follow-up.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "meeting-actions",
+      "kind": "skill",
+      "name": "Meeting action planner",
+      "description": "Extract decisions, owners and follow-ups from meeting notes.",
+      "tags": [
+        "operations",
+        "meetings"
+      ],
+      "path": "skills/meeting-actions/SKILL.md",
+      "author": "Principia"
+    },
+    {
+      "id": "customer-brief",
+      "kind": "skill",
+      "name": "Customer context brief",
+      "description": "Summarize the customer situation before a call or handoff.",
+      "tags": [
+        "customers",
+        "sales",
+        "research"
+      ],
+      "path": "skills/customer-brief/SKILL.md",
+      "author": "Principia"
+    },
+    {
+      "id": "launch-checklist",
+      "kind": "skill",
+      "name": "Launch readiness review",
+      "description": "Check a launch plan for gaps, dependencies and clear ownership.",
+      "tags": [
+        "operations",
+        "marketing",
+        "planning"
+      ],
+      "path": "skills/launch-checklist/SKILL.md",
+      "author": "Principia"
+    },
     {
       "id": "generate-image-fal",
       "kind": "workflow",
@@ -17,7 +94,7 @@
         "FAL_KEY"
       ],
       "path": "workflows/generate-image-fal.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "generate-image-openai",
@@ -33,7 +110,7 @@
         "OPENAI_API_KEY"
       ],
       "path": "workflows/generate-image-openai.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "scrape-site-firecrawl",
@@ -49,7 +126,7 @@
         "FIRECRAWL_API_KEY"
       ],
       "path": "workflows/scrape-site-firecrawl.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "competitor-brief",
@@ -65,7 +142,7 @@
         "FIRECRAWL_API_KEY"
       ],
       "path": "workflows/competitor-brief.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "fix-bug-with-tests",
@@ -77,7 +154,7 @@
         "tests"
       ],
       "path": "workflows/fix-bug-with-tests.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "second-opinion-review",
@@ -92,7 +169,7 @@
         "codex"
       ],
       "path": "workflows/second-opinion-review.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "apify-actor",
@@ -108,7 +185,7 @@
         "APIFY_API_KEY"
       ],
       "path": "scripts/apify-actor.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "resize-images",
@@ -120,19 +197,19 @@
         "files"
       ],
       "path": "scripts/resize-images.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "fetch-json",
       "kind": "script",
       "name": "Fetch a JSON API",
-      "description": "GETs a JSON endpoint, optionally with a key from Hive › Keys, and saves the response. Node.",
+      "description": "GETs a JSON endpoint, optionally with a key from Principia \u203a Keys, and saves the response. Node.",
       "tags": [
         "api",
         "data"
       ],
       "path": "scripts/fetch-json.hive.json",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "code-reviewer",
@@ -144,7 +221,7 @@
         "review"
       ],
       "path": "agents/code-reviewer.md",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "test-writer",
@@ -156,7 +233,7 @@
         "tests"
       ],
       "path": "agents/test-writer.md",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "screenshot-critic",
@@ -169,7 +246,7 @@
         "ui"
       ],
       "path": "agents/screenshot-critic.md",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "firecrawl",
@@ -185,7 +262,7 @@
         "FIRECRAWL_API_KEY"
       ],
       "path": "skills/firecrawl/SKILL.md",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "fal-image",
@@ -201,7 +278,7 @@
         "FAL_KEY"
       ],
       "path": "skills/fal-image/SKILL.md",
-      "author": "Hive"
+      "author": "Principia"
     },
     {
       "id": "screenshot-to-code",
@@ -215,7 +292,7 @@
         "coding"
       ],
       "path": "skills/screenshot-to-code/SKILL.md",
-      "author": "Hive"
+      "author": "Principia"
     }
   ]
 }

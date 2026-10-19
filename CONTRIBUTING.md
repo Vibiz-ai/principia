@@ -41,3 +41,7 @@ Run tests relevant to your change. Some database tests require native modules bu
 - `docs/CONTRACT.md`: interfaces and behavior contracts.
 
 Preserve permission boundaries, subscription authentication defaults and secret redaction. Never attach tokens, environment files, local databases, private transcripts or customer data to an issue or pull request. Report security problems privately through GitHub's vulnerability reporting feature when enabled; do not disclose credentials in public issues.
+
+## Contribute a workflow or skill
+
+The desktop **Marketplace** lists reusable capabilities from `resources/marketplace/index.json`. You can propose an item using the Marketplace issue template or contribute its files in a pull request. See the [catalog contribution guide](resources/marketplace/README.md) for formats, supported install targets and testing instructions.

@@ -113,6 +113,7 @@ function PaletteInner({ mode }: { mode: PaletteMode }): React.JSX.Element {
       { id: 'v:agents', group: 'Go to', label: 'Agents', icon: 'agents', kbd: '⇧⌘A', run: () => void navigate({ name: 'agents' }) },
       { id: 'v:home', group: 'Go to', label: 'Home', icon: 'home', kbd: '⌘1', run: () => void navigate({ name: 'home' }) },
       { id: 'v:canvas', group: 'Go to', label: 'Canvas', icon: 'canvas', kbd: '⌘2', run: () => void navigate({ name: 'canvas' }) },
+      { id: 'v:market', group: 'Go to', label: 'Marketplace — workflows and skills', icon: 'marketplace', run: () => void navigate({ name: 'marketplace' }) },
       { id: 'v:wf', group: 'Go to', label: 'Workflows', icon: 'workflows', kbd: '⌘3', run: () => void navigate({ name: 'workflows' }) },
       { id: 'v:sch', group: 'Go to', label: 'Schedules', icon: 'schedules', kbd: '⌘4', run: () => void navigate({ name: 'schedules' }) },
       { id: 'v:art', group: 'Go to', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5', run: () => void navigate({ name: 'artifacts' }) },

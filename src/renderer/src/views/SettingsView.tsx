@@ -571,7 +571,7 @@ function MarketplaceUrlRow(): React.JSX.Element {
     if (url !== saved) void updateSettings({ marketplaceUrl: url || null })
   }
   return (
-    <SRow label="Marketplace URL" desc="Optional. An https link to a marketplace index.json, listed next to Principia's built-in catalog (Canvas › Marketplace).">
+    <SRow label="Marketplace URL" desc="Optional. An https link to a marketplace index.json, listed next to Principia's built-in catalog (Marketplace in the sidebar).">
       <input
         className="input"
         style={{ width: 280 }}

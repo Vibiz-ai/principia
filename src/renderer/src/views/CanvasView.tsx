@@ -10,7 +10,6 @@ import { agentLabel, attributionNote, descendants, isIdleWaiting, type AgentInde
 import { mergeAgents, useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
 import { StepLog } from '../components/StepLog'
 import { TerminalPane } from '../components/TerminalPane'
-import { MarketplaceSheet } from '../components/MarketplaceSheet'
 import { Button, EmptyState, ErrorState, IconButton, Loading, Pill, RelativeTime, StatusGlyph, Toolbar, useTick } from '../components/ui'
 import type { ClaudeHistorySession } from '@shared/authoring'
 import { TranscriptSheet } from '../components/history/TranscriptSheet'
@@ -57,7 +56,6 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   const histSince = useMemo(() => new Date(Date.now() - 7 * 86_400_000).toISOString(), [])
   const hist = useClaudeHistory({ since: histSince, limit: 500 }, showHistory && historyOn)
   const [preview, setPreview] = useState<ClaudeHistorySession | null>(null)
-  const [market, setMarket] = useState(false)
   const toggleHistory = (): void => {
     setShowHistory((v) => {
       saveJson('hive.canvasHistory', !v)
@@ -215,7 +213,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
           <Button variant={canvasMode === 'workflows' ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'workflows'} onClick={() => changeMode('workflows')}>Workflows</Button>
         </div>
         {canvasMode === 'agents' && <span className="canvas-agent-summary" aria-live="polite">{agentCounts.total} agents{agentCounts.working > 0 ? ` · ${agentCounts.working} running` : ''}{agentCounts.failed > 0 ? ` · ${agentCounts.failed} failed` : ''}</span>}
-        <Button onClick={() => setMarket(true)} title="Find workflows, Claude Code agents and skills to install">
+        <Button onClick={() => void navigate({ name: 'marketplace' })} title="Find workflows, Claude Code agents and skills to install">
           Marketplace
         </Button>
         {historyOn && canvasMode === 'workflows' && (
@@ -242,7 +240,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
             <Button variant="primary" onClick={() => openPalette('runWorkflow')}>
               Run a Workflow
             </Button>
-            <Button onClick={() => setMarket(true)}>Browse Marketplace</Button>
+            <Button onClick={() => void navigate({ name: 'marketplace' })}>Browse Marketplace</Button>
           </EmptyState>
         ) : (
           <PillContext.Provider value={onPill}>
@@ -273,7 +271,6 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
             />
           </div>
         )}
-        {market && <MarketplaceSheet onClose={() => setMarket(false)} />}
         {preview && <TranscriptSheet session={preview} onClose={() => setPreview(null)} />}
         {sel && snap && <Drawer sel={sel.ref} snap={snap} idx={idx} agentId={sel.agentId ?? null} onAgent={(agentId) => setSel((s) => (s ? { ...s, agentId } : s))} onClose={() => setSel(null)} />}
       </div>

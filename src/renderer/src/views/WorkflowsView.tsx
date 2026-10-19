@@ -7,14 +7,12 @@ import { isScript, shapeSummary } from '../lib/workflow'
 import { useCoalesced } from '../lib/useThrottled'
 import { attempt, navigate, openRunInputs, providerLabel, toast } from '../state/store'
 import { isNothingToDo, originLine } from '../lib/authoring'
-import { MarketplaceSheet } from '../components/MarketplaceSheet'
 
 type SortKey = 'name' | 'updated' | 'lastRun'
 
 export function WorkflowsView(): React.JSX.Element {
   const [workflows, setWorkflows] = useState<Workflow[] | null>(null)
   const [runs, setRuns] = useState<Run[]>([])
-  const [market, setMarket] = useState(false)
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [error, setError] = useState<string | null>(null)
   const [sel, setSel] = useState<string | null>(null)
@@ -121,7 +119,7 @@ export function WorkflowsView(): React.JSX.Element {
   return (
     <div className="view">
       <Toolbar title="Workflows">
-        <Button onClick={() => setMarket(true)}>Marketplace</Button>
+        <Button onClick={() => void navigate({ name: 'marketplace' })}>Marketplace</Button>
         <Button icon="plus" onClick={() => void navigate({ name: 'editor', workflowId: null, nonce: Date.now(), script: true })} title="A deterministic script (Python, Node or shell): no agents, no tokens. Runs on demand, on a schedule or from Slack, with your Keys as env vars.">
           New Script
         </Button>
@@ -211,7 +209,6 @@ export function WorkflowsView(): React.JSX.Element {
           })}
         </div>
       )}
-      {market && <MarketplaceSheet onClose={() => setMarket(false)} />}
     </div>
   )
 }

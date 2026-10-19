@@ -20,6 +20,7 @@ import { SessionView } from './views/SessionView'
 import { SettingsView } from './views/SettingsView'
 import { SlackView } from './views/SlackView'
 import { WorkflowEditor } from './views/WorkflowEditor'
+import { MarketplaceView } from './views/MarketplaceView'
 import { WorkflowsView } from './views/WorkflowsView'
 
 const TITLES: Record<ViewState['name'], string> = {
@@ -28,6 +29,7 @@ const TITLES: Record<ViewState['name'], string> = {
   session: 'Session',
   canvas: 'Canvas',
   workflows: 'Workflows',
+  marketplace: 'Marketplace',
   editor: 'Workflow',
   run: 'Run',
   schedules: 'Schedules',
@@ -94,6 +96,8 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       return <SessionView />
     case 'canvas':
       return <CanvasView focusRunId={view.focusRunId} />
+    case 'marketplace':
+      return <MarketplaceView />
     case 'workflows':
       return <WorkflowsView />
     case 'editor':

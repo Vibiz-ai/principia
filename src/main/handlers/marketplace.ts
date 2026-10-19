@@ -30,6 +30,7 @@ export function registerMarketplaceHandlers(h: Hive): void {
         id: n.id,
         type: n.type,
         label: n.label,
+        ...(n.type === 'agent' ? { prompt: n.prompt } : {}),
         command: n.type === 'shell' || n.type === 'wait' ? n.command : n.type === 'check' ? n.command : null
       }))
   })

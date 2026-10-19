@@ -61,7 +61,7 @@ export interface MarketPreview {
   target: string | null
   /** Agent / skill: the file as it will be written. Workflow: null (see `nodes`). */
   text: string | null
-  nodes: { id: string; type: string; label: string; command: string | null }[]
+  nodes: { id: string; type: string; label: string; command: string | null; prompt?: string }[]
   /** An agent/skill file already exists at `target` and would be replaced. */
   overwrites: boolean
 }

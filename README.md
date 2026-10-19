@@ -104,3 +104,9 @@ The desktop renderer is sandboxed, uses typed IPC and has no production network 
 ## License
 
 [MIT](LICENSE).
+
+### Marketplace
+
+Browse **Marketplace** in the desktop sidebar for reusable workflows, skills, scripts and agents. Search by task or use case, inspect what an item does, then install it. Workflows open as editable copies; installation does not start a run. Skills and subagents currently install for Claude Code. You can also add an HTTPS community catalog in Settings → Data.
+
+Want to share a company capability? See the [Marketplace contribution guide](resources/marketplace/README.md).
