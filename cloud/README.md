@@ -120,3 +120,7 @@ Local standalone Node needs `better-sqlite3` built for your Node ABI. The deskto
 ```sh
 ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron cloud/workflows.smoke.mjs
 ```
+
+## Browser workspace direction
+
+The preferred remote interface is a mobile-friendly Principia web workspace, with Telegram remaining optional. This browser interface is planned, not implemented in this runner. It should provide task conversations, live agent hierarchy, jobs and artifacts, approvals, and company connections through the existing runner API. A browser session/authentication layer and streaming updates are still required; the runner API token must remain server-side rather than being embedded in a public web app. An installable PWA can provide home-screen access without a separate native mobile app.

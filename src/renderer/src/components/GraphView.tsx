@@ -104,7 +104,8 @@ function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
   const childCount = data.childCount ?? 0
   const title = data.task || data.sub
   const cost = typeof data.costUsd === 'number' && Number.isFinite(data.costUsd) ? `$${data.costUsd.toFixed(data.costUsd > 0 && data.costUsd < .01 ? 3 : 2)}` : null
-  const role = `${data.role ?? ''} ${data.label}`.toLowerCase()
+  const declaredRole = (data.role ?? '').toLowerCase()
+  const role = declaredRole && !['agent', 'subagent', 'session', 'workflow step'].includes(declaredRole) ? declaredRole : data.label.toLowerCase()
   const roleIcon = /research|search|audit/.test(role) ? 'search' : /test|review|check/.test(role) ? 'shield' : /writ|edit|copy/.test(role) ? 'edit' : /cod|engineer|develop/.test(role) ? 'code' : 'agents'
   const providerIcon = data.adapter === 'claude' ? 'spark' : data.adapter === 'codex' ? 'code' : data.adapter === 'shell' ? 'terminal' : 'grid'
   const statusIcon = needs ? 'warning' : data.status === 'passed' ? 'check' : data.status === 'failed' ? 'close' : data.status === 'running' ? 'refresh' : 'pause'
