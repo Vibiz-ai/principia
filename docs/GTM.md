@@ -6,7 +6,7 @@ Audit date: **19 October 2026**. This is a proposed execution plan; no launch su
 
 | Item | Verified public state | Evidence |
 | --- | --- | --- |
-| Repository | Public, `example-org/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
+| Repository | Public, `Vibiz-ai/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
 | Stars / forks | **1 star / 0 forks** | Public repository API, checked 19 October 2026 |
 | Open issues / PRs | **0 open issues / 0 open PRs** | [Issues](https://github.com/Vibiz-ai/principia/issues), [pull requests](https://github.com/Vibiz-ai/principia/pulls) |
 | License | MIT recognized by GitHub | [License](https://github.com/Vibiz-ai/principia/blob/main/LICENSE) |
@@ -16,7 +16,7 @@ Audit date: **19 October 2026**. This is a proposed execution plan; no launch su
 | Releases / app downloads | **No GitHub releases** returned by the releases API; therefore no release-attached Mac installer or release download count to report | [Releases](https://github.com/Vibiz-ai/principia/releases) |
 | User setup docs | README with source quick start, shared connections and self-hosted cloud setup | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md), [cloud guide](https://github.com/Vibiz-ai/principia/blob/main/cloud/README.md) |
 | Contributor foundation | CONTRIBUTING, SECURITY, bug/feature forms, PR template and MIT license are published | [Contribution guide](https://github.com/Vibiz-ai/principia/blob/main/CONTRIBUTING.md), [security policy](https://github.com/Vibiz-ai/principia/blob/main/SECURITY.md) |
-| Demo / onboarding | Product screenshot now embedded in README; React product/install page source published in `website/` with a public [landing page](https://principia-command.cheeryoasis4.chatgpt.site). No prebuilt-app download is published; getting started requires a source build | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md) |
+| Demo / onboarding | Product screenshot now embedded in README; React product/install page source published in `website/` with a public [landing page](https://principia-vibiz-deployments.vercel.app). No prebuilt-app download is published; getting started requires a source build | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md) |
 
 These counts were read with GitHub CLI/API. They do not establish unique users, successful installations, retention, customer demand, or independent contributors. Passing CI also does not establish a signed/notarized Mac release or successful OAuth consent with every provider.
 

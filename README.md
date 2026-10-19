@@ -1,6 +1,6 @@
 # Principia
 
-[Website](https://principia-command.cheeryoasis4.chatgpt.site) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
+[Website](https://principia-vibiz-deployments.vercel.app) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
 **A workspace for running your company with people, agents, shared tools and repeatable workflows.**
 

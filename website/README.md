@@ -20,3 +20,19 @@ Global styles and Tailwind v4 theme are in `src/styles.css`; Tailwind is install
 The halftone wordmark footer lives in `src/components/ui/halftone-wordmark-footer.tsx`. It needs React and browser canvas APIs only; no provider, state library or image dependency. The page passes Principia copy, GitHub/documentation links, matching colours and responsive height. Pointer and click animation pauses offscreen and respects reduced motion.
 
 Installation uses source commands because no downloadable release is published yet. Replace that primary path with a verified release only when one exists. The Roman headquarters reference is an editorial explanation of the name. No analytics, sign-up form, fake testimonials, or tracking cookies are included.
+
+## Production hosting
+
+The public website is deployed on Vercel under **vibiz-deployments / principia**:
+https://principia-vibiz-deployments.vercel.app
+
+The Vercel project receives this directory as its deployment root. `vercel.json` specifies the Vite build, `npm ci`, and `dist` output. It does not deploy the Electron app or cloud runner. To publish an update with the Vercel CLI from this directory:
+
+```sh
+vercel link --yes --scope vibiz-deployments --project principia
+vercel project inspect --scope vibiz-deployments --non-interactive
+npm run build
+vercel deploy --prod --scope vibiz-deployments
+```
+
+This is a CLI deployment; automatic Git deployments are not configured. Keep `.vercel`, local environment files and `.openai` hosting state out of uploads and commits.

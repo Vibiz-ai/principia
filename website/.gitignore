@@ -1,3 +1,5 @@
 node_modules
 dist
 .openai/*.local.*
+.vercel
+*.local
