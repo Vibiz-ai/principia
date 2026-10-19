@@ -91,6 +91,8 @@ type V = void
 
 /** invoke channels: [request, response]. `void` request = call with no argument. */
 export interface InvokeMap {
+  'gateway:connect': [{ id: string }, import('./gateway').GatewayConnection]
+  'gateway:disconnect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:list': [void, import('./gateway').GatewayConnection[]]
   'gateway:save': [import('./gateway').GatewayConnectionInput, import('./gateway').GatewayConnection]
   'gateway:remove': [{ id: string }, void]
@@ -434,7 +436,7 @@ export type HiveApi = { [D in Domains]: DomainApi<D> } & {
 
 /** Runtime list of invoke channels (preload builds the facade from this; main asserts every one is handled). */
 export const INVOKE_CHANNELS = [
-  'gateway:list', 'gateway:save', 'gateway:remove', 'gateway:test',
+  'gateway:connect', 'gateway:disconnect', 'gateway:list', 'gateway:save', 'gateway:remove', 'gateway:test',
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',
   'settings:get', 'settings:update',

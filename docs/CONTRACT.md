@@ -3,8 +3,8 @@
 The source of truth for all three builders: **Backend** (main process), **AI engineer** (engine), **Frontend** (renderer).
 SPEC.md wins on scope; this document wins on interfaces. If code and this doc disagree, fix one of them in the same commit.
 
-**Hive is a native Mac app.** Electron main <-> renderer talk over Electron IPC only. There is no HTTP server, no
-localhost port, no WebSocket, no browser tab and no custom URL protocol in the shipped app (`hive-artifact://` was
+**Hive is a native Mac app.** Electron main <-> renderer talk over Electron IPC only. There is no persistent HTTP server or
+localhost port (an explicit MCP OAuth sign-in may temporarily bind an expiring loopback callback), no WebSocket, no browser tab and no custom URL protocol in the shipped app (`hive-artifact://` was
 deleted in SPEC A9; artifact thumbnails cross IPC as data URLs, previews are real Quick Look).
 SPEC §0.1 amendments A1-A15 are binding and already reflected below.
 The Vite dev server that `npm run dev` starts exists only in development, to serve the renderer bundle with HMR.
@@ -1379,4 +1379,4 @@ the dev-only fake exists only in `npm run build:fakeslack` (`__HIVE_FAKE_SLACK__
 
 ## Principia shared MCP gateway (2026-10-19)
 
-`docs/MCP-GATEWAY.md` specifies the additive shared connection manager. Desktop IPC: `gateway:list`, `gateway:save`, `gateway:remove`, `gateway:test`; shapes are in `src/shared/gateway.ts`, strictly validated in `ipcSchemas.ts`. `EngineContext.gateway.attachment(cwd)` returns a scoped stdio `McpServerSpec` for Claude/Codex spawns. `McpServerSpec.name` additionally accepts `principia`. It uses file IPC and maintains the desktop no-listener invariant. Upstream credentials are encrypted with safeStorage, held only by main/upstream clients, and never included in harness config. External tool use retains harness-native approval policy. Restricted Slack agents and shell steps do not receive this attachment. Initial support is tools over stdio and Streamable HTTP static headers; managed OAuth is not claimed.
+`docs/MCP-GATEWAY.md` specifies the additive shared connection manager. Desktop IPC: `gateway:list`, `gateway:save`, `gateway:remove`, `gateway:test`; shapes are in `src/shared/gateway.ts`, strictly validated in `ipcSchemas.ts`. `EngineContext.gateway.attachment(cwd)` returns a scoped stdio `McpServerSpec` for Claude/Codex spawns. `McpServerSpec.name` additionally accepts `principia`. It uses file IPC and maintains the desktop no-listener invariant. Upstream credentials are encrypted with safeStorage, held only by main/upstream clients, and never included in harness config. External tool use retains harness-native approval policy. Restricted Slack agents and shell steps do not receive this attachment. Tools support stdio and Streamable HTTP static headers. Desktop also supports managed browser OAuth through `gateway:connect` / `gateway:disconnect`, the official MCP SDK, encrypted tokens/client registration, PKCE, exact state/issuer verification, expiry and refresh. The only desktop listener exception is the explicitly initiated, temporary loopback OAuth callback; see MCP-GATEWAY.md.

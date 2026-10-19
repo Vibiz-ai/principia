@@ -9,7 +9,7 @@ export class Upstream {
   private seq = 0
   private session: string | null = null
   private ready?: Promise<void>
-  constructor(private config: GatewayConnection, private credentials: Record<string, string>, private baseEnv: Record<string, string>) {}
+  constructor(private config: GatewayConnection, private credentials: Record<string, string>, private baseEnv: Record<string, string>, private oauthHeaders?: (forceRefresh: boolean) => Promise<Record<string, string>>) {}
   async request(method: string, params: unknown = {}): Promise<any> {
     if (!this.ready) this.ready = this.initialize()
     await this.ready
@@ -27,7 +27,7 @@ export class Upstream {
     await this.rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'principia', version: '1.0.0' } })
     await this.rpc('notifications/initialized', {}, true)
   }
-  private async rpc(method: string, params: unknown, notification = false): Promise<any> {
+  private async rpc(method: string, params: unknown, notification = false, retryAuth = true): Promise<any> {
     const id = ++this.seq
     const body = JSON.stringify({ jsonrpc: '2.0', ...(!notification ? { id } : {}), method, params })
     if (this.child) {
@@ -38,7 +38,8 @@ export class Upstream {
         this.child!.stdin.write(body + '\n', e => { if (e) this.pending.get(id)?.reject(new Error('MCP write failed')) })
       })
     }
-    const res = await fetch(this.config.url!, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(60_000), headers: { ...this.credentials, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18', ...(this.session ? { 'Mcp-Session-Id': this.session } : {}) }, body })
+    const res = await fetch(this.config.url!, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(60_000), headers: { ...this.credentials, ...(this.oauthHeaders ? await this.oauthHeaders(false) : {}), 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18', ...(this.session ? { 'Mcp-Session-Id': this.session } : {}) }, body })
+    if (res.status === 401 && this.oauthHeaders && retryAuth) { await res.body?.cancel(); await this.oauthHeaders(true); return this.rpc(method, params, notification, false) }
     if (!res.ok) throw new Error(`MCP HTTP ${res.status}; check connection authentication`)
     this.session = res.headers.get('mcp-session-id') ?? this.session
     if (notification || res.status === 202 || res.status === 204) { await res.body?.cancel(); return }

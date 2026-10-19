@@ -12,7 +12,7 @@ This is an early open-source release. The desktop app targets Apple Silicon macO
 
 - **Agent sessions:** terminal panes for installed coding CLIs, with Claude ↔ Codex handoffs carrying available conversation context and recent output.
 - **Workflows:** agent, shell, reviewer, room, wait and notification nodes; local scheduling and run history. Usage-limit failures can try other installed harnesses.
-- **Shared MCP connections:** configure stdio or Streamable HTTP tool servers once in Principia for Claude and Codex, scoped to selected project folders. Desktop credentials are encrypted. Managed browser OAuth is not implemented yet.
+- **Shared MCP connections:** configure stdio or Streamable HTTP tool servers once in Principia for Claude and Codex, scoped to selected project folders. Desktop credentials are encrypted. Remote services can use managed browser OAuth sign-in, including Mobbin.
 - **Memory:** project knowledge and provenance with review/edit controls. Provider support varies; brief injection is used where direct memory MCP support remains unverified.
 - **Artifacts and visibility:** outputs, live agent activity, a workflow editor and a canvas for following work.
 - **Cloud and phone control:** a self-hosted Linux container with an authenticated API, persistent job/run storage, CLI execution, workflow import and optional Telegram control.
@@ -45,7 +45,7 @@ macOS packages are currently unsigned. Internal `HIVE_*` variables, `.hive.json`
 
 ## Connect company tools once
 
-Open **Settings → Connections → Shared MCP connections**. Add a trusted MCP server, authentication headers or environment variables, and the project folders allowed to use it. New Claude and Codex sessions and workflow steps receive a Principia bridge automatically.
+Open **Settings → Connections → Company connections**. Choose **Connect Mobbin** or **Add connection**, enter a server URL, and select the projects allowed to use it. Sign in through your browser, or choose an API key/local server configuration. New Claude and Codex sessions and workflow steps receive a Principia bridge automatically.
 
 Principia owns the connection; harness account logins remain separate. The gateway currently proxies tools, not MCP resources, prompts or sampling. It preserves harness approval policies. Read [MCP setup and permissions](docs/MCP-GATEWAY.md).
 

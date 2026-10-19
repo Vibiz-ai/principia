@@ -1,3 +1,4 @@
+export type GatewayAuthStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 export interface GatewayConnection {
   id: string
   name: string
@@ -8,9 +9,12 @@ export interface GatewayConnection {
   enabled: boolean
   /** Absolute working directories; empty means no access. */
   roots: string[]
+  authentication?: 'none' | 'oauth'
+  authStatus?: GatewayAuthStatus
+  authError?: string
   hasCredentials: boolean
 }
-export interface GatewayConnectionInput extends Omit<GatewayConnection, 'hasCredentials'> {
+export interface GatewayConnectionInput extends Omit<GatewayConnection, 'hasCredentials' | 'authStatus' | 'authError'> {
   /** Environment for stdio, headers for HTTP. Encrypted at rest, never returned. Omit to retain. */
   credentials?: Record<string, string>
 }

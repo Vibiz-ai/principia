@@ -4,34 +4,60 @@ import crypto from 'node:crypto'
 import type { Cipher, Vault } from '../vault'
 import type { GatewayConnection, GatewayConnectionInput } from '../../shared/gateway'
 import type { McpServerSpec } from '../../shared/engine'
+import { OAuthConnection, type OAuthSaved } from './oauth'
 import { Upstream } from './client'
 import { readPrivateJson, writePrivateJson } from './files'
 
-type Saved = { config: GatewayConnection; cipher: string }
+type Saved = { config: GatewayConnection; cipher: string; oauthCipher?: string }
 export class GatewayService {
   private saved: Saved[] = []
   private grants = new Map<string, { dir: string; cwd: string; expires: number; busy: Set<string> }>()
   private clients = new Map<string, Upstream>()
   private timer: NodeJS.Timeout
   private file: string
+  private oauth = new Map<string, OAuthConnection>()
+  private authState = new Map<string, { authStatus: import('../../shared/gateway').GatewayAuthStatus; authError?: string }>()
   constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string> }) {
     this.file = path.join(opts.userData, 'mcp-connections.json')
     try { this.saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (!Array.isArray(this.saved)) this.saved = [] } catch {}
     this.timer = setInterval(() => this.poll(), 100); this.timer.unref()
   }
-  list(): GatewayConnection[] { return this.saved.map(s => ({ ...s.config })) }
+  list(): GatewayConnection[] { return this.saved.map(s => {
+    if (s.config.authentication !== 'oauth') return { ...s.config }
+    let connected = false
+    try { connected = !!this.readOAuth(s)?.tokens?.access_token } catch {}
+    return { ...s.config, authStatus: connected ? 'connected' as const : 'disconnected' as const, ...(this.authState.get(s.config.id) ?? {}) }
+  }) }
+  private readOAuth(s: Saved): OAuthSaved | undefined { return s.oauthCipher ? JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.oauthCipher, 'base64'))) : undefined }
+  private oauthConnection(id: string): OAuthConnection {
+    let oauth = this.oauth.get(id); if (oauth) return oauth
+    const saved = this.saved.find(s => s.config.id === id)
+    if (!saved || saved.config.transport !== 'http' || saved.config.authentication !== 'oauth') throw new Error('This HTTP connection does not use OAuth')
+    oauth = new OAuthConnection({ serverUrl: saved.config.url!, load: () => { const s = this.saved.find(s => s.config.id === id); return s ? this.readOAuth(s) : undefined }, save: value => {
+      const s = this.saved.find(s => s.config.id === id); if (!s) return
+      if (value) { if (!this.opts.cipher.available()) throw new Error('Credential encryption unavailable'); for (const [key, secret] of Object.entries({ access_token: value.tokens?.access_token, refresh_token: value.tokens?.refresh_token, client_secret: value.client?.client_secret })) if (typeof secret === 'string') this.opts.vault.addRedactions('MCP_OAUTH_' + id + '_' + key + '_' + crypto.randomBytes(8).toString('hex'), secret); s.oauthCipher = this.opts.cipher.encrypt(JSON.stringify(value)).toString('base64') } else delete s.oauthCipher
+      this.persist()
+    }, onStatus: (authStatus, authError) => this.authState.set(id, { authStatus, ...(authError ? { authError } : {}) }) })
+    this.oauth.set(id, oauth); return oauth
+  }
+  async connect(id: string, openBrowser: (url: string) => Promise<void>): Promise<GatewayConnection> { if (!this.opts.cipher.available()) throw new Error('Credential encryption unavailable'); this.reset(id); await this.oauthConnection(id).connect(openBrowser); return this.list().find(c => c.id === id)! }
+  disconnect(id: string): GatewayConnection { this.oauthConnection(id).disconnect(); this.reset(id); return this.list().find(c => c.id === id)! }
+
   save(input: GatewayConnectionInput): GatewayConnection {
     if (!this.opts.cipher.available()) throw new Error('Credential encryption is unavailable')
     if (input.transport === 'http') { const u = new URL(input.url!); if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) throw new Error('Remote MCP servers require HTTPS'); if (u.username || u.password) throw new Error('Put authentication in headers, not the URL') }
     if (input.transport === 'stdio' && !input.command?.trim()) throw new Error('A command is required')
     const old = this.saved.find(s => s.config.id === input.id)
     const { credentials, ...rest } = input
+    if (rest.authentication === 'oauth' && rest.transport !== 'http') throw new Error('OAuth requires an HTTP server')
+    const keepOAuth = old?.config.url === rest.url && old?.config.authentication === rest.authentication
+    if (!keepOAuth) { this.oauth.get(input.id)?.close(); this.oauth.delete(input.id); this.authState.delete(input.id) }
     const cipher = credentials === undefined && old ? old.cipher : this.opts.cipher.encrypt(JSON.stringify(credentials ?? {})).toString('base64')
     const config = { ...rest, roots: rest.roots.map(r => fs.realpathSync(r)), hasCredentials: credentials === undefined ? old?.config.hasCredentials ?? false : Object.keys(credentials).length > 0 }
-    this.saved = [...this.saved.filter(s => s.config.id !== input.id), { config, cipher }]; this.persist(); this.reset(input.id)
+    this.saved = [...this.saved.filter(s => s.config.id !== input.id), { config, cipher, ...(keepOAuth && old?.oauthCipher ? { oauthCipher: old.oauthCipher } : {}) }]; this.persist(); this.reset(input.id)
     return config
   }
-  remove(id: string): void { this.saved = this.saved.filter(s => s.config.id !== id); this.persist(); this.reset(id) }
+  remove(id: string): void { this.oauth.get(id)?.close(); this.oauth.delete(id); this.authState.delete(id); this.saved = this.saved.filter(s => s.config.id !== id); this.persist(); this.reset(id) }
   private persist(): void { fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 }); writePrivateJson(this.file, this.saved) }
   private reset(id: string): void { this.clients.get(id)?.close(); this.clients.delete(id); /* Keep previous credential redactions for historical logs until app exit. */ }
   private allowed(cwd: string): Saved[] { let real: string; try { real = fs.realpathSync(cwd) } catch { return [] }; return this.saved.filter(s => s.config.enabled && s.config.roots.some(root => real === root || real.startsWith(root + path.sep))) }
@@ -48,7 +74,7 @@ export class GatewayService {
     for (let page = 0; page < 100; page++) { const result = await this.client(s).request('tools/list', cursor ? { cursor } : {}); if (!Array.isArray(result.tools)) throw new Error('Invalid MCP tools list'); tools.push(...result.tools); if (!result.nextCursor) return { tools }; cursor = result.nextCursor }
     throw new Error('MCP tool pagination exceeded')
   }
-  private client(s: Saved): Upstream { let c = this.clients.get(s.config.id); if (!c) { const credentials = JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.cipher, 'base64'))); for (const [k,v] of Object.entries(credentials)) this.opts.vault.addRedactions('MCP_' + s.config.id + '_' + k + '_' + crypto.randomBytes(8).toString('hex'), String(v)); c = new Upstream(s.config, credentials, this.opts.baseEnv()); this.clients.set(s.config.id, c) } return c }
+  private client(s: Saved): Upstream { let c = this.clients.get(s.config.id); if (!c) { const credentials = JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.cipher, 'base64'))); for (const [k,v] of Object.entries(credentials)) this.opts.vault.addRedactions('MCP_' + s.config.id + '_' + k + '_' + crypto.randomBytes(8).toString('hex'), String(v)); const oauth = s.config.authentication === 'oauth' ? this.oauthConnection(s.config.id) : undefined; c = new Upstream(s.config, credentials, this.opts.baseEnv(), oauth ? async force => { if (this.saved.find(current => current.config.id === s.config.id) !== s) throw new Error('Connection changed'); const headers = await oauth.headers(force); if (this.saved.find(current => current.config.id === s.config.id) !== s) throw new Error('Connection changed'); return headers } : undefined); this.clients.set(s.config.id, c) } return c }
   private poll(): void {
     for (const [id, grant] of this.grants) {
       if (Date.now() > grant.expires || fs.existsSync(path.join(grant.dir, 'closed'))) { this.grants.delete(id); fs.rmSync(grant.dir, { recursive: true, force: true }); continue }
@@ -59,5 +85,5 @@ export class GatewayService {
       }
     }
   }
-  close(): void { clearInterval(this.timer); for (const c of this.clients.values()) c.close(); for (const g of this.grants.values()) fs.rmSync(g.dir, { recursive: true, force: true }); this.grants.clear() }
+  close(): void { clearInterval(this.timer); for (const oauth of this.oauth.values()) oauth.close(); this.oauth.clear(); for (const c of this.clients.values()) c.close(); for (const g of this.grants.values()) fs.rmSync(g.dir, { recursive: true, force: true }); this.grants.clear() }
 }

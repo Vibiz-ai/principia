@@ -287,10 +287,12 @@ const memoryMutation = z.union([
 ])
 
 export const REQUEST_SCHEMAS = {
+  'gateway:connect': z.object({ id: slug }),
+  'gateway:disconnect': z.object({ id: slug }),
   'gateway:list': none,
   'gateway:remove': z.object({ id: slug }),
   'gateway:test': z.object({ id: slug }),
-  'gateway:save': z.object({ id: slug, name: z.string().min(1).max(100), transport: z.enum(['stdio', 'http']), command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(), url: z.string().url().max(4096).optional(), enabled: z.boolean(), roots: z.array(absPath).max(100), credentials: z.record(z.string().min(1).max(100), z.string().max(20000)).optional() }).strict(),
+  'gateway:save': z.object({ id: slug, name: z.string().min(1).max(100), transport: z.enum(['stdio', 'http']), authentication: z.enum(['none', 'oauth']).optional(), command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(), url: z.string().url().max(4096).optional(), enabled: z.boolean(), roots: z.array(absPath).max(100), credentials: z.record(z.string().min(1).max(100), z.string().max(20000)).optional() }).strict(),
   'app:info': none,
   'app:status': none,
   'app:home': none,
