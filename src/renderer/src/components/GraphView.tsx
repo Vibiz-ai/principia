@@ -2,21 +2,25 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Background, BackgroundVariant, Handle, Position, ReactFlow, ReactFlowProvider, useReactFlow, useStoreApi, type Edge, type NodeHandle, type NodeProps } from '@xyflow/react'
-import { NODE_H, NODE_W, cardHeight, type CardNode, type FrameNode, type GraphNode, type NodeRef } from '../lib/graph'
+import { NODE_H, cardHeight, cardWidth, type CardNode, type FrameNode, type GraphNode, type NodeRef } from '../lib/graph'
 import type { Pill } from '../lib/live'
 import { eventGlyph } from '../lib/live'
 import type { AgentEvent } from '@shared/live'
 import { hive } from '../lib/hive'
-import { StatusGlyph } from './ui'
+import { StatusGlyph, useTick } from './ui'
+import { duration } from '../lib/time'
 import { AgentGlyph } from './agents/AgentBits'
 
 /** Canvas-only: clicking a subagent pill selects that agent (drawer agent tree). Editor preview leaves it unset. */
 export const PillContext = createContext<((nodeId: string, ref: NodeRef, agentId: string) => void) | null>(null)
+export const AgentBranchContext = createContext<((agentId: string) => void) | null>(null)
 
 const hidden = { opacity: 0, width: 1, height: 1, minWidth: 0, minHeight: 0, border: 0 }
 
 const CardView = memo(function CardView({ id, data, selected }: NodeProps<CardNode>) {
   const onPill = useContext(PillContext)
+  const onToggleBranch = useContext(AgentBranchContext)
+  if (data.hierarchy) return <AgentCard id={id} data={data} selected={selected} onPill={onPill} onToggleBranch={onToggleBranch} />
   const pills = data.pills ?? []
   const h = cardHeight(data)
   return (
@@ -82,6 +86,45 @@ const CardView = memo(function CardView({ id, data, selected }: NodeProps<CardNo
     </div>
   )
 })
+
+const PROVIDER_LABEL: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', shell: 'Shell' }
+const CARD_STATUS: Record<string, string> = { idle: 'Idle', queued: 'Starting', running: 'Running', passed: 'Done', failed: 'Failed', canceled: 'Stopped', scheduled: 'Scheduled', exited: 'Ended' }
+function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
+  id: string
+  data: CardNode['data']
+  selected: boolean
+  onPill: ((nodeId: string, ref: NodeRef, agentId: string) => void) | null
+  onToggleBranch: ((agentId: string) => void) | null
+}): React.JSX.Element {
+  useTick(data.endedAt ? 60_000 : 5_000)
+  const needs = !!data.needs || data.waiting
+  const state = needs ? 'needs' : data.status
+  const provider = data.adapter ? PROVIDER_LABEL[data.adapter] ?? data.adapter : null
+  const childCount = data.childCount ?? 0
+  const title = data.task || data.sub
+  const cost = typeof data.costUsd === 'number' && Number.isFinite(data.costUsd) ? `$${data.costUsd.toFixed(data.costUsd > 0 && data.costUsd < .01 ? 3 : 2)}` : null
+  return <div
+    className={`gnode gnode--agent gnode--agent-${state} ${selected ? 'is-selected' : ''} ${data.stalled ? 'gnode--agent-stalled' : ''}`}
+    style={{ width: cardWidth(data), height: cardHeight(data) }}
+    title={`${data.label}${title ? `\n${title}` : ''}\nClick to inspect · double-click to open`}
+  >
+    <Handle id="parent" type="target" position={Position.Top} className="gnode__agent-handle" isConnectable={false} />
+    <Handle id="children" type="source" position={Position.Bottom} className="gnode__agent-handle" isConnectable={false} />
+    <div className="gnode__agent-top">
+      <span className="gnode__agent-role">{data.role || 'Agent'}</span>
+      {needs && onPill && data.agentId ? <button type="button" className="gnode__agent-status gnode__agent-status--needs nodrag nopan" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onPill(id, data.ref, data.agentId!) }} title="Open this agent's requests">⚑ Needs you{data.needs && data.needs > 1 ? ` · ${data.needs}` : ''}</button> : <span className={`gnode__agent-status gnode__agent-status--${state}`}><span aria-hidden="true" />{needs ? 'Needs you' : CARD_STATUS[data.status] ?? data.status}</span>}
+    </div>
+    <div className="gnode__agent-title">{data.label}</div>
+    {(provider || data.model) && <div className="gnode__agent-provider">{provider && <span>{provider}</span>}{provider && data.model && <span aria-hidden="true">·</span>}{data.model && <span title={data.model}>{data.model}</span>}</div>}
+    <p className={`gnode__agent-task ${title ? '' : 'gnode__agent-task--empty'}`}>{title || 'No task details captured'}</p>
+    <div className="gnode__agent-footer">
+      <span title={data.startedAt ? `Started ${new Date(data.startedAt).toLocaleString()}${data.endedAt ? ` · Ended ${new Date(data.endedAt).toLocaleString()}` : ''}` : undefined}>{data.startedAt ? duration(data.startedAt, data.endedAt ?? null) : '—'}</span>
+      {data.stalled && <span className="gnode__agent-stalled">Stalled?</span>}
+      {cost && <span className="gnode__agent-cost" title="Reported model spend">{cost}</span>}
+      {childCount > 0 && <button type="button" className="gnode__agent-children nodrag nopan" onDoubleClick={event => event.stopPropagation()} disabled={!onToggleBranch || !data.agentId} aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${childCount} child agent${childCount === 1 ? '' : 's'} of ${data.label}`} onClick={event => { event.stopPropagation(); if (data.agentId) onToggleBranch?.(data.agentId) }}><span aria-hidden="true">{data.collapsed ? '▸' : '▾'}</span>{childCount} {childCount === 1 ? 'agent' : 'agents'}</button>}
+    </div>
+  </div>
+}
 
 /** One subagent pill: status dot, label, live activity. Hover shows its last 3 events. */
 function PillRow({ pill: p, onClick }: { pill: Pill; onClick?: () => void }): React.JSX.Element {
@@ -171,14 +214,17 @@ const MINI_MIN_ZOOM = 0.05
  * which left nodes at visibility:hidden. With static sizes nothing depends on measurement.
  */
 function withStaticSize(n: GraphNode): GraphNode {
-  const width = n.type === 'frame' ? n.data.width : NODE_W
+  const width = n.type === 'frame' ? n.data.width : cardWidth(n.data)
   const height = n.type === 'frame' ? n.data.height : cardHeight(n.data)
   // cards with subagent pills keep their edges on the header row
   const midY = (n.type === 'card' && height > NODE_H ? NODE_H : height) / 2 - 0.5
   const handles: NodeHandle[] =
     n.type === 'frame'
       ? [{ id: null, type: 'target', position: Position.Left, x: 0, y: midY, width: 1, height: 1 }]
-      : [
+      : n.data.hierarchy ? [
+          { id: 'parent', type: 'target', position: Position.Top, x: width / 2 - .5, y: 0, width: 6, height: 6 },
+          { id: 'children', type: 'source', position: Position.Bottom, x: width / 2 - .5, y: height - 1, width: 6, height: 6 }
+        ] : [
           { id: null, type: 'target', position: Position.Left, x: 0, y: midY, width: 1, height: 1 },
           { id: null, type: 'source', position: Position.Right, x: width - 1, y: midY, width: 1, height: 1 },
           { id: 'loop-in', type: 'target', position: Position.Bottom, x: width / 2 - 0.5, y: height - 1, width: 1, height: 1 },
@@ -189,6 +235,7 @@ function withStaticSize(n: GraphNode): GraphNode {
 
 export interface GraphViewProps {
   nodes: GraphNode[]
+  onToggleBranch?: (agentId: string) => void
   edges: Edge[]
   selectedId?: string | null
   onSelect?: (ref: NodeRef, id: string) => void
@@ -323,7 +370,7 @@ export function GraphView(props: GraphViewProps): React.JSX.Element {
   return (
     <div className="graph">
       <ReactFlowProvider>
-        <Inner {...props} />
+        <AgentBranchContext.Provider value={props.onToggleBranch ?? null}><Inner {...props} /></AgentBranchContext.Provider>
       </ReactFlowProvider>
     </div>
   )

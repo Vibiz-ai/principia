@@ -18,6 +18,7 @@ import { historyGroups, historyMeta, splitRecent } from '../lib/authoring'
 import { useClaudeHistory } from '../state/history'
 import {
   appendHistory,
+  agentHierarchyGraph,
   applyRunUpdate,
   applyScheduleUpdate,
   applySessionUpdate,
@@ -42,6 +43,13 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   const openAsks = useOpenAsks()
   const seen = useSeenSet()
   const [fitKey, setFitKey] = useState('init')
+  const [canvasMode, setCanvasMode] = useState<'agents' | 'workflows'>(() => focusRunId ? 'workflows' : loadJson('principia.canvasMode', 'agents'))
+  const [collapsedAgents, setCollapsedAgents] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleBranch = (agentId: string): void => {
+    setCollapsedAgents(current => { const next = new Set(current); if (next.has(agentId)) next.delete(agentId); else next.add(agentId); return next })
+  }
+  const changeMode = (mode: 'agents' | 'workflows'): void => { setCanvasMode(mode); saveJson('principia.canvasMode', mode); setSel(null); setFitKey(`mode:${mode}:${Date.now()}`) }
+
   const [hint, setHint] = useState<boolean>(() => !loadJson('hive.canvasHintSeen', false))
   // History layer (AUTHORING.md §8.5, PO9): per-viewer toggle; fetched when it turns on and on window focus
   const [showHistory, setShowHistory] = useState<boolean>(() => loadJson('hive.canvasHistory', false))
@@ -64,7 +72,9 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
       else if (!ref.historyId) void navigate({ name: 'home' })
       return
     }
-    setSel({ ref, id })
+    if ((ref.kind === 'step' || ref.kind === 'run') && !snap?.runs.some(rd => rd.run.id === ref.runId)) ensureRun(ref.runId)
+    const agentId = graph?.nodes.find(node => node.id === id)?.data.agentId
+    setSel({ ref, id, agentId: typeof agentId === 'string' ? agentId : null })
     if (hint) {
       setHint(false)
       saveJson('hive.canvasHintSeen', true)
@@ -151,8 +161,23 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
       return { key: g.key, label: g.label, older, cards: shown.map((h) => ({ id: h.id, title: h.title || 'Untitled', sub: [historyMeta(h), relativeShort(h.endedAt ?? h.startedAt)].filter(Boolean).join(' · ') })) }
     })
   }, [showHistory, historyOn, hist.items, repos, tick])
-  const graph = useMemo(() => (snap ? appendHistory(canvasGraph({ ...snap, sessions: storeSessions }, Date.now(), { idx, asks: openAsks, seen }), lanes) : null), [snap, storeSessions, tick, idx, openAsks, seen, lanes])
-  const onPill = useMemo(() => (nodeId: string, ref: NodeRef, agentId: string) => setSel({ ref, id: nodeId, agentId }), [])
+  const graph = useMemo(() => {
+    if (!snap) return null
+    const live = { idx, asks: openAsks, seen }
+    const workflowGraph = canvasGraph({ ...snap, sessions: storeSessions }, Date.now(), live)
+    if (canvasMode === 'workflows') return appendHistory(workflowGraph, lanes)
+    const refs = new Map<string, NodeRef>()
+    for (const node of workflowGraph.nodes) if (node.type === 'card' && node.data.agentId) refs.set(node.data.agentId, node.data.ref)
+    return agentHierarchyGraph(live, collapsedAgents, Date.now(), refs)
+  }, [snap, storeSessions, tick, idx, openAsks, seen, lanes, canvasMode, collapsedAgents])
+  const agentCounts = useMemo(() => {
+    const agents = [...idx.byId.values()]
+    return { total: agents.length, working: agents.filter(a => a.status === 'working' || a.status === 'starting').length, failed: agents.filter(a => a.status === 'failed').length }
+  }, [idx])
+  const onPill = useMemo(() => (nodeId: string, ref: NodeRef, agentId: string) => {
+    if ((ref.kind === 'step' || ref.kind === 'run') && !snap?.runs.some(rd => rd.run.id === ref.runId)) ensureRun(ref.runId)
+    setSel({ ref, id: nodeId, agentId })
+  }, [snap])
 
   const onOpen = (ref: NodeRef): void => {
     if (ref.kind === 'session') focusSession(ref.sessionId)
@@ -185,10 +210,15 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   return (
     <div className="view">
       <Toolbar title="Canvas">
+        <div className="canvas-modes" role="group" aria-label="Canvas view">
+          <Button variant={canvasMode === 'agents' ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'agents'} onClick={() => changeMode('agents')}>Agents</Button>
+          <Button variant={canvasMode === 'workflows' ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'workflows'} onClick={() => changeMode('workflows')}>Workflows</Button>
+        </div>
+        {canvasMode === 'agents' && <span className="canvas-agent-summary" aria-live="polite">{agentCounts.total} agents{agentCounts.working > 0 ? ` · ${agentCounts.working} running` : ''}{agentCounts.failed > 0 ? ` · ${agentCounts.failed} failed` : ''}</span>}
         <Button onClick={() => setMarket(true)} title="Find workflows, Claude Code agents and skills to install">
           Marketplace
         </Button>
-        {historyOn && (
+        {historyOn && canvasMode === 'workflows' && (
           <Button
             variant={showHistory ? 'secondary' : 'ghost'}
             aria-pressed={showHistory}
@@ -208,7 +238,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
         ) : !snap || !graph ? (
           <Loading />
         ) : empty ? (
-          <EmptyState icon="canvas" text="Nothing running or scheduled.">
+          <EmptyState icon="canvas" text={canvasMode === 'agents' ? 'Your agent team will appear here when a session or workflow starts.' : 'Nothing running or scheduled.'}>
             <Button variant="primary" onClick={() => openPalette('runWorkflow')}>
               Run a Workflow
             </Button>
@@ -217,6 +247,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
         ) : (
           <PillContext.Provider value={onPill}>
           <GraphView
+            onToggleBranch={toggleBranch}
             nodes={graph.nodes}
             edges={graph.edges}
             selectedId={sel?.id}
@@ -224,14 +255,14 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
             onOpen={onOpen}
             onContext={onContext}
             fitKey={fitKey}
-            focusNodeId={focusRunId ? `f:run:${focusRunId}` : null}
+            focusNodeId={canvasMode === 'workflows' && focusRunId ? `f:run:${focusRunId}` : null}
             keyboard
           />
           </PillContext.Provider>
         )}
         {hint && !sel && snap && graph && !empty && (
           <div className="canvas__hint" role="note">
-            Click any node to inspect its live terminal or log · double-click to open
+            {canvasMode === 'agents' ? 'Follow the team from parent to subagent · click a card to inspect · collapse branches with the agent count' : 'Click any node to inspect its live terminal or log · double-click to open'}
             <IconButton
               icon="close"
               label="Dismiss"
@@ -330,7 +361,9 @@ function Drawer({ sel, snap, idx, agentId, onAgent, onClose }: { sel: NodeRef; s
   } else if (sel.kind === 'step' || sel.kind === 'run') {
     const rd = snap.runs.find((r) => r.run.id === sel.runId)
     if (!rd) return null
-    body = <StepDrawer rd={rd} nodeId={sel.kind === 'step' ? sel.nodeId : null} idx={idx} agentId={agentId} onAgent={onAgent} />
+    const selectedAgent = agentId ? idx.byId.get(agentId) : undefined
+    const owner = selectedAgent ? idx.byId.get(selectedAgent.rootId) : undefined
+    body = <StepDrawer rd={rd} nodeId={sel.kind === 'step' ? sel.nodeId : null} selectedStepId={owner?.stepId ?? (sel.kind === 'step' ? sel.stepId : null)} idx={idx} agentId={agentId} onAgent={onAgent} />
   } else if (sel.kind === 'schedule') {
     const sch = snap.schedules.find((x) => x.id === sel.scheduleId)
     if (!sch) return null
@@ -412,10 +445,10 @@ function DrawerAgents({ idx, rootId, agentId, onAgent }: { idx: AgentIndex; root
   )
 }
 
-function StepDrawer({ rd, nodeId, idx, agentId, onAgent }: { rd: RunDetail; nodeId: string | null; idx: AgentIndex; agentId: Id | null; onAgent: (id: Id | null) => void }): React.JSX.Element {
+function StepDrawer({ rd, nodeId, selectedStepId, idx, agentId, onAgent }: { rd: RunDetail; nodeId: string | null; selectedStepId?: Id | null; idx: AgentIndex; agentId: Id | null; onAgent: (id: Id | null) => void }): React.JSX.Element {
   const steps = rd.steps
   let step: RunStep | undefined
-  for (const s of steps) if ((nodeId === null || s.nodeId === nodeId) && (!step || s.seq > step.seq)) step = s
+  for (const s of steps) if ((selectedStepId ? s.id === selectedStepId : nodeId === null || s.nodeId === nodeId) && (!step || s.seq > step.seq)) step = s
   const run = rd.run
   const active = run.status === 'running' || run.status === 'queued'
   const node = rd.workflow?.nodes.find((n) => n.id === nodeId)

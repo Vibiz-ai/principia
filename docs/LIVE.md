@@ -827,6 +827,8 @@ Exact shapes are in CONTRACT §12. Summary:
 - **Color.** Add a token `--status-needs: #f5a524` / `--status-needs-soft` (amber) to `docs/tokens.css` and the renderer
   tokens. Needs you is amber everywhere: glyph, sidebar badge, canvas ring, tray ⚑. Failed stays red.
 - **Canvas.**
+  - The default **Agents** mode shows an expanded top-down hierarchy: roots and individual subagents are separate 260×168 cards, connected to their actual parent. A branch count expands/collapses descendants. Cards show captured role/title, provider/model, activity, status, elapsed time and reported cost; unknown metrics are omitted. Clicking selects that exact agent in the owner session/step drawer.
+  - **Workflows** mode retains the execution graph and history layer described below; the workflow editor is unchanged. The chosen mode is remembered locally.
   - Subagents render as **child pills** stacked under their parent node: 28 px rows inside the node card's footer,
     up to 4 visible plus `+n more`. Each has a status dot, label and live activity.
   - Hovering a pill shows the last 3 events. Clicking selects the agent in the drawer, where `StepDrawer` gains an agent tree.

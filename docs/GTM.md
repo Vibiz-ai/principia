@@ -11,12 +11,12 @@ Audit date: **19 October 2026**. This is a proposed execution plan; no launch su
 | Open issues / PRs | **0 open issues / 0 open PRs** | [Issues](https://github.com/Vibiz-ai/principia/issues), [pull requests](https://github.com/Vibiz-ai/principia/pulls) |
 | License | MIT recognized by GitHub | [License](https://github.com/Vibiz-ai/principia/blob/main/LICENSE) |
 | CI | Latest three runs succeeded; two earlier initial runs failed | [Actions](https://github.com/Vibiz-ai/principia/actions) |
-| Latest verified CI | `c84df56127c0873cca8a57b12899a65f72875ad4`, success, completed 19 October 2026 11:18 UTC | [Run](https://github.com/Vibiz-ai/principia/actions/runs/39243541675) |
-| CI coverage | Dependency install, TypeScript, tests, desktop build, cloud build/tests/smokes, release-source checks | [Job steps](https://github.com/Vibiz-ai/principia/actions/runs/39243541675/job/118029834866) |
+| Latest verified CI | `1659b36`, success, verified 19 October 2026 | [Run](https://github.com/Vibiz-ai/principia/actions/runs/39262076753) |
+| CI coverage | Dependency install, TypeScript, tests, desktop build, cloud build/tests/smokes, release-source checks | [Job steps](https://github.com/Vibiz-ai/principia/actions/runs/39262076753/job/118029834866) |
 | Releases / app downloads | **No GitHub releases** returned by the releases API; therefore no release-attached Mac installer or release download count to report | [Releases](https://github.com/Vibiz-ai/principia/releases) |
 | User setup docs | README with source quick start, shared connections and self-hosted cloud setup | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md), [cloud guide](https://github.com/Vibiz-ai/principia/blob/main/cloud/README.md) |
 | Contributor foundation | CONTRIBUTING, SECURITY, bug/feature forms, PR template and MIT license are published | [Contribution guide](https://github.com/Vibiz-ai/principia/blob/main/CONTRIBUTING.md), [security policy](https://github.com/Vibiz-ai/principia/blob/main/SECURITY.md) |
-| Demo / onboarding | Published README has no embedded product screenshots/video or prebuilt-app download link; getting started requires a source build | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md) |
+| Demo / onboarding | Product screenshot now embedded in README; React product/install page source published in `website/` with a public [landing page](https://principia-command.cheeryoasis4.chatgpt.site). No prebuilt-app download is published; getting started requires a source build | [README](https://github.com/Vibiz-ai/principia/blob/main/README.md) |
 
 These counts were read with GitHub CLI/API. They do not establish unique users, successful installations, retention, customer demand, or independent contributors. Passing CI also does not establish a signed/notarized Mac release or successful OAuth consent with every provider.
 

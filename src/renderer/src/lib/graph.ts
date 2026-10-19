@@ -17,14 +17,16 @@ import type {
   StepStatus,
   WorkflowDraft
 } from '@shared/types'
-import type { Ask } from '@shared/live'
+import type { AgentNode, Ask } from '@shared/live'
 import { depsOf } from './workflow'
-import { activityLine, agentVisual, isSeen, isStalled, limitLine, pillsFor, type AgentIndex, type Pill } from './live'
+import { activityLine, agentLabel, agentVisual, isSeen, isStalled, limitLine, pillsFor, type AgentIndex, type Pill } from './live'
 import { absolute, clock, durationMs } from './time'
 import { collapseExited, firstLine, runTitle, sessionEndLabel } from './format'
 
 export const NODE_W = 168
 export const NODE_H = 44
+export const AGENT_NODE_W = 260
+export const AGENT_NODE_H = 168
 const GAP = 16
 const FRAME_PAD = 12
 const FRAME_LABEL = 22
@@ -42,6 +44,17 @@ export type NodeRef =
   | { kind: 'history'; historyId: string }
 
 export interface CardData extends Record<string, unknown> {
+  /** Canvas agent tree only; editor cards retain their original dimensions and layout. */
+  hierarchy?: boolean
+  role?: string
+  model?: string | null
+  task?: string | null
+  startedAt?: string | null
+  endedAt?: string | null
+  elapsedMs?: number | null
+  costUsd?: number | null
+  childCount?: number
+  collapsed?: boolean
   label: string
   sub: string
   status: VisualStatus
@@ -128,7 +141,9 @@ interface LocalEdge {
 export const PILL_H = 22
 const PILLS_PAD = 6
 /** Card height: 44 px, plus one 22 px row per subagent pill (and the "+n more" row). Compact chips are 32 px. */
-export function cardHeight(d: Pick<CardData, 'compact' | 'pills' | 'morePills'>): number {
+export function cardWidth(d: Pick<CardData, 'hierarchy'>): number { return d.hierarchy ? AGENT_NODE_W : NODE_W }
+export function cardHeight(d: Pick<CardData, 'compact' | 'pills' | 'morePills' | 'hierarchy'>): number {
+  if (d.hierarchy) return AGENT_NODE_H
   if (d.compact) return 32
   const rows = (d.pills?.length ?? 0) + (d.morePills ? 1 : 0)
   return rows ? NODE_H + rows * PILL_H + PILLS_PAD : NODE_H
@@ -197,6 +212,83 @@ function decorate(items: Local[], live: CanvasLive | undefined): void {
     if (root && ref.kind === 'session' && root.stopReason === 'rate_limited' && !waiting) sub = limitLine(root)
     it.data = { ...it.data, agentId: rootId, pills: pills.length ? pills : undefined, morePills: more || undefined, needs, waiting: waiting || undefined, stalled: isStalled(root) || undefined, sub }
   }
+}
+
+/**
+ * Canvas-only live agent forest. Every card is backed by an observed agent and every edge by
+ * parentId; workflow topology and editor previews are intentionally untouched. Collapsing a
+ * branch hides its descendants while retaining the real direct-child count and pending asks.
+ */
+export function agentHierarchyGraph(
+  live: CanvasLive,
+  collapsed: ReadonlySet<string> = new Set(),
+  now: number = Date.now(),
+  ownerRefs?: ReadonlyMap<string, NodeRef>
+): Graph {
+  const nodes: CardNode[] = []
+  const edges: Edge[] = []
+  const seen = live.seen ?? new Set<string>()
+  const visited = new Set<string>()
+  const asksByAgent = new Map<string, number>()
+  for (const ask of live.asks) if (ask.status === 'open') asksByAgent.set(ask.agentId, (asksByAgent.get(ask.agentId) ?? 0) + 1)
+  const rootRef = (root: AgentNode): NodeRef | undefined => ownerRefs?.get(root.id) ?? (
+    root.sessionId ? { kind: 'session', sessionId: root.sessionId } :
+    root.runId && root.stepId ? { kind: 'step', runId: root.runId, nodeId: root.stepId, stepId: root.stepId } :
+    root.runId ? { kind: 'run', runId: root.runId } : undefined
+  )
+  const orderedChildren = (agent: AgentNode) => (live.idx.children.get(agent.id) ?? [])
+    .filter(child => child.parentId === agent.id && child.id !== agent.id)
+    .slice().sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id))
+  const pendingBelow = (agent: AgentNode, path = new Set<string>()): number => {
+    if (path.has(agent.id)) return 0
+    const next = new Set(path).add(agent.id)
+    return (asksByAgent.get(agent.id) ?? 0) + orderedChildren(agent).reduce((sum, child) => sum + pendingBelow(child, next), 0)
+  }
+  const visit = (agent: AgentNode, ref: NodeRef, parent?: AgentNode): void => {
+    if (visited.has(agent.id)) return
+    visited.add(agent.id)
+    const id = `agent:${agent.id}`
+    const visual = agentVisual(agent, isSeen(agent, seen))
+    const needs = pendingBelow(agent)
+    const start = Date.parse(agent.startedAt)
+    const end = agent.endedAt ? Date.parse(agent.endedAt) : now
+    const children = orderedChildren(agent).filter(child => !visited.has(child.id))
+    nodes.push({
+      id, type: 'card', position: { x: 0, y: 0 }, width: AGENT_NODE_W, height: AGENT_NODE_H, draggable: false,
+      data: {
+        hierarchy: true, label: agentLabel(agent), sub: activityLine(agent, isSeen(agent, seen)),
+        status: visual === 'needs' ? 'idle' : visual, waiting: visual === 'needs' || needs > 0,
+        adapter: agent.provider, ref, agentId: agent.id, role: agent.agentType ?? (agent.kind === 'subagent' ? 'Subagent' : agent.kind === 'session' ? 'Session' : 'Workflow step'),
+        model: agent.model, task: agent.activity ?? agent.report ?? null,
+        startedAt: agent.startedAt, endedAt: agent.endedAt,
+        elapsedMs: Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : null,
+        costUsd: agent.costUsd, childCount: children.length, collapsed: collapsed.has(agent.id),
+        needs: needs || undefined, stalled: isStalled(agent) || undefined
+      }
+    })
+    if (parent) edges.push({ id: `agent-edge:${parent.id}:${agent.id}`, source: `agent:${parent.id}`, target: id, sourceHandle: 'children', targetHandle: 'parent', type: 'smoothstep', animated: agent.status === 'working', style: { stroke: agent.status === 'working' ? RUNNING_COLOR : EDGE_COLOR, strokeWidth: 1.5 } })
+    if (!collapsed.has(agent.id)) for (const child of children) visit(child, ref, agent)
+  }
+  for (const root of live.idx.roots) {
+    const ref = rootRef(root)
+    if (ref) visit(root, ref)
+  }
+  if (!nodes.length) return { nodes, edges, width: 0, height: 0 }
+  const graph = new dagre.graphlib.Graph()
+  graph.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 72, marginx: 24, marginy: 24 })
+  graph.setDefaultEdgeLabel(() => ({}))
+  for (const node of nodes) graph.setNode(node.id, { width: AGENT_NODE_W, height: AGENT_NODE_H })
+  for (const edge of edges) graph.setEdge(edge.source, edge.target)
+  dagre.layout(graph)
+  let width = 0
+  let height = 0
+  for (const node of nodes) {
+    const position = graph.node(node.id) as { x: number; y: number }
+    node.position = { x: position.x - AGENT_NODE_W / 2, y: position.y - AGENT_NODE_H / 2 }
+    width = Math.max(width, node.position.x + AGENT_NODE_W + 24)
+    height = Math.max(height, node.position.y + AGENT_NODE_H + 24)
+  }
+  return { nodes, edges, width, height }
 }
 
 function profileAdapter(profiles: AgentProfile[], id: string | null | undefined): AdapterId | null {

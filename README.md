@@ -1,6 +1,6 @@
 # Principia
 
-[GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
+[Website](https://principia-command.cheeryoasis4.chatgpt.site) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
 **A workspace for running your company with people, agents, shared tools and repeatable workflows.**
 
@@ -16,7 +16,7 @@ This is an early open-source release. The desktop app targets Apple Silicon macO
 - **Workflows:** agent, shell, reviewer, room, wait and notification nodes; local scheduling and run history. Usage-limit failures can try other installed harnesses.
 - **Shared MCP connections:** configure stdio or Streamable HTTP tool servers once in Principia for Claude and Codex, scoped to selected project folders or all projects. Desktop credentials are encrypted. Remote services can use managed browser OAuth sign-in, including Mobbin.
 - **Memory:** project knowledge and provenance with review/edit controls. Provider support varies; brief injection is used where direct memory MCP support remains unverified.
-- **Artifacts and visibility:** outputs, live agent activity, a workflow editor and a canvas for following work.
+- **Artifacts and visibility:** outputs, live agent activity, a workflow editor and a canvas with an expandable parent/subagent hierarchy alongside the workflow execution view.
 - **Cloud and phone control:** a self-hosted Linux container with an authenticated API, persistent job/run storage, CLI execution, workflow import and optional Telegram control.
 
 The goal is a place to operate an entire company. Today this provides the execution foundation; it does not replace accounting, payroll or every existing business system.

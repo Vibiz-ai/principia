@@ -1,3 +1,6 @@
+import type { AgentNode, Ask } from '@shared/live'
+import { indexAgents } from './live'
+import { agentHierarchyGraph, AGENT_NODE_H, AGENT_NODE_W, cardHeight, cardWidth, NODE_W } from './graph'
 import { describe, expect, it } from 'vitest'
 import type { AgentProfile, CanvasSnapshot, Run, RunDetail, RunStep, WorkflowDraft } from '@shared/types'
 import { appendHistory, applyStepUpdate, canvasGraph, draftDiffGraph, draftGraph, intervalLabel, workflowLocal } from './graph'
@@ -198,5 +201,63 @@ describe('authoring graph additions', () => {
     expect(g.nodes.find((n) => n.id === 'h:older:repo:r')!.data.label).toBe('+2 older')
     expect(g.edges).toBe(base.edges)
     expect(appendHistory(base, [])).toBe(base)
+  })
+})
+
+describe('canvas live agent hierarchy', () => {
+  const agent = (id: string, patch: Partial<AgentNode> = {}): AgentNode => ({
+    id, kind: 'session', parentId: null, rootId: id, sessionId: `session-${id}`, runId: null, stepId: null,
+    provider: 'claude', repoId: null, cwd: '/work', title: id, agentType: null, externalId: null, toolUseId: null,
+    model: null, depth: 0, background: false, attribution: 'exact', status: 'working', needs: null,
+    activity: null, lastTool: null, toolCount: 0, memReads: 0, filesTouched: [], tokensIn: null, tokensOut: null,
+    costUsd: null, modelUsage: null, report: null, startedAt: '2026-10-19T10:00:00Z', updatedAt: '2026-10-19T10:01:00Z', endedAt: null, ...patch
+  })
+  const child = (id: string, parentId: string, patch: Partial<AgentNode> = {}) => agent(id, { kind: 'subagent', rootId: 'root', parentId, sessionId: 'session-root', ...patch })
+  it('renders all actual children and nested parentage top-down beyond the old pill limit', () => {
+    const agents = [agent('root'), ...Array.from({ length: 6 }, (_, i) => child(`child-${i}`, 'root')), child('grandchild', 'child-0'), agent('other-root', { provider: 'codex' })]
+    const graph = agentHierarchyGraph({ idx: indexAgents(agents), asks: [] })
+    expect(graph.nodes).toHaveLength(9)
+    expect(graph.edges).toHaveLength(7)
+    const parent = graph.nodes.find(n => n.id === 'agent:child-0')!
+    const descendant = graph.nodes.find(n => n.id === 'agent:grandchild')!
+    expect(descendant.position.y).toBeGreaterThan(parent.position.y + AGENT_NODE_H)
+    expect(graph.edges.find(e => e.target === descendant.id)).toMatchObject({ source: parent.id, sourceHandle: 'children', targetHandle: 'parent' })
+    for (let i = 0; i < graph.nodes.length; i++) for (const other of graph.nodes.slice(i + 1)) {
+      const node = graph.nodes[i]!
+      const overlapX = node.position.x < other.position.x + AGENT_NODE_W && other.position.x < node.position.x + AGENT_NODE_W
+      const overlapY = node.position.y < other.position.y + AGENT_NODE_H && other.position.y < node.position.y + AGENT_NODE_H
+      expect(overlapX && overlapY).toBe(false)
+    }
+  })
+  it('collapses any branch while keeping its true child and hidden open-ask counts', () => {
+    const idx = indexAgents([agent('root'), child('branch', 'root'), child('leaf', 'branch')])
+    const asks = [{ id: 'ask', agentId: 'leaf', rootId: 'root', status: 'open' }] as Ask[]
+    const graph = agentHierarchyGraph({ idx, asks }, new Set(['branch']))
+    expect(graph.nodes.map(n => n.id)).toEqual(['agent:root', 'agent:branch'])
+    expect(graph.nodes[1]!.data).toMatchObject({ collapsed: true, childCount: 1, needs: 1, waiting: true })
+    expect(graph.nodes[0]!.data.needs).toBe(1)
+    expect(agentHierarchyGraph({ idx, asks }, new Set(['root'])).nodes).toHaveLength(1)
+  })
+  it('preserves exact owner refs, actual models/cost and seen idle behavior without inventing metrics', () => {
+    const root = agent('root', { kind: 'step', sessionId: null, runId: 'run', stepId: 'step', status: 'needs_you', needs: 'idle' })
+    const leaf = child('leaf', 'root', { model: 'actual-model', costUsd: 0.12, activity: 'Running tests', status: 'done', endedAt: '2026-10-19T10:02:00Z' })
+    const owner = { kind: 'step', runId: 'run', nodeId: 'build', stepId: 'step' } as const
+    const graph = agentHierarchyGraph({ idx: indexAgents([root, leaf]), asks: [], seen: new Set(['root']) }, new Set(), Date.parse('2026-10-19T10:03:00Z'), new Map([['root', owner]]))
+    expect(graph.nodes[0]!.data).toMatchObject({ ref: owner, model: null, costUsd: null, status: 'idle', waiting: false, elapsedMs: 180000 })
+    expect(graph.nodes[1]!.data).toMatchObject({ ref: owner, agentId: 'leaf', model: 'actual-model', costUsd: 0.12, task: 'Running tests', status: 'passed', elapsedMs: 120000 })
+    const rootCard = graph.nodes[0]!
+    if (rootCard.type !== 'card') throw new Error('Expected agent card')
+    expect(cardWidth(rootCard.data)).toBe(AGENT_NODE_W)
+    expect(cardHeight(rootCard.data)).toBe(AGENT_NODE_H)
+    expect(cardWidth({})).toBe(NODE_W)
+  })
+  it('returns a genuinely empty graph and terminates safely for inconsistent cyclic telemetry', () => {
+    expect(agentHierarchyGraph({ idx: indexAgents([]), asks: [] })).toEqual({ nodes: [], edges: [], width: 0, height: 0 })
+    const root = agent('root', { parentId: 'branch' })
+    const branch = child('branch', 'root')
+    const idx = indexAgents([root, branch]); idx.children.set('branch', [root])
+    const graph = agentHierarchyGraph({ idx, asks: [] })
+    expect(graph.nodes).toHaveLength(2)
+    expect(graph.edges).toHaveLength(1)
   })
 })

@@ -21,3 +21,14 @@ jobs:
       - run: npm run cloud:test
       - run: npm run cloud:verify
       - run: npm run release:test
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci --prefix website
+      - run: npm run build --prefix website
