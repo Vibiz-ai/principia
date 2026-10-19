@@ -180,7 +180,7 @@ describe('Claude history', () => {
   })
   it('search matches title, folder, branch, model', () => {
     expect(matchHistory(h('a', { title: 'Fix login' }), 'login')).toBe(true)
-    expect(matchHistory(h('a'), 'VIBIZ')).toBe(true)
+    expect(matchHistory(h('a', { cwd: '/Users/me/sample-project' }), 'SAMPLE')).toBe(true)
     expect(matchHistory(h('a'), 'nope')).toBe(false)
     expect(matchHistory(h('a'), '  ')).toBe(true)
   })

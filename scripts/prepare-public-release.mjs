@@ -15,7 +15,7 @@ if (!target || target === root || target.startsWith(root + path.sep)) {
   throw new Error('Usage: node scripts/prepare-public-release.mjs /absolute/new-empty-directory (outside source tree)')
 }
 const roots = ['src', 'resources', 'scripts', '.github', 'cloud']
-const files = ['.dockerignore', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'vitest.config.ts', 'vite.cloud.config.ts', 'build/icon.icns', 'build/icon.png', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md']
+const files = ['.dockerignore', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'vitest.config.ts', 'vite.cloud.config.ts', 'build/icon.icns', 'build/icon.png', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/slack-app-manifest.json', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md']
 const banned = /(?:^|\/)(?:node_modules|\.git|\.claude|\.codex|\.aws|\.hive-dev-data|out|dist|release)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite|sqlite3|db|log|pem|p12|pfx)$/i
 const secretPatterns = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]{10,}?-----END/],

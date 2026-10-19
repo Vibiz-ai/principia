@@ -189,7 +189,7 @@ describe.runIf(process.platform === 'darwin')('reaper through the executor', () 
     const t0 = Date.now()
     let escapees: number[] = []
     while (Date.now() - t0 < 8000) {
-      escapees = systemProcessTable.snapshotSync(true).filter((r) => r.env?.includes(` HIVE_USER_DATA=${ctx.root} `) && r.command.includes('hive-escapee')).map((r) => r.pid)
+      escapees = systemProcessTable.snapshotSync(true).filter((r) => r.env?.includes(` HIVE_USER_DATA=${ctx.root} `) && r.command.startsWith(`${process.execPath} -e setInterval(`) && r.command.includes('hive-escapee')).map((r) => r.pid)
       if (sleepPids(`sleep ${marker}`).length >= 2 && escapees.length) break
       await new Promise((r) => setTimeout(r, 100))
     }

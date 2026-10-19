@@ -1,0 +1,61 @@
+{
+  "_metadata": {
+    "major_version": 2,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "Hive",
+    "description": "Hive on your Mac: read your Slack threads, draft replies with agents, and get your Hive alerts here.",
+    "long_description": "Hive is a native Mac cockpit for coding agents. This app connects your workspace to Hive over Socket Mode (an outbound connection from your Mac; nothing is hosted publicly). Hive reads the channels you invite it to, direct messages with the bot, and messages that mention it, keeps a local copy for search, and lets agents draft replies that you approve in Hive before they are sent. Workflows can also be triggered by Slack messages, and Hive sends your workflow alerts to you as direct messages. Beyond reading channels, DMs and mentions, it asks for three permissions so you never need to reinstall: channels:join (join a public channel only when you click Join in Hive), mpim:read with message.mpim (group DMs the bot is added to) and member_joined_channel (notice when the bot is invited, to load that channel). Remove the bot from a channel at any time to stop Hive from reading it.",
+    "background_color": "#1a1a1a"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "hive",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "channels:join",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "chat:write",
+        "users:read",
+        "reactions:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "member_joined_channel"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
