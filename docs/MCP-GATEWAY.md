@@ -56,3 +56,5 @@ Client information, discovery state, access tokens, refresh tokens, and token ex
 Saved dynamic registration is reused when its previous loopback port is available; a different callback port requires registration again. Updating a server URL invalidates its OAuth session. Outstanding requests remain bound to their original server and cannot receive a replacement connection's tokens.
 
 The cloud runner is a separate deployment surface; the desktop Keychain file is not portable to a Linux cloud host. Cloud credentials must be provisioned separately in its secret environment.
+
+Choose **All projects** for a desktop connection to grant access in every current and future project. Leave it unchecked to restrict access to selected folders. Existing connections keep their selected-project scope.

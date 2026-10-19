@@ -18,7 +18,7 @@ export function importGatewayConfig(text: string): Partial<GatewayConnectionInpu
 }
 
 /** A command's argument list is one argument per line; never shell evaluated. */
-export function connectionProblem(name: string, transport: 'http' | 'stdio', endpoint: string, roots: string[]): string | null {
+export function connectionProblem(name: string, transport: 'http' | 'stdio', endpoint: string, roots: string[], scope: 'projects' | 'global' = 'projects'): string | null {
   if (!name.trim()) return 'Give this connection a name.'
   if (transport === 'stdio') { if (!endpoint.trim()) return 'Enter the server executable.' }
   else {
@@ -28,6 +28,6 @@ export function connectionProblem(name: string, transport: 'http' | 'stdio', end
       if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return 'Use an HTTPS server URL.'
     } catch { return 'Enter a complete server URL, such as https://api.mobbin.com/mcp.' }
   }
-  if (!roots.length) return 'Choose at least one project that can use this connection.'
+  if (scope !== 'global' && !roots.length) return 'Choose at least one project that can use this connection.'
   return null
 }

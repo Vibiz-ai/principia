@@ -9,6 +9,8 @@ export interface GatewayConnection {
   enabled: boolean
   /** Absolute working directories; empty means no access. */
   roots: string[]
+  /** Explicit access for all current and future project directories. */
+  scope?: 'projects' | 'global'
   authentication?: 'none' | 'oauth'
   authStatus?: GatewayAuthStatus
   authError?: string

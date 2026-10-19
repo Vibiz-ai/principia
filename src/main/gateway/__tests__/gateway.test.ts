@@ -21,6 +21,12 @@ describe('Principia MCP gateway', () => {
       expect(fs.readFileSync(path.join(dir, 'mcp-connections.json'), 'utf8')).not.toContain('secret-value-test')
       expect(service.list()[0]).not.toHaveProperty('credentials')
       expect(service.attachment(sibling)).toBeNull()
+      service.save({ id: 'test', name: 'Test', transport: 'stdio', command: 'unused', enabled: true, roots: [], scope: 'global' })
+      expect(service.attachment(sibling)).not.toBeNull()
+      const future = path.join(dir, 'future-project'); fs.mkdirSync(future)
+      expect(service.attachment(future)).not.toBeNull()
+      service.save({ id: 'test', name: 'Test', transport: 'stdio', command: 'unused', enabled: true, roots: [root], scope: 'projects' })
+      expect(service.attachment(sibling)).toBeNull()
       const spec = service.attachment(root)!
       expect(spec.args).toEqual([path.join(dir, 'cloud-bridge.mjs')])
       service.remove('test')

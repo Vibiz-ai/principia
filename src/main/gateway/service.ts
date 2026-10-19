@@ -64,7 +64,7 @@ export class GatewayService {
   remove(id: string): void { this.oauth.get(id)?.close(); this.oauth.delete(id); this.authState.delete(id); this.saved = this.saved.filter(s => s.config.id !== id); this.persist(); this.reset(id) }
   private persist(): void { fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 }); writePrivateJson(this.file, this.saved) }
   private reset(id: string): void { this.clients.get(id)?.close(); this.clients.delete(id); /* Keep previous credential redactions for historical logs until app exit. */ }
-  private allowed(cwd: string): Saved[] { let real: string; try { real = fs.realpathSync(cwd) } catch { return [] }; return this.saved.filter(s => s.config.enabled && s.config.roots.some(root => real === root || real.startsWith(root + path.sep))) }
+  private allowed(cwd: string): Saved[] { let real: string; try { real = fs.realpathSync(cwd) } catch { return [] }; return this.saved.filter(s => s.config.enabled && (s.config.scope === 'global' || s.config.roots.some(root => real === root || real.startsWith(root + path.sep)))) }
   attachment(cwd: string): McpServerSpec | null {
     if (!this.allowed(cwd).length) return null
     const id = crypto.randomBytes(24).toString('hex'); const dir = path.join(this.opts.userData, 'scratch', 'mcp-gateway', id)
