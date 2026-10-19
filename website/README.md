@@ -36,3 +36,7 @@ vercel deploy --prod --scope vibiz-deployments
 ```
 
 This is a CLI deployment; automatic Git deployments are not configured. Keep `.vercel`, local environment files and `.openai` hosting state out of uploads and commits.
+
+## Product positioning
+
+Lead with “Run your entire company. From one workspace.” The one-company-or-a-thousand ambition describes the roadmap, not current scale or autonomy guarantees. The toolbox section covers planned databases, image generation, scraping, connections, phone, and email. Passport is the planned portable company memory and context-sharing layer; current project memory must not be described as shipped Passport import/export or universal authentication.

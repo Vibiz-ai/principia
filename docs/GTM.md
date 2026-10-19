@@ -6,7 +6,7 @@ Audit date: **19 October 2026**. This is a proposed execution plan; no launch su
 
 | Item | Verified public state | Evidence |
 | --- | --- | --- |
-| Repository | Public, `Vibiz-ai/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
+| Repository | Public, `example-org/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
 | Stars / forks | **1 star / 0 forks** | Public repository API, checked 19 October 2026 |
 | Open issues / PRs | **0 open issues / 0 open PRs** | [Issues](https://github.com/Vibiz-ai/principia/issues), [pull requests](https://github.com/Vibiz-ai/principia/pulls) |
 | License | MIT recognized by GitHub | [License](https://github.com/Vibiz-ai/principia/blob/main/LICENSE) |
@@ -22,9 +22,11 @@ These counts were read with GitHub CLI/API. They do not establish unique users, 
 
 ## Positioning: broad vision, concrete first reason to try
 
-**Vision:** a place to run your company with people, agents and shared tools.
+**Vision:** run an entire company, or a portfolio of companies, from one workspace. Agents carry out the work using connected tools and shared context. Supporting a thousand companies autonomously is an ambition, not a validated capability of the preview.
 
-**Launch message:** “Principia is an open-source workspace for Claude and Codex, with shared company tools and repeatable workflows.”
+**Launch message:** “Run your entire company. From one workspace.”
+
+**Supporting story:** agents, a company toolbox (databases, image generation, scraping, connections, phone and email), and **Passport**, our name for planned portable company memory. Clearly label roadmap categories and Passport portability/sign-in integration; demonstrate existing workflows, shared MCP connections and project memory separately.
 
 First audience: technical founders and small software teams already using both coding CLIs on an Apple Silicon Mac. They already understand the tools and can recognize the pain of repeating context, reconnecting services and manually checking runs. Start with those users before claiming to serve every department or nontechnical business owner.
 
@@ -34,7 +36,7 @@ The first demo should prove three things in one continuous recording:
 2. Do a small useful job in Claude, then continue it in Codex with available context and the same connection.
 3. Show the resulting artifact and run history, so viewers can inspect what happened.
 
-A separate short cloud demo can show a Telegram command creating a job on a self-hosted worker. Label self-hosting, separate cloud authentication and experimental status clearly. Do not imply an available managed cloud service, perfect cross-harness memory, or replacement accounting/payroll functionality.
+A separate short cloud demo can show an authenticated API request creating a job on a self-hosted worker. A dedicated browser workspace is the intended remote interface; Telegram is optional. Label self-hosting, separate cloud authentication and experimental status clearly. Do not imply an available managed cloud service, perfect cross-harness memory, or replacement accounting/payroll functionality.
 
 ## Readiness gates before broad distribution
 
