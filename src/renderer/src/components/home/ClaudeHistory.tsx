@@ -1,4 +1,4 @@
-/** Home › "Recent Claude sessions outside Hive" (AUTHORING.md §8.5): last 7 days, up to 8 rows, "Show all" sheet. */
+/** Home › "Recent Claude sessions outside Principia" (AUTHORING.md §8.5): last 7 days, up to 8 rows, "Show all" sheet. */
 import { useMemo, useState } from 'react'
 import type { ClaudeHistorySession } from '@shared/authoring'
 import { Button, RelativeTime, SectionHeader, Sheet } from '../ui'
@@ -20,7 +20,7 @@ export function ClaudeHistorySection(): React.JSX.Element | null {
   if (h.available === null || (!rows.length && !h.indexing)) return null
   return (
     <>
-      <SectionHeader title="Recent Claude sessions outside Hive" count={h.total > rows.length ? h.total : rows.length || undefined}>
+      <SectionHeader title="Recent Claude sessions outside Principia" count={h.total > rows.length ? h.total : rows.length || undefined}>
         {h.indexing && <span className="text-tertiary">indexing…</span>}
         {h.items.length > rows.length && (
           <Button size="sm" variant="ghost" onClick={() => setAll(true)}>
@@ -59,7 +59,7 @@ function AllHistorySheet({ items, onOpen, onClose }: { items: ClaudeHistorySessi
   const [q, setQ] = useState('')
   const shown = items.filter((x) => matchHistory(x, q))
   return (
-    <Sheet title="Claude sessions outside Hive" onCancel={onClose} width={720}>
+    <Sheet title="Claude sessions outside Principia" onCancel={onClose} width={720}>
       <input className="input" placeholder="Search titles, folders, branches" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="group-list hist-list hist-list--sheet scroll">
         {shown.length === 0 && <div className="text-tertiary hist-empty">No matches.</div>}

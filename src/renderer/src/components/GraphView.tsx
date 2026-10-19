@@ -43,7 +43,7 @@ const CardView = memo(function CardView({ id, data, selected }: NodeProps<CardNo
           <div className="gnode__sub">{data.sub}</div>
         </div>
         {data.stalled && (
-          <span className="stalled-badge stalled-badge--node" title="No output for a while. Hive never stops it on its own.">
+          <span className="stalled-badge stalled-badge--node" title="No output for a while. Principia never stops it on its own.">
             Stalled?
           </span>
         )}

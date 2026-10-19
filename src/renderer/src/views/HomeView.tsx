@@ -544,7 +544,7 @@ function Onboarding(): React.JSX.Element {
   const agents = providers.filter((p) => p.id !== 'shell')
   return (
     <div className="onboarding">
-      <div className="onboarding__title">Welcome to Hive</div>
+      <div className="onboarding__title">Welcome to Principia</div>
       <div className="onboarding__step">
         <span className="onboarding__num">1</span>
         <span className="flex1">Add your repositories</span>

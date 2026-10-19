@@ -306,7 +306,7 @@ export function memoryChipText(c: { reads: number; saved: number; briefOnly: boo
 // ---------- answered asks (hub trace) ----------
 /** What the user sent, in one line: "You answered: users", "You allowed it", "You denied: too risky". */
 export function answerText(ask: Ask): string | null {
-  if (ask.status === 'expired') return 'Expired — Hive denied it'
+  if (ask.status === 'expired') return 'Expired — Principia denied it'
   if (ask.status === 'canceled') return null
   if (ask.status !== 'answered') return null
   if (ask.answeredVia === 'terminal') return 'Answered in the terminal'
@@ -336,7 +336,7 @@ export function answerTrace(root: Pick<AgentNode, 'id' | 'status'>, asks: Iterab
   if (all.some((a) => a.rootId === root.id && a.status === 'open')) return null
   return recentAnswer(all, root.id, now)
 }
-/** The most recent ask of a root answered in Hive within `windowMs`, for the row's last-activity line. */
+/** The most recent ask of a root answered in Principia within `windowMs`, for the row's last-activity line. */
 export function recentAnswer(asks: Iterable<Ask>, rootId: Id, now = Date.now(), windowMs = ANSWER_TRACE_MS): Ask | null {
   let best: Ask | null = null
   for (const a of asks) {

@@ -61,7 +61,7 @@ export function Timeline({ channel, openThreadTs, highlightTs, onOpenThread }: {
     [channel.id]
   )
 
-  // Hive-local read marker: the newest message once it is on screen
+  // Principia-local read marker: the newest message once it is on screen
   const newest = msgs?.[msgs.length - 1]?.ts ?? null
   useEffect(() => {
     if (newest && channel.unread && stick.current) void slackCall('slack:markRead', { channelId: channel.id, ts: newest }).catch(() => undefined)
@@ -124,7 +124,7 @@ export function Timeline({ channel, openThreadTs, highlightTs, onOpenThread }: {
         ) : (
           <div className="stimeline__start">
             <span className="text-tertiary">
-              {msgs.length ? `Start of Hive’s copy of ${channelLabel(channel)}` : `No messages in ${channelLabel(channel)} in the last ${backfillDays} days.`}
+              {msgs.length ? `Start of Principia’s copy of ${channelLabel(channel)}` : `No messages in ${channelLabel(channel)} in the last ${backfillDays} days.`}
               {page?.backfillOldestTs && ` (since ${absoluteWithDay(tsToIso(page.backfillOldestTs)!)})`}
             </span>
             <Button size="sm" variant="ghost" icon="download" disabled={fetchingSlack} onClick={() => void loadFromSlack()}>
@@ -215,7 +215,7 @@ export function MessageItem({ m, head, isOpen = false, highlight = false, onOpen
         {head && (
           <div className="smsg__meta">
             <span className="smsg__name">{name}</span>
-            {m.fromHive && <span className="pill pill--accent smsg__hive">From Hive</span>}
+            {m.fromHive && <span className="pill pill--accent smsg__hive">From Principia</span>}
             {(m.botId || user?.isBot) && !m.fromHive && <span className="smsg__app">APP</span>}
             <span className="smsg__time" title={absoluteWithDay(tsToIso(m.ts)!)}>
               {time}

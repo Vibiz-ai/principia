@@ -85,7 +85,7 @@ export interface State {
   memory: MemoryOverview | null
   /** Live agents (LIVE.md §6): every known agent node by id (roots + subagents), fed by events. */
   agents: Record<Id, LiveAgent>
-  /** Asks by id (open ones, plus any that changed while Hive was open). */
+  /** Asks by id (open ones, plus any that changed while Principia was open). */
   asks: Record<Id, Ask>
   /** false when main doesn't serve the live channels (hub stays empty, Home falls back). */
   liveAvailable: boolean | null
@@ -93,7 +93,7 @@ export interface State {
   seenIdle: Record<Id, true>
   /** Last "jump to this agent" request (hub row, ⌘J, notification): views expand / scroll to it. */
   agentFocus: { agentId: Id; askId: Id | null; nonce: number } | null
-  /** AUTHORING.md §2: agent-authored drafts by id (pending ones, plus any decided while Hive was open). */
+  /** AUTHORING.md §2: agent-authored drafts by id (pending ones, plus any decided while Principia was open). */
   drafts: Record<Id, AuthorDraft>
   /** false when main doesn't serve author:* yet (no cards). */
   authorAvailable: boolean | null
@@ -478,7 +478,7 @@ export async function repoContextMenu(repo: Repo): Promise<void> {
     { id: 'copy', label: 'Copy Path' },
     { id: 'rename', label: 'Rename…' },
     { type: 'separator' },
-    { id: 'remove', label: 'Remove from Hive' }
+    { id: 'remove', label: 'Remove from Principia' }
   ]
   const id = await nativeMenu(items)
   if (!id) return
@@ -497,7 +497,7 @@ export async function repoContextMenu(repo: Repo): Promise<void> {
 
 export async function removeRepo(repo: Repo): Promise<void> {
   const ok = await confirmNative({
-    message: `Remove ${repo.name} from Hive?`,
+    message: `Remove ${repo.name} from Principia?`,
     detail: 'The folder stays on disk. Running sessions keep running.',
     confirmLabel: 'Remove',
     destructive: true

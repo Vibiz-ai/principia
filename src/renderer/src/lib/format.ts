@@ -75,7 +75,7 @@ export function sessionPlace(s: Pick<Session, 'repoId' | 'cwd'>): string {
   return s.repoId ? tildify(s.cwd) : 'Chat'
 }
 
-/** Signals Hive sends on Kill (HUP/TERM/KILL, as 128+n or the bare signal number), or no code at all. */
+/** Signals Principia sends on Kill (HUP/TERM/KILL, as 128+n or the bare signal number), or no code at all. */
 const STOP_CODES = new Set([9, 15, 129, 130, 137, 143])
 
 /** "stopped" for a session the user killed, "ended" for a clean exit, "exited N" otherwise. */

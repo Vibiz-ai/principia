@@ -31,7 +31,7 @@ export function SlackStatusPill(): React.JSX.Element {
   )
 }
 
-/** Resolver for <Mrkdwn>: names from the local mirror, clicks navigate inside Hive. */
+/** Resolver for <Mrkdwn>: names from the local mirror, clicks navigate inside Principia. */
 export function useResolve(): MrkdwnResolve {
   const users = useSlack((s) => s.users)
   const channels = useSlack((s) => s.channels)
@@ -139,7 +139,7 @@ export function ChannelMultiPicker({ value, onChange, allowDm = false, membersOn
       <div className="chips">
         {value.map((id) => (
           <span key={id} className="chip">
-            {id === 'dm' ? label(id) : channels.some((c) => c.id === id) ? label(id) : <span className="text-failed" title="Not in Hive’s channel list">{id}</span>}
+            {id === 'dm' ? label(id) : channels.some((c) => c.id === id) ? label(id) : <span className="text-failed" title="Not in Principia’s channel list">{id}</span>}
             <button type="button" className="chip__x" aria-label={`Remove ${label(id)}`} onClick={() => toggle(id)}>
               ×
             </button>

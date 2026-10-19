@@ -1,4 +1,4 @@
-/** ⌘F search over Hive's local copy (SLACK.md §12.2): filters channel, person, date; grouped by channel. */
+/** ⌘F search over Principia's local copy (SLACK.md §12.2): filters channel, person, date; grouped by channel. */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SlackSearchHit } from '@shared/slack'
 import { EmptyState, Loading } from '../ui'
@@ -119,7 +119,7 @@ export function SearchPanel({ initialChannelId, onJump, onClose }: { initialChan
         {error ? (
           <div className="text-failed selectable ssearch__msg">{error}</div>
         ) : !q.trim() ? (
-          <EmptyState icon="search" text="Search every channel and DM Hive has a copy of. Return opens the first result." />
+          <EmptyState icon="search" text="Search every channel and DM Principia has a copy of. Return opens the first result." />
         ) : loading && !hits ? (
           <Loading />
         ) : hits && hits.length === 0 ? (
@@ -155,7 +155,7 @@ export function SearchPanel({ initialChannelId, onJump, onClose }: { initialChan
           })
         )}
       </div>
-      <div className="ssearch__foot text-tertiary">Searching Hive’s local copy (since {absolute(oldest).split(' ').slice(0, 2).join(' ')})</div>
+      <div className="ssearch__foot text-tertiary">Searching Principia’s local copy (since {absolute(oldest).split(' ').slice(0, 2).join(' ')})</div>
     </div>
   )
 }

@@ -204,7 +204,7 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
           <Icon name="check" size={12} /> {answerText(ask) ?? 'Canceled'}
         </div>
       )}
-      {pty && open && !compact && <div className="ask-card__hint text-tertiary">Hive types your answer into the terminal dialog. {hotkeys && <><Kbd>⌘↩</Kbd> allow · <Kbd>⌘⌫</Kbd> deny</>}</div>}
+      {pty && open && !compact && <div className="ask-card__hint text-tertiary">Principia types your answer into the terminal dialog. {hotkeys && <><Kbd>⌘↩</Kbd> allow · <Kbd>⌘⌫</Kbd> deny</>}</div>}
     </div>
   )
 }

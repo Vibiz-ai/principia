@@ -17,7 +17,7 @@ export async function loadDrafts(): Promise<void> {
     const list = await hive.author.list({ status: ['pending'], limit: 50 })
     setState((s) => {
       const drafts: Record<Id, AuthorDraft> = {}
-      // keep decided drafts the user saw change while Hive was open, so a card can show its outcome
+      // keep decided drafts the user saw change while Principia was open, so a card can show its outcome
       for (const d of Object.values(s.drafts)) if (d.status !== 'pending') drafts[d.id] = d
       for (const d of list) drafts[d.id] = d
       return { drafts, authorAvailable: true }

@@ -193,7 +193,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
             variant={showHistory ? 'secondary' : 'ghost'}
             aria-pressed={showHistory}
             onClick={toggleHistory}
-            title="Show your Claude Code sessions from outside Hive (read-only), grouped by repository"
+            title="Show your Claude Code sessions from outside Principia (read-only), grouped by repository"
           >
             History{showHistory && hist.indexing ? ' · indexing…' : ''}
           </Button>

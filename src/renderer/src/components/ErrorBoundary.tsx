@@ -17,7 +17,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
     if (!this.state.error) return this.props.children
     return (
       <div className="crash">
-        <div className="crash__title">Hive’s window hit an error</div>
+        <div className="crash__title">Principia’s window hit an error</div>
         <div className="crash__text text-secondary">Your sessions and runs are still going; only the window needs a reload.</div>
         <pre className="crash__detail mono selectable">{this.state.error.message}</pre>
         <button className="btn btn--primary" onClick={() => location.reload()}>

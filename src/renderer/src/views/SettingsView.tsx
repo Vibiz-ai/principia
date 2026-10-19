@@ -650,7 +650,7 @@ function About(): React.JSX.Element {
   const info = useStore((s) => s.info)
   return (
     <div className="sgroup about">
-      <div className="about__name">Hive</div>
+      <div className="about__name">Principia</div>
       {info && (
         <div className="text-secondary selectable">
           Version {info.version} · Electron {info.electron} · Node {info.node} · {info.arch}

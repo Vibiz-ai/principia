@@ -130,7 +130,7 @@ export function SessionView(): React.JSX.Element {
         <EmptyState icon="folderMissing" text={<>This folder was moved or deleted.<div className="text-tertiary mono selectable">{r?.path}</div></>}>
           {r && (
             <Button variant="primary" onClick={() => void removeRepo(r).then(() => navigate({ name: 'home' }))}>
-              Remove from Hive
+              Remove from Principia
             </Button>
           )}
         </EmptyState>
@@ -318,7 +318,7 @@ function SessionPane({
   return (
     <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
       <div className="pane__header mono">
-        <span className="pane__cwd selectable" title={s.repoId ? tildify(s.cwd) : 'Hive’s scratch folder, not tied to a repository'}>
+        <span className="pane__cwd selectable" title={s.repoId ? tildify(s.cwd) : 'Principia’s scratch folder, not tied to a repository'}>
           {sessionPlace(s)}
         </span>
         {s.adapter !== 'shell' && <span className="text-tertiary">· {providerLabel(s.adapter)}</span>}

@@ -1,5 +1,5 @@
 /**
- * Approval card (AUTHORING.md §2.2, PO2): what an agent asked Hive to save, schedule or run, and one button that does
+ * Approval card (AUTHORING.md §2.2, PO2): what an agent asked Principia to save, schedule or run, and one button that does
  * exactly that. Shown pinned above the asking session's terminal, in the Agents hub, and from notification clicks.
  * Commands are always shown in full; nothing runs or persists until the user clicks.
  */

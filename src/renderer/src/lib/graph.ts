@@ -38,7 +38,7 @@ export type NodeRef =
   | { kind: 'schedule'; scheduleId: string }
   | { kind: 'wfnode'; nodeId: string }
   | { kind: 'repo'; repoId: string | null }
-  /** Canvas History layer (AUTHORING.md §8.5): a Claude Code conversation outside Hive. */
+  /** Canvas History layer (AUTHORING.md §8.5): a Claude Code conversation outside Principia. */
   | { kind: 'history'; historyId: string }
 
 export interface CardData extends Record<string, unknown> {
@@ -487,7 +487,7 @@ export function appendHistory(base: Graph, lanes: HistoryLane[]): Graph {
     const h = FRAME_PAD * 2 + FRAME_LABEL + rows * 32 + (rows - 1) * GAP
     const f = frame(`f:hist:${ln.key}`, ln.label, x0, y, w, h, null, null)
     f.data.variant = 'history'
-    f.data.meta = 'Claude Code · outside Hive'
+    f.data.meta = 'Claude Code · outside Principia'
     nodes.push(f)
     ln.cards.forEach((c, i) => {
       nodes.push({

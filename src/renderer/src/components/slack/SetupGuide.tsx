@@ -40,7 +40,7 @@ export function SlackConnectionCard(): React.JSX.Element {
         <div className="srow">
           <div className="srow__text">
             <div>Slack isn’t available in this build yet.</div>
-            <div className="srow__desc">Update Hive to connect a Slack workspace.</div>
+            <div className="srow__desc">Update Principia to connect a Slack workspace.</div>
           </div>
         </div>
       </div>
@@ -86,13 +86,13 @@ function ConnectedRows(): React.JSX.Element {
   const disconnect = async (): Promise<void> => {
     const ok = await confirmNative({
       message: `Disconnect ${status.workspace?.name ?? 'Slack'}?`,
-      detail: 'Hive stops reading Slack and its Slack triggers turn off. This does not uninstall the app: remove it in Slack › Manage apps to revoke it there.',
+      detail: 'Principia stops reading Slack and its Slack triggers turn off. This does not uninstall the app: remove it in Slack › Manage apps to revoke it there.',
       confirmLabel: 'Disconnect',
       destructive: true
     }).catch(() => false)
     if (!ok) return
     const purge = await confirmNative({
-      message: 'Also delete Hive’s copy of the messages?',
+      message: 'Also delete Principia’s copy of the messages?',
       detail: 'Triggers are kept (turned off). Keep the copy if you plan to reconnect the same workspace.',
       confirmLabel: 'Delete Messages',
       destructive: true
@@ -182,7 +182,7 @@ function ConnectedRows(): React.JSX.Element {
       <div className="srow">
         <div className="srow__text">
           <div>Keep the last {backfillDays} days</div>
-          <div className="srow__desc">How far back Hive copies history when it joins a channel. Older pages load on request.</div>
+          <div className="srow__desc">How far back Principia copies history when it joins a channel. Older pages load on request.</div>
         </div>
         <Stepper value={backfillDays} min={0} max={90} onChange={(v) => void updateSettings({ slackBackfillDays: v })} label="Backfill days" />
         <Button size="sm" onClick={() => void syncNow()} disabled={busy === 'sync' || status.state !== 'connected'}>
@@ -193,13 +193,13 @@ function ConnectedRows(): React.JSX.Element {
   )
 }
 
-/** PO-S2: explicit click only, with the count in the confirm. Hive never joins on its own. */
+/** PO-S2: explicit click only, with the count in the confirm. Principia never joins on its own. */
 export function JoinAllRow({ count, compact = false }: { count: number; compact?: boolean }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const joinAll = async (): Promise<void> => {
     const ok = await confirmNative({
       message: `Join ${count} public channel${count === 1 ? '' : 's'}?`,
-      detail: 'Hive will read them; it posts only where you allow. Private channels still need /invite @hive in Slack.',
+      detail: 'Principia will read them; it posts only where you allow. Private channels still need /invite @hive in Slack.',
       confirmLabel: 'Join All'
     }).catch(() => false)
     if (!ok) return
@@ -218,8 +218,8 @@ export function JoinAllRow({ count, compact = false }: { count: number; compact?
   return (
     <div className="srow">
       <div className="srow__text">
-        <div>{count} public channel{count === 1 ? '' : 's'} Hive can’t see yet</div>
-        <div className="srow__desc">Join them to read them in Hive. Hive posts only where you allow.</div>
+        <div>{count} public channel{count === 1 ? '' : 's'} Principia can’t see yet</div>
+        <div className="srow__desc">Join them to read them in Principia. Principia posts only where you allow.</div>
       </div>
       <Button size="sm" onClick={() => void joinAll()} disabled={busy}>
         {busy ? 'Joining…' : 'Join all public channels'}
@@ -233,7 +233,7 @@ function SetupSteps({ replacing, onDone }: { replacing: boolean; onDone: () => v
   const [manifest, setManifest] = useState<{ json: string; yaml: string; createUrl?: string } | null>(null)
   const [manifestErr, setManifestErr] = useState<string | null>(null)
   const [fmt, setFmt] = useState<'json' | 'yaml'>('json')
-  const [appName, setAppName] = useState('Hive')
+  const [appName, setAppName] = useState('Principia')
   const [appToken, setAppToken] = useState('')
   const [botToken, setBotToken] = useState('')
   const [errs, setErrs] = useState<{ appToken?: string; botToken?: string; other?: string }>({})
@@ -242,7 +242,7 @@ function SetupSteps({ replacing, onDone }: { replacing: boolean; onDone: () => v
 
   useEffect(() => {
     const t = setTimeout(() => {
-      slackCall('slack:manifest', { name: appName.trim() || 'Hive' }).then(
+      slackCall('slack:manifest', { name: appName.trim() || 'Principia' }).then(
         (m) => {
           setManifest(m)
           setManifestErr(null)
@@ -280,7 +280,7 @@ function SetupSteps({ replacing, onDone }: { replacing: boolean; onDone: () => v
       setErrs({
         appToken: byPath.appToken,
         botToken: byPath.botToken,
-        other: list.length ? undefined : code === 'vault_unavailable' ? 'macOS Keychain encryption isn’t available, so Hive can’t store the tokens safely.' : errorMessage(e)
+        other: list.length ? undefined : code === 'vault_unavailable' ? 'macOS Keychain encryption isn’t available, so Principia can’t store the tokens safely.' : errorMessage(e)
       })
       setCheck({ app: byPath.appToken ? 'fail' : list.length ? 'ok' : 'fail', bot: byPath.botToken ? 'fail' : list.length ? 'ok' : 'fail', socket: 'idle', scopes: 'idle', missing: [] })
     } finally {
@@ -300,7 +300,7 @@ function SetupSteps({ replacing, onDone }: { replacing: boolean; onDone: () => v
         <li className="slack-step">
           <div className="slack-step__title">Create the app</div>
           <div className="slack-step__body">
-            <div className="srow__desc">Slack opens with Hive’s settings filled in. Pick your workspace, then Next › Create.</div>
+            <div className="srow__desc">Slack opens with Principia’s settings filled in. Pick your workspace, then Next › Create.</div>
             <div className="slack-step__actions">
               <Button variant="primary" size="sm" icon="external" disabled={!createUrl} onClick={() => createUrl && void attempt(() => hive.app.openExternal({ url: createUrl }), 'Open Slack')} title={manifestErr ?? undefined}>
                 Create the Slack app
@@ -365,7 +365,7 @@ function SetupSteps({ replacing, onDone }: { replacing: boolean; onDone: () => v
           <div className="slack-step__title">Say hi</div>
           <div className="slack-step__body">
             <div className="srow__desc">
-              In Slack, DM <b>@{status?.workspace?.botName ?? 'hive'}</b> “hi”. Hive offers to send your alerts there. Then join channels on the Slack page (private ones need <span className="mono">/invite @{status?.workspace?.botName ?? 'hive'}</span> in Slack).
+              In Slack, DM <b>@{status?.workspace?.botName ?? 'hive'}</b> “hi”. Principia offers to send your alerts there. Then join channels on the Slack page (private ones need <span className="mono">/invite @{status?.workspace?.botName ?? 'hive'}</span> in Slack).
             </div>
             {connected && (
               <div className="slack-step__actions">

@@ -51,14 +51,14 @@ export function useClaudeHistory(query: HistoryListQuery, enabled = true): Histo
   return { ...st, available: on ? st.available : false, reload: load }
 }
 
-/** "Resume in Hive": a normal Hive pane running `claude --resume <id>` in the transcript's folder. */
+/** "Resume in Principia": a normal Principia pane running `claude --resume <id>` in the transcript's folder. */
 export async function resumeHistory(id: string): Promise<Session | undefined> {
   const { cols, rows } = getState().lastTermSize
   try {
     const sess = await hive.history.resume({ id, cols, rows })
     await refreshSessions().catch(() => undefined)
     focusSession(sess.id)
-    toast('Resumed in Hive')
+    toast('Resumed in Principia')
     return sess
   } catch (e) {
     toastError(e, 'Resume')

@@ -1,7 +1,7 @@
 /**
  * Usage limits, "Stalled?" and leftover processes (LANDSCAPE "Elon's cut" #4, #5): the amber Stalled? badge, the
  * "Hit usage limit · resets 15:00" line with Retry at reset / Retry now / Cancel, and the leftover-process list used
- * on Home and in Settings. Hive never stops a stalled agent or a leftover process on its own.
+ * on Home and in Settings. Principia never stops a stalled agent or a leftover process on its own.
  */
 import { useEffect, useState } from 'react'
 import type { AgentNode } from '@shared/live'
@@ -19,7 +19,7 @@ export function StalledBadge({ agent }: { agent: Pick<AgentNode, 'status' | 'sta
   if (!agent || !isStalled(agent)) return null
   const n = stalledMinutes(agent, mins)
   return (
-    <span className="stalled-badge" title={`No output for ${n} min. Hive never stops it on its own.`}>
+    <span className="stalled-badge" title={`No output for ${n} min. Principia never stops it on its own.`}>
       Stalled?
     </span>
   )
@@ -36,7 +36,7 @@ export async function retryAtReset(t: LimitTarget): Promise<void> {
     if (r) toast(r.retryAt ? retryLabel(r.retryAt) : 'Retry scheduled')
   } else {
     const ok = await attempt(() => hive.sessions.retry({ id: t.sessionId, when: 'reset' }).then(() => true), 'Retry at reset')
-    if (ok) toast(t.resetAt ? 'Hive will type “continue” at the reset' : 'Hive will type “continue” in 1 h')
+    if (ok) toast(t.resetAt ? 'Principia will type “continue” at the reset' : 'Principia will type “continue” in 1 h')
   }
 }
 export async function retryNow(t: LimitTarget, open = false): Promise<void> {
@@ -114,7 +114,7 @@ export async function stopLeftovers(pids: number[], all: boolean): Promise<void>
   if (all) {
     const ok = await confirmNative({
       message: `Stop ${pids.length} leftover process${pids.length === 1 ? '' : 'es'}?`,
-      detail: 'They were started by agents in an earlier Hive run. Their whole process trees are stopped.',
+      detail: 'They were started by agents in an earlier Principia run. Their whole process trees are stopped.',
       confirmLabel: 'Stop all',
       destructive: true
     }).catch(() => false)
@@ -136,7 +136,7 @@ export function LeftoverList({ items, onChanged, empty = null }: { items: Leftov
     <div className="leftovers">
       <div className="leftovers__head">
         <span className="text-secondary">
-          {items.length} process{items.length === 1 ? '' : 'es'} left running by agents from an earlier Hive run. Hive won’t stop them on its own.
+          {items.length} process{items.length === 1 ? '' : 'es'} left running by agents from an earlier Principia run. Principia won’t stop them on its own.
         </span>
         <Button size="sm" variant="destructive" onClick={() => void stop(items.map((p) => p.pid), true)}>
           Stop all

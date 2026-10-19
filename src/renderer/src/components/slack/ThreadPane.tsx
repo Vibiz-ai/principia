@@ -101,7 +101,7 @@ export function ThreadPane({ channelId, threadTs, onClose }: { channelId: string
                 Updated <RelativeTime iso={thread.fetchedAt} />
               </>
             ) : (
-              'From Hive’s local copy'
+              'From Principia’s local copy'
             )}{' '}
             · Reply in Slack, or let an agent draft one.
           </div>

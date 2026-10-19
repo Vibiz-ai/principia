@@ -21,7 +21,7 @@ import {
   type SlackUser
 } from '@shared/slack'
 
-/** chat.postMessage text cap Hive enforces (SLACK.md §8.3). */
+/** chat.postMessage text cap Principia enforces (SLACK.md §8.3). */
 export const SLACK_TEXT_MAX = 3000
 
 // =====================================================================================================================
@@ -515,7 +515,7 @@ const EVENT_TEXT: Record<SlackTriggerEventKind, string> = {
   fired: 'Started a run',
   debounced: 'Waiting for more messages',
   coalesced: 'Queued: a run is already answering this thread',
-  skipped_own: 'Skipped: Hive’s own message',
+  skipped_own: 'Skipped: Principia’s own message',
   skipped_bot: 'Skipped: sent by another bot',
   skipped_limit: 'Skipped: hit the runs-per-hour limit',
   skipped_stale: 'Skipped: the message was too old',

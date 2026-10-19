@@ -517,7 +517,7 @@ export function newScriptDraft(): WorkflowDraft {
         command: [
           'import json, os, urllib.request',
           '',
-          '# Inputs are env vars (HIVE_INPUT_<NAME>); Hive › Keys are env vars too (e.g. os.environ["APIFY_API_KEY"]).',
+          '# Inputs are env vars (HIVE_INPUT_<NAME>); Principia › Keys are env vars too (e.g. os.environ["APIFY_API_KEY"]).',
           'query = os.environ.get("HIVE_INPUT_QUERY", "")',
           'out_dir = os.environ["ARTIFACTS_DIR"]  # files saved here show up in Artifacts',
           '',

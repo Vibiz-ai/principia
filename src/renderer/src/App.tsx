@@ -49,7 +49,7 @@ export function App(): React.JSX.Element {
     return installKeyboard()
   }, [])
   useEffect(() => {
-    document.title = `Hive — ${TITLES[view.name]}`
+    document.title = `Principia — ${TITLES[view.name]}`
   }, [view.name])
   // what the user is looking at: main suppresses notifications for it, and idle sessions on screen count as seen (A3)
   const focusedSession = useStore((s) => s.focusedSession)

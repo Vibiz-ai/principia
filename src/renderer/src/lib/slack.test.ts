@@ -130,7 +130,7 @@ describe('mrkdwn parser', () => {
 })
 
 describe('timeline helpers', () => {
-  it('groups by author within 5 min; system lines and Hive posts stand alone', () => {
+  it('groups by author within 5 min; system lines and Principia posts stand alone', () => {
     const g = groupMessages([
       msg({ ts: '1000.000100' }),
       msg({ ts: '1100.000100' }),
@@ -171,7 +171,7 @@ describe('setup', () => {
     expect(tokenProblem('bot', 'xoxb-1234567890-1234567890-abcdefABCDEF')).toBeNull()
   })
   it('PO-S1: the create link carries the manifest, url-encoded', () => {
-    const json = JSON.stringify({ display_information: { name: 'Hive' }, settings: { socket_mode_enabled: true } }, null, 2)
+    const json = JSON.stringify({ display_information: { name: 'Principia' }, settings: { socket_mode_enabled: true } }, null, 2)
     const url = manifestCreateUrl(json)
     expect(url.startsWith('https://api.slack.com/apps?new_app=1&manifest_json=')).toBe(true)
     expect(JSON.parse(decodeURIComponent(url.split('manifest_json=')[1]!))).toEqual(JSON.parse(json))

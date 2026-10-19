@@ -112,7 +112,7 @@ export function SlackDraftCard({ draft: d, hotkeys = false, compact = false, inT
           {ctxOpen &&
             detail.context.map((m) => (
               <div key={m.ts} className="sdraft__ctxmsg">
-                <span className="sdraft__ctxname">{m.fromHive ? 'Hive' : userName(users[m.userId ?? ''], m.userId)}</span>
+                <span className="sdraft__ctxname">{m.fromHive ? 'Principia' : userName(users[m.userId ?? ''], m.userId)}</span>
                 <Mrkdwn text={m.text} resolve={resolve} />
               </div>
             ))}

@@ -126,7 +126,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
       ) : !list ? (
         <Loading />
       ) : list.length === 0 ? (
-        <EmptyState icon="schedules" text="Run a workflow or prompt on a timer. Schedules fire while Hive is running — turn on Launch at Login.">
+        <EmptyState icon="schedules" text="Run a workflow or prompt on a timer. Schedules fire while Principia is running — turn on Launch at Login.">
           <Button variant="primary" icon="plus" onClick={() => setSheet({})}>
             New Schedule
           </Button>
@@ -235,7 +235,7 @@ function History({ schedule, onRunNow }: { schedule: Schedule; onRunNow: () => v
           : e.kind === 'missed'
             ? `⚠ missed${e.message ? ` — ${e.message}` : ''}`
             : e.kind === 'caught_up'
-              ? '↺ caught up (Mac was asleep or Hive was closed)'
+              ? '↺ caught up (Mac was asleep or Principia was closed)'
               : e.kind === 'error'
                 ? `✕ ${e.message ?? 'error'}`
                 : `◷ fired${e.message ? ` — ${e.message}` : ''}`
@@ -363,7 +363,7 @@ function ScheduleSheet({
       footerLeft={
         settings && !settings.launchAtLogin ? (
           <span className="text-secondary sheet__note">
-            Schedules only fire while Hive is running.{' '}
+            Schedules only fire while Principia is running.{' '}
             <button type="button" className="link-btn" onClick={() => void updateSettings({ launchAtLogin: true })}>
               Turn on Launch at Login
             </button>

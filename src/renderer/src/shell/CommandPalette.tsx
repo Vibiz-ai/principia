@@ -119,7 +119,7 @@ function PaletteInner({ mode }: { mode: PaletteMode }): React.JSX.Element {
       { id: 'v:keys', group: 'Go to', label: 'Keys', icon: 'keys', kbd: '⌘6', run: () => void navigate({ name: 'keys' }) },
       { id: 'v:memory', group: 'Go to', label: 'Open Memory', icon: 'memory', kbd: '⌘7', run: () => void navigate({ name: 'memory' }) },
       { id: 'v:slack', group: 'Go to', label: 'Slack', icon: 'slack', kbd: '⇧⌘L', run: () => void navigate({ name: 'slack', nonce: Date.now() }) },
-      { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Hive’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },
+      { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Principia’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },
       { id: 'a:slackTriggers', group: 'Actions', label: 'Slack Triggers', hint: 'run a workflow when someone mentions @hive', icon: 'slack', run: () => void navigate({ name: 'schedules', tab: 'slack', nonce: Date.now() }) },
       { id: 'a:slackConnect', group: 'Actions', label: 'Slack Connection…', hint: 'Settings › Connections', icon: 'settings', run: () => void navigate({ name: 'settings', section: 'connections' }) },
       { id: 'v:settings', group: 'Go to', label: 'Settings', icon: 'settings', kbd: '⌘,', run: () => void navigate({ name: 'settings' }) }
@@ -208,7 +208,7 @@ function PaletteInner({ mode }: { mode: PaletteMode }): React.JSX.Element {
   }
 
   let lastGroup = ''
-  const placeholder = mode === 'newSession' ? `Start ${providerLabel(adapter)} in…` : mode === 'runWorkflow' ? 'Run workflow…' : 'Search Hive or run a command'
+  const placeholder = mode === 'newSession' ? `Start ${providerLabel(adapter)} in…` : mode === 'runWorkflow' ? 'Run workflow…' : 'Search Principia or run a command'
   return (
     <div className="palette-layer" onMouseDown={(e) => e.target === e.currentTarget && closePalette()}>
       <div className="palette" role="dialog" aria-label="Command palette">

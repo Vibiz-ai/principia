@@ -251,7 +251,7 @@ export async function decideSlackDraft(id: Id, decision: 'send' | 'discard', tex
   }
 }
 
-/** PO-S1: "Send your alerts here?" — Hive never sets it without this click. */
+/** PO-S1: "Send your alerts here?" — Principia never sets it without this click. */
 export async function acceptAlertSuggestion(): Promise<void> {
   const sug = st.status?.alertSuggestion
   if (!sug) return

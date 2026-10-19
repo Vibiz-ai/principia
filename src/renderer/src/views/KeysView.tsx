@@ -101,7 +101,7 @@ export function KeysView(): React.JSX.Element {
     return (
       <div className="view">
         <Toolbar title="Keys" />
-        <EmptyState icon="lock" text="macOS Keychain encryption is unavailable, so Hive won’t store keys.">
+        <EmptyState icon="lock" text="macOS Keychain encryption is unavailable, so Principia won’t store keys.">
           <Button onClick={() => void attempt(() => hive.app.showItemInFolder({ path: '/System/Applications/Utilities/Keychain Access.app' }))}>Show Keychain Access</Button>
         </EmptyState>
       </div>

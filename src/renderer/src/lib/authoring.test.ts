@@ -167,7 +167,7 @@ describe('Claude history', () => {
     expect(g[1]!.items.map((x) => x.id)).toEqual(['a', 'c'])
     expect(g[1]!.repoId).toBe('repo_1')
   })
-  it('Home: last 7 days outside Hive, newest first, max 8', () => {
+  it('Home: last 7 days outside Principia, newest first, max 8', () => {
     const items = [h('in', { inHive: true }), h('old', { endedAt: '2026-10-01T00:00:00Z' }), ...Array.from({ length: 10 }, (_, i) => h(`n${i}`, { endedAt: new Date(now - i * 3_600_000).toISOString() }))]
     const r = recentOutside(items, now)
     expect(r).toHaveLength(8)
@@ -200,7 +200,7 @@ describe('approval card fixes (items 2, 4, 7)', () => {
 
   it('the enforced push policy is a chip; worktree / folder names never show a raw template', () => {
     const chips = flagChips(flags({ pushPolicy: 'Can push only hive/*; never the default or base branch', worktreeRepo: '{{inputs.repo}}' }), repos)
-    expect(chips.find((c) => c.key === 'pushPolicy')?.text).toBe('Push policy (enforced by Hive): Can push only hive/*; never the default or base branch')
+    expect(chips.find((c) => c.key === 'pushPolicy')?.text).toBe('Push policy (enforced by Principia): Can push only hive/*; never the default or base branch')
     expect(chips.find((c) => c.key === 'worktree')?.text).toBe('Uses a git worktree of repo from “repo”')
     expect(repoLabel('{{inputs.repo}}', repos, roundup)).toBe('example-project')
     expect(repoLabel('{{ inputs.repo }}', repos, roundup, { repo: 'repo_1' })).toBe('example-project')

@@ -1,5 +1,5 @@
 /**
- * Slack page (SLACK.md §12.2): conversations | timeline | thread. ⌘F searches Hive's local copy. The header carries the
+ * Slack page (SLACK.md §12.2): conversations | timeline | thread. ⌘F searches Principia's local copy. The header carries the
  * Pause auto-replies kill switch (PO-S3e). Everything reads the local mirror; main keeps it fresh.
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -128,7 +128,7 @@ export function SlackView({ channelId, threadTs, search, nonce }: { channelId?: 
               {channel.isMember ? (
                 <Timeline key={channel.id} channel={channel} openThreadTs={thread} highlightTs={highlight} onOpenThread={(ts) => setThread(ts)} />
               ) : (
-                <EmptyState icon="chat" text={channel.kind === 'private' ? `Hive can’t read ${channelLabel(channel)} yet. In Slack, type /invite @${status.workspace?.botName ?? 'hive'} there.` : `Hive isn’t in ${channelLabel(channel)} yet. Use Join in the list to read it here.`} />
+                <EmptyState icon="chat" text={channel.kind === 'private' ? `Principia can’t read ${channelLabel(channel)} yet. In Slack, type /invite @${status.workspace?.botName ?? 'hive'} there.` : `Principia isn’t in ${channelLabel(channel)} yet. Use Join in the list to read it here.`} />
               )}
             </>
           ) : (

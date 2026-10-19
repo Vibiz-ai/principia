@@ -1,4 +1,4 @@
-/** Read-only preview of a Claude Code transcript (AUTHORING.md §8.3), with "Resume in Hive". Never writes the file. */
+/** Read-only preview of a Claude Code transcript (AUTHORING.md §8.3), with "Resume in Principia". Never writes the file. */
 import { useEffect, useState } from 'react'
 import type { ClaudeHistorySession, ClaudeTranscript } from '@shared/authoring'
 import { Button, ErrorState, Loading, Sheet } from '../ui'
@@ -32,7 +32,7 @@ export function TranscriptSheet({ session, onClose }: { session: ClaudeHistorySe
       title={session.title || 'Claude session'}
       onCancel={onClose}
       onPrimary={() => void resume()}
-      primaryLabel={busy ? 'Opening…' : 'Resume in Hive'}
+      primaryLabel={busy ? 'Opening…' : 'Resume in Principia'}
       primaryDisabled={busy || !session.cwd}
       primaryTitle={session.cwd ? `claude --resume ${session.id} in ${session.cwd}` : 'The folder of this conversation is unknown'}
       width={720}
@@ -77,7 +77,7 @@ export function TranscriptSheet({ session, onClose }: { session: ClaudeHistorySe
                 ))}
               </div>
             )}
-            <div className="transcript__foot text-tertiary">Read-only. Hive never changes files in ~/.claude.</div>
+            <div className="transcript__foot text-tertiary">Read-only. Principia never changes files in ~/.claude.</div>
           </>
         )}
       </div>

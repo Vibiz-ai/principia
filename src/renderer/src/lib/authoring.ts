@@ -100,8 +100,8 @@ export function flagChips(flags: AuthorFlags, repos: Repo[], fmtNext: (iso: stri
     out.push({ key: `shellin:${name}`, text: `Input “${name}” is executed as shell`, tone: 'danger', title: 'Its value is pasted into a command as-is. Check the value before approving.' })
   }
   if (flags.shellCommands > 0) out.push({ key: 'shell', text: `Runs shell commands (${flags.shellCommands})`, tone: 'warning', title: 'Every command is shown in full below.' })
-  if (flags.pushes) out.push({ key: 'push', text: 'May push to git', tone: 'warning', title: 'A command or prompt mentions git push or gh pr create. Hive blocks pushes to the default branch from worktrees.' })
-  if (flags.pushPolicy) out.push({ key: 'pushPolicy', text: `Push policy (enforced by Hive): ${flags.pushPolicy}`, tone: 'accent', title: 'Enforced by a pre-push hook on the run’s worktree, not by prompt text.' })
+  if (flags.pushes) out.push({ key: 'push', text: 'May push to git', tone: 'warning', title: 'A command or prompt mentions git push or gh pr create. Principia blocks pushes to the default branch from worktrees.' })
+  if (flags.pushPolicy) out.push({ key: 'pushPolicy', text: `Push policy (enforced by Principia): ${flags.pushPolicy}`, tone: 'accent', title: 'Enforced by a pre-push hook on the run’s worktree, not by prompt text.' })
   if (flags.worktreeRepo) {
     const name = repoLabel(flags.worktreeRepo, repos)
     out.push({ key: 'worktree', text: `Uses a git worktree of ${name}`, tone: 'neutral', title: 'Your checkout is never touched.' })
@@ -269,7 +269,7 @@ export function historyMeta(h: Pick<ClaudeHistorySession, 'turns' | 'subagents'>
   return parts.join(' · ')
 }
 
-/** Repo name when the cwd belongs to a Hive repo, else a ~ path. */
+/** Repo name when the cwd belongs to a Principia repo, else a ~ path. */
 export function historyPlace(h: Pick<ClaudeHistorySession, 'cwd' | 'repoId'>, repos: Repo[], home: string | null = null): string {
   const r = h.repoId ? repos.find((x) => x.id === h.repoId) : (h.cwd ? repos.find((x) => x.path === h.cwd) : undefined)
   if (r) return r.name
@@ -305,7 +305,7 @@ export function historyGroups(items: ClaudeHistorySession[], repos: Repo[], home
   return groups.sort((a, b) => b.latest - a.latest)
 }
 
-/** Home: sessions outside Hive from the last `days`, newest first, at most `max`. */
+/** Home: sessions outside Principia from the last `days`, newest first, at most `max`. */
 export function recentOutside(items: ClaudeHistorySession[], now: number, days = 7, max = 8): ClaudeHistorySession[] {
   const since = now - days * 86_400_000
   return items

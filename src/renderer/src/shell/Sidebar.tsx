@@ -197,7 +197,7 @@ export function Sidebar(): React.JSX.Element {
           </span>
         )}
         {s.status === 'running' && stalled.sessions.has(s.id) && (
-          <span className="stalled-badge stalled-badge--side" title="No output for a while. Hive never stops it on its own.">
+          <span className="stalled-badge stalled-badge--side" title="No output for a while. Principia never stops it on its own.">
             Stalled?
           </span>
         )}
@@ -308,7 +308,7 @@ export function Sidebar(): React.JSX.Element {
                   ⚑ {needsYou}
                 </span>
               ) : stalled.roots > 0 ? (
-                <span className="stalled-badge stalled-badge--side" title={`${stalled.roots} agent${stalled.roots === 1 ? '' : 's'} with no output for a while. Hive never stops them on its own.`}>
+                <span className="stalled-badge stalled-badge--side" title={`${stalled.roots} agent${stalled.roots === 1 ? '' : 's'} with no output for a while. Principia never stops them on its own.`}>
                   Stalled? {stalled.roots}
                 </span>
               ) : (
@@ -352,7 +352,7 @@ export function Sidebar(): React.JSX.Element {
       </div>
       <div className="sidebar__chat">
         {chatSessions.length === 0 ? (
-          <div className="side-row side-row--session is-dim" onClick={() => void openChat(false)} title="Start an agent in Hive's scratch folder, not tied to a repository">
+          <div className="side-row side-row--session is-dim" onClick={() => void openChat(false)} title="Start an agent in Principia's scratch folder, not tied to a repository">
             <Icon name="chat" size={14} />
             <span className="side-row__label">New chat (no repo)</span>
           </div>

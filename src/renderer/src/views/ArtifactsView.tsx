@@ -229,7 +229,7 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
       ) : !list ? (
         <Loading />
       ) : list.length === 0 ? (
-        <EmptyState icon="artifacts" text="Files agents save appear here (Hive tells every agent to save into $ARTIFACTS_DIR).">
+        <EmptyState icon="artifacts" text="Files agents save appear here (Principia tells every agent to save into $ARTIFACTS_DIR).">
           <Button onClick={openRoot}>Open Artifacts Folder</Button>
         </EmptyState>
       ) : filtered.length === 0 ? (

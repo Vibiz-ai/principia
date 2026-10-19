@@ -14,7 +14,7 @@ const DAY = 86400_000
 
 export function registerAppHandlers(h: Hive): void {
   handle('app:info', (): AppInfo => ({
-    name: 'Hive',
+    name: 'Principia',
     version: app.getVersion(),
     electron: process.versions.electron,
     node: process.versions.node,

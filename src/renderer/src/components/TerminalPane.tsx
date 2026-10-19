@@ -118,7 +118,7 @@ export const TerminalPane = forwardRef<TerminalHandle, { sessionId: Id; readOnly
       termRef.current = term
       fitRef.current = fit
       searchRef.current = search
-      // ⌘ chords belong to Hive (menu + shortcuts); Ctrl/Option chords and Esc go to the PTY.
+      // ⌘ chords belong to Principia (menu + shortcuts); Ctrl/Option chords and Esc go to the PTY.
       term.attachCustomKeyEventHandler((e) => !e.metaKey)
 
       const offData = hive.on('pty:data', (p) => {

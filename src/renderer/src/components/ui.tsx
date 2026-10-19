@@ -119,7 +119,7 @@ export function Stepper({ value, min, max, onChange, width = 64, label }: { valu
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 
 /**
- * 24-hour HH:MM field with two segments (the same format as every time Hive prints, DESIGN §9.7).
+ * 24-hour HH:MM field with two segments (the same format as every time Principia prints, DESIGN §9.7).
  * Click or Tab into a segment; ↑/↓ step it, digits type over it, ←/→ or ":" switch segments.
  */
 export function TimeField({ value, onChange, label }: { value: string; onChange: (v: string) => void; label?: string }): React.JSX.Element {

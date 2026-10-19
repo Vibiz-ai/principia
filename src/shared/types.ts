@@ -555,7 +555,7 @@ export interface LeftoverProcess {
 
 // ---------- app / status ----------
 export interface AppInfo {
-  name: 'Hive'
+  name: 'Hive' | 'Principia'
   version: string
   electron: string
   node: string

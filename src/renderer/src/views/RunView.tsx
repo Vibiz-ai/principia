@@ -174,7 +174,7 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
           <span className="run-sub">
             {isNothingToDo(run) ? <span className="glyph glyph--quiet">–</span> : <StatusGlyph status={runVisual(run.status)} />} {runStatusLabel(run)} {duration(run.startedAt, run.endedAt)}
             {run.scheduleId && <Pill tone="scheduled">◷ from “{scheduleName ?? 'schedule'}”</Pill>}
-            {run.trigger === 'agent' && run.startedBy && <Pill tone="accent" title="Started by an agent through Hive’s tools">✦ started by {run.startedBy.ownerLabel}</Pill>}
+            {run.trigger === 'agent' && run.startedBy && <Pill tone="accent" title="Started by an agent through Principia’s tools">✦ started by {run.startedBy.ownerLabel}</Pill>}
             {run.slack && <SlackProvenance ctx={run.slack} />}
           </span>
         }
@@ -482,7 +482,7 @@ function WorktreeChip({ wt }: { wt: RunWorktree }): React.JSX.Element {
   const remove = async (): Promise<void> => {
     const ok = await confirmNative({
       message: `Remove the worktree ${wt.branch}?`,
-      detail: `Deletes the folder ${tildify(wt.path)} and Hive’s own branch when it has nothing unpushed. ${wt.keptReason === 'dirty' ? 'It has uncommitted or unpushed work that will be lost.' : 'Branches that exist on the remote are left alone.'} Your checkout is not touched.`,
+      detail: `Deletes the folder ${tildify(wt.path)} and Principia’s own branch when it has nothing unpushed. ${wt.keptReason === 'dirty' ? 'It has uncommitted or unpushed work that will be lost.' : 'Branches that exist on the remote are left alone.'} Your checkout is not touched.`,
       confirmLabel: 'Remove Worktree',
       destructive: true
     }).catch(() => false)
@@ -522,7 +522,7 @@ function SlackProvenance({ ctx }: { ctx: SlackRunContext }): React.JSX.Element {
     <button
       type="button"
       className="pill pill--accent run-slack no-drag"
-      title={`${ctx.text.slice(0, 300)}${ctx.catchup ? '\n(caught up after Hive was offline)' : ''}\nOpen in Slack`}
+      title={`${ctx.text.slice(0, 300)}${ctx.catchup ? '\n(caught up after Principia was offline)' : ''}\nOpen in Slack`}
       onClick={() => /^https:\/\//.test(ctx.permalink) && void attempt(() => hive.app.openExternal({ url: ctx.permalink }))}
     >
       <Icon name="slack" size={11} /> Slack · {ctx.isDm ? `DM with ${ctx.userName}` : `${ctx.channelName.startsWith('#') ? '' : '#'}${ctx.channelName} · ${ctx.userName}`}
