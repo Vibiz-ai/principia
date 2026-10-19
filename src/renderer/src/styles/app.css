@@ -615,3 +615,46 @@ button.pane__footer-item:hover { background: var(--row-hover); color: var(--text
 .canvas-agent-summary { margin-right: auto; font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 @media (max-width: 1050px) { .canvas-agent-summary { display: none; } }
 @media (prefers-reduced-motion: reduce) { .graph .react-flow__edge.animated path { animation: none; } }
+
+/* Repository order: the insertion edge stays visible without moving live sessions. */
+.side-row--repo { position: relative; }
+.side-row--repo.is-dragging { opacity: .45; }
+.side-row--repo.repo-drop--before::before, .side-row--repo.repo-drop--after::after { content: ''; position: absolute; left: 8px; right: 8px; height: 2px; background: var(--accent, #6b8aff); border-radius: 2px; pointer-events: none; }
+.side-row--repo.repo-drop--before::before { top: 0; }
+.side-row--repo.repo-drop--after::after { bottom: 0; }
+.side-row--repo:focus-visible { outline: 2px solid var(--accent, #6b8aff); outline-offset: -2px; }
+
+.connection-catalog { margin-top: 24px; }
+.connection-catalog .gateway__editor-heading { margin-bottom: 18px; }
+.connection-catalog__search { display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--surface, #222426); border: 1px solid var(--border); border-radius: 9px; }
+.connection-catalog__search .input { border: none; background: transparent; box-shadow: none; min-height: 44px; }
+.connection-catalog__search:focus-within { outline: 2px solid var(--accent, #6b8aff); outline-offset: 2px; }
+.connection-catalog__filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px 0; }
+.connection-catalog__filters button { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 10px; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.connection-catalog__filters button[aria-pressed="true"] { color: var(--text-primary); background: var(--surface-hover, #303236); border-color: var(--border); }
+.connection-catalog__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
+.connection-catalog__item { display: flex; align-items: flex-start; gap: 13px; text-align: left; border: 1px solid var(--border); border-radius: 11px; padding: 18px; min-height: 136px; cursor: pointer; background: transparent; color: inherit; transition: background .15s, border-color .15s; }
+.connection-catalog__item:hover { background: var(--surface-hover, #292b2f); border-color: #555b65; }
+.connection-catalog__item:focus-visible, .connection-catalog__filters button:focus-visible { outline: 2px solid var(--accent, #6b8aff); outline-offset: 2px; }
+.connection-catalog__item:disabled { opacity: .5; cursor: wait; }
+.connection-catalog__brand { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; flex-shrink: 0; background: #edf1f2; color: #151718; font-size: 23px; font-weight: 700; letter-spacing: -1px; }
+.connection-catalog__brand--granola { background: #dce6cb; color: #333e2c; font-family: Georgia, serif; }
+.connection-catalog__brand--linear { background: #5e6ad2; color: white; }
+.connection-catalog__brand--stripe { background: #635bff; color: white; }
+.connection-catalog__brand--supabase, .connection-catalog__brand--neon { background: #123e31; color: #5fe8a9; }
+.connection-catalog__brand--firecrawl, .connection-catalog__brand--hubspot { background: #ef6c3e; color: white; }
+.connection-catalog__brand--sentry { background: #6c5b7b; color: white; }
+.connection-catalog__brand--asana { background: #ee6b83; color: white; }
+.connection-catalog__copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.connection-catalog__copy strong { font-size: 14px; font-weight: 600; }
+.connection-catalog__copy > span { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.connection-catalog__copy small { color: var(--text-secondary); font-size: 10px; margin-top: 5px; }
+.connection-catalog__item > svg { margin-top: 10px; opacity: .5; }
+.connection-catalog__empty, .connection-catalog__detail { padding: 20px; border: 1px solid var(--border); border-radius: 10px; margin-top: 12px; }
+.connection-catalog__detail p { margin: 8px 0 14px; color: var(--text-secondary); max-width: 70ch; }
+.gateway__preset-note { margin-bottom: 20px; max-width: 75ch; }
+.gateway__editor { scroll-margin-top: 24px; }
+@media (max-width: 650px) { .connection-catalog__grid { grid-template-columns: minmax(0, 1fr); } }
+
+.connection-catalog__brand:has(img) { background: #292c31; }
+.connection-catalog__brand img { width: 22px; height: 22px; object-fit: contain; }

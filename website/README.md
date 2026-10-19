@@ -1,6 +1,6 @@
 # Principia website
 
-Product and installation page, built with React 19, TypeScript, Vite, Tailwind CSS v4 and Lucide icons. The app screenshot is a real desktop workflow run captured during QA; no mock output or customer claims are presented.
+Product and installation page, built with React 19, TypeScript, Vite, Tailwind CSS v4 and Lucide icons. Product captures show the current renderer with a clearly labelled example workspace; sample activity is illustrative.
 
 ```sh
 cd website
@@ -40,3 +40,5 @@ This is a CLI deployment; automatic Git deployments are not configured. Keep `.v
 ## Product positioning
 
 Lead with “Run your entire company. From one workspace.” The one-company-or-a-thousand ambition describes the roadmap, not current scale or autonomy guarantees. The toolbox section covers planned databases, image generation, scraping, connections, phone, and email. Passport is the planned portable company memory and context-sharing layer; current project memory must not be described as shipped Passport import/export or universal authentication.
+
+Product screenshots use the actual renderer components with an explicitly labelled example workspace. `principia-agents.png` shows the agent hierarchy; `principia-connections.png` shows the searchable catalog. Sample activity and costs are illustrative, not customer results.

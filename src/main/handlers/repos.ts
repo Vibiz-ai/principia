@@ -50,6 +50,11 @@ export function registerRepoHandlers(h: Hive): void {
     emit('data:changed', { domain: 'repos' })
     return h.store.getRepo(id, live)!
   })
+  handle('repos:move', ({ id, targetId, placement }) => {
+    h.store.moveRepo(id, targetId, placement)
+    emit('data:changed', { domain: 'repos' })
+    return h.store.listRepos(live)
+  })
   handle('repos:remove', ({ id }) => {
     h.store.removeRepo(id)
     emit('data:changed', { domain: 'repos' })

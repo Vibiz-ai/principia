@@ -117,6 +117,7 @@ export interface InvokeMap {
   'repos:pick': [V, Repo[]] // native folder picker (multi), returns newly added
   'repos:add': [{ paths: string[] }, Repo[]] // drag-drop from Finder
   'repos:update': [{ id: Id; name: string }, Repo]
+  'repos:move': [{ id: Id; targetId: Id; placement: 'before' | 'after' }, Repo[]]
   'repos:remove': [{ id: Id }, V] // DB row only, never touches files
   'repos:siblings': [{ id: Id }, { path: string; name: string }[]] // git dirs next to repo, not yet added
   // profiles
@@ -441,7 +442,7 @@ export const INVOKE_CHANNELS = [
   'app:hideWindow',
   'settings:get', 'settings:update',
   'providers:list',
-  'repos:list', 'repos:pick', 'repos:add', 'repos:update', 'repos:remove', 'repos:siblings',
+  'repos:list', 'repos:pick', 'repos:add', 'repos:update', 'repos:move', 'repos:remove', 'repos:siblings',
   'profiles:list', 'profiles:create', 'profiles:update', 'profiles:remove',
   'sessions:list', 'sessions:create', 'sessions:attach', 'sessions:kill', 'sessions:remove', 'sessions:rename',
   'sessions:restart', 'sessions:handoff', 'sessions:saveImage',

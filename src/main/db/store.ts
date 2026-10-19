@@ -172,9 +172,23 @@ export class Store {
     return { id: r.id, name: r.name, path: r.path, addedAt: r.added_at, exists, isGit, liveSessions: live(r.id) }
   }
   listRepos(live: (id: Id) => number = () => 0): Repo[] {
-    return (this.db.prepare('SELECT * FROM repos ORDER BY name COLLATE NOCASE').all() as RepoRow[]).map((r) =>
-      this.repoFromRow(r, live)
-    )
+    const rows = this.db.prepare('SELECT * FROM repos ORDER BY name COLLATE NOCASE, id').all() as RepoRow[]
+    const saved = this.db.prepare("SELECT value FROM meta WHERE key = 'repo_order'").get() as { value: string } | undefined
+    const order = json<string[]>(saved?.value, [])
+    const positions = new Map((Array.isArray(order) ? order : []).map((id, index) => [id, index]))
+    rows.sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity))
+    return rows.map(r => this.repoFromRow(r, live))
+  }
+  /** Move one folder against the current order, preserving concurrent additions. */
+  moveRepo(id: Id, targetId: Id, placement: 'before' | 'after'): void {
+    this.db.transaction(() => {
+      const ids = this.listRepos().map(repo => repo.id)
+      if (!ids.includes(id) || !ids.includes(targetId)) throw new HiveError('not_found', 'Repository not found')
+      if (id === targetId) return
+      const remaining = ids.filter(item => item !== id)
+      remaining.splice(remaining.indexOf(targetId) + (placement === 'after' ? 1 : 0), 0, id)
+      this.db.prepare("INSERT INTO meta(key, value) VALUES ('repo_order', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(remaining))
+    })()
   }
   getRepo(id: Id, live: (id: Id) => number = () => 0): Repo | null {
     const r = this.db.prepare('SELECT * FROM repos WHERE id = ?').get(id) as RepoRow | undefined

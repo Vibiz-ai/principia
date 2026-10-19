@@ -65,6 +65,33 @@ d('settings', () => {
 })
 
 d('repos', () => {
+  it('persists folder moves without losing added folders or changing sessions', () => {
+    const [a] = store.addRepo(path.join(tmp, 'alpha'))
+    const [b] = store.addRepo(path.join(tmp, 'beta'))
+    const [c] = store.addRepo(path.join(tmp, 'quest'))
+    store.moveRepo(c.id, a.id, 'before')
+    expect(new Store(db).listRepos().map(r => r.id)).toEqual([c.id, a.id, b.id])
+    store.renameRepo(c.id, 'zulu')
+    const [added] = store.addRepo(path.join(tmp, 'aardvark'))
+    expect(store.listRepos().map(r => r.id)).toEqual([c.id, a.id, b.id, added.id])
+    store.moveRepo(c.id, b.id, 'after')
+    expect(store.listRepos().map(r => r.id)).toEqual([a.id, b.id, c.id, added.id])
+    store.moveRepo(c.id, c.id, 'before')
+    expect(() => store.moveRepo(c.id, 'missing', 'before')).toThrow('Repository not found')
+    store.removeRepo(b.id)
+    expect(store.listRepos().map(r => r.id)).toEqual([a.id, c.id, added.id])
+  })
+  it('retains custom order after closing and reopening the database', () => {
+    const file = path.join(tmp, 'ordered.db')
+    const first = openDatabase(file)
+    const one = new Store(first)
+    const [a] = one.addRepo(path.join(tmp, 'alpha'))
+    const [q] = one.addRepo(path.join(tmp, 'quest'))
+    one.moveRepo(q.id, a.id, 'before')
+    first.close()
+    const second = openDatabase(file)
+    try { expect(new Store(second).listRepos().map(r => r.id)).toEqual([q.id, a.id]) } finally { second.close() }
+  })
   it('adds once per path, computes exists/isGit', () => {
     fs.mkdirSync(path.join(tmp, 'proj', '.git'), { recursive: true })
     const [r, created] = store.addRepo(path.join(tmp, 'proj'))

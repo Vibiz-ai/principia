@@ -8,7 +8,9 @@ Principia brings agent sessions, company tool connections, memory, workflows and
 
 This is an early open-source release. The desktop app targets Apple Silicon macOS. The cloud runner is experimental and intended for one trusted operator, not a public multi-tenant service.
 
-![Principia desktop workflow canvas](website/public/principia-canvas.png)
+![Principia agent canvas — example workspace](website/public/principia-agents.png)
+
+*Current interface with sample data. [Explore the connection catalog](website/public/principia-connections.png).*
 
 ## What works today
 

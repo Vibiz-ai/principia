@@ -11,6 +11,7 @@ import { age, startedHint } from '../lib/time'
 import { collapseExited, sessionEndLabel, tildify } from '../lib/format'
 import {
   addRepoPaths,
+  moveRepo,
   addRepos,
   focusSession,
   navigate,
@@ -28,6 +29,8 @@ import {
   refreshRepos,
   type ViewState
 } from '../state/store'
+
+const REPO_DRAG_TYPE = 'application/x-principia-repository'
 
 const NAV: { key: ViewState['name']; label: string; icon: string; kbd?: string }[] = [
   { key: 'agents', label: 'Agents', icon: 'agents', kbd: '⇧⌘A' },
@@ -80,6 +83,8 @@ export function Sidebar(): React.JSX.Element {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [filter, setFilter] = useState('')
   const [drop, setDrop] = useState(false)
+  const [draggedRepo, setDraggedRepo] = useState<string | null>(null)
+  const [repoDrop, setRepoDrop] = useState<{ id: string; placement: 'before' | 'after' } | null>(null)
   const [width, setWidth] = useState<number>(() => loadJson('hive.sidebarWidth', 232))
   const [showEnded, setShowEnded] = useState<Record<string, boolean>>({})
   const [renaming, setRenaming] = useState<{ kind: 'repo' | 'session'; id: string } | null>(null)
@@ -144,6 +149,7 @@ export function Sidebar(): React.JSX.Element {
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
     setDrop(false)
+    if (!e.dataTransfer.types.includes('Files')) return
     const paths = Array.from(e.dataTransfer.files).map((f) => hive.pathForFile(f)).filter(Boolean)
     void addRepoPaths(paths)
   }
@@ -218,7 +224,45 @@ export function Sidebar(): React.JSX.Element {
     return (
       <div key={r.id}>
         <div
-          className={`side-row ${selected ? 'is-selected-parent' : ''} ${!r.exists ? 'is-missing' : ''}`}
+          className={`side-row side-row--repo ${selected ? 'is-selected-parent' : ''} ${!r.exists ? 'is-missing' : ''} ${draggedRepo === r.id ? 'is-dragging' : ''} ${repoDrop?.id === r.id ? `repo-drop--${repoDrop.placement}` : ''}`}
+          draggable={!isRenaming}
+          role="button"
+          tabIndex={0}
+          aria-label={`${r.name}. Drag to reorder, or use Alt and arrow keys to move.`}
+          onDragStart={e => {
+            e.dataTransfer.setData(REPO_DRAG_TYPE, r.id)
+            e.dataTransfer.effectAllowed = 'move'
+            setDraggedRepo(r.id)
+          }}
+          onDragEnd={() => { setDraggedRepo(null); setRepoDrop(null) }}
+          onDragOver={e => {
+            if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
+            e.preventDefault(); e.stopPropagation()
+            e.dataTransfer.dropEffect = 'move'
+            const rect = e.currentTarget.getBoundingClientRect()
+            setRepoDrop({ id: r.id, placement: e.clientY < rect.top + rect.height / 2 ? 'before' : 'after' })
+          }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setRepoDrop(null) }}
+          onDrop={e => {
+            if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
+            e.preventDefault(); e.stopPropagation()
+            const id = e.dataTransfer.getData(REPO_DRAG_TYPE)
+            const rect = e.currentTarget.getBoundingClientRect()
+            const placement = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+            setRepoDrop(null); setDraggedRepo(null)
+            if (repos.some(repo => repo.id === id)) void moveRepo(id, r.id, placement)
+          }}
+          onKeyDown={e => {
+            if (e.target !== e.currentTarget) return
+            if (e.altKey && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+              e.preventDefault()
+              const index = repos.findIndex(repo => repo.id === r.id)
+              const target = e.key === 'Home' ? repos[0] : e.key === 'End' ? repos.at(-1) : repos[index + (e.key === 'ArrowUp' ? -1 : 1)]
+              if (target) void moveRepo(r.id, target.id, e.key === 'ArrowDown' || e.key === 'End' ? 'after' : 'before')
+            } else if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault(); e.currentTarget.click()
+            }
+          }}
           onClick={(e) => {
             if (!r.exists) return void navigate({ name: 'session', missingRepoId: r.id })
             toggleRepoExpanded(r.id, true)
@@ -228,7 +272,7 @@ export function Sidebar(): React.JSX.Element {
             e.preventDefault()
             void repoContextMenu(r)
           }}
-          title={r.exists ? `${tildify(r.path)}\nClick: focus or start a session · ⌥-click: new session` : `${tildify(r.path)} — folder not found`}
+          title={r.exists ? `${tildify(r.path)}\nDrag to reorder · Right-click to move to top\nClick: focus or start a session · ⌥-click: new session` : `${tildify(r.path)} — folder not found`}
         >
           <button
             type="button"
@@ -369,7 +413,12 @@ export function Sidebar(): React.JSX.Element {
           <input ref={filterRef} className="input input--sm" placeholder="Filter  ⌘⌥F" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} />
         </div>
       )}
-      <div className="sidebar__repos">
+      <div className="sidebar__repos" onDragOverCapture={e => {
+        if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
+        const bounds = e.currentTarget.getBoundingClientRect()
+        if (e.clientY < bounds.top + 40) e.currentTarget.scrollTop -= 16
+        if (e.clientY > bounds.bottom - 40) e.currentTarget.scrollTop += 16
+      }}>
         {repos.length === 0 ? (
           <div className="sidebar__empty">
             <div>Add the folders you work in.</div>

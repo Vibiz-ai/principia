@@ -58,3 +58,11 @@ Saved dynamic registration is reused when its previous loopback port is availabl
 The cloud runner is a separate deployment surface; the desktop Keychain file is not portable to a Linux cloud host. Cloud credentials must be provisioned separately in its secret environment.
 
 Choose **All projects** for a desktop connection to grant access in every current and future project. Leave it unchecked to restrict access to selected folders. Existing connections keep their selected-project scope.
+
+## Connection catalog
+
+Settings → Connections includes a searchable catalog of official MCP servers. Search by service name or purpose (for example Granola, meetings, payments, or databases), select a preset, choose All projects or specific folders, then sign in or enter a token. No JSON is required. Custom remote/local connections and configuration imports remain available.
+
+The catalog records official setup guides next to each preset in `src/renderer/src/lib/connectionCatalog.ts` (checked 2026-10-19). Granola, Notion, Linear, Stripe, Mobbin, Supabase, Neon, Sentry, Firecrawl, and Tavily use browser sign-in; GitHub uses a personal access token. Supabase defaults to read-only. Account plans and administrator policies still apply. Catalog entries are setup presets, not a claim that every service has been authenticated in Principia.
+
+Asana and HubSpot require preregistered OAuth client credentials, which the gateway does not support yet. Figma requires approval of new clients. These entries expose setup guidance, not a nonfunctional sign-in button. Credentials are never embedded in preset URLs. GitHub MCP authentication does not authenticate local `git` or `gh` commands.

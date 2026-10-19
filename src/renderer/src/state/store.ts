@@ -465,7 +465,14 @@ async function offerSiblings(repo: Repo): Promise<void> {
   }
 }
 
+export async function moveRepo(id: string, targetId: string, placement: 'before' | 'after'): Promise<void> {
+  if (id === targetId) return
+  await attempt(() => hive.repos.move({ id, targetId, placement }), 'Move repository')
+  await refreshRepos().catch(() => undefined)
+}
+
 export async function repoContextMenu(repo: Repo): Promise<void> {
+  const index = state.repos.findIndex(r => r.id === repo.id)
   const items: NativeMenuItem[] = [
     {
       label: 'New Session',
@@ -477,12 +484,18 @@ export async function repoContextMenu(repo: Repo): Promise<void> {
     { id: 'reveal', label: 'Reveal in Finder', enabled: repo.exists },
     { id: 'copy', label: 'Copy Path' },
     { id: 'rename', label: 'Rename…' },
+    { id: 'move-top', label: 'Move to Top', enabled: index > 0 },
+    { id: 'move-up', label: 'Move Up', enabled: index > 0 },
+    { id: 'move-down', label: 'Move Down', enabled: index >= 0 && index < state.repos.length - 1 },
     { type: 'separator' },
     { id: 'remove', label: 'Remove from Principia' }
   ]
   const id = await nativeMenu(items)
   if (!id) return
   if (id.startsWith('new:')) return void startSession({ repoId: repo.id, adapter: id.slice(4) as AdapterId, forceNew: true })
+  if (id === 'move-top') return moveRepo(repo.id, state.repos[0].id, 'before')
+  if (id === 'move-up' && index > 0) return moveRepo(repo.id, state.repos[index - 1].id, 'before')
+  if (id === 'move-down' && index < state.repos.length - 1) return moveRepo(repo.id, state.repos[index + 1].id, 'after')
   if (id === 'reveal') return void attempt(() => hive.app.showItemInFolder({ path: repo.path }))
   if (id === 'copy') {
     await attempt(() => hive.clipboard.writeText({ text: repo.path }))

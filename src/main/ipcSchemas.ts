@@ -308,6 +308,7 @@ export const REQUEST_SCHEMAS = {
   'repos:pick': none,
   'repos:add': z.object({ paths: z.array(absPath).min(1).max(200) }),
   'repos:update': z.object({ id, name: z.string().trim().min(1).max(200) }),
+  'repos:move': z.object({ id, targetId: id, placement: z.enum(['before', 'after']) }),
   'repos:remove': z.object({ id }),
   'repos:siblings': z.object({ id }),
   'profiles:list': none,
