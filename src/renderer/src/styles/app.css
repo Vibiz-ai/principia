@@ -615,3 +615,17 @@ button.pane__footer-item:hover { background: var(--row-hover); color: var(--text
 .canvas-agent-summary { margin-right: auto; font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 @media (max-width: 1050px) { .canvas-agent-summary { display: none; } }
 @media (prefers-reduced-motion: reduce) { .graph .react-flow__edge.animated path { animation: none; } }
+
+/* Compact icon hierarchy: role, harness identity, state, and metrics. */
+.gnode__agent-role { display: flex; align-items: center; gap: 6px; }
+.gnode__agent-identity { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.gnode__agent-identity-text { min-width: 0; flex: 1; }
+.gnode__agent-avatar { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: #333941; color: #c6d5e9; border: 1px solid rgba(255,255,255,.08); }
+.gnode__agent-avatar--claude { color: #e8ad91; background: #3b302d; }
+.gnode__agent-avatar--codex { color: #b0d9cb; background: #293a35; }
+.gnode__agent-provider { margin-top: 1px; }
+.gnode__agent-footer > span { display: inline-flex; align-items: center; gap: 4px; }
+.gnode__agent-status > .icon { flex: none; }
+.gnode__agent-status--running > .icon { animation: agent-card-spin 3s linear infinite; }
+@keyframes agent-card-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .gnode__agent-status--running > .icon { animation: none; } }

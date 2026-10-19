@@ -9,6 +9,7 @@ import type { AgentEvent } from '@shared/live'
 import { hive } from '../lib/hive'
 import { StatusGlyph, useTick } from './ui'
 import { duration } from '../lib/time'
+import { Icon } from './Icon'
 import { AgentGlyph } from './agents/AgentBits'
 
 /** Canvas-only: clicking a subagent pill selects that agent (drawer agent tree). Editor preview leaves it unset. */
@@ -103,6 +104,10 @@ function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
   const childCount = data.childCount ?? 0
   const title = data.task || data.sub
   const cost = typeof data.costUsd === 'number' && Number.isFinite(data.costUsd) ? `$${data.costUsd.toFixed(data.costUsd > 0 && data.costUsd < .01 ? 3 : 2)}` : null
+  const role = `${data.role ?? ''} ${data.label}`.toLowerCase()
+  const roleIcon = /research|search|audit/.test(role) ? 'search' : /test|review|check/.test(role) ? 'shield' : /writ|edit|copy/.test(role) ? 'edit' : /cod|engineer|develop/.test(role) ? 'code' : 'agents'
+  const providerIcon = data.adapter === 'claude' ? 'spark' : data.adapter === 'codex' ? 'code' : data.adapter === 'shell' ? 'terminal' : 'grid'
+  const statusIcon = needs ? 'warning' : data.status === 'passed' ? 'check' : data.status === 'failed' ? 'close' : data.status === 'running' ? 'refresh' : 'pause'
   return <div
     className={`gnode gnode--agent gnode--agent-${state} ${selected ? 'is-selected' : ''} ${data.stalled ? 'gnode--agent-stalled' : ''}`}
     style={{ width: cardWidth(data), height: cardHeight(data) }}
@@ -111,17 +116,17 @@ function AgentCard({ id, data, selected, onPill, onToggleBranch }: {
     <Handle id="parent" type="target" position={Position.Top} className="gnode__agent-handle" isConnectable={false} />
     <Handle id="children" type="source" position={Position.Bottom} className="gnode__agent-handle" isConnectable={false} />
     <div className="gnode__agent-top">
-      <span className="gnode__agent-role">{data.role || 'Agent'}</span>
-      {needs && onPill && data.agentId ? <button type="button" className="gnode__agent-status gnode__agent-status--needs nodrag nopan" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onPill(id, data.ref, data.agentId!) }} title="Open this agent's requests">⚑ Needs you{data.needs && data.needs > 1 ? ` · ${data.needs}` : ''}</button> : <span className={`gnode__agent-status gnode__agent-status--${state}`}><span aria-hidden="true" />{needs ? 'Needs you' : CARD_STATUS[data.status] ?? data.status}</span>}
+      <span className="gnode__agent-role"><Icon name={roleIcon} size={12}/>{data.role || 'Agent'}</span>
+      {needs && onPill && data.agentId ? <button type="button" className="gnode__agent-status gnode__agent-status--needs nodrag nopan" onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onPill(id, data.ref, data.agentId!) }} title="Open this agent's requests"><Icon name="warning" size={11}/> Needs you{data.needs && data.needs > 1 ? ` · ${data.needs}` : ''}</button> : <span className={`gnode__agent-status gnode__agent-status--${state}`}><Icon name={statusIcon} size={11}/>{needs ? 'Needs you' : CARD_STATUS[data.status] ?? data.status}</span>}
     </div>
-    <div className="gnode__agent-title">{data.label}</div>
-    {(provider || data.model) && <div className="gnode__agent-provider">{provider && <span>{provider}</span>}{provider && data.model && <span aria-hidden="true">·</span>}{data.model && <span title={data.model}>{data.model}</span>}</div>}
+    <div className="gnode__agent-identity"><span className={`gnode__agent-avatar gnode__agent-avatar--${data.adapter ?? 'other'}`} title={provider ?? 'Agent'}><Icon name={providerIcon} size={19}/></span><div className="gnode__agent-identity-text"><div className="gnode__agent-title">{data.label}</div>
+    {(provider || data.model) && <div className="gnode__agent-provider">{provider && <span>{provider}</span>}{provider && data.model && <span aria-hidden="true">·</span>}{data.model && <span title={data.model}>{data.model}</span>}</div>}</div></div>
     <p className={`gnode__agent-task ${title ? '' : 'gnode__agent-task--empty'}`}>{title || 'No task details captured'}</p>
     <div className="gnode__agent-footer">
-      <span title={data.startedAt ? `Started ${new Date(data.startedAt).toLocaleString()}${data.endedAt ? ` · Ended ${new Date(data.endedAt).toLocaleString()}` : ''}` : undefined}>{data.startedAt ? duration(data.startedAt, data.endedAt ?? null) : '—'}</span>
+      <span title={data.startedAt ? `Started ${new Date(data.startedAt).toLocaleString()}${data.endedAt ? ` · Ended ${new Date(data.endedAt).toLocaleString()}` : ''}` : undefined}><Icon name="clock" size={11}/>{data.startedAt ? duration(data.startedAt, data.endedAt ?? null) : '—'}</span>
       {data.stalled && <span className="gnode__agent-stalled">Stalled?</span>}
-      {cost && <span className="gnode__agent-cost" title="Reported model spend">{cost}</span>}
-      {childCount > 0 && <button type="button" className="gnode__agent-children nodrag nopan" onDoubleClick={event => event.stopPropagation()} disabled={!onToggleBranch || !data.agentId} aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${childCount} child agent${childCount === 1 ? '' : 's'} of ${data.label}`} onClick={event => { event.stopPropagation(); if (data.agentId) onToggleBranch?.(data.agentId) }}><span aria-hidden="true">{data.collapsed ? '▸' : '▾'}</span>{childCount} {childCount === 1 ? 'agent' : 'agents'}</button>}
+      {cost && <span className="gnode__agent-cost" title="Reported model spend"><Icon name="coins" size={11}/>{cost}</span>}
+      {childCount > 0 && <button type="button" className="gnode__agent-children nodrag nopan" onDoubleClick={event => event.stopPropagation()} disabled={!onToggleBranch || !data.agentId} aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${childCount} child agent${childCount === 1 ? '' : 's'} of ${data.label}`} onClick={event => { event.stopPropagation(); if (data.agentId) onToggleBranch?.(data.agentId) }}><Icon name="agents" size={12}/>{childCount} {childCount === 1 ? 'agent' : 'agents'}<Icon name={data.collapsed ? 'chevronRight' : 'chevronDown'} size={11}/></button>}
     </div>
   </div>
 }
