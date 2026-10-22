@@ -29,6 +29,33 @@ import {
   type Visibility
 } from './store'
 import { normalizeName } from './screen'
+import fs from 'node:fs'
+import path from 'node:path'
+import type {
+  BacklinkGroup,
+  GlobalGraphFilters,
+  LinkOrigin,
+  LocalGraphFilters,
+  UnlinkedMention,
+  VaultFact,
+  VaultFactKind,
+  VaultFactStatus,
+  VaultGhost,
+  VaultGraph,
+  VaultGraphEdge,
+  VaultGraphNode,
+  VaultLink,
+  VaultNoteDetail,
+  VaultNoteSummary,
+  VaultPropertyValue,
+  VaultTagCount,
+  VaultTreeEntry
+} from '../../shared/passport'
+import { findNoteMentions, TitleTrie } from '../../shared/vault/autolink'
+import { LINKS_TO } from '../../shared/vault/grammar'
+import { guessTargetType, inverseLabel } from '../../shared/vault/ontology'
+import { parseNote } from '../../shared/vault/parse'
+import type { IndexDB } from './vault/indexDb'
 
 export const GRAPH_CAP = 150
 /**
@@ -662,4 +689,789 @@ export function topEntityNames(store: MemoryStore, vis: Visibility, n = 25): str
   )
     .filter((r) => r.w > 0)
     .map((r) => r.name)
+}
+
+// ======================================================================================
+// Passport vault reads (PASSPORT.md §8.1). Every query binds `company_id`; visibility is `{ companyId, repoId? }`
+// and the global scope is retired. Plain SELECTs (the hivemem server opens passport-index.db with query_only).
+// ======================================================================================
+
+/** Ranking weights (§8.1, §8.2): the repo note's neighbourhood 1.0, the rest of the company 0.8; edge weights by origin. */
+export const VAULT_RANK = { repoScope: 1.0, companyScope: 0.8, archived: 0.3, history: 0.25, degreeBoost: 0.05 }
+export const EDGE_WEIGHT = { relation: 1.0, property: 0.8, body: 0.6, bullet: 0.6, fact: 0.6, ghost: 0.3, tag: 0.15 } as const
+export const GLOBAL_GRAPH_CAP = 5000
+export const LOCAL_GRAPH_CAP = 300
+/** Tags shared by more notes than this are ignored as graph edges and PPR links (§8.2). */
+export const TAG_EDGE_MAX_MEMBERS = 20
+
+export interface VaultVis {
+  companyId: string
+  /** The grant's repo: notes linked to its repo note (or listing it in `repos:`) rank at 1.0 */
+  repoId?: string | null
+}
+
+interface VNoteRow {
+  id: string
+  company_id: string
+  path: string
+  title: string
+  type: string
+  status: string
+  pinned: number
+  summary: string
+  frontmatter_json: string
+  repo_id: string | null
+  repo_ids_json: string
+  hash: string
+  mtime_ms: number
+  created: string | null
+  modified: string | null
+  parse_warnings_json: string
+  indexed_at: string
+}
+interface VFactRow {
+  id: string
+  note_id: string
+  block_id: string | null
+  line: number
+  section: 'obs' | 'history'
+  category: string
+  kind: VaultFactKind
+  text: string
+  status: VaultFactStatus
+  superseded_by: string | null
+  pinned: number
+  reviewed: number
+  actor: string
+  run_id: string | null
+  session_id: string | null
+  date: string | null
+  repo_id: string | null
+}
+interface VLinkRow {
+  id: string
+  from_note: string
+  from_fact: string | null
+  line: number
+  rel: string
+  norm_rel: string
+  origin: LinkOrigin
+  to_note: string | null
+  to_text: string
+  to_norm: string
+  to_heading: string | null
+  to_block: string | null
+  display: string | null
+  embed: number
+  ambiguous: number
+  candidates_json: string | null
+  context: string | null
+  block_id: string | null
+  status: 'active' | 'pending' | 'invalid'
+}
+
+const NOTE_COLS = `n.id, n.company_id, n.path, n.title, n.type, n.status, n.pinned, n.summary, n.frontmatter_json, n.repo_id, n.repo_ids_json, n.hash,
+  n.mtime_ms, n.created, n.modified, n.parse_warnings_json, n.indexed_at`
+const ident = (s: string) => s
+const parseJson = <T>(s: string | null | undefined, fallback: T): T => {
+  if (!s) return fallback
+  try {
+    return JSON.parse(s) as T
+  } catch {
+    return fallback
+  }
+}
+const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',')
+
+function vNotes(db: IndexDB, companyId: string, ids: string[]): Map<string, VNoteRow> {
+  const out = new Map<string, VNoteRow>()
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500)
+    for (const r of db
+      .prepare(`SELECT ${NOTE_COLS} FROM mem_note n WHERE n.company_id = ? AND n.removed_at IS NULL AND n.id IN (${placeholders(chunk.length)})`)
+      .all(companyId, ...chunk) as VNoteRow[])
+      out.set(r.id, r)
+  }
+  return out
+}
+
+/** Note rows -> VaultNoteSummary (aliases, tags and degrees in one pass per batch). */
+export function noteSummaries(db: IndexDB, companyId: string, rows: VNoteRow[], redact: (s: string) => string = ident): VaultNoteSummary[] {
+  if (!rows.length) return []
+  const ids = rows.map((r) => r.id)
+  const aliases = new Map<string, string[]>()
+  const tags = new Map<string, Set<string>>()
+  const inDeg = new Map<string, number>()
+  const outDeg = new Map<string, number>()
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500)
+    const ph = placeholders(chunk.length)
+    for (const a of db.prepare(`SELECT note_id, alias FROM mem_alias WHERE company_id = ? AND note_id IN (${ph})`).all(companyId, ...chunk) as { note_id: string; alias: string }[])
+      aliases.set(a.note_id, [...(aliases.get(a.note_id) ?? []), a.alias])
+    for (const t of db.prepare(`SELECT note_id, tag_norm FROM mem_tag WHERE company_id = ? AND note_id IN (${ph})`).all(companyId, ...chunk) as { note_id: string; tag_norm: string }[]) {
+      const s = tags.get(t.note_id) ?? new Set<string>()
+      s.add(t.tag_norm)
+      tags.set(t.note_id, s)
+    }
+    for (const d of db
+      .prepare(`SELECT to_note AS id, count(DISTINCT from_note) AS n FROM mem_link WHERE company_id = ? AND status = 'active' AND to_note IN (${ph}) AND from_note != to_note GROUP BY to_note`)
+      .all(companyId, ...chunk) as { id: string; n: number }[])
+      inDeg.set(d.id, d.n)
+    for (const d of db
+      .prepare(`SELECT from_note AS id, count(DISTINCT to_norm) AS n FROM mem_link WHERE company_id = ? AND status = 'active' AND from_note IN (${ph}) GROUP BY from_note`)
+      .all(companyId, ...chunk) as { id: string; n: number }[])
+      outDeg.set(d.id, d.n)
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    companyId,
+    path: r.path,
+    title: r.title,
+    type: r.type,
+    status: r.status === 'archived' ? 'archived' : 'active',
+    pinned: !!r.pinned,
+    summary: redact(r.summary),
+    aliases: aliases.get(r.id) ?? [],
+    tags: [...(tags.get(r.id) ?? [])].sort(),
+    created: r.created,
+    modified: r.modified,
+    inDegree: inDeg.get(r.id) ?? 0,
+    outDegree: outDeg.get(r.id) ?? 0
+  }))
+}
+
+export function noteSummary(db: IndexDB, companyId: string, noteId: string, redact: (s: string) => string = ident): VaultNoteSummary | null {
+  const row = vNotes(db, companyId, [noteId]).get(noteId)
+  return row ? noteSummaries(db, companyId, [row], redact)[0] : null
+}
+
+function mapFact(r: VFactRow, tags: string[], redact: (s: string) => string): VaultFact {
+  return {
+    id: r.id,
+    blockId: r.block_id,
+    line: r.line,
+    section: r.section,
+    category: r.category,
+    kind: r.kind,
+    text: redact(r.text),
+    tags,
+    status: r.status,
+    supersededBy: r.superseded_by,
+    pinned: !!r.pinned,
+    reviewed: !!r.reviewed,
+    actor: r.actor,
+    runId: r.run_id,
+    sessionId: r.session_id,
+    date: r.date,
+    repoId: r.repo_id
+  }
+}
+
+function mapLinks(db: IndexDB, companyId: string, rows: VLinkRow[], redact: (s: string) => string): VaultLink[] {
+  const ids = [...new Set(rows.flatMap((r) => [r.from_note, r.to_note, ...parseJson<string[]>(r.candidates_json, [])]).filter((x): x is string => !!x))]
+  const notes = vNotes(db, companyId, ids)
+  const title = (id: string | null) => (id ? (notes.get(id)?.title ?? null) : null)
+  return rows.map((r) => ({
+    id: r.id,
+    fromNote: r.from_note,
+    fromTitle: title(r.from_note) ?? r.from_note,
+    fromFact: r.from_fact,
+    line: r.line,
+    rel: r.rel,
+    inverse: inverseLabel(r.norm_rel),
+    origin: r.origin,
+    toNote: r.to_note && notes.has(r.to_note) ? r.to_note : null,
+    toTitle: title(r.to_note),
+    toText: r.to_text,
+    heading: r.to_heading,
+    block: r.to_block,
+    display: r.display,
+    embed: !!r.embed,
+    ambiguous: !!r.ambiguous,
+    candidates: parseJson<string[]>(r.candidates_json, []).map((id) => title(id) ?? id),
+    context: r.context ? redact(r.context) : null,
+    blockId: r.block_id,
+    status: r.status
+  }))
+}
+
+/** Every outgoing link of a note (prose, bullets, relations, properties), ghosts marked by toNote = null. */
+export function outgoingLinks(db: IndexDB, companyId: string, noteId: string, redact: (s: string) => string = ident): VaultLink[] {
+  const rows = db.prepare(`SELECT * FROM mem_link WHERE company_id = ? AND from_note = ? AND dup_of IS NULL ORDER BY line, id`).all(companyId, noteId) as VLinkRow[]
+  return mapLinks(db, companyId, rows, redact)
+}
+
+/** §8.1 note detail: properties, facts (every status, History included), relations, outgoing links, warnings. */
+export function vaultNoteDetail(db: IndexDB, companyId: string, noteId: string, redact: (s: string) => string = ident, opts: { mtimeMs?: number | null } = {}): VaultNoteDetail | null {
+  const row = vNotes(db, companyId, [noteId]).get(noteId)
+  if (!row) return null
+  const facts = db
+    .prepare(`SELECT * FROM mem_fact WHERE company_id = ? AND note_id = ? AND dup_of IS NULL ORDER BY line`)
+    .all(companyId, noteId) as VFactRow[]
+  const factTags = new Map<string, string[]>()
+  for (const t of db.prepare(`SELECT fact_id, tag_norm FROM mem_tag WHERE company_id = ? AND note_id = ? AND fact_id IS NOT NULL`).all(companyId, noteId) as { fact_id: string; tag_norm: string }[])
+    factTags.set(t.fact_id, [...(factTags.get(t.fact_id) ?? []), t.tag_norm])
+  const outgoing = outgoingLinks(db, companyId, noteId, redact)
+  const props = parseJson<Record<string, unknown>>(row.frontmatter_json, {})
+  const properties: Record<string, VaultPropertyValue> = {}
+  for (const [k, v] of Object.entries(props)) {
+    if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') properties[k] = typeof v === 'string' ? redact(v) : v
+    else if (Array.isArray(v)) properties[k] = v.map((x) => redact(String(x)))
+    else if (v && typeof v === 'object' && 'raw' in v) properties[k] = redact(String((v as { raw: unknown }).raw))
+  }
+  return {
+    note: noteSummaries(db, companyId, [row], redact)[0],
+    properties,
+    facts: facts.map((f) => mapFact(f, factTags.get(f.id) ?? [], redact)),
+    relations: outgoing.filter((l) => l.origin === 'relation'),
+    outgoing,
+    parseWarnings: parseJson<string[]>(row.parse_warnings_json, []),
+    stale: opts.mtimeMs != null && Math.abs(opts.mtimeMs - row.mtime_ms) > 1
+  }
+}
+
+/** Linked mentions grouped by inverse label, with the linking line as context (§8.1 backlinks). */
+export function backlinks(db: IndexDB, companyId: string, noteId: string, redact: (s: string) => string = ident): BacklinkGroup[] {
+  const rows = db
+    .prepare(
+      `SELECT l.from_note, l.from_fact, l.line, l.rel, l.norm_rel, l.context, n.title, n.path FROM mem_link l
+       JOIN mem_note n ON n.company_id = l.company_id AND n.id = l.from_note AND n.removed_at IS NULL
+       WHERE l.company_id = ? AND l.to_note = ? AND l.status = 'active' AND l.dup_of IS NULL AND l.from_note != l.to_note
+       ORDER BY n.title, l.line`
+    )
+    .all(companyId, noteId) as { from_note: string; from_fact: string | null; line: number; rel: string; norm_rel: string; context: string | null; title: string; path: string }[]
+  const groups = new Map<string, BacklinkGroup>()
+  for (const r of rows) {
+    const label = inverseLabel(r.norm_rel)
+    const g = groups.get(r.norm_rel) ?? { label, rel: r.norm_rel, items: [] }
+    g.items.push({ fromNote: r.from_note, fromTitle: r.title, fromPath: r.path, line: r.line, context: redact(r.context ?? ''), factId: r.from_fact })
+    groups.set(r.norm_rel, g)
+  }
+  // typed relations first, then properties, then plain links
+  return [...groups.values()].sort((a, b) => Number(a.rel === LINKS_TO) - Number(b.rel === LINKS_TO) || a.label.localeCompare(b.label))
+}
+
+/**
+ * Unlinked mentions (§8.1): an FTS phrase match on the note's title and aliases finds candidate notes, then each
+ * candidate file is scanned line by line (code, headings, existing links, provenance and block ids skipped).
+ */
+export function unlinkedMentions(db: IndexDB, companyId: string, noteId: string, opts: { root: string; limit?: number; redact?: (s: string) => string }): UnlinkedMention[] {
+  const target = vNotes(db, companyId, [noteId]).get(noteId)
+  if (!target) return []
+  const redact = opts.redact ?? ident
+  const limit = opts.limit ?? 100
+  const names = [target.title, ...(db.prepare('SELECT alias FROM mem_alias WHERE company_id = ? AND note_id = ?').all(companyId, noteId) as { alias: string }[]).map((a) => a.alias)]
+  const phrases = [...new Set(names.map((n) => n.replace(/"/g, ' ').replace(/\s+/g, ' ').trim()).filter((n) => n.length >= 3))]
+  if (!phrases.length) return []
+  const match = phrases.map((p) => `body : "${p}"`).join(' OR ')
+  let candidates: string[] = []
+  try {
+    candidates = (
+      db
+        .prepare(`SELECT DISTINCT note_id FROM mem_fts WHERE mem_fts MATCH ? AND company_id = ? AND note_id != ? LIMIT 400`)
+        .all(match, companyId, noteId) as { note_id: string }[]
+    ).map((r) => r.note_id)
+  } catch {
+    return []
+  }
+  const trie = new TitleTrie([{ id: noteId, title: target.title, aliases: names.slice(1), path: target.path }], { stoplist: [] })
+  const out: UnlinkedMention[] = []
+  const notes = vNotes(db, companyId, candidates)
+  for (const id of candidates) {
+    const n = notes.get(id)
+    if (!n) continue
+    let text: string
+    try {
+      text = fs.readFileSync(path.join(opts.root, ...n.path.split('/')), 'utf8')
+    } catch {
+      continue
+    }
+    const parsed = parseNote(text, { path: n.path })
+    for (const m of findNoteMentions(parsed, trie, { excludeIds: [n.id] })) {
+      if (m.noteId !== noteId) continue
+      const line = parsed.lines.lines[m.line]
+      out.push({ noteId: n.id, title: n.title, path: n.path, line: m.line, text: redact(line), span: { start: m.start, end: m.end }, matched: m.text })
+      if (out.length >= limit) return out
+    }
+  }
+  return out
+}
+
+/** Tag counts (distinct notes per tag), nested tags as written (`team/founding`); the UI builds the tree. */
+export function vaultTags(db: IndexDB, companyId: string): VaultTagCount[] {
+  return (
+    db
+      .prepare(
+        `SELECT t.tag_norm AS tag, min(t.tag_display) AS display, count(DISTINCT t.note_id) AS count FROM mem_tag t
+         JOIN mem_note n ON n.company_id = t.company_id AND n.id = t.note_id AND n.removed_at IS NULL
+         WHERE t.company_id = ? GROUP BY t.tag_norm ORDER BY count DESC, t.tag_norm`
+      )
+      .all(companyId) as VaultTagCount[]
+  )
+}
+
+/** Unresolved link targets with inbound counts (ghost notes), most linked first. */
+export function vaultGhosts(db: IndexDB, companyId: string, limit = 500): VaultGhost[] {
+  const rows = db
+    .prepare(
+      `SELECT l.to_norm AS norm, min(l.to_text) AS text, count(*) AS inbound, count(DISTINCT l.from_note) AS sources, max(l.ambiguous) AS ambiguous,
+         max(l.candidates_json) AS candidates_json, group_concat(DISTINCT l.norm_rel) AS rels
+       FROM mem_link l JOIN mem_note n ON n.company_id = l.company_id AND n.id = l.from_note AND n.removed_at IS NULL
+       WHERE l.company_id = ? AND l.to_note IS NULL AND l.status = 'active' AND l.dup_of IS NULL AND l.to_norm != ''
+       GROUP BY l.to_norm ORDER BY inbound DESC, sources DESC, norm LIMIT ?`
+    )
+    .all(companyId, limit) as { norm: string; text: string; inbound: number; sources: number; ambiguous: number; candidates_json: string | null; rels: string | null }[]
+  const candIds = [...new Set(rows.flatMap((r) => parseJson<string[]>(r.candidates_json, [])))]
+  const titles = vNotes(db, companyId, candIds)
+  return rows.map((r) => ({
+    text: r.text,
+    norm: r.norm,
+    inbound: r.inbound,
+    sources: r.sources,
+    ambiguous: !!r.ambiguous,
+    candidates: parseJson<string[]>(r.candidates_json, []).map((id) => titles.get(id)?.title ?? id),
+    guessedType: (r.rels ?? '').split(',').map((rel) => guessTargetType(rel)).find((t): t is NonNullable<typeof t> => !!t) ?? null
+  }))
+}
+
+/** The vault tree (every live note), with orphan flags (no links in or out) and aliases (editor `[[` completion). */
+export function notesTree(db: IndexDB, companyId: string, opts: { includeArchived?: boolean } = {}): VaultTreeEntry[] {
+  const aliases = new Map<string, string[]>()
+  for (const a of db.prepare('SELECT note_id, alias FROM mem_alias WHERE company_id = ? ORDER BY alias').all(companyId) as { note_id: string; alias: string }[]) {
+    const list = aliases.get(a.note_id)
+    if (list) list.push(a.alias)
+    else aliases.set(a.note_id, [a.alias])
+  }
+  return (
+    db
+      .prepare(
+        `SELECT n.id, n.path, n.title, n.type, n.status, n.pinned, n.modified,
+           NOT EXISTS (SELECT 1 FROM mem_link l WHERE l.company_id = n.company_id AND l.status = 'active' AND (l.from_note = n.id OR l.to_note = n.id)) AS orphan
+         FROM mem_note n WHERE n.company_id = ? AND n.removed_at IS NULL ${opts.includeArchived ? '' : "AND n.status = 'active'"} ORDER BY n.path`
+      )
+      .all(companyId) as { id: string; path: string; title: string; type: string; status: string; pinned: number; modified: string | null; orphan: number }[]
+  ).map((r) => ({ id: r.id, path: r.path, title: r.title, type: r.type, status: r.status === 'archived' ? 'archived' : 'active', pinned: !!r.pinned, modified: r.modified, orphan: !!r.orphan, aliases: aliases.get(r.id) ?? [] }))
+}
+
+export function orphanNotes(db: IndexDB, companyId: string): VaultTreeEntry[] {
+  return notesTree(db, companyId).filter((n) => n.orphan)
+}
+
+/** Recently changed notes from the change feed (mem_event), newest first. */
+export function recentChanges(db: IndexDB, companyId: string, limit = 20): { noteId: string; path: string | null; op: string; actor: string; ts: string }[] {
+  return (
+    db
+      .prepare(
+        `SELECT e.entity_id AS noteId, max(e.path) AS path, e.op, e.actor, max(e.ts) AS ts FROM mem_event e
+         JOIN mem_note n ON n.company_id = e.company_id AND n.id = e.entity_id AND n.removed_at IS NULL
+         WHERE e.company_id = ? AND e.entity_id IS NOT NULL GROUP BY e.entity_id ORDER BY max(e.seq) DESC LIMIT ?`
+      )
+      .all(companyId, limit) as { noteId: string; path: string | null; op: string; actor: string; ts: string }[]
+  )
+}
+
+/** Notes a run or a session wrote to (MemoryChips: "This run wrote 4 lines in 3 notes"). */
+export function runTouched(db: IndexDB, companyId: string, q: { runId?: string; sessionId?: string }): { noteIds: string[]; lines: number } {
+  const where = q.runId ? 'g.run_id = ?' : 'g.session_id = ?'
+  const arg = q.runId ?? q.sessionId
+  if (!arg) return { noteIds: [], lines: 0 }
+  const rows = db
+    .prepare(
+      `SELECT e.entity_id AS id, count(*) AS n FROM mem_event e JOIN mem_grant g ON g.id = e.grant_id
+       WHERE e.company_id = ? AND ${where} AND e.entity_id IS NOT NULL GROUP BY e.entity_id`
+    )
+    .all(companyId, arg) as { id: string; n: number }[]
+  return { noteIds: rows.map((r) => r.id), lines: rows.reduce((s, r) => s + r.n, 0) }
+}
+
+// ---------- graphs ----------
+
+interface GraphEdgeRow {
+  from_note: string
+  to_note: string | null
+  to_norm: string
+  to_text: string
+  norm_rel: string
+  origin: LinkOrigin
+}
+export function edgeWeight(e: { origin: LinkOrigin; to_note: string | null }): number {
+  if (!e.to_note) return EDGE_WEIGHT.ghost
+  return EDGE_WEIGHT[e.origin] ?? EDGE_WEIGHT.body
+}
+const ghostId = (norm: string) => `ghost:${norm}`
+
+class GraphBuilder {
+  nodes: VaultGraphNode[] = []
+  edges: VaultGraphEdge[] = []
+  rels: string[] = []
+  tags: string[] = []
+  private idx = new Map<string, number>()
+  private relIdx = new Map<string, number>()
+  private tagIdx = new Map<string, number>()
+  private edgeKeys = new Set<string>()
+
+  has(id: string): boolean {
+    return this.idx.has(id)
+  }
+  node(id: string, title: string, type: string, ghost: 0 | 1, tags: string[] = []): number {
+    const hit = this.idx.get(id)
+    if (hit !== undefined) return hit
+    const tagIdx = tags.map((t) => {
+      let i = this.tagIdx.get(t)
+      if (i === undefined) this.tagIdx.set(t, (i = this.tags.push(t) - 1))
+      return i
+    })
+    this.idx.set(id, this.nodes.length)
+    this.nodes.push([id, title, type, 0, ghost, tagIdx])
+    return this.nodes.length - 1
+  }
+  edge(src: string, dst: string, rel: string, weight: number): void {
+    const s = this.idx.get(src)
+    const d = this.idx.get(dst)
+    if (s === undefined || d === undefined || s === d) return
+    const key = `${s}>${d}>${rel}`
+    if (this.edgeKeys.has(key)) return
+    this.edgeKeys.add(key)
+    let r = this.relIdx.get(rel)
+    if (r === undefined) this.relIdx.set(rel, (r = this.rels.push(rel) - 1))
+    this.edges.push([s, d, r, weight])
+    this.nodes[d][3]++
+  }
+}
+
+function tagMap(db: IndexDB, companyId: string): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const t of db.prepare('SELECT DISTINCT note_id, tag_norm FROM mem_tag WHERE company_id = ?').all(companyId) as { note_id: string; tag_norm: string }[])
+    out.set(t.note_id, [...(out.get(t.note_id) ?? []), t.tag_norm])
+  return out
+}
+
+function positionsFor(db: IndexDB, companyId: string, ids: Set<string>): VaultGraph['positions'] {
+  return (db.prepare('SELECT note_id, x, y, pinned FROM mem_layout WHERE company_id = ?').all(companyId) as { note_id: string; x: number; y: number; pinned: number }[])
+    .filter((p) => ids.has(p.note_id))
+    .map((p) => [p.note_id, p.x, p.y, p.pinned ? 1 : 0])
+}
+
+function tagMatchesAny(noteTags: string[] | undefined, wanted: string[]): boolean {
+  if (!wanted.length) return true
+  return (noteTags ?? []).some((t) => wanted.some((w) => t === w || t.startsWith(`${w}/`)))
+}
+
+/** §8.1 global graph: a compact payload of up to GLOBAL_GRAPH_CAP nodes (highest degree first), ghosts as `ghost:<norm>`. */
+export function globalGraph(db: IndexDB, companyId: string, f: GlobalGraphFilters = {}): VaultGraph {
+  const tags = tagMap(db, companyId)
+  const wantTags = (f.tags ?? []).map((t) => t.replace(/^#/, '').toLowerCase())
+  const types = new Set((f.types ?? []).map((t) => t.toLowerCase()))
+  let notes = db
+    .prepare(`SELECT id, title, type, status FROM mem_note WHERE company_id = ? AND removed_at IS NULL ${f.includeArchived ? '' : "AND status = 'active'"}`)
+    .all(companyId) as { id: string; title: string; type: string; status: string }[]
+  if (types.size) notes = notes.filter((n) => types.has(n.type))
+  if (wantTags.length) notes = notes.filter((n) => tagMatchesAny(tags.get(n.id), wantTags))
+  if (f.search?.trim()) {
+    const hits = new Set(vaultSearch(db, { companyId }, f.search, { limit: 1000, includeArchived: f.includeArchived }).map((h) => h.note.id))
+    const q = normalizeName(f.search)
+    notes = notes.filter((n) => hits.has(n.id) || normalizeName(n.title).includes(q))
+  }
+  const keep = new Set(notes.map((n) => n.id))
+  const edges = (db
+    .prepare(`SELECT from_note, to_note, to_norm, to_text, norm_rel, origin FROM mem_link WHERE company_id = ? AND status = 'active' AND dup_of IS NULL AND to_norm != ''`)
+    .all(companyId) as GraphEdgeRow[]).filter((e) => keep.has(e.from_note) && (!e.to_note || keep.has(e.to_note)))
+  const degree = new Map<string, number>()
+  const bump = (id: string) => degree.set(id, (degree.get(id) ?? 0) + 1)
+  for (const e of edges) {
+    bump(e.from_note)
+    bump(e.to_note ?? ghostId(e.to_norm))
+  }
+  const hugeVault = notes.length > GLOBAL_GRAPH_CAP
+  const showGhosts = !(f.existingOnly ?? hugeVault)
+  const showOrphans = f.orphans ?? !hugeVault
+  const g = new GraphBuilder()
+  const ordered = [...notes].filter((n) => showOrphans || degree.has(n.id)).sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.title.localeCompare(b.title))
+  const ghostTexts = new Map<string, string>()
+  for (const e of edges) if (!e.to_note && !ghostTexts.has(e.to_norm)) ghostTexts.set(e.to_norm, e.to_text)
+  const total = ordered.length + (showGhosts ? ghostTexts.size : 0)
+  for (const n of ordered) {
+    if (g.nodes.length >= GLOBAL_GRAPH_CAP) break
+    g.node(n.id, n.title, n.type, 0, tags.get(n.id) ?? [])
+  }
+  if (showGhosts) {
+    const ghosts = [...ghostTexts.entries()].sort((a, b) => (degree.get(ghostId(b[0])) ?? 0) - (degree.get(ghostId(a[0])) ?? 0))
+    for (const [norm, text] of ghosts) {
+      if (g.nodes.length >= GLOBAL_GRAPH_CAP) break
+      g.node(ghostId(norm), text, 'ghost', 1)
+    }
+  }
+  for (const e of edges) g.edge(e.from_note, e.to_note ?? ghostId(e.to_norm), e.norm_rel, edgeWeight(e))
+  if (f.includeTags) addTagNodes(g, tags)
+  const ids = new Set(g.nodes.map((n) => n[0]))
+  return { companyId, nodes: g.nodes, edges: g.edges, rels: g.rels, tags: g.tags, positions: positionsFor(db, companyId, ids), centerId: null, total, truncated: total > g.nodes.length }
+}
+
+function addTagNodes(g: GraphBuilder, tags: Map<string, string[]>): void {
+  const members = new Map<string, string[]>()
+  for (const n of [...g.nodes]) {
+    if (n[4]) continue
+    for (const t of tags.get(n[0]) ?? []) members.set(t, [...(members.get(t) ?? []), n[0]])
+  }
+  for (const [t, ids] of members) {
+    if (ids.length > TAG_EDGE_MAX_MEMBERS * 50) continue
+    g.node(`tag:${t}`, `#${t}`, 'tag', 0)
+    for (const id of ids) g.edge(id, `tag:${t}`, 'tag', EDGE_WEIGHT.tag)
+  }
+}
+
+/** §8.1 local graph: BFS over links in both directions up to `depth`, ghosts as nodes, capped at LOCAL_GRAPH_CAP. */
+export function localGraph(db: IndexDB, companyId: string, noteId: string, depth: 1 | 2 | 3, f: LocalGraphFilters = {}): VaultGraph {
+  const center = vNotes(db, companyId, [noteId]).get(noteId)
+  const tags = tagMap(db, companyId)
+  const empty: VaultGraph = { companyId, nodes: [], edges: [], rels: [], tags: [], positions: [], centerId: null, total: 0, truncated: false }
+  if (!center) return empty
+  const showGhosts = f.ghosts !== false
+  const outQ = db.prepare(
+    `SELECT from_note, to_note, to_norm, to_text, norm_rel, origin FROM mem_link WHERE company_id = ? AND from_note = ? AND status = 'active' AND dup_of IS NULL AND to_norm != ''`
+  )
+  const inQ = db.prepare(
+    `SELECT from_note, to_note, to_norm, to_text, norm_rel, origin FROM mem_link WHERE company_id = ? AND to_note = ? AND status = 'active' AND dup_of IS NULL`
+  )
+  const ghostInQ = db.prepare(
+    `SELECT from_note, to_note, to_norm, to_text, norm_rel, origin FROM mem_link WHERE company_id = ? AND to_note IS NULL AND to_norm = ? AND status = 'active' AND dup_of IS NULL`
+  )
+  const seen = new Set<string>([noteId])
+  const edges: GraphEdgeRow[] = []
+  let frontier = [noteId]
+  let truncated = false
+  for (let d = 0; d < depth && frontier.length; d++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      const rows = id.startsWith('ghost:') ? (ghostInQ.all(companyId, id.slice(6)) as GraphEdgeRow[]) : [...(outQ.all(companyId, id) as GraphEdgeRow[]), ...(inQ.all(companyId, id) as GraphEdgeRow[])]
+      for (const e of rows) {
+        if (!e.to_note && !showGhosts) continue
+        edges.push(e)
+        for (const other of [e.from_note, e.to_note ?? ghostId(e.to_norm)]) {
+          if (seen.has(other)) continue
+          if (seen.size >= LOCAL_GRAPH_CAP) {
+            truncated = true
+            continue
+          }
+          seen.add(other)
+          next.push(other)
+        }
+      }
+    }
+    frontier = next
+  }
+  const noteIds = [...seen].filter((id) => !id.startsWith('ghost:'))
+  const rows = vNotes(db, companyId, noteIds)
+  const g = new GraphBuilder()
+  g.node(center.id, center.title, center.type, 0, tags.get(center.id) ?? [])
+  for (const id of seen) {
+    if (id === noteId) continue
+    if (id.startsWith('ghost:')) {
+      const e = edges.find((x) => !x.to_note && ghostId(x.to_norm) === id)
+      g.node(id, e?.to_text ?? id.slice(6), 'ghost', 1)
+      continue
+    }
+    const r = rows.get(id)
+    if (!r || (r.status === 'archived' && !f.includeArchived)) continue
+    g.node(r.id, r.title, r.type, 0, tags.get(r.id) ?? [])
+  }
+  for (const e of edges) g.edge(e.from_note, e.to_note ?? ghostId(e.to_norm), e.norm_rel, edgeWeight(e))
+  if (f.tags) addTagNodes(g, tags)
+  const ids = new Set(g.nodes.map((n) => n[0]))
+  return { companyId, nodes: g.nodes, edges: g.edges, rels: g.rels, tags: g.tags, positions: positionsFor(db, companyId, ids), centerId: center.id, total: seen.size, truncated }
+}
+
+// ---------- ranked search (memory_search, the search box, the brief) ----------
+
+export interface VaultSearchOptions {
+  limit?: number
+  types?: string[]
+  tags?: string[]
+  factsPerNote?: number
+  includeArchived?: boolean
+  includeHistory?: boolean
+  /** The query is a whole prompt (the brief): filler words are dropped and more keywords are OR-ed. */
+  prompt?: boolean
+  now?: Date
+}
+export interface VaultSearchFact {
+  row: VFactRow
+  score: number
+}
+export interface VaultSearchHit {
+  note: VaultNoteSummary
+  facts: VaultFact[]
+  /** Outgoing resolved link titles (up to 5) */
+  links: string[]
+  snippet: string
+  score: number
+  exact: boolean
+}
+
+/** Notes linked to the repo's note (or listing it in `repos:`), plus the repo note itself: the 1.0 scope (§8.1). */
+export function repoNeighbourhood(db: IndexDB, companyId: string, repoId: string | null | undefined): Set<string> {
+  const out = new Set<string>()
+  if (!repoId) return out
+  const repoNotes = (db.prepare(`SELECT id FROM mem_note WHERE company_id = ? AND repo_id = ? AND removed_at IS NULL`).all(companyId, repoId) as { id: string }[]).map((r) => r.id)
+  for (const id of repoNotes) {
+    out.add(id)
+    for (const r of db.prepare(`SELECT from_note AS a, to_note AS b FROM mem_link WHERE company_id = ? AND status = 'active' AND (from_note = ? OR to_note = ?)`).all(companyId, id, id) as { a: string; b: string | null }[]) {
+      out.add(r.a)
+      if (r.b) out.add(r.b)
+    }
+  }
+  for (const r of db.prepare(`SELECT id, repo_ids_json FROM mem_note WHERE company_id = ? AND removed_at IS NULL AND repo_ids_json != '[]'`).all(companyId) as { id: string; repo_ids_json: string }[])
+    if (parseJson<string[]>(r.repo_ids_json, []).includes(repoId)) out.add(r.id)
+  // facts stamped with the repo (migrated v1 project facts)
+  for (const r of db.prepare(`SELECT DISTINCT note_id FROM mem_fact WHERE company_id = ? AND repo_id = ?`).all(companyId, repoId) as { note_id: string }[]) out.add(r.note_id)
+  return out
+}
+
+const factTrust = (f: { pinned: number; actor: string; reviewed: number }) => (f.pinned ? 1.3 : f.actor === 'user' || f.actor.startsWith('user ') || f.reviewed ? 1.15 : 1.0)
+const dayOf = (s: string | null | undefined): string | null => (s && /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null)
+
+/**
+ * §8.1 rankedSearch on the vault: exact title/alias hits first, then FTS bm25 × trust × recency × scope × a link-degree
+ * prior, grouped per note (note rows and fact rows both count). History lines only with `includeHistory`.
+ */
+export function vaultSearch(db: IndexDB, vis: VaultVis, query: string, o: VaultSearchOptions = {}): VaultSearchHit[] {
+  const companyId = vis.companyId
+  const now = o.now ?? new Date()
+  const limit = Math.min(Math.max(o.limit ?? 20, 1), 1000)
+  const perNote = o.factsPerNote ?? 3
+  const scoped = repoNeighbourhood(db, companyId, vis.repoId)
+  const scopeW = (id: string) => (vis.repoId ? (scoped.has(id) ? VAULT_RANK.repoScope : VAULT_RANK.companyScope) : 1)
+  const statuses = o.includeHistory ? ['active', 'superseded', 'invalid'] : ['active']
+
+  const byNote = new Map<string, { score: number; exact: boolean; facts: VaultSearchFact[]; snippet: string }>()
+  const entry = (id: string) => {
+    let e = byNote.get(id)
+    if (!e) byNote.set(id, (e = { score: 0, exact: false, facts: [], snippet: '' }))
+    return e
+  }
+
+  // 1. exact titles / aliases (the whole query, then its comma/semicolon parts and, for prompts, keywords)
+  const kws = queryKeywords(query, { prompt: o.prompt })
+  const candidates = new Set(
+    (o.prompt ? kws.slice(0, PROMPT_TERMS) : [query, ...query.split(/[,;]+/)]).map((t) => normalizeName(t.replace(/^\[\[|\]\]$/g, ''))).filter((t) => t.length >= 2)
+  )
+  if (o.prompt) for (const m of query.matchAll(/\[\[([^[\]\n|#]+)/g)) candidates.add(normalizeName(m[1]))
+  if (candidates.size) {
+    const list = [...candidates].slice(0, 400)
+    const ph = placeholders(list.length)
+    const rows = db
+      .prepare(
+        `SELECT id FROM mem_note WHERE company_id = ? AND removed_at IS NULL AND (norm_title IN (${ph}) OR basename_norm IN (${ph}))
+         UNION SELECT a.note_id FROM mem_alias a WHERE a.company_id = ? AND a.norm_alias IN (${ph})`
+      )
+      .all(companyId, ...list, ...list, companyId, ...list) as { id: string }[]
+    for (const r of rows) entry(r.id).exact = true
+  }
+
+  // 2. FTS (note rows and fact rows), every MATCH bound to the company
+  const q = ftsQuery(query, o.prompt ? PROMPT_TERMS : 12, { prompt: o.prompt })
+  if (q) {
+    let hits: { ref_kind: 'note' | 'fact'; ref_id: string; note_id: string; rank: number; snip: string }[] = []
+    try {
+      hits = db
+        .prepare(
+          `SELECT ref_kind, ref_id, note_id, bm25(mem_fts, 0, 0, 0, 0, 2.0, 1.0) AS rank, snippet(mem_fts, 5, '', '', '…', 12) AS snip
+           FROM mem_fts WHERE mem_fts MATCH ? AND company_id = ? ORDER BY rank LIMIT 300`
+        )
+        .all(q, companyId) as typeof hits
+    } catch {
+      hits = []
+    }
+    const maxS = Math.max(1e-9, ...hits.map((h) => -h.rank))
+    const factIds = hits.filter((h) => h.ref_kind === 'fact').map((h) => h.ref_id)
+    const facts = new Map<string, VFactRow>()
+    for (let i = 0; i < factIds.length; i += 500) {
+      const chunk = factIds.slice(i, i + 500)
+      for (const f of db
+        .prepare(`SELECT * FROM mem_fact WHERE company_id = ? AND id IN (${placeholders(chunk.length)}) AND status IN (${placeholders(statuses.length)}) AND dup_of IS NULL`)
+        .all(companyId, ...chunk, ...statuses) as VFactRow[])
+        facts.set(f.id, f)
+    }
+    for (const h of hits) {
+      const bm = -h.rank / maxS
+      if (h.ref_kind === 'fact') {
+        const f = facts.get(h.ref_id)
+        if (!f) continue
+        const s = bm * factTrust(f) * recencyWeight(dayOf(f.date) ?? now.toISOString(), now) * (f.status === 'active' ? 1 : VAULT_RANK.history)
+        entry(f.note_id).facts.push({ row: f, score: s })
+      } else {
+        const e = entry(h.note_id)
+        if (bm > e.score) {
+          e.score = bm
+          e.snippet = h.snip
+        }
+      }
+    }
+  }
+
+  const ids = [...byNote.keys()]
+  const notes = vNotes(db, companyId, ids)
+  const tagsOf = o.tags?.length ? tagMap(db, companyId) : null
+  const wantTags = (o.tags ?? []).map((t) => t.replace(/^#/, '').toLowerCase())
+  const types = new Set((o.types ?? []).map((t) => t.toLowerCase()))
+  const deg = new Map<string, number>()
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500)
+    for (const d of db
+      .prepare(`SELECT to_note AS id, count(*) AS n FROM mem_link WHERE company_id = ? AND status = 'active' AND to_note IN (${placeholders(chunk.length)}) GROUP BY to_note`)
+      .all(companyId, ...chunk) as { id: string; n: number }[])
+      deg.set(d.id, d.n)
+  }
+  const ranked: { row: VNoteRow; score: number; exact: boolean; facts: VaultSearchFact[]; snippet: string }[] = []
+  for (const [id, e] of byNote) {
+    const row = notes.get(id)
+    if (!row) continue
+    if (row.status === 'archived' && !o.includeArchived) continue
+    if (types.size && !types.has(row.type)) continue
+    if (tagsOf && !tagMatchesAny(tagsOf.get(id), wantTags)) continue
+    e.facts.sort((a, b) => b.score - a.score)
+    const best = Math.max(e.score * (row.pinned ? 1.3 : 1) * recencyWeight(dayOf(row.modified) ?? row.indexed_at, now), e.facts[0]?.score ?? 0)
+    const prior = 1 + VAULT_RANK.degreeBoost * Math.log1p(deg.get(id) ?? 0)
+    const score = (e.exact ? Math.max(best, 0.5) : best) * scopeW(id) * prior * (row.status === 'archived' ? VAULT_RANK.archived : 1)
+    ranked.push({ row, score, exact: e.exact, facts: e.facts, snippet: e.snippet })
+  }
+  ranked.sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score || a.row.title.localeCompare(b.row.title))
+  const top = ranked.slice(0, limit)
+  const summaries = noteSummaries(db, companyId, top.map((t) => t.row))
+  return top.map((t, i) => {
+    let facts = t.facts.slice(0, perNote).map((f) => f.row)
+    if (facts.length < perNote) {
+      // exact or note-level hits still show their best live lines
+      const have = new Set(facts.map((f) => f.id))
+      const more = db
+        .prepare(`SELECT * FROM mem_fact WHERE company_id = ? AND note_id = ? AND status = 'active' AND dup_of IS NULL ORDER BY pinned DESC, date DESC, line LIMIT ?`)
+        .all(companyId, t.row.id, perNote + have.size) as VFactRow[]
+      facts = [...facts, ...more.filter((f) => !have.has(f.id))].slice(0, perNote)
+    }
+    const links = (
+      db
+        .prepare(
+          `SELECT DISTINCT n.title FROM mem_link l JOIN mem_note n ON n.company_id = l.company_id AND n.id = l.to_note
+           WHERE l.company_id = ? AND l.from_note = ? AND l.status = 'active' AND n.removed_at IS NULL LIMIT 5`
+        )
+        .all(companyId, t.row.id) as { title: string }[]
+    ).map((r) => r.title)
+    return {
+      note: summaries[i],
+      facts: facts.map((f) => mapFact(f, [], ident)),
+      links,
+      snippet: t.snippet || t.row.summary,
+      score: round(t.score),
+      exact: t.exact
+    }
+  })
+}
+
+/** Ghost targets whose name matches the query: `[[Onboarding flow]]: no note yet, 3 links` (memory_search). */
+export function ghostMatches(db: IndexDB, companyId: string, query: string, limit = 5): VaultGhost[] {
+  const q = normalizeName(query)
+  if (q.length < 2) return []
+  return vaultGhosts(db, companyId, 2000)
+    .filter((g) => g.norm.includes(q) || q.includes(g.norm) || queryKeywords(query).some((k) => g.norm.includes(k)))
+    .slice(0, limit)
 }

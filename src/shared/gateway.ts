@@ -11,6 +11,11 @@ export interface GatewayConnection {
   roots: string[]
   /** Explicit access for all current and future project directories. */
   scope?: 'projects' | 'global'
+  /**
+   * COMPANY.md §6: only spawns of these companies get the connection (checked against the spawn's company, else the
+   * company of its folder). Absent = every company (configs saved before companies).
+   */
+  companyIds?: string[]
   authentication?: 'none' | 'oauth'
   authStatus?: GatewayAuthStatus
   authError?: string

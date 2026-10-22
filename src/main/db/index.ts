@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3'
-import { AUTHORING_ADDED_COLUMNS, DDL_AUTHORING, DDL_SLACK, DDL_V1, DDL_V2_SCHEDULE_EVENTS, DDL_V2_TABLES, PRAGMAS, SCHEMA_VERSION, SLACK_ADDED_COLUMNS, V2_ADDED_COLUMNS } from './schema'
+import { AUTHORING_ADDED_COLUMNS, COMPANY_ADDED_COLUMNS, DDL_AUTHORING, DDL_COMPANY, DDL_COMPANY_INDEXES, DDL_SLACK, DDL_V1, DDL_V2_SCHEDULE_EVENTS, DDL_V2_TABLES, PRAGMAS, SCHEMA_VERSION, SLACK_ADDED_COLUMNS, V2_ADDED_COLUMNS } from './schema'
+import { backupBeforeCompanyMigration, migrateCompanyData } from './companyMigration'
 import { migrateSlackData } from './slackMigration'
+import { ensureForumSchema } from '../forum/schema'
+import { log } from '../log'
 
 export type DB = Database.Database
 
@@ -73,6 +76,22 @@ function healV2Columns(db: DB): void {
   }
   db.exec('CREATE INDEX IF NOT EXISTS asks_slack_draft ON asks(slack_draft_id) WHERE slack_draft_id IS NOT NULL')
   migrateSlackData(db)
+  // COMPANY.md §2-§4, §9: company tables + company_id columns, still schema v2; then the one-time backfill.
+  // The pre-company copy is taken before any company DDL touches the file.
+  try {
+    backupBeforeCompanyMigration(db)
+  } catch (err) {
+    // additive backfill: a failed copy (disk full, read-only dir) must not keep Hive from opening
+    log.warn('hive.db backup before the company migration failed', { error: String(err) })
+  }
+  db.exec(DDL_COMPANY)
+  for (const [table, column, ddl] of COMPANY_ADDED_COLUMNS) {
+    if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+  }
+  db.exec(DDL_COMPANY_INDEXES)
+  migrateCompanyData(db)
+  // FORUM.md §1: the Forum tables, still schema v2 (older builds ignore them)
+  ensureForumSchema(db)
 }
 
 /** Columns added to the v1 DDL during the build. CREATE IF NOT EXISTS won't add them to an older db, so add them here. */

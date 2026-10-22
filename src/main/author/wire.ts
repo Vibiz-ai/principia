@@ -2,6 +2,7 @@
  * Wires the authoring services into the running app (AUTHORING.md §1, §2, §6-§8): the broker behind the `hive` tools,
  * worktrees, notify nodes and Claude history. Effects go through the same store/engine paths the IPC handlers use.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { McpServerSpec, ProcessReaper } from '../../shared/engine'
@@ -9,6 +10,7 @@ import { AUTHOR_SERVER_NAME, AUTHOR_TOOLS, approveLabel, type AuthoringContext }
 import { SLACK_TOOLS } from '../../shared/slack'
 import type { Ask } from '../../shared/live'
 import type { AdapterId, Id, Run, SchedulePreview } from '../../shared/types'
+import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import { newId } from '../../shared/ids'
 import type { Hive } from '../hive'
@@ -18,8 +20,10 @@ import { notify } from '../notify'
 import { baseChildEnv } from '../loginEnv'
 import { normalizeDraft, validateDraft } from '../handlers/workflows'
 import { checkTarget } from '../handlers/runs'
+import { guardSameCompany, guardWorkflowTargets, workflowRepoRefs } from '../handlers/companyScope'
 import { repoForCwd } from '../memory/service'
 import { AuthorBroker } from './broker'
+import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
 import { NotifyNode } from '../notifyNode'
@@ -39,9 +43,24 @@ export function ownerKeyFor(s: { id: Id; adapter: AdapterId; agentSessionId: str
   return s.agentSessionId ? `${s.adapter}:${s.agentSessionId}` : `session:${s.id}`
 }
 
+/**
+ * COMPANY.md §6: the company of the authoring call being served (the caller's session), carried across the broker's
+ * awaits. Unset = a renderer-side read (lists everything, as the UI does).
+ */
+const authorCompany = new AsyncLocalStorage<Id>()
+
 export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessReaper | null }): void {
   const git = gitRunner(() => baseChildEnv())
   const redact = (t: string) => h.vault.redact(t)
+
+  // ---------- companies (COMPANY.md §3, §6): list, read, draft and push only the caller's company ----------
+  const sessionCompany = (sessionId: Id | null | undefined): Id => (sessionId ? h.store.getSession(sessionId)?.companyId : null) || PERSONAL_COMPANY_ID
+  /** Visible to the call being served: always with guards off (they warn, never hide) or outside a call. */
+  const visible = (companyId: Id | null | undefined): boolean => {
+    const scope = authorCompany.getStore()
+    return !scope || !h.store.companyGuardsEnforced() || (companyId || PERSONAL_COMPANY_ID) === scope
+  }
+  const workflowCompany = (id: Id): Id => h.store.getWorkflow(id)?.companyId || PERSONAL_COMPANY_ID
 
   // ---------- worktrees (§6) ----------
   h.worktrees = new WorktreeManager({
@@ -124,13 +143,15 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     return {
       profiles: profiles.map((p) => ({ id: p.id, name: p.name, adapter: p.adapter, permissionMode: p.permissionMode, model: p.model })),
       defaults,
-      repos: h.store.listRepos().map((r) => ({ id: r.id, name: r.name, path: r.path, isGit: r.isGit, exists: r.exists }))
+      repos: h.store.listRepos().filter((r) => visible(r.companyId)).map((r) => ({ id: r.id, name: r.name, path: r.path, isGit: r.isGit, exists: r.exists }))
     }
   }
   const startRun = (workflowId: Id, inputs: Record<string, string>, startedBy: { ownerLabel: string; ownerKey: string; draftId: Id | null }): Run => {
     const target = { kind: 'workflow' as const, workflowId, inputs }
     checkTarget(h, target)
-    const run = h.engine.runs.start(target, { trigger: 'agent', startedBy })
+    // the caller's company is the explicit stamp: the engine guards a workflow of another company
+    const scope = authorCompany.getStore()
+    const run = h.engine.runs.start(target, { trigger: 'agent', startedBy, ...(scope ? { companyId: scope } : {}) })
     // persisted here too, so provenance holds even if the engine ignores startedBy
     h.db.prepare('UPDATE runs SET started_by_json = ? WHERE id = ?').run(JSON.stringify(startedBy), run.id)
     const fresh = h.store.getRun(run.id) ?? run
@@ -138,6 +159,35 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     h.statusChanged()
     return fresh
   }
+  // ---------- the hivetask toolset (DEPARTMENTS.md §6): served by the broker, offered to task runs and sessions ----------
+  const boardOn = () => departmentsEnabled(h.settings().experimental)
+  const tasks = new TaskTools({
+    company: () => h.company,
+    redact,
+    enabled: boardOn,
+    onChange: () => {
+      emit('data:changed', { domain: 'tasks' })
+      h.statusChanged()
+    },
+    // a handed-off task wakes its auto target now (null until startDispatcher; the tick covers it then)
+    pump: (companyId) => void h.dispatcher?.pump(companyId),
+    log
+  })
+  // headless claude steps of a task run list the tools on their hivemem server (executor withTaskTools)
+  h.taskToolset = (req) => tasks.toolset(req)
+  // §4.5: the fenced report of inject adapters, written before the run ends (step output precedes the run end)
+  h.stepOutputHooks?.push((e) => void tasks.harvest(e))
+  // §6: a handoff is applied at run end, before syncRun computes the outcome (every syncRun caller: run hooks,
+  // reconcile, session leases)
+  const company = h.company as Hive['company'] | undefined
+  if (company) {
+    const syncRun = company.syncRun.bind(company)
+    company.syncRun = (run) => {
+      tasks.beforeSyncRun(run)
+      return syncRun(run)
+    }
+  }
+
   const drafts = new AuthorDrafts(h.db, redact)
   h.author = new AuthorBroker({
     drafts,
@@ -155,18 +205,42 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     ctx,
     providers: () => h.safe(() => h.engine.providers.cached(), []),
-    engineValidate: (d) => h.engine.workflows.validate(normalizeDraft(d)),
+    engineValidate: (d) => {
+      const errors = h.engine.workflows.validate(normalizeDraft(d))
+      // COMPANY.md §3: with guards enforced, a proposal naming another company's repo is invalid right away (the
+      // agent can fix it) instead of an approval card that can never be approved
+      const scope = authorCompany.getStore()
+      if (scope && h.store.companyGuardsEnforced()) {
+        for (const ref of workflowRepoRefs(h, d)) {
+          const problem = h.safe(() => h.company.crossCompany(scope, ref), null)
+          if (problem) {
+            errors.push({ path: 'nodes', message: problem })
+            break
+          }
+        }
+      }
+      return errors
+    },
     defaultBranch: async (repoPath) => {
       const sym = await git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath })
       if (sym.code === 0 && sym.stdout.trim()) return sym.stdout.trim().replace(/^origin\//, '')
       for (const b of ['main', 'master']) if ((await git(['rev-parse', '--verify', '--quiet', `refs/heads/${b}`], { cwd: repoPath })).code === 0) return b
       return null
     },
-    listWorkflows: () => h.store.listWorkflows(),
-    getWorkflow: (id) => h.store.getWorkflow(id),
-    listSchedules: () => h.store.listSchedules(),
-    lastRun: (workflowId) => h.store.listRuns({ workflowId, limit: 1 })[0] ?? null,
-    getRunDetail: (id) => h.store.getRunDetail(id),
+    listWorkflows: () => h.store.listWorkflows().filter((w) => visible(w.companyId)),
+    getWorkflow: (id) => {
+      const w = h.store.getWorkflow(id)
+      return w && visible(w.companyId) ? w : null
+    },
+    listSchedules: () => h.store.listSchedules().filter((s) => visible(s.companyId)),
+    lastRun: (workflowId) => {
+      const r = h.store.listRuns({ workflowId, limit: 1 })[0]
+      return r && visible(r.companyId) ? r : null
+    },
+    getRunDetail: (id) => {
+      const d = h.store.getRunDetail(id)
+      return d && visible(d.run.companyId) ? d : null
+    },
     activeAgentRuns: (ownerKey) =>
       (
         h.db
@@ -175,14 +249,20 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       ).n,
     previewSchedule: (when): SchedulePreview =>
       h.safe(() => h.engine.scheduler.preview(when), { ok: false, sentence: '', next: [], error: 'Schedules are not available' }),
+    // stamped with the authoring session's company; its repo targets must be that company's
     saveWorkflow: (draft, origin) => {
       const d = normalizeDraft(draft)
       validateDraft(h, d)
-      return h.store.createWorkflow(d, null, origin)
+      const companyId = authorCompany.getStore() ?? sessionCompany(origin.sessionId)
+      guardWorkflowTargets(h, companyId, d)
+      return h.store.createWorkflow(d, null, origin, companyId)
     },
     updateWorkflow: (id, draft) => {
       const d = normalizeDraft(draft)
       validateDraft(h, d, id)
+      const scope = authorCompany.getStore()
+      if (scope) guardSameCompany(h, scope, { workflowId: id }, 'authoring')
+      guardWorkflowTargets(h, workflowCompany(id), d)
       return h.store.updateWorkflow(id, d)
     },
     setOrigin: (id, origin) => h.store.setWorkflowOrigin(id, origin),
@@ -191,7 +271,10 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       const p = h.engine.scheduler.preview(input.when)
       if (!p.ok) throw new HiveError('validation', p.error ?? 'Invalid schedule')
       checkTarget(h, scheduleInput.target)
-      const id = h.store.insertSchedule(scheduleInput)
+      // a schedule lives in its workflow's company (COMPANY.md §3)
+      const scope = authorCompany.getStore()
+      if (scope) guardSameCompany(h, scope, { workflowId: input.workflowId }, 'authoring')
+      const id = h.store.insertSchedule(scheduleInput, workflowCompany(input.workflowId))
       h.safe(() => h.engine.scheduler.upsert(id), null)
       const fresh = h.store.getSchedule(id)!
       emit('schedule:updated', fresh)
@@ -249,6 +332,12 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       h.onLiveEvent({ type: 'ask.updated', ask: u })
     },
     emitDraft: (d) => {
+      // COMPANY.md §3: author_drafts.company_id comes from the authoring session (set once)
+      try {
+        h.db.prepare('UPDATE author_drafts SET company_id = ? WHERE id = ? AND company_id IS NULL').run(authorCompany.getStore() ?? sessionCompany(drafts.get(d.id)?.sessionId), d.id)
+      } catch {
+        /* older db without the column */
+      }
       emit('author:updated', d)
       h.statusChanged()
     },
@@ -262,6 +351,10 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       alertUserId: () => h.settings().slackAlertUserId ?? null,
       channelName: (id) => h.slack?.connector.names.channel(id) ?? id
     },
+    tasks: {
+      resolve: (owner) => tasks.resolveCaller(owner),
+      call: (caller, tool, args, hints) => tasks.call(caller as TaskCaller, tool, args, hints)
+    },
     // SLACK.md §11: slack_* tools (sessions, and steps of Slack runs); the service decides from the owner
     slack: {
       call: (owner, tool, args) => {
@@ -271,6 +364,32 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     log
   })
+  // every call runs in its session's company (filters above, stamps); a line naming another company is refused while
+  // guards are enforced (a server started for one company never serves another)
+  const broker = h.author
+  const handleCall = broker.handleCall.bind(broker)
+  broker.handleCall = (owner, line, writeAnswer) => {
+    if (!('sessionId' in owner)) return handleCall(owner, line, writeAnswer)
+    const companyId = sessionCompany(owner.sessionId)
+    const l = (line && typeof line === 'object' ? line : {}) as { call_id?: unknown; company_id?: unknown }
+    if (typeof l.company_id === 'string' && l.company_id !== companyId && h.store.companyGuardsEnforced()) {
+      return writeAnswer(String(l.call_id ?? ''), { ok: false, error: 'This Hive tool server belongs to another company. Restart the session.' })
+    }
+    return authorCompany.run(companyId, () => handleCall(owner, line, writeAnswer))
+  }
+  // approving a card saves into the draft's company, whoever clicks (hub, tray, the card). The stamp wins over the
+  // session's: the session may have been removed since (it would otherwise read as Personal)
+  const draftCompany = (id: Id): Id => {
+    try {
+      const row = h.db.prepare('SELECT company_id FROM author_drafts WHERE id = ?').get(id) as { company_id: string | null } | undefined
+      if (row?.company_id) return row.company_id
+    } catch {
+      /* older db without the column */
+    }
+    return sessionCompany(drafts.get(id)?.sessionId)
+  }
+  const decide = broker.decide.bind(broker)
+  broker.decide = (req) => authorCompany.run(draftCompany(req.id), () => decide(req))
 
   // ---------- session attach (§1.1, PO1/PO7: interactive claude panes only) ----------
   const spawnDir = path.join(h.paths.userData, 'author', 'spawn')
@@ -281,8 +400,19 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   }
   const script = resolveAuthorScript(opts.mainDir)
   h.authorAttach = {
-    server: (sessionId: Id, liveDir: string): McpServerSpec | null => {
+    server: (sessionId: Id, liveDir: string, companyId?: Id | null): McpServerSpec | null => {
       if (!fs.existsSync(script)) return null
+      // DEPARTMENTS.md §6: board sessions list task_*; a session opened for a task names it (cross-check only: the
+      // broker resolves the task from the session at call time, so a lease stamped after spawn still works)
+      const board = boardOn()
+      let taskId: Id | null = null
+      if (board) {
+        try {
+          taskId = (h.db.prepare("SELECT id FROM company_tasks WHERE run_id = ? AND status = 'in_progress' LIMIT 1").get(sessionId) as { id: Id } | undefined)?.id ?? null
+        } catch {
+          /* older db */
+        }
+      }
       return {
         name: AUTHOR_SERVER_NAME,
         command: process.execPath,
@@ -291,14 +421,17 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           ELECTRON_RUN_AS_NODE: '1',
           HIVE_LIVE_DIR: liveDir,
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
-          HIVE_TOOLSETS: h.slack?.sessionToolsets() ?? 'author',
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}`,
+          ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
+          // COMPANY.md §6: the session's company (main still scopes every call by the session itself)
+          ...(companyId ? { HIVE_COMPANY_ID: companyId } : {}),
           ...(opts.reaper?.tag(sessionId) ?? { HIVE_SPAWN_ID: sessionId, HIVE_USER_DATA: h.paths.userData })
         }
       }
     },
     // pre-allowed mcp__hive__* names for the pane: the slack group joins once Slack is connected
     get tools() {
-      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : [])]
+      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? TASK_TOOLS : [])]
     },
     spawnDir
   }

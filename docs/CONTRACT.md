@@ -210,6 +210,8 @@ booleans INTEGER 0/1. IPC/TS shapes are camelCase; main's repositories map rows 
 | `secrets` | name PK, label, cipher BLOB (`safeStorage.encryptString`), masked, created/updated/last_used_at | main | `SecretMeta` (never the value) |
 | `artifacts` | id, run_id, session_id, path UNIQUE, rel_path, name, kind, mime, bytes, mtime, created_at | main | `Artifact` |
 
+Company columns, `company_secrets` and the `COALESCE(company_id, 'co_personal')` read rule: see "Companies" (Co.1).
+
 Anyone in main may READ any table. Engine never touches SQL: it writes through `EngineStore` (implemented by main in
 `src/main/db/engineStore.ts`) and reads config through `EngineContext` getters.
 
@@ -240,7 +242,8 @@ Seeds (first launch, `meta.seeded=1`): one default profile per *available* adapt
   `secrets:importEnv` / `secrets:parseEnv` requests. Everything else (logs, prompts, outputs, pty data) is redacted.
 
 ### 4.2 Invoke channels
-`V` = no argument. Types are in `src/shared/types.ts` / `ipc.ts`.
+`V` = no argument. Types are in `src/shared/types.ts` / `ipc.ts`. The optional `companyId` on lists and creates, the
+company channels and the amended channel counts are in "Companies" (Co.3).
 
 **app**
 | Channel | Request | Response | Semantics |
@@ -314,7 +317,7 @@ Input and resize are `send` channels (§4.4). PTY lives in main; closing the win
 | `schedules:update` | `{id, input}` | `Schedule` (same) |
 | `schedules:remove` | `{id}` | V — `engine.scheduler.remove(id)` then delete (events cascade; runs keep `scheduleId`) |
 | `schedules:setEnabled` | `{id, enabled}` | `Schedule` — then `upsert(id)` |
-| `schedules:runNow` | `{id}` | `Run` — `engine.scheduler.runNow(id)`; `conflict` if previous run still active |
+| `schedules:runNow` | `{id}` | `Run \| null` — `engine.scheduler.fireNow(id)`; `conflict` if previous run still active; `null` when a task-mode schedule (DEPARTMENTS.md §8) commented on and woke its standing card instead |
 | `schedules:preview` | `{when}` | `SchedulePreview` (sentence + next 3, or `error` e.g. "Minimum interval is 5 minutes") |
 | `schedules:events` | `{scheduleId, limit?}` | `ScheduleEvent[]` newest first (default 50) |
 | `schedules:pauseAll` | `{paused}` | `StatusSnapshot` — same as `settings.update({schedulesPaused})` |
@@ -1206,7 +1209,8 @@ export interface SlackInboundMessage {     // main -> engine, live only (never b
 export type NotifySlackTarget = { kind: 'me' } | { kind: 'channel'; channel: string }
 export const SLACK_TOOLS = ['slack_list_channels', 'slack_read_thread', 'slack_search', 'slack_draft_reply', 'slack_post'] as const
 export const SLACK_REQUIRED_SCOPES = ['app_mentions:read', 'channels:history', 'channels:read', 'channels:join', 'groups:history',
-  'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'reactions:read'] as const
+  'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'reactions:read',
+  'files:read'] as const
 export const SLACK_BOT_EVENTS = ['app_mention', 'message.channels', 'message.groups', 'message.im', 'message.mpim', 'member_joined_channel'] as const
 export const SLACK_AUTO_LIMITS = { perChannelPerHour: 6, perRun: 1, maxUserMentions: 3, runsPerTriggerPerHour: 30 } as const   // PO-S3, not settings
 export const dmThreadKey = (channelId: string) => `dm:${channelId}`                                                          // PO-S4
@@ -1380,3 +1384,280 @@ the dev-only fake exists only in `npm run build:fakeslack` (`__HIVE_FAKE_SLACK__
 ## Principia shared MCP gateway (2026-10-19)
 
 `docs/MCP-GATEWAY.md` specifies the additive shared connection manager. Desktop IPC: `gateway:list`, `gateway:save`, `gateway:remove`, `gateway:test`; shapes are in `src/shared/gateway.ts`, strictly validated in `ipcSchemas.ts`. `EngineContext.gateway.attachment(cwd)` returns a scoped stdio `McpServerSpec` for Claude/Codex spawns. `McpServerSpec.name` additionally accepts `principia`. It uses file IPC and maintains the desktop no-listener invariant. Upstream credentials are encrypted with safeStorage, held only by main/upstream clients, and never included in harness config. External tool use retains harness-native approval policy. Restricted Slack agents and shell steps do not receive this attachment. Tools support stdio and Streamable HTTP static headers. Desktop also supports managed browser OAuth through `gateway:connect` / `gateway:disconnect`, the official MCP SDK, encrypted tokens/client registration, PKCE, exact state/issuer verification, expiry and refresh. The only desktop listener exception is the explicitly initiated, temporary loopback OAuth callback; see MCP-GATEWAY.md.
+
+## Companies (COMPANY.md, 2026-10-20)
+
+`docs/COMPANY.md` makes the company the boundary for data and execution, and `docs/PASSPORT.md` gives each company a
+vault. This section amends §3 (schema), §4 (IPC), §5 (engine boundary) and §5.3 (secrets). Everything is additive:
+still `schema_version = 2`, every new column is nullable, and every list without `companyId` answers exactly what it
+answered before.
+
+### Co.1 Persistence (`src/main/db/schema.ts`, `db/companyMigration.ts`)
+- `DDL_COMPANY` moves `company_passports`, `company_repos`, `company_tasks` and `company_task_activity` out of
+  `CompanyStore`'s lazy `CREATE` (kept as a no-op) and adds `company_secrets`. `healV2Columns` runs it after
+  `DDL_SLACK`, then `COMPANY_ADDED_COLUMNS`, then `DDL_COMPANY_INDEXES`.
+- `company_passports` gains `slug` (unique through `company_passports_slug`, fixed at creation), `color`, `sort_order`,
+  `system` (`'personal'` on the reserved row), `archived_at` (archive replaces delete), `vault_path` (NULL =
+  `<userData>/companies/<slug>/Passport`). `data` keeps the shape older builds parse.
+- `company_id TEXT` (nullable) on `sessions`, `runs`, `workflows`, `schedules`, `artifacts`, `agents`, `asks`,
+  `slack_workspaces`, `author_drafts`. Indexes: `sessions_company`, `runs_company(company_id, created_at)`,
+  `agents_company`, `asks_company`, `artifacts_company(company_id, created_at)`.
+- **Reads `COALESCE(company_id, 'co_personal')`.** A NULL (a row written by an older build) reads as Personal.
+  Companies are never deleted (archive only), so every stamp names a company that still exists, and the backfill only
+  stamps companies it finds in `company_passports` (a task or repo row naming a missing company falls through to the
+  next rule). Nothing is ever hidden.
+- `company_secrets(company_id, name, label, cipher, masked, created_at, updated_at, PRIMARY KEY (company_id, name))`.
+  `secrets` stays the **Shared** namespace with `name` as its key, so older builds' `ON CONFLICT(name)` still works.
+- Reserved row `co_personal` (`system = 'personal'`, slug `personal`): it can be renamed and recoloured but never
+  archived, and it always sorts last. Repos with no `company_repos` row are Personal's; no rows are written for them.
+- Repo order: `meta.repo_order:<companyId>` per company. The legacy `meta.repo_order` stays in place and in sync, so
+  older builds and the unfiltered `repos:list` keep their order.
+- One-time backfill (COMPANY.md §9), guarded by `meta.company_migrated = 1`, in one transaction, after a
+  `VACUUM INTO <hive.db dir>/Hive-backups/hive.pre-company.<ts>.db` copy (normally `<userData>/Hive-backups/`). The copy
+  is made once, before any company table or column exists, and only when the db holds user data (fresh installs and
+  later opens make none); if it fails, a warning is logged and the db still opens. It is idempotent and deletes nothing. The
+  report goes to `meta.company_migration_report` (counts plus workflows flagged for using repos of several companies).
+  `seed_key` stays globally UNIQUE; profiles and settings stay global.
+
+### Co.2 Shared types (add-only)
+- `src/shared/company.ts`: `PERSONAL_COMPANY_ID`, `CompanyPassport` (+ `slug`, `color`, `sortOrder`, `system?`,
+  `archivedAt?`, `vaultPath?`), `CompanyCreateInput`, `CompanyUpdateInput`, `CompanyOverview`.
+- `src/shared/types.ts`: `CompanyFilter { companyId? }` (the list filter; absent = all companies) and
+  `CompanyStamped { companyId? }` on `Repo`, `Session`, `Workflow`, `Run`, `Schedule`, `Artifact`, agents, asks and
+  Slack triggers. `RunListQuery` and `ArtifactQuery` take `companyId`. `Settings` gains `activeCompanyId` (UI state
+  only, default `'all'`; main never reads it), `expandedCompanies`, and `experimental: { companies, vault, vaultAI }`.
+- `src/shared/gateway.ts`: `GatewayConnection.companyIds?: Id[]` (absent = every company, the behaviour before).
+- `src/shared/passport.ts`: every Passport request and response type (PASSPORT.md §11).
+
+### Co.3 IPC
+- Every list channel takes an optional `companyId` (`repos`, `sessions`, `runs`, `workflows`, `schedules`,
+  `artifacts`, `agents`, `asks`, `secrets`, `slackTriggers`, `tasks`, `author:list` (drafts), `memory:*`). Absent = all
+  companies. Every returned row carries `companyId`.
+- `app:dashboard {since?, companyId?}` and `app:canvas {companyId?}`: with a company, Home's done runs, learned facts
+  and 14-day activity, and the Canvas runs (the 40-run cap applies per company), schedules and sessions are that
+  company's only. `history:resume {…, companyId?}`: a transcript whose folder no repo owns lands in that company (a
+  repo's folder always decides by its repo).
+- Create paths take the caller's company: `repos:pick` / `repos:add` (assign the new repos), `workflows:create` /
+  `workflows:import` / `marketplace:install` (else Personal), `workflows:duplicate {id, companyId?}` ("Duplicate to
+  company…", new row, no seed key), `runs:start {target, companyId?}` (the last link of the inheritance chain),
+  `schedules:create` (stamped from its workflow, else the prompt's repo, else `companyId`, else Personal).
+- `secrets:*` take `companyId: Id | null` (null or absent = Shared). `secrets:list {companyId}` answers that company's
+  keys followed by the Shared keys it inherits. New `secrets:move {name, from, to}` ("Move to company…" / "Make
+  shared"; `conflict` if the name is taken there). Plaintext still never crosses IPC outside §4.1's exceptions.
+- New company channels (`handlers/company.ts`):
+
+| Channel | Request | Response | Notes |
+|---|---|---|---|
+| `company:list` | `{includeArchived?}` \| V | `CompanyPassport[]` | `sort_order`, Personal last; archived only on request |
+| `company:create` | `CompanyCreateInput` | `CompanyPassport` | creates `<userData>/companies/<slug>/workspace` |
+| `company:update` | `{id, patch: CompanyUpdateInput}` | `CompanyPassport` | name, colour, sort, vault path (a path overlapping another company's folders, the home dir or the disk root is refused) |
+| `company:archive` | `{id, archived?}` | `CompanyPassport` | `bad_request` for Personal; data stays |
+| `company:reorder` | `{ids}` | `CompanyPassport[]` | |
+| `company:assignRepo` | `{repoId, companyId}` | `CompanyPassport` | future runs and sessions only (prompt schedules on the repo move with it; workflows, sessions and past runs keep their stamp); refused with open tasks or anything live on the repo; `co_personal` unassigns |
+| `company:overview` | V | `CompanyOverview[]` | one grouped query per domain; memory counts from the Passport index |
+
+- `slack:company` V → `{teamId, companyId} | null` and `slack:setCompany {companyId}` re-home the connected workspace.
+- Passport channels (PASSPORT.md §11): `memory:note`, `memory:links`, `memory:proposals`, `memory:vault`, plus the
+  `global` / `local` / `layout` requests of `memory:graph`. With `experimental.vault` off they answer `not_implemented`
+  (error code `not_implemented`: the renderer falls back to the v1 pages); `memory:vault {op:'migrate'}` answers it when
+  no migrator is registered. `memory:vault` also has `aiSettings {companyId}` and `setAi {companyId, optedIn?,
+  dailyCap?}` (PASSPORT.md §12 "Suggest with AI": opt-in, daily cap 0-500, calls today, recent activity).
+- `company:create`, `company:save` and `company:import` change repo ownership, so they emit
+  `data:changed {domain:'repos'}` as well as `{domain:'company'}` (as `company:assignRepo` does).
+- **Channel counts (amended).** `memory:*` invoke channels: 11 → **15**, under MEMORY.md PO10's limit, which is
+  raised from 12 to **17**. The company feature adds 13 invoke channels in all (`company:create`, `company:update`,
+  `company:archive`, `company:reorder`, `company:assignRepo`, `company:overview`, `secrets:move`, `slack:company`,
+  `slack:setCompany` and the four Passport channels). No new send channels. No new events:
+  `data:changed {domain: 'company'}` reports company changes, and the existing agent, ask, run and session events carry
+  `companyId`, so badges need no extra IPC. There is no `company:switch` (main keeps no current company).
+
+### Co.4 Stamping and guards (one resolver: `src/main/company/scope.ts`)
+- `resolveCompany({companyId?, taskId?, runId?, sessionId?, workflowId?, scheduleId?, teamId?, repoId?, cwd?})`:
+  the explicit id first, then the owning entity, then the repo, then the cwd (longest realpath repo match, then a
+  `companies/<slug>` or custom vault folder), else Personal. Executor, sessions, scheduler, Slack, gateway, the
+  memory grant and the authoring grant all call it (through `companyBridge.ts` for the engine and sessions).
+- Stamps on insert: sessions from the explicit id, then the repo, then Personal; runs inherit from task, then workflow,
+  then schedule, then Slack trigger, then target repo, then the explicit id; schedules from their workflow; artifacts
+  from their run, else session; root agents from their session or run, subagents from their root; asks from their
+  agent; authoring drafts from the authoring session.
+- Guards (`assertSameCompany` → `bad_request` "That repository belongs to B; open it from B"):
+  - sessions: the cwd may not be inside another company's repo or folder;
+  - runs: every step's repo target and realpath cwd (templates and symlinks included) must be the run's company's,
+    and a conflicting explicit id is refused;
+  - workflows: node repo targets and the worktree repo must be the workflow's company's;
+  - schedules: the workflow and the repo target must be in the schedule's company (also checked when a schedule
+    fires, so a schedule whose workflow moved is caught);
+  - Slack: a team's message never starts another company's workflow (dropped with a `slack_trigger_events` note, at
+    most one per trigger per hour), and `slackTriggers:create/update` refuse a mismatch;
+  - gateway: a connection with `companyIds` reaches only spawns of those companies (the spawn's company, else its
+    cwd's);
+  - authoring: the `hive` MCP server gets `HIVE_COMPANY_ID`; list, read, run, draft and push are filtered and stamped
+    by it, and a call line naming another `company_id` is refused. With guards enforced, a proposal whose nodes name
+    another company's repo is `invalid` when proposed (approval runs the save guard again either way).
+- `settings.experimental.companies` (removed at GA): on, guards throw; off, they log a warning and still stamp. Key
+  scoping (Co.5) never depends on the flag.
+- Repo-less spawns run in `<userData>/companies/<slug>/workspace/`, never the shared `scratchDir`; the Claude trust
+  pre-seed covers these folders.
+
+### Co.5 Engine boundary (`src/shared/engine.ts`, add-only) and secrets
+- `EngineContext.company?: CompanyBridge` (`resolve`, `crossCompany`, `enforced`, `workspaceDir`, `repoIds`). Absent =
+  no companies: nothing is stamped or checked.
+- `EngineContext.secrets.resolve(names, companyId?)` and `names(names, companyId?)`: a company value overrides a
+  shared one of the same name; `'*'` means every Shared key plus this company's keys, **never another company's**.
+  `vault.ts` implements it over `secrets` + `company_secrets`. Redaction stays global over every Shared and company
+  key: a key of company A is masked in company B's output too, as `••••NAME` (vault.ts reads `company_secrets` itself
+  and re-reads it on every company-key change, which also refreshes memory's secret fingerprints).
+- `EngineContext.passportContext(cwd, companyId?)`: with a company id, that company's Passport only
+  (`CompanyStore.passportContextFor`, through the renderer the memory service registers). `HIVE_REPOS` lists only the
+  run's company's repos while guards are enforced.
+- `EngineContext.gateway.attachment(cwd, companyId?)`; `StartRunOptions.companyId`; `InteractiveSpawnOptions.companyId`;
+  `MemoryGrantRequest.companyId`; `StepOutputEvent.companyId`.
+
+### Co.6 Tests
+- `src/main/__tests__/companyIsolation.test.ts`: the isolation matrix over the real modules (hive.db, CompanyStore,
+  vault + `company_secrets`, the engine with its db-backed store and scheduler, SessionManager, the gateway, the
+  Slack service and the authoring wiring). For sessions, runs, schedules, Slack triggers, the gateway, keys and the
+  authoring tools, company A's spawn can neither see nor change company B's rows, keys, connections or workflows, and
+  shared keys are inherited.
+- `src/main/__tests__/upgrade.test.ts`: a pre-company hive.db (a live-shaped snapshot, plus a scrubbed real copy when
+  `HIVE_UPGRADE_DB` or `src/main/__tests__/fixtures/upgrade/hive-scrubbed.db` exists) opens with every row listed
+  under All and under exactly its company or Personal, deletes nothing, and keeps every schedule's rule and next fire
+  time. `fixtures/upgrade/scrub-hive-db.mjs` makes the scrubbed copy from a backup, never from the live file (it
+  refuses the app's data folder and an already-upgraded db); the snapshot also runs through it, so the script is
+  tested too.
+
+### Co.7 Ownership
+COMPANY.md §11 (C1-C7) and PASSPORT.md §12 (P1-P8); file ownership is disjoint across both documents.
+
+## Departments (DEPARTMENTS.md, 2026-10-20)
+
+`docs/DEPARTMENTS.md` puts departments and agents inside a company and gives each company one task board. This section
+amends §3, §4, §5 and "Companies". Everything is additive: still `schema_version = 2`, every new column is nullable,
+and everything sits behind `settings.experimental.departments`, which only takes effect with `experimental.companies`
+on (`departmentsEnabled` in `src/shared/company.ts`). With it off, the Tasks page and every task channel behave as
+before.
+
+### De.1 Persistence (`src/main/db/schema.ts`, `db/companyMigration.ts`)
+- `DDL_COMPANY` gains `company_departments(id, company_id, key, name, color, icon, sort_order, archived_at, created_at,
+  updated_at, data)` (`UNIQUE(company_id, key)`) and `company_agents(id, company_id, department_id, kind
+  'profile'|'workflow', ref_id, name, archived_at, paused_at, created_at, updated_at, data)` (index
+  `company_agents_dept(company_id, department_id)`). Archive replaces delete for both.
+- `COMPANY_ADDED_COLUMNS`: `company_tasks.status / department_id / agent_id` (query mirrors written with the JSON in one
+  statement), `runs.task_id / agent_id`, `sessions.task_id`, `asks.task_id`, `workflows / schedules /
+  slack_triggers.department_id`. Indexes `company_tasks_status(company_id, status)`, `company_tasks_agent(agent_id,
+  status)`, `runs_task(task_id)`, plus `company_tasks_source(company_id, source_key)` (unique, one task per external
+  source) and `company_tasks_run(run_id)`.
+- `runs.trigger` keeps its CHECK: a task run is stored as `'manual'` + `trigger_ext = 'task'` and reads back as
+  `trigger: 'task'` with `taskId` / `agentId`.
+- Autopilot and the in-flight cap live in the company row's JSON: `autopilot` (default false), `maxInFlight` (1-20,
+  default 3).
+- One-time backfill guarded by `meta.departments_migrated` (DEPARTMENTS.md §11): task mirrors from the JSON,
+  `runs.task_id` from `company_tasks.run_id`, and a `blockReason` for blocked tasks. No departments or agents are
+  created, and Autopilot is off everywhere.
+
+### De.2 Shared types (add-only)
+- `src/shared/company.ts`: `Department`, `DepartmentData`, `DepartmentSaveInput`, `DepartmentPresetKey`,
+  `CompanyAgent`, `CompanyAgentData`, `CompanyAgentSaveInput`, `BoardSettings {companyId, autopilot, maxInFlight}`,
+  `BoardTask` (= `CompanyTask` + `TaskBoardFields`: `departmentId`, `agentId`, `blockReason`, `ask`, `report`,
+  `doneNote`, `routing`, `pendingWake`, `agentSessionId`, `autoWakes`, `handoffs`), `BLOCK_REASONS`,
+  `TASK_ACTIVITY_KINDS` (every activity carries `by: 'human'|'agent'|'system'`), `TaskSource` + `agent`, `schedule`,
+  and the one lane function `laneOf(task, openLiveAsk?, agentEligible?)` / `needsYouReason` (Inbox, Queued, Working,
+  Needs you, Done) that the board, the sidebar, `CompanyOverview` and the rail badge all use.
+- `src/shared/types.ts`: `ExperimentalFlags.departments`, `Workflow.departmentId`, `Schedule.departmentId`,
+  `ScheduleTarget = RunTarget & {mode?: 'run'|'task'; agentId?}`.
+- `src/shared/slack.ts`: `SlackTrigger.action?: 'run'|'task'` (absent = `run`) and `departmentId`.
+
+### De.3 IPC (`src/shared/ipc.ts`, `handlers/company.ts`, `handlers/board.ts`)
+Every channel below is zod-validated (`ipcSchemas.ts`, strict objects) and answers `forbidden` unless
+`experimental.companies` and `experimental.departments` are on. Ids are checked against the task's (or row's) own
+company, never a company the renderer names: a department or agent of another company is refused (`bad_request`
+"… belongs to another company"), a department or agent never moves to another company, and a task's company never
+changes.
+
+| Channel | Request | Response | Notes |
+|---|---|---|---|
+| `departments:list` | `{companyId?, includeArchived?}` \| V | `Department[]` | absent = every company; sidebar order |
+| `departments:save` | `DepartmentSaveInput` | `Department` | no id = create; key fixed at creation; `data` merges; a Slack channel routes to one department per company |
+| `departments:archive` | `{id, archived?}` | `Department` | `conflict` while it has open tasks or its agents are in flight (the message names them) |
+| `departments:reorder` | `{companyId, ids}` | `Department[]` | ids of another company: `not_found` |
+| `departments:createPresets` | `{companyId, keys?}` | `Department[]` | the six §9 presets in one call, idempotent by key |
+| `companyAgents:list` | `{companyId?, departmentId?, includeArchived?}` \| V | `CompanyAgent[]` | `departmentId: null` = company-level agents |
+| `companyAgents:save` | `CompanyAgentSaveInput` | `CompanyAgent` | a profile agent's profile exists and is not shell; a workflow agent's workflow and the department are the agent's company's |
+| `companyAgents:archive` | `{id, archived?}` | `CompanyAgent` | `conflict` while it has a task in flight |
+| `companyAgents:pause` / `companyAgents:resume` | `{id}` | `CompanyAgent` | a paused agent takes no new task |
+| `tasks:assign` | `{id, departmentId?, agentId?}` | `BoardTask` | absent = unchanged, null = clear; `routing.by: 'human'`; refused in flight |
+| `tasks:acceptRoute` | `{id}` | `BoardTask` | applies the model's routing suggestion (never applied by itself) |
+| `tasks:answer` | `{id, answer}` | `BoardTask` | `blocked(needs_input)` → `todo`; the same agent resumes with `Answer: …` |
+| `tasks:approve` | `{id, doneNote}` | `BoardTask` | `in_review` → `done`, human only, note required; heals its dependents |
+| `tasks:sendBack` | `{id, note}` | `BoardTask` | `in_review` → `todo`; the note is the next turn's wake |
+| `tasks:unpark` | `{id}` | `BoardTask` | `blocked` (not `deps`) → `todo`; resets the wake counter |
+| `tasks:openSession` | `{id, cols, rows}` | `{task, session}` | a PTY session (`sessions.task_id`) holds the lease |
+| `tasks:takeover` | `{id, cols, rows}` | `{task, session}` | cancels the headless run, opens a session resuming `agentSessionId` |
+| `tasks:stop` | `{id}` | `BoardTask` | cancels the run or ends the session; the task parks per §1.4 |
+| `board:autopilot` | `{companyId, on, maxInFlight?}` | `BoardSettings` | the company's switch (default off); the rail's "Pause all agents" turns it off for every company |
+
+- Existing `tasks:*` channels stay. `tasks:create` / `tasks:update` with departments on check the department and agent
+  against the task's company, never create or patch a board task straight to `done`, and `tasks:update` cannot write
+  the fields only main writes (`blockReason`, `ask`, `report`, `doneNote`, `routing`, `pendingWake`,
+  `agentSessionId`, `autoWakes`, `handoffs`). With departments off they refuse a department or agent (`forbidden`).
+- `schedules:create/update` accept `target.mode: 'task'` with `target.agentId` and `departmentId`;
+  `slackTriggers:create/update` accept `action: 'task'` and `departmentId` (refused when the department is not the
+  trigger's company's).
+- Events: `data:changed {domain: 'departments'}` (departments and agents) and `{domain: 'tasks'}` (the board,
+  including dispatcher and hivetask writes). No new event names.
+- **Channel counts.** The departments feature adds 20 invoke channels (5 `departments:*`, 5 `companyAgents:*`, 9
+  `tasks:*`, `board:autopilot`). No new send channels.
+
+### De.4 Engine boundary (`src/shared/engine.ts`, add-only)
+- `StartRunOptions.trigger: RunTrigger | 'task'`, `taskId`, `agentId` (persisted in `runs.task_id / agent_id`; the
+  run's company is the task's), `resumeSessionId` (a resumed Claude task turn) and `runMinutes` (the seat's time cap;
+  the agent is warned about 2 minutes before, `TASK_WRAP_UP_TEXT`, then the run is canceled and the task parks with
+  `limit`).
+- `RunTrigger` gains `'task'`, and `Run` gains optional `taskId` / `agentId` (read back from `runs.task_id / agent_id`).
+  `tasks:start` goes through the dispatcher's `runNow`, so a board Run always records its task and seat.
+- `CompanyBridge.tasks?: TaskRunBridge` (`companyOf`, `runMinutes`, `toolset`, `sessionCaptured`, `timeLimit`,
+  `passportContext` with the department slot) and `CompanyBridge.boards?` (task-mode schedules and Slack triggers,
+  `company/recurring.ts`). The engine never imports `src/main/company/**`.
+- `EngineStore.insertRun(run, snapshot, task?: RunTaskLink)`.
+
+### De.5 MCP: the `hivetask` toolset (`src/main/company/taskTools.ts`, `taskToolDefs.ts`)
+Listed on the headless `hivemem` server of a Claude step of a task run (`HIVE_TASK_ID`, `HIVE_TASK_COMPANY_ID`) and
+on the authoring `hive` server of a board session (`HIVE_TOOLSETS` includes `task`, `HIVE_COMPANY_ID`, plus
+`HIVE_TASK_ID` when the session holds a task). Calls travel the live dir mailbox like the authoring tools: the broker
+resolves the caller from the live dir's owner (never from the line), refuses a line whose `company_id` or `task_id` is
+not the caller's, and lets a write through only while the caller's run or session still holds its task
+(`in_progress` with its `runId`); `TaskTools` checks again. Reads are limited to the caller's company (another
+company's task reads as "Task not found in this company", by id and by identifier). Output is redacted, capped at
+8000 chars and marked as data, not instructions. Codex, Gemini and Cursor get no tools: the prompt carries the task
+and they end with a fenced `principia-task-report` JSON block (malformed = no report).
+
+| Tool | Caller | Effect |
+|---|---|---|
+| `task_get({id?})` | any | the current task, or a task of the same company (another agent's in-flight task shows who has it, nothing more) |
+| `task_list({scope: 'mine'\|'department'\|'open', limit ≤ 50})` | any | the company board |
+| `task_comment({text})` | the run or session holding the task | redacted; never wakes anyone |
+| `task_report({outcome: 'review'\|'blocked', summary, evidence[]})` | holder | decides the run-end outcome (`in_review` or `blocked(agent)`) |
+| `task_ask({kind: 'question'\|'confirm'\|'choice', prompt, options?})` | holder | `blocked(needs_input)` at run end; a choice needs 2-6 options |
+| `task_create({title, description?, departmentKey?, blocksCurrent?})` | holder; a session holding no task files a top-level task | child of the current task, `source: 'agent'`, routed by §2; at most 4 per task, one level deep, 10 per company per hour; a replayed tool-use id returns the first task; `blocksCurrent` makes it a dependency (`blocked(deps)` at run end, then heals) |
+| `task_handoff({departmentKey \| agentId, reason})` | holder | applied at run end: `todo` with the target (same company only), `handoff` activity; after 4 handoffs the task parks with `handoff_cap` |
+
+Never exposed: setting `done`, another agent's in-flight task, department or agent config, cancelling runs.
+
+### De.6 Tests
+- `src/main/__tests__/departmentsIsolation.test.ts`: two companies over the real modules. Through both MCP servers
+  (each driven through its real `callTool`, the LiveBridge mailbox and the broker) and through every
+  `departments:*`, `companyAgents:*`, `tasks:*` and `board:autopilot` handler, company A can neither list, claim,
+  comment on nor hand off to company B's tasks, and each refusal leaves B's board unchanged. With
+  `experimental.departments` off, all 20 §10 channels answer `forbidden`, `tasks:create`/`tasks:update` refuse board
+  fields, and every task tool on both servers is refused.
+- `src/main/company/board.integration.test.ts`: the fake-adapter scenario (Slack message → task → Support →
+  Autopilot run → `task_ask` → answer → resumed turn → review → approve with a note → the dependent Marketing task
+  heals and runs), replayed twice with identical transcripts, and a seeded overnight soak over 5 companies (no task
+  beyond its caps, nothing done without a human, no re-wake loop once the stimuli stop), plus a sixth company with
+  Autopilot off whose auto seats receive the same wakes and never start.
+- Per-package tests: `departments.test.ts`, `company.test.ts`, `taskState.test.ts`, `router.test.ts`,
+  `dispatcher.test.ts`, `taskTools.test.ts`, `scope.departments.test.ts`, `db/__tests__/departmentsMigration.test.ts`,
+  `engine/__tests__/recurringTasks.test.ts`, and the renderer's `lib/departments.test.ts` / `lib/board.test.ts`.
+
+### De.7 Ownership
+DEPARTMENTS.md §13 (D1-D11); file ownership is disjoint with COMPANY.md (C1-C7) and PASSPORT.md (P1-P8).

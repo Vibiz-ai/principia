@@ -60,9 +60,20 @@ export interface HttpResponse {
   headers: { retryAfter: number | null; scopes: string | null }
   body: unknown
 }
+/** A downloaded Slack file (an image; the transport refuses anything else). */
+export interface HttpDownload {
+  contentType: string
+  bytes: Uint8Array
+}
 export interface HttpPort {
   /** POST https://slack.com/api/<method>. */
   call(req: { method: string; token: string; body: Record<string, unknown>; json?: boolean; signal?: AbortSignal }): Promise<HttpResponse>
+  /**
+   * GET an auth-gated Slack file (url_private[_download]) with the bot token (SLACK.md §9.6). The token goes only to
+   * files.slack.com / *.slack.com over https, checked on every redirect hop. Only png/jpeg/gif/webp, at most maxBytes.
+   * Throws (never with the token or the URL in the message) otherwise. Absent = this transport cannot download.
+   */
+  download?(req: { url: string; token: string; maxBytes: number; signal?: AbortSignal }): Promise<HttpDownload>
 }
 export interface SocketLike {
   send(text: string): void

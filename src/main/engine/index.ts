@@ -95,6 +95,10 @@ export interface EngineOverrides {
   stallThresholdMs?: number
   /** Wait-node time unit (tests). Default 1000 ms. */
   waitSecondMs?: number
+  /** Task-run time cap unit (tests). Default 60 000 ms (StartRunOptions.runMinutes are minutes). */
+  taskMinuteMs?: number
+  /** Harness fallback filter (ExecDeps.harnessFallback). Absent = the desktop's rule. */
+  harnessFallback?: (runId: string, to: AdapterId) => boolean
 }
 
 export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides = {}): Engine {
@@ -150,6 +154,68 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
   const validate = (draft: WorkflowDraft, opts: { slackTriggered?: boolean } = {}) =>
     validateWorkflow(draft, { getProfile: (id) => ctx.getProfile(id), getRepo: (id) => ctx.getRepo(id), slackTriggered: !!opts.slackTriggered })
 
+  /**
+   * COMPANY.md §3, §6: the run's company by inheritance (workflow, then schedule, then repo, then the explicit id;
+   * Personal otherwise), and the cross-company guards: with experimental.companies on a mismatch throws, off it is
+   * logged and the run is still stamped. null = no company bridge (tests, older main).
+   */
+  const runCompany = (target: RunTarget, opts: StartRunOptions): string | null => {
+    const co = ctx.company
+    if (!co) return null
+    const problems: (string | null)[] = []
+    let companyId: string
+    // DEPARTMENTS.md §4.3: a task run belongs to its task's company, first in the stamping order; its repo or workflow
+    // must be that company's, and a conflicting explicit id is a cross-company launch
+    const fromTask = opts.taskId ? safeTaskCompany(opts.taskId) : null
+    if (fromTask) {
+      companyId = fromTask
+      problems.push(co.crossCompany(companyId, target.kind === 'workflow' ? { workflowId: target.workflowId } : { repoId: target.repoId ?? null }))
+      if (opts.companyId && opts.companyId !== companyId) problems.push('That task belongs to another company')
+    } else if (target.kind === 'workflow') {
+      companyId = co.resolve({ workflowId: target.workflowId })
+      if (opts.companyId) problems.push(co.crossCompany(opts.companyId, { workflowId: target.workflowId }))
+    } else {
+      const fromSchedule = opts.scheduleId && ctx.store.getSchedule(opts.scheduleId) ? co.resolve({ scheduleId: opts.scheduleId }) : null
+      companyId = fromSchedule ?? (target.repoId ? co.resolve({ repoId: target.repoId }) : co.resolve({ companyId: opts.companyId ?? null }))
+      if (target.repoId) problems.push(co.crossCompany(companyId, { repoId: target.repoId }))
+      if (opts.companyId && opts.companyId !== companyId) problems.push(co.crossCompany(opts.companyId, { repoId: target.repoId ?? null }) ?? 'That run belongs to another company')
+    }
+    // a schedule fires its target in its own company (schedules:save checks it; the workflow may have moved since)
+    if (opts.scheduleId && target.kind === 'workflow' && ctx.store.getSchedule(opts.scheduleId)) {
+      const sc = co.resolve({ scheduleId: opts.scheduleId })
+      problems.push(co.crossCompany(sc, { workflowId: target.workflowId }))
+    }
+    const problem = problems.find(Boolean)
+    if (problem) {
+      if (co.enforced()) throw new HiveError('bad_request', problem)
+      ctx.log.warn('engine: company guard (not enforced)', { companyId, problem })
+    }
+    return companyId
+  }
+
+  /** The task's company through the board bridge; a failing bridge never blocks a run (it falls back to inheritance). */
+  const safeTaskCompany = (taskId: string): string | null => {
+    try {
+      return ctx.company?.tasks?.companyOf(taskId) ?? null
+    } catch (e) {
+      ctx.log.warn('engine: task company lookup failed', { taskId, error: String(e) })
+      return null
+    }
+  }
+  /** §3.6: the explicit cap, else the seat's limits.runMinutes; null = no cap (non-task runs, no seat). */
+  const taskRunMinutes = (opts: StartRunOptions): number | null => {
+    if (!opts.taskId) return null
+    let m: number | null | undefined = opts.runMinutes
+    if (m == null && opts.agentId) {
+      try {
+        m = ctx.company?.tasks?.runMinutes?.(opts.agentId) ?? null
+      } catch {
+        m = null
+      }
+    }
+    return typeof m === 'number' && Number.isFinite(m) && m > 0 ? m : null
+  }
+
   const startRun = (target: RunTarget, opts: StartRunOptions): Run => {
     if (!target || typeof target !== 'object') throw new HiveError('bad_request', 'Missing run target')
     let title: string
@@ -176,13 +242,14 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         inputs: wf.inputs,
         nodes: wf.nodes,
         ...(wf.worktree ? { worktree: wf.worktree } : {}),
-        ...(wf.slackTools ? { slackTools: true } : {})
+        ...(wf.slackTools ? { slackTools: true, ...(wf.slackAgentPermissions === 'profile' ? { slackAgentPermissions: 'profile' as const } : {}) } : {})
       }
       workflowId = wf.id
       // SLACK.md §9.3: "<workflow> · #support"
       title = opts.slack ? `${wf.name} · ${channelLabel(opts.slack.channelKind, opts.slack.channelName, opts.slack.userName)}` : wf.name
     } else throw new HiveError('bad_request', 'Unknown run target')
 
+    const companyId = runCompany(target, opts)
     const id = newId('run')
     const artifactsDir = ensureRunDirs(ctx, id)
     const run: Run = {
@@ -193,7 +260,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       workflowId,
       scheduleId: opts.scheduleId ?? null,
       parentRunId: opts.parentRunId ?? null,
-      trigger: opts.trigger,
+      // 'task' is stored as 'manual' + trigger_ext (engineStore) and reads back as 'task'
+      trigger: opts.trigger as Run['trigger'],
       status: 'queued',
       reason: null,
       createdAt: now().toISOString(),
@@ -201,15 +269,18 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       endedAt: null,
       artifactsDir,
       artifactCount: 0,
+      ...(companyId ? { companyId } : {}),
       ...(opts.startedBy ? { startedBy: { ...opts.startedBy, ownerLabel: ctx.secrets.redact(opts.startedBy.ownerLabel) } } : {}),
       ...(opts.slack ? { slack: opts.slack } : {})
     }
-    ctx.store.insertRun(run, snapshot)
+    const task = opts.taskId ? { taskId: opts.taskId, agentId: opts.agentId ?? null } : null
+    ctx.store.insertRun(run, snapshot, task)
     ctx.emit({ type: 'run.updated', run })
     const exec = new Execution(
-      { ctx, adapters, provider, semaphore, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs },
+      { ctx, adapters, provider, semaphore, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, taskMinuteMs: overrides.taskMinuteMs, harnessFallback: overrides.harnessFallback },
       run,
-      snapshot
+      snapshot,
+      task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null, runMinutes: taskRunMinutes(opts) } : null
     )
     stall.startTimer(overrides.stallSweepMs ?? 15_000)
     executions.set(id, exec)
@@ -223,6 +294,10 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     })
     return run
   }
+
+  /** A rerun of a prompt run stays in the source run's company; a workflow run takes its workflow's (it may have moved). */
+  const rerunCompany = (r: Run): Pick<StartRunOptions, 'companyId'> =>
+    r.target.kind === 'prompt' && r.companyId && ctx.company ? { companyId: r.companyId } : {}
 
   const active = (): Run[] => {
     const mem = [...executions.values()].map((e) => e.run).filter((r) => r.status === 'queued' || r.status === 'running')
@@ -241,11 +316,12 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
   const scheduler = createScheduler({
     store: ctx.store,
     startRun,
-    rerun: (r) => startRun(r.target, { trigger: 'rerun', parentRunId: r.id, scheduleId: r.scheduleId }),
+    rerun: (r) => startRun(r.target, { trigger: 'rerun', parentRunId: r.id, scheduleId: r.scheduleId, ...rerunCompany(r) }),
     isScheduleActive: (sid) => active().some((r) => r.scheduleId === sid),
     emit: (e) => ctx.emit(e),
     log: ctx.log,
     now,
+    board: ctx.company?.boards?.schedules ?? null,
     paused: (() => {
       try {
         return !!ctx.getSettings().schedulesPaused
@@ -266,7 +342,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       activeRuns: active,
       emit: (e) => ctx.emit(e),
       log: ctx.log,
-      now
+      now,
+      board: ctx.company?.boards?.slack ?? null
     })
   }
 
@@ -337,10 +414,16 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           }
         }
         if (profile.adapter === 'claude' || profile.adapter === 'codex') {
-          const gateway = ctx.gateway?.attachment(opts.cwd ?? ctx.paths.scratchDir)
+          const gwCwd = opts.cwd ?? ctx.paths.scratchDir
+          const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
           if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) writeMcpFiles(mcp.files) }
         }
-        const memoryBrief = grant ? agentBrief(grant, !!mcp && memOk) : ''
+        const memoryBrief = ctx.secrets.redact([
+          // nobody harvests an interactive pane's output (PASSPORT.md §7.6 is headless steps only)
+          grant ? agentBrief(grant, !!mcp && memOk, { harvest: false }) : '',
+          // COMPANY.md §5: the session's company decides the Passport (cwd only for older callers without one)
+          opts.companyId ? ctx.passportContext?.(opts.cwd ?? '', opts.companyId) ?? '' : opts.cwd ? ctx.passportContext?.(opts.cwd) ?? '' : ''
+        ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []
         const env: Record<string, string> = { ...(mcp?.env ?? {}) }
@@ -410,7 +493,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       rerun(id) {
         const r = ctx.store.getRun(id)
         if (!r) throw new HiveError('not_found', `Run ${id} not found`)
-        return startRun(r.target, { trigger: 'rerun', parentRunId: id, scheduleId: null })
+        return startRun(r.target, { trigger: 'rerun', parentRunId: id, scheduleId: null, ...rerunCompany(r) })
       },
       retryAt(id, at) {
         const r = ctx.store.getRun(id)
@@ -432,6 +515,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       upsert: (id) => scheduler.upsert(id),
       remove: (id) => scheduler.remove(id),
       runNow: (id) => scheduler.runNow(id),
+      fireNow: (id) => scheduler.fireNow(id),
       preview: (when) => previewWhen(when, now()),
       describe: (when) => describeWhen(when),
       nextRuns: (limit) => scheduler.nextRuns(limit),

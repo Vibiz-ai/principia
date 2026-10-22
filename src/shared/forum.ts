@@ -1,0 +1,286 @@
+/**
+ * FORUM.md: the Forum's shared types (main, renderer, the forum CLI). Pure: no node or electron imports.
+ * One Forum per company; every row carries companyId. Messages are addressed by `ref` (m + base36 seq) in the agent
+ * protocol and by `id` (fmsg_…) everywhere else.
+ */
+
+export const FORUM_PROTOCOL_VERSION = 1
+
+export const FORUM_MEMBER_KINDS = ['human', 'agent', 'guest'] as const
+export type ForumMemberKind = (typeof FORUM_MEMBER_KINDS)[number]
+export const FORUM_ROLES = ['owner', 'admin', 'member', 'guest', 'agent'] as const
+export type ForumRole = (typeof FORUM_ROLES)[number]
+/** Roles an invite can grant (owner is never invited; agents are added, never invited). */
+export const FORUM_INVITE_ROLES = ['admin', 'member', 'guest'] as const
+export type ForumInviteRole = (typeof FORUM_INVITE_ROLES)[number]
+export type ForumMemberStatus = 'active' | 'invited' | 'removed'
+
+export interface ForumMember {
+  id: string
+  companyId: string
+  kind: ForumMemberKind
+  role: ForumRole
+  /** company_agents.id for agent members */
+  agentId: string | null
+  /** lowercase, unique per company: what `@handle` resolves */
+  handle: string
+  /** display name; agents: the persona name (the role label comes from the seat) */
+  name: string
+  status: ForumMemberStatus
+  createdAt: string
+  data: { email?: string; title?: string; inviteId?: string }
+}
+
+export const FORUM_CHANNEL_KINDS = ['public', 'private', 'dm', 'group'] as const
+export type ForumChannelKind = (typeof FORUM_CHANNEL_KINDS)[number]
+export type ForumChannelSystem = 'general' | 'department' | 'proposals'
+
+export interface ForumChannel {
+  id: string
+  companyId: string
+  kind: ForumChannelKind
+  /** slug for public/private channels; null for DMs */
+  name: string | null
+  topic: string
+  purpose: string
+  departmentId: string | null
+  system: ForumChannelSystem | null
+  createdBy: string | null
+  createdAt: string
+  archivedAt: string | null
+  memberIds: string[]
+  lastSeq: number
+  lastMessageAt: string | null
+  /** for the viewer (`forum:state`): */
+  joined: boolean
+  lastReadSeq: number
+  unread: number
+  mentions: number
+}
+
+export const FORUM_MESSAGE_KINDS = ['text', 'ask', 'proposal', 'system'] as const
+export type ForumMessageKind = (typeof FORUM_MESSAGE_KINDS)[number]
+export const FORUM_REF_KINDS = ['task', 'note', 'artifact', 'run', 'url', 'message'] as const
+export type ForumRefKind = (typeof FORUM_REF_KINDS)[number]
+export interface ForumRef {
+  kind: ForumRefKind
+  /** task id or PRN-12, note title, art_…, run_…, url, message ref */
+  id: string
+  label: string
+}
+
+export interface ForumAsk {
+  status: 'open' | 'answered' | 'closed'
+  /** member ids asked */
+  to: string[]
+  options?: string[]
+  taskId?: string | null
+  runId?: string | null
+  answer?: string
+  answeredBy?: string
+  answeredAt?: string
+  /** an answer given while the task's run was still running: applied when it parks */
+  pendingTaskAnswer?: boolean
+}
+
+export const FORUM_PROPOSAL_KINDS = ['department', 'agent'] as const
+export type ForumProposalKind = (typeof FORUM_PROPOSAL_KINDS)[number]
+export const FORUM_AGENT_ADAPTERS = ['claude', 'codex', 'gemini', 'cursor'] as const
+export interface ForumProposalDepartment { name: string; key?: string; does: string; doesNot: string }
+export interface ForumProposalAgent {
+  departmentKey: string | null
+  role: string
+  instructions: string
+  capabilities: string
+  adapter?: (typeof FORUM_AGENT_ADAPTERS)[number]
+}
+export interface ForumProposal {
+  kind: ForumProposalKind
+  status: 'open' | 'approved' | 'rejected'
+  reason: string
+  department?: ForumProposalDepartment
+  agent?: ForumProposalAgent
+  decidedBy?: string
+  decidedAt?: string
+  note?: string
+  result?: { departmentId?: string; agentId?: string }
+  error?: string
+}
+
+export interface ForumMessage {
+  id: string
+  seq: number
+  /** m + base36(seq): the short ref agents quote */
+  ref: string
+  companyId: string
+  channelId: string
+  /** root message id of a thread reply, else null */
+  threadId: string | null
+  authorId: string
+  kind: ForumMessageKind
+  text: string
+  createdAt: string
+  editedAt: string | null
+  deletedAt: string | null
+  replyCount: number
+  lastReplyAt: string | null
+  /** up to five member ids who replied (thread avatars) */
+  repliers: string[]
+  mentions: string[]
+  mentionDepartments: string[]
+  refs: ForumRef[]
+  reactions: Record<string, string[]>
+  ask?: ForumAsk
+  proposal?: ForumProposal
+  /** 'local' | 'agent:<stepId>' (FORUM.md §7) */
+  origin: string
+}
+
+export type ForumInviteStatus = 'active' | 'expired' | 'used' | 'revoked'
+export interface ForumInvite {
+  id: string
+  companyId: string
+  role: ForumInviteRole
+  channelIds: string[]
+  label: string
+  codeHint: string
+  createdBy: string
+  createdAt: string
+  expiresAt: string | null
+  maxUses: number
+  uses: number
+  revokedAt: string | null
+  status: ForumInviteStatus
+  /** only in the forum:invite answer (shown once) */
+  code?: string
+  link?: string
+}
+
+export type ForumPresenceState = 'working' | 'reading' | 'composing' | 'idle'
+export interface ForumPresence {
+  companyId: string
+  memberId: string
+  state: ForumPresenceState
+  channelId: string | null
+  at: string
+}
+
+export interface ForumState {
+  companyId: string
+  /** the viewer (the owner on this Mac) */
+  me: string
+  members: ForumMember[]
+  channels: ForumChannel[]
+  presence: ForumPresence[]
+  openAsks: number
+  openProposals: number
+}
+
+export interface ForumSearchHit { message: ForumMessage; channelId: string }
+
+export type ForumEvent =
+  | { kind: 'message'; companyId: string; message: ForumMessage }
+  | { kind: 'channel'; companyId: string; channel: ForumChannel | null; channelId: string }
+  | { kind: 'members'; companyId: string }
+  | { kind: 'presence'; companyId: string; presence: ForumPresence }
+  | { kind: 'read'; companyId: string; channelId: string; seq: number }
+
+// ---------- request shapes (forum:* IPC) ----------
+export interface ForumPostRequest {
+  companyId: string
+  channelId: string
+  text: string
+  threadId?: string | null
+  /** post an ask card: member ids asked (and quick answers) */
+  ask?: { to: string[]; options?: string[] }
+  /** post a proposal card (a human may propose too; an admin decides) */
+  proposal?: Pick<ForumProposal, 'kind' | 'reason' | 'department' | 'agent'>
+}
+export interface ForumCreateChannelRequest {
+  companyId: string
+  name: string
+  kind: 'public' | 'private'
+  purpose?: string
+  memberIds?: string[]
+}
+export interface ForumInviteRequest {
+  companyId: string
+  role: ForumInviteRole
+  channelIds?: string[]
+  label?: string
+  /** 0 = never */
+  expiresInDays?: number
+  maxUses?: number
+}
+export interface ForumDecideRequest {
+  messageId: string
+  decision: 'approve' | 'reject'
+  note?: string
+  /** approve with edits (the sheet's fields) */
+  edits?: { name?: string; key?: string; role?: string; departmentKey?: string | null; profileId?: string; instructions?: string; capabilities?: string; does?: string; doesNot?: string }
+}
+
+// ---------- limits (FORUM.md §2.3, §4.4) ----------
+export const FORUM_LIMITS = {
+  agentText: 2000,
+  humanText: 8000,
+  postsPerStep: 12,
+  postsPerHour: 40,
+  agentChannelsPerDay: 3,
+  proposalsPerDay: 5,
+  openAsksPerAgent: 3,
+  mentionsPerMessage: 8,
+  waitMaxS: 600,
+  httpPerMinute: 60,
+  digestBudget: 4000,
+  digestMax: 12000,
+  digestLine: 400,
+  threadLine: 2000,
+  briefMax: 600,
+  injectBriefMax: 1500,
+  fencedOps: 5,
+  reactionKinds: 12
+} as const
+
+/** m + base36(seq) */
+export const messageRef = (seq: number): string => `m${seq.toString(36)}`
+export const cursorRef = (seq: number): string => `c${seq.toString(36)}`
+/** seq of `m3fk` / `c3fk`, or null */
+export function parseSeqRef(ref: string, prefix: 'm' | 'c'): number | null {
+  const m = new RegExp(`^${prefix}([0-9a-z]{1,10})$`).exec(ref.trim())
+  if (!m) return null
+  const n = parseInt(m[1], 36)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+/** Channel slug: lowercase, [a-z0-9-], 2..40. */
+export const CHANNEL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,39}$/
+export function channelSlug(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+}
+/** Member handle: lowercase [a-z0-9._-], 1..32. */
+export const HANDLE_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/
+export function handleSlug(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9._-]+/g, '')
+      .replace(/^[._-]+/, '')
+      .slice(0, 32) || 'member'
+  )
+}
+
+/** Display label of a channel: `#marketing`, or the other members' names for a DM. */
+export function channelLabel(c: Pick<ForumChannel, 'kind' | 'name' | 'memberIds'>, members: ReadonlyMap<string, Pick<ForumMember, 'name'>>, me: string): string {
+  if (c.name) return `#${c.name}`
+  const others = c.memberIds.filter((id) => id !== me).map((id) => members.get(id)?.name ?? 'someone')
+  return others.length ? others.join(', ') : 'Just you'
+}

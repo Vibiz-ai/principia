@@ -321,3 +321,75 @@ export function layoutMemoryGroups(groups: LayoutGroup[], edges: LayoutEdge[]): 
   }
   return { positions, bands, frames }
 }
+
+// ---------- Passport graph: first-paint seeding (PASSPORT.md §10 Graph mode) ----------
+export interface SeedPoint {
+  x: number
+  y: number
+}
+
+/**
+ * Start positions for the live Passport graph. Saved positions (mem_layout) are kept as they are; a new node starts
+ * next to the centroid of its already placed neighbours (breadth-first from the saved ones), so a note an agent just
+ * added appears beside what it links to instead of flying in from the middle. Nodes with no placed neighbour go on a
+ * phyllotaxis spiral (d3-force's own start) around the placed picture. Deterministic: same input, same seeds.
+ */
+export function seedPositions(ids: string[], edges: LayoutEdge[], saved: ReadonlyMap<string, SeedPoint>): Map<string, SeedPoint> {
+  const order = [...new Set(ids)].sort()
+  const known = new Set(order)
+  const out = new Map<string, SeedPoint>()
+  for (const id of order) {
+    const p = saved.get(id)
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) out.set(id, { x: p.x, y: p.y })
+  }
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    if (e.source === e.target || !known.has(e.source) || !known.has(e.target)) continue
+    // push, not spread: a hub note with thousands of links would otherwise copy its list once per link
+    const a = adj.get(e.source)
+    if (a) a.push(e.target)
+    else adj.set(e.source, [e.target])
+    const b = adj.get(e.target)
+    if (b) b.push(e.source)
+    else adj.set(e.target, [e.source])
+  }
+  // breadth-first rings out of the saved picture
+  let frontier = order.filter((id) => !out.has(id) && (adj.get(id) ?? []).some((n) => out.has(n)))
+  while (frontier.length) {
+    const placed: [string, SeedPoint][] = []
+    for (const id of frontier) {
+      const ns = (adj.get(id) ?? []).filter((n) => out.has(n))
+      let x = 0
+      let y = 0
+      for (const n of ns) {
+        x += out.get(n)!.x
+        y += out.get(n)!.y
+      }
+      const h = hash32(id)
+      const angle = ((h % 3600) / 3600) * Math.PI * 2
+      const r = 24 + (h % 17)
+      placed.push([id, { x: Math.round(x / ns.length + r * Math.cos(angle)), y: Math.round(y / ns.length + r * Math.sin(angle)) }])
+    }
+    for (const [id, p] of placed) out.set(id, p)
+    frontier = [...new Set(placed.flatMap(([id]) => adj.get(id) ?? []))].filter((id) => !out.has(id)).sort()
+  }
+  // the rest: a spiral around the placed picture's centre, starting outside it
+  const rest = order.filter((id) => !out.has(id))
+  if (rest.length) {
+    let cx = 0
+    let cy = 0
+    let r0 = 0
+    if (out.size) {
+      const pts = [...out.values()]
+      cx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+      cy = pts.reduce((s, p) => s + p.y, 0) / pts.length
+      r0 = Math.max(...pts.map((p) => Math.hypot(p.x - cx, p.y - cy))) + 40
+    }
+    rest.forEach((id, i) => {
+      const radius = r0 + 10 * Math.sqrt(0.5 + i)
+      const angle = i * Math.PI * (3 - Math.sqrt(5))
+      out.set(id, { x: Math.round(cx + radius * Math.cos(angle)), y: Math.round(cy + radius * Math.sin(angle)) })
+    })
+  }
+  return out
+}

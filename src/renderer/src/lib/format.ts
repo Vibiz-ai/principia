@@ -24,6 +24,12 @@ const NOISE = /^(cd|export|set|source|\.|mkdir|pushd|popd|unset|true)\b/
  * reads "Weekly report". Natural-language prompts are left alone apart from leading markdown markers.
  */
 export function promptTitle(text: string, max = 40): string {
+  // a board task turn (main/company/taskPrompt.ts) opens with the <principia-role> frame: the task's title is the
+  // name, never the raw frame; a resumed turn (wake and rules only) has no title in it
+  if (/^\s*<principia-[a-z]/i.test(text)) {
+    const title = /<principia-task\b[^>]*>\s*Title:[ \t]*([^\n]*)/i.exec(text)?.[1]?.trim()
+    return title ? capWords(title, max) : 'Task follow-up'
+  }
   let line = firstLine(text, 1000)
   const shell = SHELLISH.test(line)
   if (shell) {

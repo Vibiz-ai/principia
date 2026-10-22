@@ -13,6 +13,7 @@ import type {
   WorkflowDraft,
   WorkflowNode
 } from '../../shared/types'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import { migrateDraftLike, migrateNodes } from './slackMigration'
 
 export const json = <T>(s: string | null | undefined, fallback: T): T => {
@@ -25,6 +26,8 @@ export const json = <T>(s: string | null | undefined, fallback: T): T => {
 }
 export const bool = (n: number | null | undefined): boolean => !!n
 export const int = (b: boolean): number => (b ? 1 : 0)
+/** COMPANY.md §1.4: a NULL stamp (row written by an older build) reads as Personal. */
+export const stamp = (companyId: string | null | undefined): string => companyId || PERSONAL_COMPANY_ID
 
 export interface ProfileRow {
   id: string
@@ -70,6 +73,7 @@ export interface SessionRow {
   log_path: string
   from_run_id: string | null
   agent_session_id: string | null
+  company_id?: string | null
 }
 export const sessionFromRow = (r: SessionRow): Session => ({
   id: r.id,
@@ -87,7 +91,8 @@ export const sessionFromRow = (r: SessionRow): Session => ({
   endedAt: r.ended_at,
   artifactsDir: r.artifacts_dir,
   fromRunId: r.from_run_id,
-  agentSessionId: r.agent_session_id
+  agentSessionId: r.agent_session_id,
+  companyId: stamp(r.company_id)
 })
 
 export interface WorkflowRow {
@@ -102,6 +107,8 @@ export interface WorkflowRow {
   origin_json?: string | null
   worktree_json?: string | null
   slack_tools?: number | null
+  slack_agent_permissions?: string | null
+  company_id?: string | null
 }
 export const workflowFromRow = (r: WorkflowRow): Workflow => {
   const wf: Workflow = {
@@ -112,7 +119,8 @@ export const workflowFromRow = (r: WorkflowRow): Workflow => {
     // SLACK.md §10.4: legacy `imessage` reads as `slack` (imports, rows written by an older Hive)
     nodes: migrateNodes(json<WorkflowNode[]>(r.nodes_json, [])).nodes,
     createdAt: r.created_at,
-    updatedAt: r.updated_at
+    updatedAt: r.updated_at,
+    companyId: stamp(r.company_id)
   }
   // AUTHORING.md §2.5, §6: only present when set, so older equality checks and exports stay unchanged
   const worktree = json<Workflow['worktree']>(r.worktree_json ?? null, null)
@@ -120,6 +128,7 @@ export const workflowFromRow = (r: WorkflowRow): Workflow => {
   const origin = json<Workflow['origin']>(r.origin_json ?? null, null)
   if (origin) wf.origin = origin
   if (r.slack_tools) wf.slackTools = true
+  if (r.slack_tools && r.slack_agent_permissions === 'profile') wf.slackAgentPermissions = 'profile'
   return wf
 }
 
@@ -149,6 +158,7 @@ export interface RunRow {
   worktree_obj?: string | null
   trigger_ext?: string | null
   slack_json?: string | null
+  company_id?: string | null
 }
 /** AUTHORING.md §6: the run's newest worktree row as a RunWorktree JSON object. */
 const WORKTREE_OBJ = `(SELECT json_object('id', w.id, 'runId', w.run_id, 'repoId', w.repo_id, 'repoPath', w.repo_path, 'path', w.path,
@@ -180,7 +190,8 @@ export const runFromRow = (r: RunRow): Run => ({
   outcome: r.outcome === 'nothing_to_do' ? 'nothing_to_do' : null,
   worktree: json<Run['worktree']>(r.worktree_obj ?? null, null),
   startedBy: json<Run['startedBy']>(r.started_by_json ?? null, null),
-  slack: json<Run['slack']>(r.slack_json ?? null, null)
+  slack: json<Run['slack']>(r.slack_json ?? null, null),
+  companyId: stamp(r.company_id)
 })
 /** Snapshots are history and never rewritten; legacy `imessage` reads as `slack` (SLACK.md §7.2.4). */
 export const runSnapshot = (r: RunRow): WorkflowDraft | null => migrateDraftLike(json<WorkflowDraft | null>(r.workflow_json, null))
@@ -258,6 +269,8 @@ export interface ScheduleRow {
   updated_at: string
   last_run_status?: string | null
   skip_slot_at?: string | null
+  company_id?: string | null
+  department_id?: string | null
 }
 export const SCHEDULE_SELECT = `SELECT schedules.*, (SELECT status FROM runs WHERE runs.id = schedules.last_run_id) AS last_run_status FROM schedules`
 export const scheduleFromRow = (r: ScheduleRow, describe: (w: Schedule['when']) => string): Schedule => {
@@ -282,7 +295,10 @@ export const scheduleFromRow = (r: ScheduleRow, describe: (w: Schedule['when']) 
     nextFireAt: r.next_fire_at,
     skipSlotAt: r.skip_slot_at ?? null,
     createdAt: r.created_at,
-    updatedAt: r.updated_at
+    updatedAt: r.updated_at,
+    companyId: stamp(r.company_id),
+    // DEPARTMENTS.md §8: schedules.department_id (absent when unset, so older shapes stay unchanged)
+    ...(r.department_id ? { departmentId: r.department_id } : {})
   }
 }
 
@@ -317,6 +333,7 @@ export interface ArtifactRow {
   bytes: number
   mtime: string
   created_at: string
+  company_id?: string | null
 }
 export const artifactFromRow = (r: ArtifactRow): Artifact => ({
   id: r.id,
@@ -329,7 +346,8 @@ export const artifactFromRow = (r: ArtifactRow): Artifact => ({
   mime: r.mime,
   bytes: r.bytes,
   createdAt: r.created_at,
-  mtime: r.mtime
+  mtime: r.mtime,
+  companyId: stamp(r.company_id)
 })
 
 /** camelCase patch -> "col = @col" SET clause for whitelisted columns. JSON columns are stringified. */

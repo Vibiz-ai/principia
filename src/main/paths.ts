@@ -22,6 +22,8 @@ export interface HivePaths {
   sessionLogsDir: string
   runLogsDir: string
   scratchDir: string
+  /** COMPANY.md §3: `<userData>/companies/<slug>/{workspace,Passport}` (created per company, on demand). */
+  companiesRoot: string
   mainLog: string
 }
 
@@ -35,6 +37,7 @@ export function buildPaths(userData: string): HivePaths {
     sessionLogsDir: path.join(userData, 'logs', 'sessions'),
     runLogsDir: path.join(userData, 'logs', 'runs'),
     scratchDir: path.join(userData, 'scratch'),
+    companiesRoot: path.join(userData, 'companies'),
     mainLog: path.join(userData, 'logs', 'main.log')
   }
 }

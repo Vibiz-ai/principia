@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+// Fake Claude Code for Principia Cloud tests: stream-json in and out, usage in the result. Never calls a model.
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+if (args.includes('--version')) { console.log('2.1.290 (Claude Code)'); process.exit(0) }
+if (args.includes('--bare')) { console.error('--bare ignores CLAUDE_CODE_OAUTH_TOKEN'); process.exit(2) }
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || ''
+if (!token) { console.error('Invalid API key · Please run /login'); process.exit(1) }
+if (token.includes('expired')) {
+  if (args.includes('--output-format') && args[args.indexOf('--output-format') + 1] === 'json') { out({ type: 'result', is_error: true, result: 'OAuth token has expired. Please obtain a new token or refresh your existing token.' }); process.exit(1) }
+  // a run (stream-json): the CLI's own failure result, as a real expired setup-token gives it
+  out({ type: 'result', subtype: 'success', is_error: true, result: 'OAuth token has expired. Please obtain a new token or refresh your existing token.' })
+  process.exit(1)
+}
+async function prompt() {
+  if (args.includes('-p') && !args.includes('--input-format')) return args[args.indexOf('-p') + 1]
+  let buf = ''
+  for await (const chunk of process.stdin) {
+    buf += chunk
+    for (const line of buf.split('\n')) {
+      try { const m = JSON.parse(line); if (m.type === 'user') return typeof m.message.content === 'string' ? m.message.content : m.message.content.map((c) => c.text || '').join('') } catch {}
+    }
+  }
+  return ''
+}
+;(async () => {
+  const text = await prompt()
+  const notes = []
+  const art = process.env.ARTIFACTS_DIR
+  if (text.includes('LIMIT_HIT')) { out({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1792580400' }); process.exit(1) }
+  if (text.includes('MENTION_401')) { out({ type: 'result', subtype: 'success', is_error: true, result: 'The billing API returned 401 Unauthorized, so I could not finish the report.' }); process.exit(1) }
+  if (text.includes('GIT_TOKEN') && art) {
+    const { execFileSync } = require('node:child_process')
+    let got = ''
+    try { got = execFileSync('git', ['-c', 'credential.helper=', 'credential', 'fill'], { cwd: process.cwd(), input: 'protocol=https\nhost=github.com\n\n', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } }).toString() } catch (e) { got = 'FAILED ' + String(e.stderr || e) }
+    fs.writeFileSync(path.join(art, 'git-cred.txt'), got)
+    notes.push('GIT_DONE ' + got.replace(/\n/g, ' '))
+  }
+  // report what the agent can see (names only) for the env allowlist checks
+  if (art) fs.writeFileSync(path.join(art, 'claude-env.json'), JSON.stringify({ names: Object.keys(process.env).sort(), home: process.env.HOME, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR, cwd: process.cwd(), args }))
+  if (text.includes('Acme sells')) notes.push('PASSPORT_SEEN')
+  if (/^Answer: /m.test(text)) notes.push('ANSWER_SEEN')
+  if (text.includes('PRINT_SECRET')) notes.push(`token=${token} key=${process.env.ACME_KEY || ''}`)
+  if (text.includes('FAKE_FORUM_ASK') && process.env.PRINCIPIA_FORUM_URL) {
+    const res = await fetch(`${process.env.PRINCIPIA_FORUM_URL}/v1/forum_ask`, { method: 'POST', headers: { authorization: `Bearer ${process.env.PRINCIPIA_FORUM_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'Which plan should the launch email push?', options: ['Monthly', 'Yearly'] }) })
+    notes.push(`ASKED ${res.status} ${(await res.text()).slice(0, 80)}`)
+  }
+  if (text.includes('FAKE_FORUM_POST') && process.env.PRINCIPIA_FORUM_URL) {
+    const res = await fetch(`${process.env.PRINCIPIA_FORUM_URL}/v1/forum_post`, { method: 'POST', headers: { authorization: `Bearer ${process.env.PRINCIPIA_FORUM_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ channel: '#general', text: 'Drafted the launch email.' }) })
+    notes.push(`POSTED ${res.status}`)
+  }
+  if (text.includes('WRITE_NOTES')) notes.push('<passport-notes>\n### [[Launch]] (product)\n- [decision] The launch email goes out on Tuesdays\n</passport-notes>')
+  const result = `fake-claude-ok ${notes.join(' ')}`.trim()
+  out({ type: 'system', subtype: 'init', session_id: 'fake-session', model: 'claude-fake' })
+  out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: result }] } })
+  out({ type: 'result', subtype: 'success', is_error: false, result, num_turns: 1, total_cost_usd: 0.0123, usage: { input_tokens: 120, output_tokens: 30 } })
+  process.exit(0)
+})()

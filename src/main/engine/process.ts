@@ -22,6 +22,11 @@ export interface ProcOptions {
    * an escaped child still holds its stdout/stderr gets that tree reaped after `PIPE_GRACE_MS`, so the step ends.
    */
   reap?: { spawnId: string; reaper: ProcessReaper }
+  /**
+   * Start the process as this user (Principia Cloud, CLOUD.md §7.8: agents never run as the control plane's user).
+   * Needs a parent that may change uid; absent or null = the parent's own user.
+   */
+  user?: { uid: number; gid: number } | null
 }
 export interface ProcResult {
   exitCode: number | null
@@ -82,7 +87,8 @@ export function startProcess(o: ProcOptions): ProcHandle {
     cwd: o.cwd,
     env: o.env,
     stdio: [o.stdin === 'pipe' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    detached: true
+    detached: true,
+    ...(o.user ? { uid: o.user.uid, gid: o.user.gid } : {})
   })
   let stdinOpen = o.stdin === 'pipe' && !!child.stdin
   // EPIPE when the child exits before reading everything: harmless

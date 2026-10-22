@@ -1,0 +1,61 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "YouTube thumbnails",
+    "description": "From a video title and an optional face or product image URL, renders 3 high-contrast 16:9 thumbnail concepts with fal.ai FLUX and recommends the best one. The PNGs land in Artifacts.",
+    "inputs": [
+      {
+        "name": "title",
+        "label": "Video title"
+      },
+      {
+        "name": "image_url",
+        "label": "Face or product image URL (optional, public https link)",
+        "default": ""
+      },
+      {
+        "name": "notes",
+        "label": "Channel style or audience (optional)",
+        "type": "multiline",
+        "default": ""
+      }
+    ],
+    "nodes": [
+      {
+        "id": "concepts",
+        "type": "agent",
+        "label": "Plan 3 concepts",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Plan exactly 3 distinct YouTube thumbnail concepts for this video. Each must read instantly at small size: one clear focal subject, high contrast, bold saturated colors, a simple uncluttered background, and big headline text of at most 4 words (not the full title). Vary the angle across the three (e.g. emotion/reaction, before-vs-after or comparison, curiosity/mystery object).\n\nIf a reference image URL is given, every concept must feature that face or product as the main subject; describe how it is posed, framed and lit, but do not invent a different person. Do not imitate real creators, logos or trademarks, and avoid misleading or shocking imagery.\n\nFor each concept output:\n- Name (2-3 words)\n- Overlay text (max 4 words, uppercase)\n- Image prompt (max 80 words, landscape 16:9): subject, expression, composition with space for the text, lighting, color palette, style. Put the overlay text in the prompt in double quotes so the model renders it.\n- Why it works (one line)\n\nVideo title: {{inputs.title}}\nReference image URL: {{inputs.image_url}}\nChannel style / audience: {{inputs.notes}}"
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render with fal",
+        "after": [
+          "concepts"
+        ],
+        "cwd": null,
+        "timeoutMin": 20,
+        "profileId": "prof_claude",
+        "prompt": "Render the 3 thumbnail concepts below with the fal.ai REST API. Generate exactly 3 images in total, one per concept (num_images 1); do not retry more than once per concept.\n\nRead the key from the FAL_KEY environment variable with curl and headers `Authorization: Key $FAL_KEY` and `Content-Type: application/json`; never print or echo it. If FAL_KEY is not set, stop and say: add FAL_KEY in Hive › Keys.\n\nReference image URL: \"{{inputs.image_url}}\"\n\n- If the reference image URL above is empty: POST https://fal.run/fal-ai/flux/dev with JSON {\"prompt\": <concept prompt>, \"image_size\": \"landscape_16_9\", \"num_images\": 1, \"output_format\": \"png\"}. Model: FLUX.1 [dev].\n- If it is set: POST https://fal.run/fal-ai/flux-pro/kontext with JSON {\"prompt\": <concept prompt, phrased as an edit that keeps the person or product from the reference>, \"image_url\": <the reference URL>, \"aspect_ratio\": \"16:9\", \"num_images\": 1, \"output_format\": \"png\"}. Model: FLUX.1 Kontext [pro].\n\nBoth endpoints are synchronous on fal.run and return {\"images\":[{\"url\":...}]}. Download each images[0].url (curl -sfL) into \"$ARTIFACTS_DIR/thumbnail-1.png\", \"$ARTIFACTS_DIR/thumbnail-2.png\" and \"$ARTIFACTS_DIR/thumbnail-3.png\" (in concept order).\n\nReply with, per concept: the saved path, the model used, the overlay text and the exact prompt sent. Note any concept that failed and why.\n\nConcepts:\n{{concepts.output}}"
+      },
+      {
+        "id": "pick",
+        "type": "agent",
+        "label": "Recommend the best",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Open and look at each saved thumbnail in \"$ARTIFACTS_DIR\" (thumbnail-1.png to thumbnail-3.png). Score each 1-5 on: readability at small size, contrast, focal clarity, text legibility (is the overlay text spelled correctly?), and fit with the title \"{{inputs.title}}\". Recommend one winner and give one concrete tweak for it.\n\nThen write a short \"$ARTIFACTS_DIR/README.md\" with: the video title, a table listing each file, concept name, model and overlay text, the exact prompt used for each image, the scores, and the recommendation. Do not include any API keys.\n\nReply with the winning file path and a two-line rationale.\n\nRender report:\n{{render.output}}"
+      }
+    ]
+  }
+}

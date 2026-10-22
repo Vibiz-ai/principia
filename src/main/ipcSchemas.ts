@@ -1,21 +1,30 @@
+import { assignRepoSchema, companyAgentSaveSchema, companyCreateSchema, companyReorderSchema, companyUpdateSchema, departmentPresetsSchema, departmentReorderSchema, departmentSaveSchema, passportInputSchema, taskInputSchema, taskPatchSchema } from './company/schemas'
 /**
  * zod request schemas for every invoke channel (CONTRACT §4.2). Main validates every renderer request before the
  * handler runs; failures answer `bad_request` with per-field errors. `satisfies` keeps this map exhaustive.
  */
 import { z } from 'zod'
+import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
 import { AGENT_STATUSES } from '../shared/live'
+import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
+import { GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
 const none = z.unknown().transform(() => undefined)
 const adapter = z.enum(ADAPTER_IDS)
 const iso = z.string().min(1).max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'invalid date')
 const absPath = z.string().min(1).max(4096).refine((s) => s.startsWith('/'), 'must be an absolute path')
+const ptySize = { cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }
 const optObj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).nullish().transform((v) => v ?? undefined)
 
 const memoryMode = z.enum(MEMORY_MODES)
+/** COMPANY.md §7: the optional list filter; absent = all companies. */
+const companyId = id.optional()
+/** COMPANY.md §4: null = Shared keys; absent = Shared. */
+const keySpace = id.nullish()
 const marketRef = z.object({ source: z.enum(['builtin', 'remote']), id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/) })
 const slug = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'id must be a lowercase slug').max(64)
 const nodeBase = {
@@ -87,25 +96,28 @@ export const workflowDraft = z.object({
   nodes: z.array(workflowNode).max(200),
   worktree: z.object({ repo: z.string().min(1).max(4096), base: z.string().max(200).nullish(), pushBranches: z.array(z.string().regex(/^[A-Za-z0-9._/*-]{1,100}$/, 'branch pattern: letters, digits, . _ / - and *')).max(20).nullish() }).nullish(),
   // SLACK.md §9.4: headless claude steps get the slack toolset
-  slackTools: z.boolean().optional()
+  slackTools: z.boolean().optional(),
+  slackAgentPermissions: z.enum(['restricted', 'profile']).optional()
 })
 export const workflowFile = z.object({ hive: z.literal('workflow'), version: z.literal(1), workflow: workflowDraft })
 
-const runTarget = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('prompt'),
-    profileId: z.string().max(64),
-    repoId: z.string().max(64).nullable(),
-    prompt: z.string().min(1, 'Prompt is empty').max(200_000),
-    secretNames: z.array(z.string().max(128)).max(200).optional(),
-    memory: memoryMode.optional()
-  }),
-  z.object({
-    kind: z.literal('workflow'),
-    workflowId: z.string().max(64),
-    inputs: z.record(z.string().max(64), z.string().max(200_000))
-  })
-])
+const promptTarget = z.object({
+  kind: z.literal('prompt'),
+  profileId: z.string().max(64),
+  repoId: z.string().max(64).nullable(),
+  prompt: z.string().min(1, 'Prompt is empty').max(200_000),
+  secretNames: z.array(z.string().max(128)).max(200).optional(),
+  memory: memoryMode.optional()
+})
+const workflowTarget = z.object({
+  kind: z.literal('workflow'),
+  workflowId: z.string().max(64),
+  inputs: z.record(z.string().max(64), z.string().max(200_000))
+})
+const runTarget = z.discriminatedUnion('kind', [promptTarget, workflowTarget])
+/** DEPARTMENTS.md §8: a schedule's target may be in task mode (one standing card assigned to agentId). */
+const scheduleMode = { mode: z.enum(['run', 'task']).optional(), agentId: id.nullish() }
+const scheduleTarget = z.discriminatedUnion('kind', [promptTarget.extend(scheduleMode), workflowTarget.extend(scheduleMode)])
 const when = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('cron'), cron: z.string().min(1).max(200), tz: z.string().min(1).max(64) }),
   z.object({ kind: z.literal('at'), at: iso })
@@ -123,10 +135,11 @@ const preset = z
   .nullable()
 const scheduleInput = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
-  target: runTarget,
+  target: scheduleTarget,
   when,
   preset: preset.optional(),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
+  departmentId: id.nullish()
 })
 const profileFields = {
   name: z.string().trim().min(1).max(100),
@@ -168,7 +181,15 @@ const settingsPatch = z
       .max(2048)
       .url()
       .refine((u) => u.startsWith('https://'), 'Use an https:// link')
-      .nullable()
+      .nullable(),
+    // COMPANY.md §8.6: UI state only (main never reads it to decide anything)
+    activeCompanyId: z.union([z.literal('all'), id]),
+    expandedCompanies: z.record(id, z.boolean()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // COMPANY.md §6: a partial patch, merged into the stored flags
+    experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean() }).partial().strict(),
+    // VOICE.md §0
+    tone: z.enum(['playful', 'plain']),
+    personas: z.boolean()
   })
   .partial()
   .strict()
@@ -184,6 +205,74 @@ const menuItem: z.ZodType<unknown> = z.lazy(() =>
   })
 )
 const secretName = z.string().min(1).max(128)
+
+// ---------- Passport vault (PASSPORT.md §11; implemented by P3) ----------
+/** frontmatter id, or `h:<vault-relative path>` for a note without one (§3.1) */
+const noteId = z.union([z.string().regex(/^n-[0-9a-z]{10}$/, 'invalid note id'), z.string().regex(/^h:[^\0]{1,1024}$/, 'invalid note id')])
+/** vault-relative markdown path: no leading slash, no `..`, no NUL */
+const notePath = z
+  .string()
+  .min(4)
+  .max(1024)
+  .refine((p) => !p.startsWith('/') && !p.includes('\0') && !p.includes('\\') && !p.split('/').some((s) => s === '..' || s === '.' || s === ''), 'invalid vault path')
+  .refine((p) => p.toLowerCase().endsWith('.md'), 'notes are .md files')
+/** `[[Title]]`, title, alias, path or note id */
+const noteName = z.string().trim().min(1).max(300)
+const blockRef = z.union([z.string().regex(/^[fr]-[0-9a-z]{10}$/, 'invalid block id'), z.string().regex(/^h:[0-9a-f]{40}$/, 'invalid block id')])
+const contentHash = z.string().regex(/^[0-9a-f]{40}$/, 'invalid hash')
+const proposalId = z.string().regex(/^sg-[0-9a-z]{4,32}$/, 'invalid suggestion id')
+const vaultTitle = z.string().trim().min(1).max(200)
+const vaultType = z.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_-]*$/, 'type is a lowercase word')
+const vaultText = z.string().trim().min(1).max(2000)
+const vaultTag = z.string().regex(/^[A-Za-z0-9_/-]{1,100}$/, 'invalid tag')
+const relType = z.string().trim().min(2).max(60)
+const propKey = z.string().regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/, 'invalid property key')
+const propValue = z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.array(z.string().max(500)).max(100), z.null()])
+const properties = z.record(propKey, propValue).refine((r) => Object.keys(r).length <= 50, 'Too many properties')
+const folder = z.string().max(300).refine((p) => !p.startsWith('/') && !p.split('/').some((s) => s === '..'), 'invalid folder')
+const vaultOp = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('createNote'), title: vaultTitle, type: vaultType, summary: z.string().max(500).optional(), aliases: z.array(vaultTitle).max(20).optional(), properties: properties.optional(), folder: folder.optional() }).strict(),
+  z.object({ op: z.literal('observe'), note: noteName, category: z.string().trim().min(1).max(40).regex(/^[^[\]()]+$/, 'category without brackets'), text: vaultText, tags: z.array(vaultTag).max(20).optional() }).strict(),
+  z.object({ op: z.literal('relate'), from: noteName, rel: relType, to: noteName, context: z.string().max(300).optional() }).strict(),
+  z.object({ op: z.literal('supersede'), blockId: blockRef, text: vaultText }).strict(),
+  z.object({ op: z.literal('invalidate'), blockId: blockRef, reason: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ op: z.literal('setProperty'), note: noteName, key: propKey, value: propValue }).strict(),
+  z.object({ op: z.literal('addAlias'), note: noteName, alias: vaultTitle }).strict(),
+  z.object({ op: z.literal('rename'), note: noteName, newTitle: vaultTitle }).strict(),
+  z.object({ op: z.literal('archive'), note: noteName }).strict(),
+  z.object({ op: z.literal('merge'), from: noteName, into: noteName }).strict(),
+  z.object({ op: z.literal('linkMention'), note: noteName, line: z.number().int().min(0).max(1_000_000), span: z.object({ start: z.number().int().min(0), end: z.number().int().min(1) }).refine((s) => s.end > s.start, 'empty span'), target: noteName, text: z.string().min(1).max(500).optional() }).strict(),
+  z.object({ op: z.literal('materializeId'), note: noteName, line: z.number().int().min(0).max(1_000_000) }).strict(),
+  z.object({ op: z.literal('restoreLine'), blockId: blockRef }).strict(),
+  z.object({ op: z.literal('reinforce'), blockId: blockRef, example: z.string().max(300).optional() }).strict()
+])
+const vaultOps = z.array(vaultOp).min(1).max(200)
+const graphFilters = z
+  .object({
+    search: z.string().max(200).optional(),
+    tags: z.array(vaultTag).max(50).optional(),
+    types: z.array(vaultType).max(30).optional(),
+    existingOnly: z.boolean().optional(),
+    orphans: z.boolean().optional(),
+    includeArchived: z.boolean().optional(),
+    includeTags: z.boolean().optional()
+  })
+  .strict()
+const passportGraph = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('global'), companyId: id, filters: graphFilters.optional() }).strict(),
+  z.object({
+    op: z.literal('local'),
+    companyId: id,
+    noteId,
+    depth: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    filters: z.object({ tags: z.boolean().optional(), ghosts: z.boolean().optional(), includeArchived: z.boolean().optional() }).strict().optional()
+  }).strict(),
+  z.object({
+    op: z.literal('layout'),
+    companyId: id,
+    positions: z.array(z.object({ noteId: z.string().min(1).max(1100), x: z.number().finite(), y: z.number().finite(), pinned: z.boolean().optional() }).strict()).max(10_000)
+  }).strict()
+])
 
 // ---------- Slack (CONTRACT "Slack.5") ----------
 const slackChannelId = z.string().regex(/^[CGD][A-Z0-9]{1,20}$/, 'Slack channel id')
@@ -216,9 +305,19 @@ const slackTriggerInput = z.object({
       // reads beyond the triggering conversation: channels only (never DMs); absent = none
       readChannels: z.array(z.string().regex(/^[CG][A-Z0-9]{1,20}$/, 'Read channels are channel ids (C…/G…), never DMs')).max(50).optional()
     })
-    .optional()
+    .optional(),
+  // DEPARTMENTS.md §8: absent = 'run'
+  action: z.enum(['run', 'task']).optional(),
+  departmentId: id.nullish()
 })
 
+
+// ---------- onboarding (ONBOARDING.md §4) ----------
+/** Opaque handles minted by main (journal, draft, stash, plan request). */
+const obHandle = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, 'invalid id')
+const obPaths = z.array(absPath).min(1).max(MAX_ONBOARDING_PATHS)
+/** A plan ref (`weekly-review`) of a schedule the journal created. */
+const obRef = z.string().regex(/^[a-z][a-z0-9-]{1,30}$/, 'invalid ref')
 
 // ---------- memory (CONTRACT §11.5; limits from MEMORY.md §4.2) ----------
 const memId = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[0-9a-z]{1,32}$`), 'invalid id')
@@ -235,7 +334,8 @@ const memFilter = {
   statuses: z.array(z.enum(MEMORY_STATUSES)).max(3).optional(),
   unreviewedOnly: z.boolean().optional(),
   runId: id.optional(),
-  sessionId: id.optional()
+  sessionId: id.optional(),
+  companyId
 }
 const memName = z.string().trim().min(1).max(120)
 const memType = z.string().trim().min(1).max(40)
@@ -286,17 +386,23 @@ const memoryMutation = z.union([
   z.object({ op: z.literal('merge'), sourceIds: z.array(entityId).min(1).max(50), targetId: entityId })
 ])
 
+/**
+ * DEPARTMENTS.md §1.3 fields only main writes (run outcome, wake guard, routing, done note). The renderer changes them
+ * through the dedicated task channels (assign, answer, approve, sendBack, unpark), never through create/update.
+ */
+const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true } as const
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
   'gateway:list': none,
   'gateway:remove': z.object({ id: slug }),
   'gateway:test': z.object({ id: slug }),
-  'gateway:save': z.object({ id: slug, name: z.string().min(1).max(100), transport: z.enum(['stdio', 'http']), authentication: z.enum(['none', 'oauth']).optional(), command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(), url: z.string().url().max(4096).optional(), enabled: z.boolean(), roots: z.array(absPath).max(100), scope: z.enum(['projects', 'global']).optional(), credentials: z.record(z.string().min(1).max(100), z.string().max(20000)).optional() }).strict(),
+  // COMPANY.md §6: companyIds limits a connection to those companies' spawns; absent = all companies
+  'gateway:save': z.object({ id: slug, name: z.string().min(1).max(100), transport: z.enum(['stdio', 'http']), authentication: z.enum(['none', 'oauth']).optional(), command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(), url: z.string().url().max(4096).optional(), enabled: z.boolean(), roots: z.array(absPath).max(100), scope: z.enum(['projects', 'global']).optional(), credentials: z.record(z.string().min(1).max(100), z.string().max(20000)).optional(), companyIds: z.array(id).max(100).optional() }).strict(),
   'app:info': none,
   'app:status': none,
   'app:home': none,
-  'app:canvas': none,
+  'app:canvas': optObj({ companyId }),
   'app:quit': none,
   'app:openExternal': z.object({ url: z.string().url().max(4096) }),
   'app:showItemInFolder': z.object({ path: absPath }),
@@ -304,9 +410,9 @@ export const REQUEST_SCHEMAS = {
   'settings:get': none,
   'settings:update': settingsPatch,
   'providers:list': optObj({ refresh: z.boolean().optional() }),
-  'repos:list': none,
-  'repos:pick': none,
-  'repos:add': z.object({ paths: z.array(absPath).min(1).max(200) }),
+  'repos:list': optObj({ companyId }),
+  'repos:pick': optObj({ companyId }),
+  'repos:add': z.object({ paths: z.array(absPath).min(1).max(200), companyId }),
   'repos:update': z.object({ id, name: z.string().trim().min(1).max(200) }),
   'repos:move': z.object({ id, targetId: id, placement: z.enum(['before', 'after']) }),
   'repos:remove': z.object({ id }),
@@ -323,8 +429,9 @@ export const REQUEST_SCHEMAS = {
   }),
   'profiles:update': z.object({ id, ...profileFields }).partial().required({ id: true }),
   'profiles:remove': z.object({ id }),
-  'sessions:list': optObj({ status: z.enum(['running', 'exited', 'all']).optional() }),
+  'sessions:list': optObj({ status: z.enum(['running', 'exited', 'all']).optional(), companyId }),
   'sessions:create': z.object({
+    companyId,
     profileId: id.optional(),
     adapter: adapter.optional(),
     repoId: id.nullish(),
@@ -345,20 +452,120 @@ export const REQUEST_SCHEMAS = {
     data: z.instanceof(Uint8Array).refine((d) => d.byteLength > 0 && d.byteLength <= 20 * 1024 * 1024, 'Image is empty or over 20 MB'),
     type: z.enum(PASTED_IMAGE_TYPES)
   }),
-  'workflows:list': none,
+  'workflows:list': optObj({ companyId }),
   'workflows:get': z.object({ id }),
-  'workflows:create': workflowDraft,
+  'workflows:create': workflowDraft.extend({ companyId }),
   'workflows:update': z.object({ id, draft: workflowDraft }),
   'workflows:remove': z.object({ id }),
-  'workflows:duplicate': z.object({ id }),
+  'workflows:duplicate': z.object({ id, companyId }),
   'workflows:validate': workflowDraft,
   'workflows:export': z.object({ id }),
-  'workflows:import': none,
+  'workflows:import': optObj({ companyId }),
+  'company:list': optObj({ includeArchived: z.boolean().optional() }),
+  'company:save': z.object({id: id.optional(), passport: passportInputSchema}),
+  'company:create': companyCreateSchema,
+  'company:update': z.object({ id, patch: companyUpdateSchema }).strict(),
+  'company:archive': z.object({ id, archived: z.boolean().optional() }).strict(),
+  'company:reorder': z.object({ ids: companyReorderSchema }).strict(),
+  'company:assignRepo': assignRepoSchema,
+  'company:overview': none,
+  'company:export': z.object({id}),
+  'company:previewImport': z.object({json: z.string().max(300_000)}),
+  'company:import': z.object({json: z.string().max(300_000),repoIds:z.array(id).max(500)}),
+  'company:exportOpenPassport': z.object({id}).strict(),
+  'company:previewOpenPassport': optObj({source: z.string().min(1).max(4096).optional()}),
+  'company:openPassportSync': z.discriminatedUnion('op', [
+    z.object({op: z.literal('get'), companyId: id}).strict(),
+    z.object({op: z.literal('set'), companyId: id, url: z.string().url().max(2000), passportId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), token: z.string().max(4000).optional()}).strict(),
+    z.object({op: z.literal('clear'), companyId: id}).strict(),
+    z.object({op: z.literal('sync'), companyId: id}).strict()
+  ]),
+  'company:passportConnect': z.discriminatedUnion('op', [
+    z.object({op: z.literal('info'), companyId: id}).strict(),
+    z.object({op: z.literal('install'), companyId: id, app: z.literal('claude-desktop')}).strict(),
+    z.object({op: z.literal('open'), companyId: id, app: z.enum(['cursor','vscode']), hosted: z.boolean().optional()}).strict(),
+    z.object({op: z.literal('hostSignIn'), companyId: id}).strict(),
+    z.object({op: z.literal('ingest'), companyId: id}).strict()
+  ]),
+  'company:passportImport': z.object({companyId: id, kind: z.enum(['export','folder','url','text']), source: z.string().min(1).max(4096).optional(), text: z.string().max(200_000).optional(), max: z.number().int().min(1).max(200).optional()}).strict()
+    .refine((q)=>q.kind!=='text'||!!q.text?.trim(),'Paste some text to import').refine((q)=>q.kind!=='url'||/^https?:\/\//i.test(q.source??''),'Enter the website address (https://…)'),
+  'company:importOpenPassport': z.object({source: z.string().min(1).max(4096), mode: z.enum(['new','merge']), companyId: id.optional(), repoIds: z.array(id).max(500).optional()}).strict().refine((q)=>q.mode==='new'||!!q.companyId,'Choose the company to merge into'),
+  'tasks:previewGithub': z.object({url:z.string().url().max(4000)}),
+  'tasks:list': optObj({companyId: id.optional()}),
+  'tasks:create': z.object({task:taskInputSchema.omit(TASK_SYSTEM_FIELDS)}),
+  'tasks:update': z.object({id,patch:taskPatchSchema.omit(TASK_SYSTEM_FIELDS)}),
+  'tasks:get': z.object({id}),
+  'tasks:start': z.object({id,profileId:id.optional()}),
+  'tasks:comment': z.object({id,message:z.string().trim().min(1).max(10_000)}),
+  // DEPARTMENTS.md §10
+  'departments:list': optObj({ companyId, includeArchived: z.boolean().optional() }),
+  'departments:save': departmentSaveSchema,
+  'departments:archive': z.object({ id, archived: z.boolean().optional() }).strict(),
+  'departments:reorder': departmentReorderSchema,
+  'departments:createPresets': departmentPresetsSchema,
+  'companyAgents:list': optObj({ companyId, departmentId: id.nullable().optional(), includeArchived: z.boolean().optional() }),
+  'companyAgents:save': companyAgentSaveSchema,
+  'companyAgents:archive': z.object({ id, archived: z.boolean().optional() }).strict(),
+  'companyAgents:pause': z.object({ id }).strict(),
+  'companyAgents:resume': z.object({ id }).strict(),
+  'tasks:assign': z.object({ id, departmentId: id.nullable().optional(), agentId: id.nullable().optional() }).strict()
+    .refine((q) => q.departmentId !== undefined || q.agentId !== undefined, 'Choose a department or an agent'),
+  'tasks:acceptRoute': z.object({ id }).strict(),
+  'tasks:answer': z.object({ id, answer: z.string().trim().min(1, 'Answer is empty').max(10_000) }).strict(),
+  'tasks:approve': z.object({ id, doneNote: z.string().trim().min(1, 'A done note is required').max(10_000) }).strict(),
+  'tasks:sendBack': z.object({ id, note: z.string().trim().min(1, 'Say what to change').max(10_000) }).strict(),
+  'tasks:unpark': z.object({ id }).strict(),
+  'tasks:openSession': z.object({ id, ...ptySize }).strict(),
+  'tasks:takeover': z.object({ id, ...ptySize }).strict(),
+  'tasks:stop': z.object({ id }).strict(),
+  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional() }).strict(),
+  // FORUM.md §9 (bounds mirror FORUM_LIMITS; the store re-checks every rule)
+  'forum:state': z.object({ companyId: id }).strict(),
+  'forum:messages': z.object({ companyId: id, channelId: id, beforeSeq: z.number().int().min(1).optional(), limit: z.number().int().min(1).max(200).optional() }).strict(),
+  'forum:thread': z.object({ messageId: id }).strict(),
+  'forum:post': z.object({
+    companyId: id, channelId: id, text: z.string().trim().min(1, 'The message is empty').max(8000), threadId: id.nullish(),
+    ask: z.object({ to: z.array(id).min(1).max(8), options: z.array(z.string().trim().min(1).max(120)).min(2).max(6).optional() }).strict().optional(),
+    proposal: z.object({
+      kind: z.enum(['department', 'agent']), reason: z.string().trim().min(3).max(600),
+      department: z.object({ name: z.string().trim().min(1).max(80), key: z.string().trim().max(40).optional(), does: z.string().max(300), doesNot: z.string().max(300) }).strict().optional(),
+      agent: z.object({ departmentKey: z.string().max(80).nullable(), role: z.string().trim().min(1).max(80), instructions: z.string().max(4000), capabilities: z.string().max(400), adapter: z.enum(['claude', 'codex', 'gemini', 'cursor']).optional() }).strict().optional()
+    }).strict().refine((p) => (p.kind === 'department' ? !!p.department : !!p.agent), 'Fill in the proposal').optional()
+  }).strict(),
+  'forum:edit': z.object({ messageId: id, text: z.string().max(8000).nullable() }).strict(),
+  'forum:react': z.object({ messageId: id, emoji: z.string().min(1).max(16) }).strict(),
+  'forum:markRead': z.object({ channelId: id, seq: z.number().int().min(0).optional() }).strict(),
+  'forum:createChannel': z.object({ companyId: id, name: z.string().trim().min(2).max(60), kind: z.enum(['public', 'private']), purpose: z.string().max(300).optional(), memberIds: z.array(id).max(50).optional() }).strict(),
+  'forum:updateChannel': z.object({ channelId: id, topic: z.string().max(250).optional(), purpose: z.string().max(300).optional(), archived: z.boolean().optional() }).strict(),
+  'forum:membership': z.discriminatedUnion('op', [
+    z.object({ op: z.enum(['join', 'leave']), channelId: id }).strict(),
+    z.object({ op: z.literal('add'), channelId: id, memberIds: z.array(id).min(1).max(50) }).strict(),
+    z.object({ op: z.literal('remove'), memberId: id }).strict()
+  ]),
+  'forum:openDm': z.object({ companyId: id, memberIds: z.array(id).min(1).max(8) }).strict(),
+  'forum:search': z.object({ companyId: id, query: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(100).optional() }).strict(),
+  'forum:decide': z.object({
+    messageId: id,
+    decision: z.enum(['approve', 'reject']),
+    note: z.string().max(1000).optional(),
+    edits: z.object({
+      name: z.string().trim().min(1).max(80).optional(), key: z.string().trim().max(40).optional(), role: z.string().trim().min(1).max(80).optional(),
+      departmentKey: z.string().trim().max(80).nullable().optional(), profileId: id.optional(), instructions: z.string().max(4000).optional(),
+      capabilities: z.string().max(400).optional(), does: z.string().max(300).optional(), doesNot: z.string().max(300).optional()
+    }).strict().optional()
+  }).strict(),
+  'forum:answer': z.object({ messageId: id, answer: z.string().trim().min(1, 'The answer is empty').max(4000) }).strict(),
+  'forum:invite': z.object({ companyId: id, role: z.enum(['admin', 'member', 'guest']), channelIds: z.array(id).max(20).optional(), label: z.string().max(120).optional(), expiresInDays: z.number().int().min(0).max(365).optional(), maxUses: z.number().int().min(1).max(100).optional() }).strict(),
+  'forum:invites': z.object({ companyId: id }).strict(),
+  'forum:revokeInvite': z.object({ inviteId: id }).strict(),
+  'forum:acceptInvite': z.object({ code: z.string().trim().min(8).max(120), name: z.string().trim().min(1).max(60), handle: z.string().trim().max(32).optional() }).strict(),
+  'forum:toTask': z.object({ messageId: id, agentId: id.nullish() }).strict(),
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
-  'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional() }),
-  'runs:start': z.object({ target: runTarget }),
+  'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional(), companyId }),
+  'runs:start': z.object({ target: runTarget, companyId }),
   'runs:list': optObj({
+    companyId,
     status: z.array(z.enum(['queued', 'running', 'passed', 'failed', 'canceled'])).max(5).optional(),
     workflowId: id.optional(),
     scheduleId: id.optional(),
@@ -370,8 +577,8 @@ export const REQUEST_SCHEMAS = {
   'runs:rerun': z.object({ id }),
   'runs:stepLog': z.object({ runId: id, stepId: id, tailBytes: z.number().int().min(1).max(50 * 1024 * 1024).optional(), view: z.enum(['raw', 'readable']).optional() }),
   'runs:openAsSession': z.object({ runId: id, stepId: id.optional() }),
-  'schedules:list': none,
-  'schedules:create': scheduleInput,
+  'schedules:list': optObj({ companyId }),
+  'schedules:create': scheduleInput.extend({ companyId }),
   'schedules:update': z.object({ id, input: scheduleInput }),
   'schedules:remove': z.object({ id }),
   'schedules:setEnabled': z.object({ id, enabled: z.boolean() }),
@@ -379,15 +586,17 @@ export const REQUEST_SCHEMAS = {
   'schedules:preview': z.object({ when }),
   'schedules:events': z.object({ scheduleId: id, limit: z.number().int().min(1).max(500).optional() }),
   'schedules:pauseAll': z.object({ paused: z.boolean() }),
-  'secrets:list': none,
-  'secrets:set': z.object({ name: secretName, value: z.string().min(1, 'Value is empty').max(64 * 1024), label: z.string().max(200).optional() }),
-  'secrets:remove': z.object({ name: secretName }),
-  'secrets:reveal': z.object({ name: secretName }),
-  'secrets:copy': z.object({ name: secretName }),
-  'secrets:parseEnv': z.object({ text: z.string().max(1024 * 1024) }),
-  'secrets:importEnv': z.object({ text: z.string().max(1024 * 1024), names: z.array(secretName).max(1000) }),
-  'secrets:pickEnvFile': none,
+  'secrets:list': optObj({ companyId: keySpace }),
+  'secrets:set': z.object({ name: secretName, value: z.string().min(1, 'Value is empty').max(64 * 1024), label: z.string().max(200).optional(), companyId: keySpace }),
+  'secrets:remove': z.object({ name: secretName, companyId: keySpace }),
+  'secrets:reveal': z.object({ name: secretName, companyId: keySpace }),
+  'secrets:copy': z.object({ name: secretName, companyId: keySpace }),
+  'secrets:parseEnv': z.object({ text: z.string().max(1024 * 1024), companyId: keySpace }),
+  'secrets:importEnv': z.object({ text: z.string().max(1024 * 1024), names: z.array(secretName).max(1000), companyId: keySpace }),
+  'secrets:pickEnvFile': optObj({ companyId: keySpace }),
+  'secrets:move': z.object({ name: secretName, from: id.nullable(), to: id.nullable() }).refine((v) => v.from !== v.to, 'Pick a different place'),
   'artifacts:list': optObj({
+    companyId,
     runId: id.optional(),
     sessionId: id.optional(),
     kind: z.enum(ARTIFACT_KINDS).optional(),
@@ -413,14 +622,19 @@ export const REQUEST_SCHEMAS = {
   }),
   'ui:setEdited': z.object({ edited: z.boolean() }),
   'clipboard:writeText': z.object({ text: z.string().max(10 * 1024 * 1024) }),
-  'memory:overview': none,
-  'memory:graph': z.object({
-    ...memFilter,
-    centerId: entityId.optional(),
-    hops: z.union([z.literal(1), z.literal(2)]).optional(),
-    limit: z.number().int().min(1).max(150).optional()
-  }),
-  'memory:entity': z.object({ id: entityId }),
+  'memory:overview': optObj({ companyId }),
+  // a request with `op` is a Passport graph op (PASSPORT.md §11); without it, the v1 graph query
+  'memory:graph': z.union([
+    passportGraph,
+    z.object({
+      ...memFilter,
+      op: z.undefined().optional(),
+      centerId: entityId.optional(),
+      hops: z.union([z.literal(1), z.literal(2)]).optional(),
+      limit: z.number().int().min(1).max(150).optional()
+    })
+  ]),
+  'memory:entity': z.object({ id: entityId, companyId }),
   'memory:search': z.object({
     ...memFilter,
     query: z.string().trim().min(1).max(300),
@@ -434,12 +648,57 @@ export const REQUEST_SCHEMAS = {
     offset: z.number().int().min(0).max(1_000_000).optional(),
     limit: z.number().int().min(1).max(1000).optional()
   }),
-  'memory:mutate': memoryMutation,
-  'memory:delete': z.object({ kind: z.enum(['entity', 'fact', 'relation']), ids: memIds(z.string().max(64)) }),
+  'memory:mutate': z.intersection(memoryMutation, z.object({ companyId })),
+  'memory:delete': z.object({ kind: z.enum(['entity', 'fact', 'relation']), ids: memIds(z.string().max(64)), companyId }),
   'memory:revertRun': z.object({ runId: id }),
-  'memory:grants': z.object({ runId: id.optional(), sessionId: id.optional() }),
+  'memory:grants': z.object({ runId: id.optional(), sessionId: id.optional(), companyId }),
   'memory:setPaused': z.object({ paused: z.boolean() }),
-  'memory:export': z.object({ scope: memScopeSel }),
+  'memory:export': z.object({ scope: memScopeSel, companyId }),
+  // a union, not a discriminated one: get / rename / archive take either a path or an id
+  'memory:note': z.union([
+    z.object({ op: z.literal('get'), companyId: id, path: notePath }).strict(),
+    z.object({ op: z.literal('get'), companyId: id, id: noteId }).strict(),
+    z.object({ op: z.literal('save'), companyId: id, path: notePath, baseHash: contentHash, text: z.string().max(2 * 1024 * 1024) }).strict(),
+    z.object({ op: z.literal('ops'), companyId: id, ops: vaultOps }).strict(),
+    z.object({ op: z.literal('create'), companyId: id, title: vaultTitle, type: vaultType.optional(), folder: folder.optional(), properties: properties.optional(), fromGhost: z.boolean().optional() }).strict(),
+    z.object({ op: z.literal('rename'), companyId: id, newTitle: vaultTitle, path: notePath }).strict(),
+    z.object({ op: z.literal('rename'), companyId: id, newTitle: vaultTitle, id: noteId }).strict(),
+    z.object({ op: z.literal('archive'), companyId: id, archived: z.boolean().optional(), path: notePath }).strict(),
+    z.object({ op: z.literal('archive'), companyId: id, archived: z.boolean().optional(), id: noteId }).strict()
+  ]),
+  'memory:links': z.discriminatedUnion('op', [
+    z.object({ op: z.literal('backlinks'), companyId: id, noteId }).strict(),
+    z.object({ op: z.literal('unlinked'), companyId: id, noteId, limit: z.number().int().min(1).max(500).optional() }).strict(),
+    z.object({ op: z.literal('outgoing'), companyId: id, noteId }).strict(),
+    z.object({ op: z.literal('tags'), companyId: id }).strict(),
+    z.object({ op: z.literal('ghosts'), companyId: id, limit: z.number().int().min(1).max(5000).optional() }).strict(),
+    z.object({ op: z.literal('tree'), companyId: id, includeArchived: z.boolean().optional() }).strict()
+  ]),
+  'memory:proposals': z.discriminatedUnion('op', [
+    z.object({
+      op: z.literal('list'),
+      companyId: id,
+      status: z.array(z.enum(PROPOSAL_STATUSES)).max(4).optional(),
+      kinds: z.array(z.enum(PROPOSAL_KINDS)).max(PROPOSAL_KINDS.length).optional(),
+      noteId: noteId.optional(),
+      limit: z.number().int().min(1).max(500).optional()
+    }).strict(),
+    z.object({ op: z.literal('accept'), companyId: id, ids: z.array(proposalId).min(1).max(200), addAlias: z.boolean().optional() }).strict(),
+    z.object({ op: z.literal('reject'), companyId: id, ids: z.array(proposalId).min(1).max(200) }).strict(),
+    z.object({ op: z.literal('edit'), companyId: id, id: proposalId, ops: vaultOps, accept: z.boolean().optional() }).strict(),
+    z.object({ op: z.literal('suggestNow'), companyId: id, noteId: noteId.optional() }).strict()
+  ]),
+  'memory:vault': z.union([
+    z.object({ op: z.literal('status'), companyId: id }).strict(),
+    z.object({ op: z.literal('reindex'), companyId: id }).strict(),
+    z.object({ op: z.literal('openInObsidian'), companyId: id, path: notePath.optional() }).strict(),
+    z.object({ op: z.literal('reveal'), companyId: id, path: notePath.optional() }).strict(),
+    z.object({ op: z.literal('setPath'), companyId: id, path: absPath.nullable() }).strict(),
+    z.object({ op: z.literal('setPath'), companyId: id, pick: z.literal(true) }).strict(),
+    z.object({ op: z.literal('migrate'), dryRun: z.boolean() }).strict(),
+    z.object({ op: z.literal('aiSettings'), companyId: id }).strict(),
+    z.object({ op: z.literal('setAi'), companyId: id, optedIn: z.boolean().optional(), dailyCap: z.number().int().min(0).max(500).optional() }).strict()
+  ]),
   // live agents (CONTRACT §12.6): text <= 8 KB, message <= 2 KB, limit <= 1000
   'agents:list': optObj({
     status: z.array(z.enum(AGENT_STATUSES)).max(7).optional(),
@@ -447,7 +706,8 @@ export const REQUEST_SCHEMAS = {
     sessionId: id.optional(),
     rootsOnly: z.boolean().optional(),
     since: iso.optional(),
-    limit: z.number().int().min(1).max(1000).optional()
+    limit: z.number().int().min(1).max(1000).optional(),
+    companyId
   }),
   'agents:get': z.object({ id, eventsLimit: z.number().int().min(1).max(1000).optional() }),
   'agents:events': z.object({ agentId: id, beforeSeq: z.number().int().min(1).optional(), limit: z.number().int().min(1).max(1000).optional() }),
@@ -456,7 +716,8 @@ export const REQUEST_SCHEMAS = {
     status: z.enum(['open', 'all']).optional(),
     runId: id.optional(),
     sessionId: id.optional(),
-    limit: z.number().int().min(1).max(1000).optional()
+    limit: z.number().int().min(1).max(1000).optional(),
+    companyId
   }),
   'asks:answer': z.object({
     askId: id,
@@ -464,7 +725,7 @@ export const REQUEST_SCHEMAS = {
     text: z.string().max(8192).optional(),
     message: z.string().max(2048).optional()
   }),
-  'app:dashboard': optObj({ since: iso.optional() }),
+  'app:dashboard': optObj({ since: iso.optional(), companyId }),
   'app:markSeen': none,
   'schedules:skipNext': z.object({ id }),
   // CONTRACT §13
@@ -475,7 +736,8 @@ export const REQUEST_SCHEMAS = {
   // authoring (CONTRACT §14.5): note <= 2 KB, draft <= 256 KB
   'author:list': optObj({
     status: z.array(z.enum(['pending', 'approved', 'rejected', 'expired'])).max(4).optional(),
-    limit: z.number().int().min(1).max(500).optional()
+    limit: z.number().int().min(1).max(500).optional(),
+    companyId
   }),
   'author:get': z.object({ id }),
   'author:decide': z.object({
@@ -509,7 +771,8 @@ export const REQUEST_SCHEMAS = {
     id: z.string().regex(/^[0-9a-zA-Z-]{8,64}$/, 'invalid session id'),
     profileId: id.optional(),
     cols: z.number().int().min(1).max(1000),
-    rows: z.number().int().min(1).max(1000)
+    rows: z.number().int().min(1).max(1000),
+    companyId
   }),
   // ---------- Slack (CONTRACT "Slack.5"): tokens <= 300 chars, text <= 3000, regex <= 300, <= 50 ids per list ----------
   'slack:status': none,
@@ -552,7 +815,9 @@ export const REQUEST_SCHEMAS = {
   'slack:draftDecide': z.object({ id, decision: z.enum(['send', 'discard']), text: z.string().min(1).max(3000).optional() }),
   'slack:testAlert': none,
   'slack:permalink': z.object({ channelId: slackChannelId, ts: slackTs }),
-  'slackTriggers:list': optObj({ workflowId: id.optional() }),
+  'slack:company': none,
+  'slack:setCompany': z.object({ companyId: id }).strict(),
+  'slackTriggers:list': optObj({ workflowId: id.optional(), companyId }),
   'slackTriggers:create': slackTriggerInput,
   'slackTriggers:update': z.object({ id, input: slackTriggerInput }),
   'slackTriggers:remove': z.object({ id }),
@@ -561,7 +826,30 @@ export const REQUEST_SCHEMAS = {
     input: slackTriggerInput,
     sample: z.union([z.object({ permalink: z.string().url().max(500) }), z.object({ channelId: slackChannelId, ts: slackTs })])
   }),
-  'slackTriggers:events': z.object({ triggerId: id, limit: z.number().int().min(1).max(500).optional() })
+  'slackTriggers:events': z.object({ triggerId: id, limit: z.number().int().min(1).max(500).optional() }),
+  // ---------- onboarding (ONBOARDING.md §4): paths <= 8, url <= 2048, key names allowlisted, plan parsed by OnboardingPlan ----------
+  'onboarding:status': none,
+  'onboarding:pickFolders': none,
+  'onboarding:inspectFolders': z.object({ paths: obPaths }).strict(),
+  'onboarding:scan': z
+    .object({ paths: obPaths.optional(), github: z.object({ fullName: z.string().regex(GITHUB_FULL_NAME, 'owner/repo') }).strict().optional() })
+    .strict()
+    .refine((q) => !!q.paths || !!q.github, 'Choose a folder or a GitHub repo'),
+  'onboarding:fetchSite': z.object({ url: z.string().trim().min(1).max(MAX_URL_LENGTH) }).strict(),
+  'onboarding:github': z.discriminatedUnion('op', [z.object({ op: z.literal('list'), query: z.string().max(100).optional() }).strict()]),
+  'onboarding:pickCloneDir': none,
+  'onboarding:key': z.discriminatedUnion('op', [
+    z.object({ op: z.literal('check'), name: z.enum(ONBOARDING_KEY_NAMES), value: z.string().trim().min(1, 'Paste a key').max(4096) }).strict(),
+    z.object({ op: z.literal('forget'), stashIds: z.array(obHandle).max(20) }).strict()
+  ]),
+  'onboarding:plan': z.object({ requestId: obHandle, input: PlanInputSchema, useAgent: z.boolean() }).strict(),
+  'onboarding:cancelPlan': z.object({ requestId: obHandle }).strict(),
+  'onboarding:launch': z.object({ journalId: obHandle.optional(), draftId: obHandle, input: LaunchInputSchema }).strict(),
+  'onboarding:skipStep': z.object({ journalId: obHandle, step: z.enum(SOFT_LAUNCH_STEPS) }).strict(),
+  'onboarding:discard': z.object({ journalId: obHandle }).strict(),
+  'onboarding:start': z.object({ journalId: obHandle, autopilot: z.boolean(), scheduleRefs: z.array(obRef).max(8) }).strict(),
+  // CLOUD.md §13.1: the cloud:* channels
+  ...CLOUD_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {

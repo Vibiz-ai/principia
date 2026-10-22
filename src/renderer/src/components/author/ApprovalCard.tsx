@@ -13,16 +13,13 @@ import { ProviderDot } from '../ui'
 import { computeDiff, flagChips, kindVerb, metaChanges, nodeLines, primaryLabel, scheduleHint, wantsSlackMe, willRunNow, type NodeLine } from '../../lib/authoring'
 import { absoluteWithDay } from '../../lib/time'
 import { errorMessage, hive, useHiveEvent } from '../../lib/hive'
+import { hotkeyBlocked } from '../../lib/hotkeys'
 import { decideDraft, editDraftInEditor, outcomeText } from '../../state/authoring'
 import { focusSession, navigate, providerLabel, toast, updateSettings, useStore } from '../../state/store'
 import { isSetUp, useSlack } from '../../state/slack'
 import { replyModeRow, triggerSentence, userName } from '../../lib/slack'
 import { useNamer } from '../slack/TriggerEditor'
 import { UserPicker } from '../slack/bits'
-
-function inTerminal(t: EventTarget | null): boolean {
-  return !!(t as HTMLElement | null)?.closest?.('.xterm')
-}
 
 export function ApprovalCard({
   draft: d,
@@ -125,7 +122,7 @@ export function ApprovalCard({
   useEffect(() => {
     if (!hotkeys || !pending) return
     const onKey = (e: KeyboardEvent): void => {
-      if (!e.metaKey || e.altKey || e.ctrlKey || inTerminal(e.target)) return
+      if (!e.metaKey || e.altKey || e.ctrlKey || hotkeyBlocked(e.target, ref.current)) return
       if (document.querySelector('.sheet-layer')) return
       if (e.key === 'Enter') {
         e.preventDefault()

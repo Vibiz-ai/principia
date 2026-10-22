@@ -2,6 +2,7 @@
  * Author broker (AUTHORING.md §1.2, §2; PO1-PO4, PO8). Main's single authority for the `hive` tools:
  * - identity comes ONLY from the live dir a call arrived in (LiveOwner), never from the line's content;
  * - PO1: only interactive session owners are served (headless steps never get the server; a step owner is refused);
+ *   the exceptions are the slack toolset (SA2) and the task_* toolset of task runs (DEPARTMENTS.md §6);
  * - dispatches exactly AUTHOR_TOOLS; anything else is "Unknown tool";
  * - writes (create/update/run) become drafts + an approval Ask; the call blocks until the user decides (or wait_s);
  * - decide() persists (workflow + origin, schedule, run) and answers every waiting call.
@@ -42,7 +43,8 @@ import type {
   WorkflowOrigin
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
-import { SLACK_TOOLS, type SlackTool, type SlackTriggerInput } from '../../shared/slack'
+import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
+import { isTaskTool, TASK_MUTATIONS, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
 
@@ -96,7 +98,17 @@ export interface BrokerDeps {
    * SLACK.md §11 (SA2): the `slack_*` toolset. Session owners and step owners of Slack runs may call it; the handler
    * decides from the owner (never from args). Absent = Slack tools are unknown.
    */
-  slack?: { call(owner: LiveOwner, tool: SlackTool, args: Record<string, unknown>): Promise<Record<string, unknown>> }
+  slack?: { call(owner: LiveOwner, tool: SlackTool | SlackWorkTool, args: Record<string, unknown>): Promise<Record<string, unknown>> }
+  /**
+   * DEPARTMENTS.md §6: the `task_*` toolset (hivetask). Step owners of task runs and session owners may call it. The
+   * broker resolves the caller from the owner, refuses a line naming another company or task, and lets writes through
+   * only while the caller holds its task; the handler checks again. Absent = task tools are unknown.
+   */
+  tasks?: {
+    /** The caller of an owner (its company, its task, whether its run or session still holds it). Throws the refusal. */
+    resolve(owner: LiveOwner): TaskCallerRef
+    call(caller: TaskCallerRef, tool: TaskTool, args: Record<string, unknown>, hints: { companyId: string | null; taskId: string | null; callId: string | null }): Record<string, unknown> | Promise<Record<string, unknown>>
+  }
   /** SLACK.md §9.5: `slack_trigger` on create/update/validate. Absent = the argument is refused. */
   slackTriggers?: {
     /** Resolves #name / @handle from the local mirror and validates (PO-S3c included). */
@@ -110,6 +122,9 @@ export interface BrokerDeps {
   now?: () => number
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>
 }
+
+/** What the broker needs to know about a task tool caller (TaskTools.resolveCaller's TaskCaller). */
+export interface TaskCallerRef { kind: 'run' | 'session'; companyId: Id; taskId: Id | null; holdsTask: boolean }
 
 type Waiter = (r: Record<string, unknown>) => void
 
@@ -170,20 +185,28 @@ export class AuthorBroker {
       }
     }
     const tool = typeof line.tool === 'string' ? line.tool : ''
-    const isSlack = (SLACK_TOOLS as readonly string[]).includes(tool)
+    // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike); identity is the owner, checked in taskCall
+    if (isTaskTool(tool)) {
+      if (!this.d.tasks) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const args = isObj(line.args) ? line.args : {}
+      Promise.resolve()
+        .then(() => this.taskCall(owner, tool, args, line))
+        .then((result) => answer({ ok: true, result }))
+        .catch((e: unknown) => answer({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      return
+    }
+    // SLACK.md §11.4: the work toolset rides on the same handler (it decides from the owner: Slack-triggered steps only)
+    const isSlack = (SLACK_TOOLS as readonly string[]).includes(tool) || (SLACK_WORK_TOOLS as readonly string[]).includes(tool)
     // PO1 / SA2: a step owner may call only the slack toolset; an authoring tool from a step is unknown
     if (!isSlack && !('sessionId' in owner)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
     if (!isSlack && !(AUTHOR_TOOLS as readonly string[]).includes(tool)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
     if (isSlack && !this.d.slack) return answer({ ok: false, error: `Unknown tool: ${tool}` })
-    const t = this.now()
-    const hits = (this.rate.get(ownerId(owner)) ?? []).filter((x) => t - x < 60_000)
-    if (hits.length >= RATE_PER_MIN) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
-    hits.push(t)
-    this.rate.set(ownerId(owner), hits)
+    if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
     const ac = new AbortController()
     this.calls.set(key, ac)
     const args = isObj(line.args) ? line.args : {}
-    const run = isSlack ? this.d.slack!.call(owner, tool as SlackTool, args) : this.dispatch((owner as { sessionId: Id }).sessionId, tool as AuthorTool, args, ac.signal)
+    const run = isSlack ? this.d.slack!.call(owner, tool as SlackTool | SlackWorkTool, args) : this.dispatch((owner as { sessionId: Id }).sessionId, tool as AuthorTool, args, ac.signal)
     run
       .then((result) => {
         if (!ac.signal.aborted) answer({ ok: true, result })
@@ -193,6 +216,36 @@ export class AuthorBroker {
         const msg = e instanceof Error ? e.message : String(e)
         answer({ ok: false, error: msg })
       })
+  }
+
+  /** RATE_PER_MIN calls per owner per rolling minute; counts this call when allowed. */
+  private allow(owner: LiveOwner): boolean {
+    const t = this.now()
+    const hits = (this.rate.get(ownerId(owner)) ?? []).filter((x) => t - x < 60_000)
+    if (hits.length >= RATE_PER_MIN) return false
+    hits.push(t)
+    this.rate.set(ownerId(owner), hits)
+    return true
+  }
+
+  /**
+   * DEPARTMENTS.md §6: every task tool call. The caller comes from the owner; the line's company_id (the server's
+   * HIVE_TASK_COMPANY_ID / HIVE_COMPANY_ID) and task_id (HIVE_TASK_ID) must be the caller's own; a write needs the
+   * caller's run or session to still hold its task (task_create from a session holding no task files a top-level one).
+   */
+  async taskCall(owner: LiveOwner, tool: TaskTool, args: Record<string, unknown>, line: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const tasks = this.d.tasks
+    if (!tasks) throw new Error(`Unknown tool: ${tool}`)
+    const caller = tasks.resolve(owner)
+    const companyId = str(line.company_id, 64)
+    const taskId = str(line.task_id, 64)
+    if (companyId && companyId !== caller.companyId) throw new Error('This task tool server belongs to another company. Restart the session.')
+    if (taskId && taskId !== caller.taskId) throw new Error('This task tool server was started for another task')
+    if (TASK_MUTATIONS.has(tool) && !(tool === 'task_create' && caller.kind === 'session' && !caller.taskId)) {
+      if (!caller.taskId) throw new Error('You are not working on a task')
+      if (!caller.holdsTask) throw new Error('This task is no longer yours to change (its run or session ended)')
+    }
+    return tasks.call(caller, tool, args, { companyId, taskId, callId: str(line.agent_hint, 120) })
   }
 
   /** `author_cancelled`: the agent stopped waiting (the draft stays pending). */

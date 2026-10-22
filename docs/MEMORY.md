@@ -1,6 +1,22 @@
 # Hive Memory — buildable design (v1)
 
 Status: design, ready to build. Date: 2026-10-16. Interfaces are normative in `docs/CONTRACT.md` §11 "Memory".
+
+> **Passport amendment (2026-10-20).** With `experimental.vault` on, the source of truth is the company Passport vault
+> specified in `docs/PASSPORT.md`: one Obsidian-style markdown vault per company, `passport-index.db` as a rebuildable
+> index, and main as the only writer. §2, §4, §5 and §10 below now open with what the vault replaces and point at the
+> PASSPORT.md section that is normative; the v1 text after each pointer is kept for the legacy path (flag off), which
+> is deleted at GA. PO10 is amended below. Everything else in this document (gating, grants, the engine side, safety
+> screens) still applies to both paths.
+>
+> **Passport evals (PASSPORT.md §14 P8).** The Northwind fixture vault (`src/main/memory/__tests__/fixtures/vault/`,
+> 41 hand-labelled notes) gates CI: brief recall@5 is 1.00 over 20 task prompts (gate 0.8), and deterministic link
+> suggestions (mentions plus ghost retargets) have precision 0.96, 43 of 45 (gate 0.9). The two false positives are the
+> labelled traps: a generic "stripe" and the ghost `[[Pricing v2]]` retargeted to Pricing v3. The opt-in real-CLI
+> smoke test (`agentEval.smoke.test.ts`, claude, 10 scripted tasks, run on 2026-10-20) measured: 94% of written lines
+> carry a resolved link (30 of 32), 7% of written links are ghosts (3 of 43), and no new note duplicated an existing
+> one (0 of 4).
+
 Background research: `docs/research/memory-{letta-mem0,graph,mcp-local,retrieval-ui}.md`.
 
 Scope is exactly one feature, with no other product changes:
@@ -60,6 +76,15 @@ detail below still disagrees, the amendment wins.
   `delete`, `revertRun`, `grants`, `setPaused`, `export`. Plus the `memory:changed` event. §8 (embeddings) is
   reduced to a one-line non-goal: any outbound download or embedding call needs a SPEC A1 amendment first, and that
   is not part of this feature.
+  - **PO10 amendment (2026-10-20, PASSPORT.md §11).** The limit is raised from 12 to **17** `memory:*` invoke
+    channels. The Passport adds four: `memory:note` (get, save, ops, create, rename, archive), `memory:links`
+    (backlinks, unlinked, outgoing, tags, ghosts, tree), `memory:proposals` (list, accept, reject, edit, suggestNow)
+    and `memory:vault` (status, reindex, openInObsidian, reveal, setPath, migrate, aiSettings, setAi). `memory:graph` keeps its name and
+    also answers the Passport `global`, `local` and `layout` requests. That makes 15 channels in use today, leaving 2
+    of headroom. Every channel takes `companyId`, and `memory:changed` carries it. In vault mode `memory:delete`
+    archives a note or moves a line to History (nothing is removed) and `memory:revertRun` invalidates lines.
+    `mem_layout` returns with stable graph positions (PASSPORT.md §6.1, §10), which reverses PO8's "positions are not
+    saved" for the Passport graph only.
 
 ---
 
@@ -122,6 +147,23 @@ Hive main ─────────── owns migrations, page IPC, grants, c
 ---
 
 ## 2. Data model (`memory.db`, schema v1)
+
+> **Vault mode: see PASSPORT.md §2, §3 and §6.1.** The store is one markdown vault per company
+> (`<userData>/companies/<slug>/Passport/`, or an adopted folder), one note per entity with YAML frontmatter,
+> observations `- [category] text (provenance) ^f-<id>`, typed relations `- rel [[Target]] ^r-<id>` and a `## History`
+> section. `passport-index.db` holds derived rows (`mem_note`, `mem_fact`, `mem_link`, `mem_alias`, `mem_tag`,
+> `mem_fts`, all keyed by `company_id`), rebuilt from the files at any time, plus operational tables (`mem_grant`,
+> `mem_event`, `mem_proposal`, `mem_conflict`, `mem_layout`). v1 ids map 1:1 onto block ids (`mfa_x` ↔ `^f-x`,
+> `mrel_x` ↔ `^r-x`, `ment_x` ↔ `n-x`). Scopes are retired: visibility is one company, with a repo boost. Statuses gain
+> `superseded` and `removed_external`, and notes gain `archived`, which replaces delete. `memory.db` is migrated once
+> (PASSPORT.md §9), backed up first and then left byte-identical as an archive (the live db now holds 9 entities,
+> 27 active and 2 invalid facts; PASSPORT.md §9's 8/24/2 are from when it was written). The index never mistakes a
+> vanished vault folder (unmounted, moved) for deletions: indexing, scans and `rebuild` set `mem_vault.state =
+> 'missing'` and leave every row as it was; the next scan sets it back to `ready` once the folder returns. `rebuild`
+> clears `last_full_scan_at` until it completes, so a crash midway is redone on the next start. Vault folders may not
+> be the same as, inside or around another company's (`registerVault` refuses with `overlaps`; that company's Passport
+> stays unavailable and the error shows in its status). `mem_layout` rows follow a note's key when Principia stamps its
+> id or it moves. The rest of this section describes `memory.db`, which the legacy path still uses.
 
 Exact DDL lives in `src/main/memory/schema.ts` (backend) and follows `hive.db` conventions: snake_case, TEXT ids
 from `newId()`, ISO-UTC TEXT timestamps, `*_json` TEXT, booleans as 0/1. Id prefixes: `ment_` entity, `mfa_` fact,
@@ -307,6 +349,18 @@ refusing the call. If they are called anyway, the server answers an MCP error.
 
 ## 4. Write path
 
+> **Vault mode: see PASSPORT.md §6.4, §6.5, §7.3 and §7.6.** Every write source (agent RPC through the per-grant spool,
+> the UI, accepted suggestions, migration) runs the policy layer (`policy.ts`: screens, the per-grant budget with links
+> weighted 0.25, per-note dedup, the contested-supersede rule, relation-type normalization, the cross-company check),
+> then the sink, then the single writer. The writer applies semantic line patches with compare-and-swap, writes tmp +
+> fsync + rename, then indexes and logs (`mem_event` + `.principia/log.jsonl`). Supersede and invalidate move lines to
+> `## History`; delete archives a note; revertRun invalidates or restores, and nothing is ever removed. A contested
+> supersede becomes a `fact_supersede` proposal and leaves the file untouched. Inject adapters (codex, gemini, cursor)
+> write nothing directly: their `<passport-notes>` block is harvested into proposals a human accepts, which amends D3
+> and "no parsing `<memory>` blocks" for the vault path only. Invariants are tested in
+> `src/main/memory/__tests__/memory.test.ts` (file first, then index; History; archive; no fs removal under a vault,
+> observed across every op) and `isolation.test.ts`. The v1 write path follows.
+
 Writes come only from MCP tool calls and the user (the page). There is no end-of-run extraction in v1.
 
 **Why no extraction step.** An extra summarizer call per step would cost about 1–3k tokens per step on the user's
@@ -383,6 +437,21 @@ Folded into `memory_write` (PO3, step 6a above). The user adds relations on the 
 ---
 
 ## 5. MCP server `hivemem`
+
+> **Vault mode: see PASSPORT.md §7.1, §7.2 and §7.4.** The server keeps its name, the stdio transport and the
+> `memory_*` prefix. With `HIVE_MEM_INDEX` set it reads `passport-index.db` read-only and sends writes to main through
+> the grant's spool (`HIVE_MEM_SPOOL`, 10 s timeout, "Principia is not running; memory is read-only" when main is
+> down). Main claims a request by renaming `<id>.request` to `<id>.taking` before applying it, so a client that times
+> out can withdraw only requests main never started; when the withdrawal fails it waits one more timeout for the
+> answer, and an applied write is never reported as read-only. Brief-hit requests (fire and forget) get no answer.
+> The grant row stores the effective mode: a vault paused or held by another instance grants `read`, so the server
+> never lists write tools main would refuse. It serves only `ask_user` unless the grant row's company equals `HIVE_COMPANY_ID`, and every query binds the
+> company from the grant row, never from arguments (tool schemas are strict, so an argument cannot name a company).
+> Tools: `memory_search`, `memory_get { notes, depth 0-2 }`, `memory_write { note, facts, relations, create_missing }`
+> (autolinks exact, unambiguous titles), `memory_link`, `memory_invalidate` and `ask_user`. Every result names notes
+> as `[[Title]]`, is capped at 8,000 characters and is masked for credentials and stored secrets. This amends PO3
+> (five memory tools, with `memory_link` as the cheap linking verb). The write rules are `<passport-write-rules>`,
+> under 900 characters. The v1 server follows (`HIVE_MEM_DB`, legacy path).
 
 - **Entry.** `src/main/memory/server/main.ts`, built as `out/main/mcp-memory.js`.
 - **Protocol.** MCP over stdio: newline-delimited JSON-RPC 2.0. Implemented in-repo (`server/jsonrpc.ts`, about 200
@@ -682,6 +751,14 @@ queue. Keep the list short: every false positive is a valuable fact the agents c
 
 ## 10. Memory page UX (renderer)
 
+> **Vault mode: see PASSPORT.md §10.** The **Passport** view replaces Memory in the sidebar and on ⌘7 (the `memory`
+> route redirects to it). Notes mode has the vault tree, tags, ghosts and search on the left, a reading/source editor
+> with `[[` completion and live agent updates in the centre, and properties, backlinks, unlinked mentions, a local
+> graph and History on the right. Graph mode is a d3-force canvas over the whole company with ghosts, filters, groups
+> and persisted positions. Inbox mode is the review queue: contested supersedes, conflicts, external removals and
+> suggestions, with diff previews. "Open in Obsidian" opens the same folder. QA screenshots are in
+> `docs/qa/passport/`. The v1 page follows; it serves memory.db while the flag is off.
+
 ### 10.1 Placement
 - Sidebar NAV adds **Memory** after Artifacts, with icon `memory`. View name `'memory'`.
 - Command palette: "Open Memory", "Search memory…".
@@ -785,8 +862,8 @@ rows (§9), and emits `memory:changed { seq, runIds, entityIds }`. The page refe
   - `Settings.sessionMemory`
   - `ProviderInfo.memory?`
   - `View` adds `'memory'` (in ipc.ts)
-- **`src/shared/ipc.ts`.** At most 12 `memory:*` invoke channels (PO10), one event `memory:changed`, and
-  `SessionCreateRequest.memory?`.
+- **`src/shared/ipc.ts`.** At most 17 `memory:*` invoke channels (PO10 as amended; 15 in use), one event
+  `memory:changed`, and `SessionCreateRequest.memory?`.
 - **`src/shared/engine.ts`.** `EngineContext.memory?: MemoryBridge`, `McpServerSpec`, `MemoryGrantRequest`,
   `MemoryGrant`, and `InteractiveSpawnOptions.memory?`.
 

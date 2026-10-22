@@ -2,6 +2,9 @@
  * Slack trigger config (SLACK.md §9.1, §9.5; PO-S3c, PO-S9, PO-S10): normalize + validate a SlackTriggerInput and build
  * the trigger sentence. Main-side (the engine validates templates/commands itself in engine/validate.ts).
  * The regex probe runs in node:vm with a 50 ms timeout, which interrupts a catastrophic backtrack.
+ *
+ * DEPARTMENTS.md §8: action 'task' sends matching messages to the company board instead of running the workflow, so
+ * its workflow inputs and reply policy do not apply (stored as reply 'none'); departmentId routes its tasks.
  */
 import vm from 'node:vm'
 import {
@@ -11,12 +14,14 @@ import {
   type SlackAgentAccess,
   defaultDebounceSec,
   type SlackReplyPolicy,
+  type SlackTriggerAction,
   type SlackTriggerInput,
   type SlackTriggerLimits,
   type SlackTriggerMatch,
   type SlackTriggerOn
 } from '../../../shared/slack'
 import type { ValidationError, WorkflowDraft } from '../../../shared/types'
+import { slackCompanyMismatch, type SlackCompanyRef } from './core/policy'
 
 const CHANNEL_ID = /^[CGD][A-Z0-9]{1,20}$/
 const USER_ID = /^[UW][A-Z0-9]{1,20}$/
@@ -33,7 +38,12 @@ export interface NormalizedTrigger {
   inputs: Record<string, string>
   /** SA2: restricted, no keys unless set. */
   access: SlackAgentAccess
+  /** DEPARTMENTS.md §8: 'run' (default) or 'task' (board task per thread). */
+  action: SlackTriggerAction
+  /** slack_triggers.department_id: a task-mode trigger's tasks route here. */
+  departmentId: string | null
 }
+const ID = /^[A-Za-z0-9_-]{1,64}$/
 
 /** Rejects a regex that does not compile or backtracks catastrophically (> 50 ms on adversarial input). */
 export function regexProblem(src: string): string | null {
@@ -64,6 +74,12 @@ const uniq = <T extends string>(a: T[]): T[] => [...new Set(a)]
 export function normalizeTrigger(input: SlackTriggerInput, wf: (Pick<WorkflowDraft, 'nodes' | 'inputs'> & { id?: string }) | null): { trigger: NormalizedTrigger; errors: ValidationError[] } {
   const errors: ValidationError[] = []
   const err = (path: string, message: string) => errors.push({ path, message })
+  if (input.action !== undefined && input.action !== 'run' && input.action !== 'task') err('action', 'The action is "run" (start the workflow) or "task" (add to the board)')
+  const action: SlackTriggerAction = input.action === 'task' ? 'task' : 'run'
+  const task = action === 'task'
+  const rawDept = (input as { departmentId?: unknown }).departmentId
+  const departmentId = typeof rawDept === 'string' && rawDept.trim() ? rawDept.trim() : null
+  if (rawDept != null && rawDept !== '' && (typeof rawDept !== 'string' || !ID.test(rawDept.trim()))) err('departmentId', 'Pick a department of this company')
   const m = input.match ?? ({} as SlackTriggerMatch)
   const on = uniq((Array.isArray(m.on) ? m.on : []).filter((x): x is SlackTriggerOn => ON.includes(x as SlackTriggerOn)))
   if (!on.length) err('match.on', 'Pick at least one of: @hive is mentioned, someone DMs @hive, any message in…')
@@ -86,7 +102,8 @@ export function normalizeTrigger(input: SlackTriggerInput, wf: (Pick<WorkflowDra
   // default: workspace members only (slackAuthorProblem); stored only when opted in
   const match: SlackTriggerMatch = { on, channels, keywords, regex, fromUsers, ...(m.allowGuests === true ? { allowGuests: true } : {}), ...(m.fallback === true ? { fallback: true } : {}) }
 
-  const r = input.reply ?? ({ mode: 'draft', autoChannels: [] } as SlackTriggerInput['reply'])
+  // a board task replies through its agent's own tools (if any), never through the trigger's reply node
+  const r = task ? ({ mode: 'none', autoChannels: [], replyNode: null } as SlackTriggerInput['reply']) : (input.reply ?? ({ mode: 'draft', autoChannels: [] } as SlackTriggerInput['reply']))
   const mode = r.mode === 'auto' || r.mode === 'none' ? r.mode : 'draft'
   const autoChannels = uniq((r.autoChannels ?? []).map((c) => String(c).trim()).filter(Boolean))
   for (const c of autoChannels) if (c !== 'dm' && c !== '*' && !CHANNEL_ID.test(c)) err('reply.autoChannels', `"${c}" is not a channel id or "dm"`)
@@ -119,7 +136,7 @@ export function normalizeTrigger(input: SlackTriggerInput, wf: (Pick<WorkflowDra
     }
     inputs[k] = v
   }
-  for (const i of wf?.inputs ?? []) {
+  for (const i of task ? [] : (wf?.inputs ?? [])) {
     if ((i.default === undefined || i.default === '') && !(i.name in inputs) && i.type !== 'boolean') err(`inputs.${i.name}`, `Map the workflow input "${i.name}" (it has no default), e.g. {{trigger.text}}`)
   }
 
@@ -138,13 +155,37 @@ export function normalizeTrigger(input: SlackTriggerInput, wf: (Pick<WorkflowDra
   if (!name) err('name', 'Name the trigger')
   if (name.length > 120) err('name', 'Name is at most 120 characters')
   return {
-    trigger: { name: name.slice(0, 120), workflowId: input.workflowId, enabled: input.enabled !== false, match, reply, limits, inputs, access },
+    trigger: { name: name.slice(0, 120), workflowId: input.workflowId, enabled: input.enabled !== false, match, reply, limits, inputs, access, action, departmentId },
     errors
   }
 }
 
+/**
+ * COMPANY.md §6: slackTriggers:save asserts the connected workspace's company equals the workflow's. `team` null = no
+ * workspace connected yet (nothing to compare; checked again on every inbound event).
+ */
+export function triggerCompanyErrors(team: SlackCompanyRef | null, workflow: SlackCompanyRef): ValidationError[] {
+  const problem = team ? slackCompanyMismatch(team, workflow) : null
+  return problem ? [{ path: 'workflowId', message: problem }] : []
+}
+
+/**
+ * DEPARTMENTS.md §8: slackTriggers:save checks a trigger's department (null = none set): it must exist, be active and
+ * belong to the workflow's company, so a trigger can never file tasks into another company's board.
+ */
+export function triggerDepartmentErrors(
+  departmentId: string | null,
+  department: { companyId: string; archivedAt?: string | null } | null,
+  workflowCompanyId: string
+): ValidationError[] {
+  if (!departmentId) return []
+  if (!department || department.companyId !== workflowCompanyId) return [{ path: 'departmentId', message: "Pick a department of the workflow's company" }]
+  if (department.archivedAt) return [{ path: 'departmentId', message: 'That department is archived' }]
+  return []
+}
+
 /** "When @hive is mentioned in #support · replies as drafts". */
-export function triggerSentence(t: Pick<NormalizedTrigger, 'match' | 'reply'>, channelName: (id: string) => string = (id) => id): string {
+export function triggerSentence(t: Pick<NormalizedTrigger, 'match' | 'reply'> & { action?: SlackTriggerAction }, channelName: (id: string) => string = (id) => id): string {
   const chans = (ids: string[]) => ids.map((id) => `#${channelName(id)}`).join(', ')
   const parts: string[] = []
   if (t.match.on.includes('mention')) parts.push(`@hive is mentioned${t.match.channels.length && !t.match.on.includes('message') ? ` in ${chans(t.match.channels)}` : ''}`)
@@ -156,8 +197,9 @@ export function triggerSentence(t: Pick<NormalizedTrigger, 'match' | 'reply'>, c
   if (t.match.fromUsers.length) filters.push(`from ${t.match.fromUsers.length === 1 ? '1 person' : `${t.match.fromUsers.length} people`}`)
   // who can trigger, when no people are named (they are the audience otherwise)
   const who = t.match.fromUsers.length ? '' : t.match.allowGuests ? ' · anyone, including guests and other organizations' : ' · workspace members only'
-  const reply =
-    t.reply.mode === 'draft'
+  const reply = t.action === 'task'
+    ? 'adds a board task per thread'
+    : t.reply.mode === 'draft'
       ? 'replies as drafts'
       : t.reply.mode === 'none'
         ? 'no replies'

@@ -14,6 +14,10 @@ describe('format', () => {
     expect(promptTitle('npm test > out.log')).toBe('npm test')
     expect(promptTitle('## Fix the login bug; then run tests')).toBe('Fix the login bug; then run tests')
     expect(promptTitle('Summarize the repo')).toBe('Summarize the repo')
+    // board task turns: the task title, never the raw role frame
+    const turn = '<principia-role department="Marketing" agent="Copywriter">\nWrite posts.\n</principia-role>\n\n<principia-task id="ACM-1" company="co_1">\nTitle: Draft 3 launch posts\nSource: manual\n</principia-task>'
+    expect(promptTitle(turn)).toBe('Draft 3 launch posts')
+    expect(promptTitle('<principia-wake>\nYou were answered.\n</principia-wake>\n\nRules: …')).toBe('Task follow-up')
   })
   it('natural-language prompt titles keep the first sentence, drop "Step 1:" and cut at a word', () => {
     expect(promptTitle('Step 1: use the Agent tool to map src. Then report back.', 60)).toBe('Use the Agent tool to map src')

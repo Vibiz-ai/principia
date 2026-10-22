@@ -1,5 +1,5 @@
 /**
- * Shared memory, engine side (docs/MEMORY.md 3, 6.3, 7; CONTRACT 11.4; PO amendments 2026-10-16).
+ * Shared memory, engine side (docs/MEMORY.md 3, 6.3, 7; CONTRACT 11.4; PO amendments 2026-10-16; PASSPORT.md §7.2, §7.4, §7.6).
  * Pure helpers: mode resolution, transports, MCP config rendering per adapter, brief placement, readable
  * tool-call lines. The store, the MCP server and the brief text itself belong to main (MemoryBridge).
  */
@@ -128,6 +128,15 @@ export function codexMcpAttach(grant: MemoryGrant): McpAttachment {
   return { args, env: {}, files: [] }
 }
 
+/** Per-run built-in tools for Codex. Approval remains with the CLI and the main-process tool policy. */
+export function codexToolsAttach(server: McpServerSpec, toolNames: readonly string[], previous: McpAttachment | null = null): McpAttachment {
+  const k = `mcp_servers.${server.name}`
+  const args = ['-c', `${k}.command=${toml(server.command)}`, '-c', `${k}.args=${tomlArr(server.args)}`]
+  for (const [name, value] of Object.entries(server.env)) args.push('-c', `${k}.env.${name}=${toml(value)}`)
+  args.push('-c', `${k}.enabled_tools=${tomlArr([...toolNames])}`)
+  return { args: [...(previous?.args ?? []), ...args], env: previous?.env ?? {}, files: previous?.files ?? [] }
+}
+
 /** gemini: a per-grant system settings file holding only hivemem. Unverified (merge semantics). */
 export function geminiMcpAttach(grant: MemoryGrant): McpAttachment {
   const path = join(grant.spawnDir, `${grant.grantId}.gemini.json`)
@@ -161,10 +170,26 @@ export function removeMcpFiles(files: McpFile[]): void {
 }
 
 /**
- * Write discipline for spawns that can write (engine-side, next to the brief). Agents otherwise churn: write
- * five facts, then invalidate three of their own as redundant, which burns writes and fills History with noise.
+ * Write discipline for spawns that can write (PASSPORT.md §7.4, engine-side, next to the brief; under 900 characters).
+ * Agents otherwise churn: write five facts, then invalidate three of their own as redundant, which burns writes and
+ * fills History with noise; or they write loose facts with no links, which leaves the graph sparse.
  */
 export const MEMORY_WRITE_RULES = [
+  '<passport-write-rules>',
+  "- The Passport is this company's memory (an Obsidian vault). Save lasting knowledge with memory_write, not in",
+  "  CLAUDE.md or your CLI's own memory.",
+  '- One note per real thing (person, customer, offer, product, repo, decision, process). Put facts on the note they are about.',
+  '- Link everything you mention as [[Exact Title]], using the Known notes list. If no note exists yet, link it anyway;',
+  '  it becomes a placeholder.',
+  '- Prefer typed relations (works_at, uses, decided_by, depends_on, sells, part_of, …) via `relations` or memory_link.',
+  '- memory_search before writing. Supersede by ^id instead of contradicting. Never store secrets.',
+  '- Save only what the source states outright: the best 0-3 items per task. Saving nothing is fine.',
+  '  Never write and then invalidate your own facts.',
+  '</passport-write-rules>'
+].join('\n')
+
+/** The v1 rules for legacy grants (HIVE_MEM_DB, `experimental.vault` off). Deleted with the v1 path at GA. */
+export const LEGACY_MEMORY_WRITE_RULES = [
   '<memory-write-rules>',
   '- Hive memory (the hivemem tools) is the memory for this project. When the user asks you to remember or save',
   '  something, or you learn a lasting fact (decision, convention, gotcha), save it with memory_write. Do not save it',
@@ -180,13 +205,48 @@ export const MEMORY_WRITE_RULES = [
   '</memory-write-rules>'
 ].join('\n')
 
+/**
+ * PASSPORT.md §7.6: read-write steps on inject adapters (codex, gemini, cursor) have no write tools. They end their final
+ * answer with a `<passport-notes>` block in vault grammar; suggest/harvest.ts files it as proposals a human accepts.
+ */
+export const PASSPORT_HARVEST_RULES = [
+  '<passport-write-rules>',
+  "- The Passport is this company's memory (an Obsidian vault). You cannot write it directly: propose lasting",
+  '  knowledge for the user to accept by ending your final answer with one block in this exact form:',
+  '<passport-notes>',
+  '### [[Exact Note Title]]',
+  '- [fact] one self-contained fact, linking [[Other Note]] where it is mentioned',
+  '- uses [[Other Note]]',
+  '</passport-notes>',
+  '- One ### heading per real thing (person, customer, offer, product, repo, decision, process). Kinds: fact, decision,',
+  '  convention, gotcha. Relations: works_at, uses, decided_by, depends_on, sells, part_of, relates_to.',
+  '- Use exact titles from the Known notes list; a note that does not exist yet is fine.',
+  '- Only what the source states outright, the best 0-3 items. Omit the block when nothing new and lasting came up.',
+  '  Never include secrets.',
+  '</passport-write-rules>'
+].join('\n')
+
+/** A Passport vault grant (PASSPORT.md §7.1): its server reads passport-index.db; legacy grants carry HIVE_MEM_DB. */
+export const isVaultGrant = (grant: MemoryGrant): boolean => !!grant.server.env.HIVE_MEM_INDEX || grant.toolNames.includes('memory_link')
+const isLegacyGrant = (grant: MemoryGrant): boolean => !isVaultGrant(grant) && !!grant.server.env.HIVE_MEM_DB
+
 /** True when this grant's spawn actually reaches the write tools (MCP attached + memory_write granted). */
 export const canWriteMemory = (grant: MemoryGrant, attached: boolean): boolean =>
   attached && grant.toolNames.includes('memory_write')
 
-/** The brief an agent sees: main's <hive-memory> block, plus the write rules when it can write. */
-export function agentBrief(grant: MemoryGrant, attached: boolean): string {
-  const parts = [grant.brief.trim(), canWriteMemory(grant, attached) ? MEMORY_WRITE_RULES : ''].filter(Boolean)
+/** Write rules for this grant: the Passport rules, the v1 rules for a legacy grant, the harvest rules for inject. */
+export function writeRulesFor(grant: MemoryGrant, attached: boolean, opts: { harvest?: boolean } = {}): string {
+  if (canWriteMemory(grant, attached)) return isLegacyGrant(grant) ? LEGACY_MEMORY_WRITE_RULES : MEMORY_WRITE_RULES
+  if (opts.harvest !== false && !attached && isVaultGrant(grant) && grant.toolNames.includes('memory_write')) return PASSPORT_HARVEST_RULES
+  return ''
+}
+
+/**
+ * The brief an agent sees: main's brief block, plus the write rules when it can write (or, on a read-write vault grant
+ * without MCP, the harvest rules). `harvest: false` for spawns nobody harvests (interactive sessions).
+ */
+export function agentBrief(grant: MemoryGrant, attached: boolean, opts: { harvest?: boolean } = {}): string {
+  const parts = [grant.brief.trim(), writeRulesFor(grant, attached, opts)].filter(Boolean)
   return parts.join('\n\n')
 }
 
@@ -195,17 +255,20 @@ export const withBrief = (brief: string, prompt: string): string => (brief.trim(
 
 // ---------- readable tool-call lines ----------
 
-const MEM_TOOL = /^(?:mcp__hivemem__|hivemem[.:/_]{1,2})?(memory_(?:search|get|write|invalidate))$/
+const MEM_TOOL = /^(?:mcp__hivemem__|hivemem[.:/_]{1,2})?(memory_(?:search|get|write|link|invalidate))$/
 
 const short = (s: unknown, n = 60): string => {
   const t = typeof s === 'string' ? s.replace(/\s+/g, ' ').trim() : ''
   return t.length > n ? `${t.slice(0, n - 1)}…` : t
 }
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
+/** `[[Stripe#^f-x|alias]]` -> `Stripe` */
+const bare = (s: unknown, n = 60): string => short(typeof s === 'string' ? s.trim().replace(/^!?\[\[|\]\]$/g, '').replace(/[#|].*$/, '') : s, n)
 
 /**
- * `[memory] write auth-service (2 facts)` for a hivemem tool call, null for any other tool.
- * Accepts claude's `mcp__hivemem__memory_write` and codex's `hivemem.memory_write`.
+ * `[memory] write Stripe (2 facts)` for a hivemem tool call, null for any other tool.
+ * Accepts claude's `mcp__hivemem__memory_write` and codex's `hivemem.memory_write`, and both the vault argument names
+ * (note, notes, refs) and the legacy ones (entity, names, ids).
  */
 export function memoryToolLine(name: string, input: unknown): string | null {
   const m = MEM_TOOL.exec(name)
@@ -215,18 +278,31 @@ export function memoryToolLine(name: string, input: unknown): string | null {
   switch (m[1]) {
     case 'memory_search':
       return `[memory] search "${short(i.query)}"${typeof i.entity === 'string' ? ` near ${short(i.entity, 40)}` : ''}`
-    case 'memory_get':
-      return `[memory] get ${arr(i.names).map((x) => short(x, 40)).join(', ') || '(nothing)'}`
+    case 'memory_get': {
+      const names = arr(i.notes).length ? arr(i.notes) : arr(i.names)
+      const depth = typeof i.depth === 'number' && i.depth > 0 ? ` (depth ${i.depth})` : ''
+      return `[memory] get ${names.map((x) => bare(x, 40)).join(', ') || '(nothing)'}${depth}`
+    }
     case 'memory_write': {
       const bits: string[] = []
       const f = arr(i.facts).length
       const r = arr(i.relations).length
       if (f) bits.push(plural(f, 'fact'))
       if (r) bits.push(plural(r, 'relation'))
-      return `[memory] write ${short(i.entity, 60) || '(entity)'}${bits.length ? ` (${bits.join(', ')})` : ''}`
+      return `[memory] write ${bare(i.note ?? i.entity, 60) || '(note)'}${bits.length ? ` (${bits.join(', ')})` : ''}`
     }
-    case 'memory_invalidate':
-      return `[memory] invalidate ${plural(arr(i.ids).length, 'item')}${i.reason ? `: ${short(i.reason)}` : ''}`
+    case 'memory_link': {
+      const links = arr(i.links).map((x) => (x && typeof x === 'object' ? (x as Record<string, unknown>) : {}))
+      if (links.length !== 1) return `[memory] link ${plural(links.length, 'relation')}`
+      const l = links[0]
+      return `[memory] link ${bare(l.from, 40)} → ${bare(l.to, 40)} (${short(l.type, 30) || 'relates_to'})`
+    }
+    case 'memory_taste':
+      return `[memory] taste ${short(i.polarity, 10)} "${short(i.text, 60)}"${i.scope && i.scope !== 'company' ? ` (${short(i.scope, 40)})` : ''}`
+    case 'memory_invalidate': {
+      const n = arr(i.refs).length || arr(i.ids).length
+      return `[memory] invalidate ${plural(n, 'item')}${i.reason ? `: ${short(i.reason)}` : ''}`
+    }
   }
   return null
 }

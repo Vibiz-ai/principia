@@ -1,0 +1,476 @@
+/*
+ * Principia Roman theme layer (docs/VOICE.md §5): Roman LINE ART on dark. Two tools and nothing else (§5.2):
+ *   1. line art: white hairline strokes in four opacity tiers (--rm-ln-1..4) on the app's near-black grounds;
+ *   2. pixel mosaic: crisp square tesserae from the --rm-px-* palette, tiny gaps, no gradients, no glow.
+ * No brown, bronze, copper, travertine, beige, terracotta, ochre, mustard or gold; no stone or material fills; no noise
+ * textures; no warm gradient backgrounds (§5.12). App chrome keeps tokens.css.
+ *
+ * Motion rule (§0, §9): every animation is <= 900 ms or a slow breathe, sits inside
+ * @media (prefers-reduced-motion: no-preference), and the styles outside that block ARE the static end state.
+ * Cinzel is bundled (font-src 'self').
+ */
+
+/* Cinzel, SIL OFL 1.1 (assets/fonts/OFL-Cinzel.txt), variable weight, latin subset. Display only (§0). */
+@font-face {
+  font-family: 'Cinzel';
+  src: url('../assets/fonts/Cinzel-Variable.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  /* line-art stroke tiers: white at four opacities */
+  --rm-ln-1: rgba(255, 255, 255, .9);   /* contours, outer rings, primary rules */
+  --rm-ln-2: rgba(255, 255, 255, .5);   /* secondary detail: inner hairlines, folds, labels */
+  --rm-ln-3: rgba(255, 255, 255, .2);   /* hints: inner rings, dentils, todo tesserae, unsealed seal */
+  --rm-ln-4: rgba(255, 255, 255, .1);   /* rules between rows, the inner frame rule */
+  --rm-ink: #141517;                    /* the deepest ground: passport, charter, ceremony layer */
+  --rm-stroke: 1px;                     /* 1.25px at the mini bust tier, 1.2px above 80px */
+  --rm-glow: drop-shadow(0 0 3px rgba(255, 255, 255, .35));   /* hover only */
+  /* pixel-mosaic palette: app tokens plus clean accents */
+  --rm-px-white: var(--text-primary);
+  --rm-px-silver: var(--text-secondary);
+  --rm-px-grey: var(--text-tertiary);
+  --rm-px-blue: var(--status-running);
+  --rm-px-accent: var(--accent);
+  --rm-px-blue-deep: #2f6bd0;
+  --rm-px-green: var(--status-success);
+  --rm-px-green-deep: #2a9d6b;
+  --rm-px-red: var(--status-failed);
+  --rm-px-purple: #5a3a8a;              /* border tiles only */
+  --rm-px-purple-2: #4a2f74;
+  --rm-px-ground: #26272b;              /* grout-dark tiles */
+  --rm-px-ground-2: #2a2b2f;
+  --font-display: 'Cinzel', 'Trajan Pro', 'Cormorant SC', Georgia, serif;
+}
+
+/* ---------- line art (§5.2) ---------- */
+
+/* On the <svg>; children inherit fill, stroke, caps and joins, and keep 1 px at any rendered size. */
+.rm-la {
+  fill: none;
+  stroke: #fff;
+  stroke-width: var(--rm-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+.rm-la * { vector-effect: non-scaling-stroke; }
+.rm-la text { font-family: var(--font-display); }
+
+.rm-display { font-family: var(--font-display); letter-spacing: .02em; }
+
+/* Latin and its translation (§2, §5.11): the translation is the meaning, so secondary, never tertiary. */
+.rm-latin { font-style: italic; color: var(--text-primary); }
+.rm-latin__en { color: var(--text-secondary); }
+
+/* visually hidden, still read */
+.rm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- arch (§5.7) ---------- */
+
+.rm-arch {
+  position: absolute;
+  pointer-events: none;
+  overflow: visible;
+}
+@media (max-width: 1099px) {
+  .rm-arch { display: none; }
+}
+
+/* ---------- bust (§5.4) and laurel (§5.5) ---------- */
+
+.rm-bust { display: block; flex: none; overflow: visible; }
+.rm-laurel-svg { display: inline-block; flex: none; vertical-align: middle; }
+
+/* ---------- double rule and corner lozenges (§5.2) ---------- */
+
+/* the corner lozenge: an 11 px square turned 45°, ground-filled, breaking the double rule like a rosette */
+.rm-cn {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  background: var(--rm-ink);
+  border: 1px solid var(--rm-ln-2);
+  transform: rotate(45deg);
+  pointer-events: none;
+  z-index: 1;
+}
+.rm-cn::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border: 1px solid var(--rm-ln-1);
+}
+.rm-cn0 { top: -6px; left: -6px; }
+.rm-cn1 { top: -6px; right: -6px; }
+.rm-cn2 { bottom: -6px; right: -6px; }
+.rm-cn3 { bottom: -6px; left: -6px; }
+
+/* ---------- business passport (§5.3) ---------- */
+
+.rm-pp {
+  position: relative;
+  min-width: 0;
+  background: var(--rm-ink);
+  border: 1px solid var(--rm-ln-2);
+  color: var(--text-primary);
+  padding: 16px 22px 18px;
+}
+/* the inner rule of the double rule */
+.rm-pp::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--rm-ln-4);
+  pointer-events: none;
+}
+/* inside BeamBorder the outer rule steps down so the beam reads as the brightest edge */
+.rm-pp--beam { border-color: var(--rm-ln-3); }
+
+.rm-pp--portrait { width: 280px; max-width: 100%; min-height: 380px; display: flex; flex-direction: column; }
+.rm-pp--landscape {
+  width: 560px;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 28px;
+  padding: 16px 30px 20px;
+}
+.rm-pp--card { width: 100%; min-height: 150px; padding: 12px 18px 16px; display: flex; flex-direction: column; }
+.rm-pp__span { grid-column: 1 / -1; }
+.rm-pp__col { min-width: 0; display: flex; flex-direction: column; }
+
+.rm-pp__ped { display: flex; justify-content: center; margin: 2px 0 8px; }
+.rm-pp__ped > svg { display: block; width: 100%; height: auto; }
+.rm-pp--card .rm-pp__ped { margin-bottom: 6px; }
+
+.rm-pp__lbl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 9.5px;
+  line-height: 1.2;
+  letter-spacing: .34em;
+  font-weight: 600;
+  color: var(--rm-ln-2);
+  white-space: nowrap;
+}
+.rm-pp__lbl::before,
+.rm-pp__lbl::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rm-ln-3);
+}
+
+.rm-pp__ins {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: .1em;
+  line-height: 1.22;
+  text-align: center;
+  color: var(--text-primary);
+  margin-top: 22px;
+  word-break: keep-all;
+  overflow-wrap: anywhere; /* last resort for a single word longer than the passport at 16 px */
+  hyphens: none;
+}
+.rm-pp__ins i,
+.rm-pp__dot { font-style: normal; color: var(--rm-ln-2); }
+.rm-pp__ins.is-empty {
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 15px;
+  color: rgba(255, 255, 255, .32);
+}
+.rm-pp--landscape .rm-pp__ins { text-align: left; font-size: 24px; margin-top: 20px; white-space: nowrap; overflow-wrap: normal; }
+.rm-pp--card .rm-pp__ins { font-size: 19px; margin-top: 12px; padding-right: 34px; text-align: left; }
+
+.rm-pp__name {
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.rm-pp__line {
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  margin: 14px 4px 0;
+  overflow-wrap: anywhere;
+}
+.rm-pp--landscape .rm-pp__name,
+.rm-pp--landscape .rm-pp__line { text-align: left; margin-left: 0; margin-right: 0; }
+
+.rm-pp__meta { margin-top: 18px; display: grid; }
+.rm-pp--landscape .rm-pp__meta { margin-top: 20px; }
+.rm-pp__row,
+.rm-pp__meta > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  padding: 7px 0;
+  border-top: 1px solid var(--rm-ln-4);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+}
+.rm-pp__row:last-child,
+.rm-pp__meta > div:last-child { border-bottom: 1px solid var(--rm-ln-4); }
+.rm-pp__row > span,
+.rm-pp__meta > div > span {
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  color: var(--rm-ln-2);
+}
+.rm-pp__row > b,
+.rm-pp__meta > div > b {
+  min-width: 0;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* empty passport: the rows are already drawn, like a form being filled in */
+.rm-pp__meta--ghost > div,
+.rm-pp__meta--ghost .rm-pp__row { border-top-style: dashed; }
+.rm-pp__meta--ghost > div:last-child,
+.rm-pp__meta--ghost .rm-pp__row:last-child { border-bottom-style: dashed; }
+.rm-pp__meta--ghost b { color: rgba(255, 255, 255, .22); font-weight: 400; }
+
+.rm-pp__foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+.rm-pp--landscape .rm-pp__foot { margin-top: 16px; }
+.rm-pp__founded {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: .3em;
+  font-weight: 600;
+  color: var(--rm-ln-2);
+  padding-bottom: 4px;
+  white-space: nowrap; /* "FOUNDED · MMXXVI" stays one line */
+  flex: none;
+}
+/* the seal sits inside the frame, so BeamBorder never clips it */
+.rm-pp--card .rm-pp__seal { position: absolute; right: 14px; bottom: 12px; }
+
+/* ---------- seal: line-drawn laurel roundel (§5.3) ---------- */
+
+.rm-seal {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  line-height: 0;
+}
+.rm-seal > svg,
+.rm-seal__svg { display: block; overflow: visible; }
+
+/* ---------- coin medallion (§5.6) ---------- */
+
+.rm-medallion {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  line-height: 0;
+}
+.rm-medallion > svg { display: block; flex: none; overflow: visible; grid-area: 1 / 1; }
+/* working tiles: all faintly lit at rest (reduced motion keeps them static at .6) */
+.rm-medallion .rm-wk { opacity: .6; }
+/* failed: a red square tessera at the bottom right with a rail-coloured gap */
+.rm-medallion__fail {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  display: block;
+  background: var(--rm-px-red);
+  box-shadow: 0 0 0 2px var(--surface-0, #1a1b1e);
+}
+
+/* ---------- tesserae progress (§5.7) ---------- */
+
+.rm-tess {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-secondary);
+}
+.rm-tess__tiles { display: inline-flex; gap: 3px; }
+.rm-tess__tile {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 11px;
+  height: 11px;
+  box-shadow: inset 0 0 0 1px var(--rm-ln-3);
+}
+.rm-tess__tile--todo { background: transparent; }
+.rm-tess__tile--cur { background: transparent; box-shadow: inset 0 0 0 1px var(--rm-ln-1); }
+.rm-tess__tile--cur::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 5px;
+  height: 5px;
+  background: var(--rm-px-blue);
+}
+.rm-tess__tile--done { background: var(--rm-px-white); box-shadow: none; }
+.rm-tess__label { font-variant-numeric: tabular-nums; }
+
+/* ---------- plinth: a drawn plinth under the bust (§5.7) ---------- */
+
+.rm-plinth {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
+}
+.rm-plinth__bust { position: relative; z-index: 1; margin-bottom: -2px; }
+/* an outline box, never a material */
+.rm-plinth__base {
+  position: relative;
+  width: 100%;
+  height: 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  padding: 0 16%;
+}
+.rm-plinth__base > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* ellipsis needs a block box with a width cap */
+.rm-plinth__carving {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  margin-top: -4px;
+  padding-left: .2em; /* balances the trailing tracking */
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .2em;
+  color: var(--rm-ln-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rm-plinth__role { font-family: var(--font-sans); font-size: 12px; font-weight: 600; margin-top: 8px; color: var(--text-secondary); }
+.rm-plinth__pers { font-size: 12px; line-height: 1.35; margin-top: 3px; color: var(--text-primary); }
+.rm-plinth__task { font-size: 11.5px; line-height: 1.35; margin-top: 5px; color: var(--text-secondary); }
+.rm-plinth__acts { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 11px; color: var(--text-tertiary); }
+
+/* ---------- pixel mosaic (§5.8) ---------- */
+
+.rm-mosaic-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+.rm-mosaic { display: block; flex: none; shape-rendering: crispEdges; }
+.rm-mosaic rect { shape-rendering: crispEdges; }
+
+/* ---------- milestone coin (§5.9) ---------- */
+
+.rm-coin { display: block; flex: none; overflow: visible; }
+
+/* ---------- hover glow (interactive line art only; nothing glows at rest) ---------- */
+
+@media (hover: hover) {
+  .rm-pp:hover .rm-la,
+  .rm-plinth:hover .rm-la { filter: var(--rm-glow); }
+}
+
+/* ---------- motion (§0, §5.2, §8, §9) ----------
+ * Everything above is the static end state. Below, only for people who haven't asked for less motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  /*
+   * A stroke drawing itself: give the element pathLength="1"; stagger with --i (60 ms).
+   * The dash only exists inside the keyframes (fill-mode backwards hides it during the delay), so the end state is the
+   * plain, undashed stroke. Reason: under `vector-effect: non-scaling-stroke` Chromium measures pathLength in user units
+   * but dashes in screen px, so a permanent `stroke-dasharray: 1` left any SVG drawn larger than its viewBox (the arch,
+   * a 72-100 px seal) half dashed. `--rm-ds` (default 1) is the dash length in pathLength units: an SVG rendered at
+   * scale s > 1 sets `--rm-ds` >= s so the drawing is continuous; a larger value only makes it finish sooner.
+   */
+  .rm-draw {
+    animation: rm-draw 700ms ease-out backwards;
+    animation-delay: calc(var(--i, 0) * 60ms + var(--rm-delay, 0ms));
+  }
+  /* laurel leaves draw faster, pair by pair (22 ms) */
+  .rm-laurel--draw .rm-draw { animation-duration: 420ms; animation-delay: calc(var(--i, 0) * 22ms + var(--rm-delay, 0ms)); }
+  /* the seal stamp's leaves: 300 ms start + 7 pairs × 22 ms + 150 ms ends at ~600 ms (§5.3) */
+  .rm-seal--stamp .rm-laurel--draw .rm-draw { animation-duration: 150ms; }
+  /* a tessera appearing: no flying, no scaling; stagger with --i (28 ms) */
+  .rm-tile { animation: rm-tile 900ms steps(1, end) both; animation-delay: calc(var(--i, 0) * 28ms + var(--rm-delay, 0ms)); }
+  /* the current tessera breathes, slower than 1 Hz */
+  .rm-tess__tile--cur { animation: rm-breathe var(--dur-pulse, 1600ms) ease-in-out infinite; }
+  /* coin working tiles lit one after another, 100 ms apart */
+  .rm-medallion .rm-wk { opacity: .25; animation: rm-wk 1200ms steps(1, end) infinite; animation-delay: calc(var(--i, 0) * 100ms); }
+  /* plinth cards rising one by one (ceremony); stagger with --rm-delay */
+  .rm-rise { animation: rm-rise 450ms ease-out both; animation-delay: var(--rm-delay, 0ms); }
+  /* Cinzel words settling (ceremony) */
+  .rm-letters-in { animation: rm-letters-in 800ms ease-out both; animation-delay: var(--rm-delay, 0ms); }
+
+  @keyframes rm-draw {
+    from { stroke-dasharray: var(--rm-ds, 1); stroke-dashoffset: var(--rm-ds, 1); }
+    to { stroke-dasharray: var(--rm-ds, 1); stroke-dashoffset: 0; }
+  }
+  @keyframes rm-tile {
+    0% { opacity: 0; }
+    1%, 100% { opacity: 1; }
+  }
+  @keyframes rm-breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+  }
+  @keyframes rm-wk {
+    0%, 24% { opacity: 1; }
+    25%, 100% { opacity: .25; }
+  }
+  @keyframes rm-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes rm-letters-in {
+    from { opacity: 0; letter-spacing: .4em; }
+    to { opacity: 1; letter-spacing: .12em; }
+  }
+}

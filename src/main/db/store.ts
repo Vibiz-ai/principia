@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type {
   AdapterId,
+  ExperimentalFlags,
   AgentProfile,
   AgentProfileInput,
   Artifact,
@@ -23,6 +24,7 @@ import type {
 import type { ArtifactQuery, RunListQuery } from '../../shared/ipc'
 import { HiveError } from '../../shared/errors'
 import { newId } from '../../shared/ids'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { DB } from './index'
 import {
   RUN_SELECT,
@@ -77,9 +79,28 @@ export const DEFAULT_SETTINGS: Settings = {
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,
-  marketplaceUrl: null
+  marketplaceUrl: null,
+  // COMPANY.md §8.6 (UI state) and §6 (guards warn while experimental.companies is off)
+  activeCompanyId: 'all',
+  expandedCompanies: {},
+  experimental: { companies: false, vault: false, vaultAI: false },
+  // VOICE.md §0
+  tone: 'playful',
+  personas: true
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
+// departments stays absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
+const DEFAULT_EXPERIMENTAL: Required<Omit<ExperimentalFlags, 'departments'>> = { companies: false, vault: false, vaultAI: false }
+
+/**
+ * COMPANY.md §1.4: rows written by an older build (NULL company_id) read as Personal. Every company filter and stamp
+ * goes through these, so the rule lives in one place.
+ */
+export const companyOf = (col: string): string => `COALESCE(${col}, '${PERSONAL_COMPANY_ID}')`
+/** A repo's company: its company_repos owner (if that company exists), else Personal (§2.2). */
+const REPO_COMPANY = (repoCol: string): string =>
+  `COALESCE((SELECT cr.company_id FROM company_repos cr JOIN company_passports cp ON cp.id = cr.company_id WHERE cr.repo_id = ${repoCol}), '${PERSONAL_COMPANY_ID}')`
+const REPO_SELECT = `SELECT repos.*, ${REPO_COMPANY('repos.id')} AS company_id FROM repos`
 
 export const ADAPTER_LABELS: Record<AdapterId, string> = {
   claude: 'Claude Code',
@@ -102,6 +123,17 @@ interface RepoRow {
   name: string
   path: string
   added_at: string
+  company_id?: string | null
+}
+const orderOf = (raw: string | null | undefined): Map<string, number> => {
+  const ids = json<unknown>(raw, [])
+  return new Map((Array.isArray(ids) ? ids : []).map((id, index) => [String(id), index]))
+}
+/** Moves `id` next to `targetId` inside `ids` (both present). */
+const placed = (ids: string[], id: string, targetId: string, placement: 'before' | 'after'): string[] => {
+  const remaining = ids.filter((item) => item !== id)
+  remaining.splice(remaining.indexOf(targetId) + (placement === 'after' ? 1 : 0), 0, id)
+  return remaining
 }
 
 export interface SessionInsert extends Session {
@@ -144,6 +176,10 @@ export class Store {
         ;(s as unknown as Record<string, unknown>)[r.key] = json(r.value, (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[r.key])
       }
     }
+    // flags added later default to off, whatever an older stored object lacks
+    s.experimental = { ...DEFAULT_EXPERIMENTAL, ...(s.experimental && typeof s.experimental === 'object' ? s.experimental : {}) }
+    // never hand out the shared default object (a caller mutating it would change every later read)
+    s.expandedCompanies = s.expandedCompanies && typeof s.expandedCompanies === 'object' && !Array.isArray(s.expandedCompanies) ? { ...s.expandedCompanies } : {}
     return s
   }
   updateSettings(patch: Partial<Settings>): Settings {
@@ -151,12 +187,18 @@ export class Store {
       'INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
     )
     this.db.transaction(() => {
-      for (const [k, v] of Object.entries(patch)) {
+      // experimental is patched flag by flag (settings:update sends only the flags it changes)
+      const experimental = patch.experimental ? { ...this.getSettings().experimental, ...patch.experimental } : undefined
+      for (const [k, v] of Object.entries({ ...patch, ...(experimental ? { experimental } : {}) })) {
         if (v === undefined || !(SETTINGS_KEYS as string[]).includes(k)) continue
         stmt.run(k, JSON.stringify(v))
       }
     })()
     return this.getSettings()
+  }
+  /** COMPANY.md §6: guards throw with the flag on, warn and still stamp with it off. */
+  companyGuardsEnforced(): boolean {
+    return !!this.getSettings().experimental?.companies
   }
 
   // ---------- repos ----------
@@ -169,33 +211,57 @@ export class Store {
     } catch {
       /* missing */
     }
-    return { id: r.id, name: r.name, path: r.path, addedAt: r.added_at, exists, isGit, liveSessions: live(r.id) }
+    return { id: r.id, name: r.name, path: r.path, addedAt: r.added_at, exists, isGit, liveSessions: live(r.id), companyId: r.company_id ?? PERSONAL_COMPANY_ID }
   }
-  listRepos(live: (id: Id) => number = () => 0): Repo[] {
-    const rows = this.db.prepare('SELECT * FROM repos ORDER BY name COLLATE NOCASE, id').all() as RepoRow[]
-    const saved = this.db.prepare("SELECT value FROM meta WHERE key = 'repo_order'").get() as { value: string } | undefined
-    const order = json<string[]>(saved?.value, [])
-    const positions = new Map((Array.isArray(order) ? order : []).map((id, index) => [id, index]))
-    rows.sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity))
-    return rows.map(r => this.repoFromRow(r, live))
+  /**
+   * Without companyId: every repo in the legacy `repo_order` (exactly the pre-company list). With it: that company's
+   * repos in `repo_order:<companyId>` (COMPANY.md §2.3). Either way each repo carries its company and its position in
+   * that company's order, so the All-mode sidebar can group one list.
+   */
+  listRepos(live: (id: Id) => number = () => 0, companyId?: Id): Repo[] {
+    const rows = this.db.prepare(`${REPO_SELECT} ORDER BY repos.name COLLATE NOCASE, repos.id`).all() as RepoRow[]
+    const metas = this.db.prepare("SELECT key, value FROM meta WHERE key = 'repo_order' OR key LIKE 'repo_order:%'").all() as { key: string; value: string }[]
+    const legacy = orderOf(metas.find((m) => m.key === 'repo_order')?.value)
+    const perCompany = new Map(metas.filter((m) => m.key !== 'repo_order').map((m) => [m.key.slice('repo_order:'.length), orderOf(m.value)]))
+    const at = (order: Map<string, number> | undefined, id: string) => order?.get(id) ?? Infinity
+    const repos = rows.map((r) => this.repoFromRow(r, live))
+    // per-company position: its own key first, then the legacy order (unsplit installs), then by name
+    const groups = new Map<string, Repo[]>()
+    for (const r of repos) groups.set(r.companyId!, [...(groups.get(r.companyId!) ?? []), r])
+    for (const [cid, list] of groups) {
+      const own = perCompany.get(cid)
+      list
+        .slice()
+        .sort((a, b) => at(own, a.id) - at(own, b.id) || at(legacy, a.id) - at(legacy, b.id))
+        .forEach((r, i) => (r.companyOrder = i))
+    }
+    if (companyId) return repos.filter((r) => r.companyId === companyId).sort((a, b) => a.companyOrder! - b.companyOrder!)
+    return repos.sort((a, b) => at(legacy, a.id) - at(legacy, b.id))
   }
-  /** Move one folder against the current order, preserving concurrent additions. */
+  /**
+   * Move one folder against its company's order, preserving concurrent additions. Both repos must share a company
+   * (moving to another company is company:assignRepo). The legacy global order gets the same move, so older builds
+   * and the unfiltered list follow.
+   */
   moveRepo(id: Id, targetId: Id, placement: 'before' | 'after'): void {
     this.db.transaction(() => {
-      const ids = this.listRepos().map(repo => repo.id)
-      if (!ids.includes(id) || !ids.includes(targetId)) throw new HiveError('not_found', 'Repository not found')
+      const all = this.listRepos()
+      const repo = all.find((r) => r.id === id)
+      const target = all.find((r) => r.id === targetId)
+      if (!repo || !target) throw new HiveError('not_found', 'Repository not found')
       if (id === targetId) return
-      const remaining = ids.filter(item => item !== id)
-      remaining.splice(remaining.indexOf(targetId) + (placement === 'after' ? 1 : 0), 0, id)
-      this.db.prepare("INSERT INTO meta(key, value) VALUES ('repo_order', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(remaining))
+      if (repo.companyId !== target.companyId) throw new HiveError('bad_request', 'That repository belongs to another company. Drop it on the company to move it there.')
+      const own = all.filter((r) => r.companyId === repo.companyId).sort((a, b) => a.companyOrder! - b.companyOrder!).map((r) => r.id)
+      this.setMeta(`repo_order:${repo.companyId}`, JSON.stringify(placed(own, id, targetId, placement)))
+      this.setMeta('repo_order', JSON.stringify(placed(all.map((r) => r.id), id, targetId, placement)))
     })()
   }
   getRepo(id: Id, live: (id: Id) => number = () => 0): Repo | null {
-    const r = this.db.prepare('SELECT * FROM repos WHERE id = ?').get(id) as RepoRow | undefined
+    const r = this.db.prepare(`${REPO_SELECT} WHERE repos.id = ?`).get(id) as RepoRow | undefined
     return r ? this.repoFromRow(r, live) : null
   }
   getRepoByPath(p: string): Repo | null {
-    const r = this.db.prepare('SELECT * FROM repos WHERE path = ?').get(p) as RepoRow | undefined
+    const r = this.db.prepare(`${REPO_SELECT} WHERE repos.path = ?`).get(p) as RepoRow | undefined
     return r ? this.repoFromRow(r, () => 0) : null
   }
   /** Returns [repo, created]. Path must be an absolute, existing directory (caller realpaths it). */
@@ -221,7 +287,7 @@ export class Store {
   recentRepos(limit: number): Repo[] {
     const rows = this.db
       .prepare(
-        `SELECT repos.* FROM repos LEFT JOIN (SELECT repo_id, MAX(started_at) AS last FROM sessions GROUP BY repo_id) s
+        `SELECT repos.*, ${REPO_COMPANY('repos.id')} AS company_id FROM repos LEFT JOIN (SELECT repo_id, MAX(started_at) AS last FROM sessions GROUP BY repo_id) s
          ON s.repo_id = repos.id ORDER BY COALESCE(s.last, repos.added_at) DESC LIMIT ?`
       )
       .all(limit) as RepoRow[]
@@ -308,15 +374,16 @@ export class Store {
   }
 
   // ---------- sessions ----------
+  /** COMPANY.md §3: stamped with the launcher's companyId, else the repo's company, else Personal. */
   insertSession(s: SessionInsert): void {
     this.db
       .prepare(
         `INSERT INTO sessions(id, title, profile_id, adapter, repo_id, cwd, status, pid, cols, rows, exit_code, started_at,
-          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id)
+          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id, company_id)
          VALUES (@id, @title, @profileId, @adapter, @repoId, @cwd, @status, @pid, @cols, @rows, @exitCode, @startedAt,
-          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId)`
+          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')}))`
       )
-      .run(s)
+      .run({ ...s, companyId: s.companyId ?? null })
   }
   updateSession(id: Id, patch: Partial<Omit<Session, 'id'>>): Session {
     const { set, params } = buildPatch(patch as Record<string, unknown>, {
@@ -342,9 +409,13 @@ export class Store {
     const r = this.db.prepare('SELECT log_path FROM sessions WHERE id = ?').get(id) as { log_path: string } | undefined
     return r?.log_path ?? null
   }
-  listSessions(status: 'running' | 'exited' | 'all' = 'all', since?: string): Session[] {
+  listSessions(status: 'running' | 'exited' | 'all' = 'all', since?: string, companyId?: Id): Session[] {
     const where: string[] = []
     const params: unknown[] = []
+    if (companyId) {
+      where.push(`${companyOf('company_id')} = ?`)
+      params.push(companyId)
+    }
     if (status !== 'all') {
       where.push('status = ?')
       params.push(status)
@@ -379,21 +450,23 @@ export class Store {
   }
 
   // ---------- workflows ----------
-  listWorkflows(): Workflow[] {
-    return (this.db.prepare('SELECT * FROM workflows ORDER BY updated_at DESC').all() as WorkflowRow[]).map(
-      workflowFromRow
-    )
+  listWorkflows(companyId?: Id): Workflow[] {
+    const rows = companyId
+      ? this.db.prepare(`SELECT * FROM workflows WHERE ${companyOf('company_id')} = ? ORDER BY updated_at DESC`).all(companyId)
+      : this.db.prepare('SELECT * FROM workflows ORDER BY updated_at DESC').all()
+    return (rows as WorkflowRow[]).map(workflowFromRow)
   }
   getWorkflow(id: Id): Workflow | null {
     const r = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as WorkflowRow | undefined
     return r ? workflowFromRow(r) : null
   }
-  createWorkflow(draft: WorkflowDraft, seedKey: string | null = null, origin: WorkflowOrigin | null = null): Workflow {
+  /** COMPANY.md §3: stamped with the company it is created or installed from; seeds and unscoped callers go to Personal. */
+  createWorkflow(draft: WorkflowDraft, seedKey: string | null = null, origin: WorkflowOrigin | null = null, companyId: Id = PERSONAL_COMPANY_ID): Workflow {
     const id = newId('workflow')
     const ts = this.ts()
     this.db
       .prepare(
-        'INSERT INTO workflows(id, name, description, inputs_json, nodes_json, seed_key, created_at, updated_at, worktree_json, origin_json) VALUES (?,?,?,?,?,?,?,?,?,?)'
+        'INSERT INTO workflows(id, name, description, inputs_json, nodes_json, seed_key, created_at, updated_at, worktree_json, origin_json, company_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
       )
       .run(
         id,
@@ -405,10 +478,12 @@ export class Store {
         ts,
         ts,
         draft.worktree ? JSON.stringify(draft.worktree) : null,
-        origin ? JSON.stringify(origin) : null
+        origin ? JSON.stringify(origin) : null,
+        companyId
       )
     // SLACK.md §9.4 (add-only column)
     if (draft.slackTools !== undefined) this.db.prepare('UPDATE workflows SET slack_tools = ? WHERE id = ?').run(draft.slackTools ? 1 : null, id)
+    this.db.prepare('UPDATE workflows SET slack_agent_permissions = ? WHERE id = ?').run(draft.slackTools && draft.slackAgentPermissions === 'profile' ? 'profile' : null, id)
     return this.getWorkflow(id)!
   }
   updateWorkflow(id: Id, draft: WorkflowDraft): Workflow {
@@ -425,7 +500,13 @@ export class Store {
       )
     if (!r.changes) throw new HiveError('not_found', 'Workflow not found')
     this.db.prepare('UPDATE workflows SET slack_tools = ? WHERE id = ?').run(draft.slackTools ? 1 : null, id)
+    this.db.prepare('UPDATE workflows SET slack_agent_permissions = ? WHERE id = ?').run(draft.slackTools && draft.slackAgentPermissions === 'profile' ? 'profile' : null, id)
     return this.getWorkflow(id)!
+  }
+  /** Re-homes a workflow (marketplace installs into the caller's company, "Duplicate to company…" copies). */
+  setWorkflowCompany(id: Id, companyId: Id): void {
+    const r = this.db.prepare('UPDATE workflows SET company_id = ? WHERE id = ?').run(companyId, id)
+    if (!r.changes) throw new HiveError('not_found', 'Workflow not found')
   }
   /** AUTHORING.md §2.5: provenance (agent-created / agent-updated). Human edits never clear it. */
   setWorkflowOrigin(id: Id, origin: WorkflowOrigin | null): void {
@@ -445,6 +526,10 @@ export class Store {
   listRuns(q: RunListQuery = {}): Run[] {
     const where: string[] = []
     const params: unknown[] = []
+    if (q.companyId) {
+      where.push(`${companyOf('runs.company_id')} = ?`)
+      params.push(q.companyId)
+    }
     if (q.status?.length) {
       where.push(`runs.status IN (${q.status.map(() => '?').join(',')})`)
       params.push(...q.status)
@@ -478,11 +563,12 @@ export class Store {
     return { run: runFromRow(r), steps, workflow: runSnapshot(r) }
   }
   /** Runs that ended since `since`, newest first. */
-  endedRunsSince(since: string, limit: number): Run[] {
+  endedRunsSince(since: string, limit: number, companyId?: string): Run[] {
+    const co = companyId ? ` AND COALESCE(runs.company_id, 'co_personal') = ?` : ''
     return (
       this.db
-        .prepare(`${RUN_SELECT} WHERE runs.ended_at >= ? ORDER BY runs.ended_at DESC LIMIT ?`)
-        .all(since, limit) as RunRow[]
+        .prepare(`${RUN_SELECT} WHERE runs.ended_at >= ?${co} ORDER BY runs.ended_at DESC LIMIT ?`)
+        .all(...(companyId ? [since, companyId, limit] : [since, limit])) as RunRow[]
     ).map(runFromRow)
   }
   countEndedSince(since: string): { passed: number; failed: number } {
@@ -495,22 +581,24 @@ export class Store {
   }
 
   // ---------- schedules (config columns; fire-state belongs to the engine) ----------
-  listSchedules(): Schedule[] {
-    return (this.db.prepare(`${SCHEDULE_SELECT} ORDER BY schedules.created_at`).all() as ScheduleRow[]).map((r) =>
-      scheduleFromRow(r, this.describe)
-    )
+  listSchedules(companyId?: Id): Schedule[] {
+    const rows = companyId
+      ? this.db.prepare(`${SCHEDULE_SELECT} WHERE ${companyOf('schedules.company_id')} = ? ORDER BY schedules.created_at`).all(companyId)
+      : this.db.prepare(`${SCHEDULE_SELECT} ORDER BY schedules.created_at`).all()
+    return (rows as ScheduleRow[]).map((r) => scheduleFromRow(r, this.describe))
   }
   getSchedule(id: Id): Schedule | null {
     const r = this.db.prepare(`${SCHEDULE_SELECT} WHERE schedules.id = ?`).get(id) as ScheduleRow | undefined
     return r ? scheduleFromRow(r, this.describe) : null
   }
-  insertSchedule(input: ScheduleInput): Id {
+  /** COMPANY.md §3: the caller resolves the company from the schedule's workflow (handlers/schedules.ts). */
+  insertSchedule(input: ScheduleInput, companyId: Id = PERSONAL_COMPANY_ID): Id {
     const id = newId('schedule')
     const ts = this.ts()
     this.db
       .prepare(
-        `INSERT INTO schedules(id, name, target_json, when_json, preset_json, enabled, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?)`
+        `INSERT INTO schedules(id, name, target_json, when_json, preset_json, enabled, created_at, updated_at, company_id)
+         VALUES (?,?,?,?,?,?,?,?,?)`
       )
       .run(
         id,
@@ -520,11 +608,21 @@ export class Store {
         input.preset ? JSON.stringify(input.preset) : null,
         int(input.enabled ?? true),
         ts,
-        ts
+        ts,
+        companyId
       )
+    this.writeScheduleDepartment(id, input.departmentId)
     return id
   }
-  updateScheduleConfig(id: Id, input: ScheduleInput): void {
+  /** DEPARTMENTS.md §8: schedules.department_id (healed by openDatabase; a bare test db may lack it). undefined = keep. */
+  private writeScheduleDepartment(id: Id, departmentId: Id | null | undefined): void {
+    if (departmentId === undefined) return
+    const cols = this.db.prepare('PRAGMA table_info(schedules)').all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'department_id')) return
+    this.db.prepare('UPDATE schedules SET department_id = ? WHERE id = ?').run(departmentId, id)
+  }
+  /** companyId: re-stamp (the target moved to a workflow of another company). Absent = keep the stamp. */
+  updateScheduleConfig(id: Id, input: ScheduleInput, companyId?: Id): void {
     const existing = this.getSchedule(id)
     if (!existing) throw new HiveError('not_found', 'Schedule not found')
     this.db
@@ -540,6 +638,8 @@ export class Store {
         this.ts(),
         id
       )
+    if (companyId) this.db.prepare('UPDATE schedules SET company_id = ? WHERE id = ?').run(companyId, id)
+    this.writeScheduleDepartment(id, input.departmentId)
   }
   setScheduleEnabled(id: Id, enabled: boolean): void {
     const r = this.db
@@ -569,12 +669,13 @@ export class Store {
       return { artifact: this.getArtifact(existing.id)!, changed: true, created: false }
     }
     const id = newId('artifact')
+    // COMPANY.md §3: denormalized from the run, else the session, else Personal
     this.db
       .prepare(
-        `INSERT INTO artifacts(id, run_id, session_id, path, rel_path, name, kind, mime, bytes, mtime, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO artifacts(id, run_id, session_id, path, rel_path, name, kind, mime, bytes, mtime, created_at, company_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, (SELECT company_id FROM runs WHERE id = ?), (SELECT company_id FROM sessions WHERE id = ?), '${PERSONAL_COMPANY_ID}'))`
       )
-      .run(id, a.runId, a.sessionId, a.path, a.relPath, a.name, a.kind, a.mime, a.bytes, a.mtime, this.ts())
+      .run(id, a.runId, a.sessionId, a.path, a.relPath, a.name, a.kind, a.mime, a.bytes, a.mtime, this.ts(), a.companyId ?? null, a.runId, a.sessionId)
     return { artifact: this.getArtifact(id)!, changed: true, created: true }
   }
   getArtifact(id: Id): Artifact | null {
@@ -598,6 +699,10 @@ export class Store {
   listArtifacts(q: ArtifactQuery = {}): Artifact[] {
     const where: string[] = []
     const params: unknown[] = []
+    if (q.companyId) {
+      where.push(`${companyOf('company_id')} = ?`)
+      params.push(q.companyId)
+    }
     if (q.runId) {
       where.push('run_id = ?')
       params.push(q.runId)

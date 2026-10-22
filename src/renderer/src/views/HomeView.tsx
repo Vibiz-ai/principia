@@ -6,35 +6,41 @@ import { AskCard } from '../components/agents/AskCard'
 import { ReplyBox } from '../components/agents/ReplyBox'
 import { LeftoverList, useLeftovers } from '../components/agents/LimitBits'
 import { ActivityCharts } from '../components/home/ActivityCharts'
-import { ComingUpList, LearnedList, MorningBrief, RunCardView } from '../components/home/DashboardParts'
+import { ComingUpList, HomeGreeting, LearnedList, MorningBrief, NeedsYouEmpty, NeedsYouHeader, RunCardView, SenateBriefing } from '../components/home/DashboardParts'
+import { MilestoneStrip } from '../components/home/MilestoneStrip'
+import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
+import { CloudNeedsYou } from '../components/cloud/NeedsYou'
 import { ClaudeHistorySection } from '../components/home/ClaudeHistory'
 import { isNothingToDo } from '../lib/authoring'
 import { homeWindowLabel, hubGroups, isLive, isSeen, isUnseenIdle } from '../lib/live'
-import { focusAgent, mergeAgents, mergeAsks, useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
+import { focusAgent, mergeAgents, mergeAsks, useSeenSet } from '../state/live'
+import { useScope, useScopedLive } from '../components/CompanyChip'
+import { inScope } from '../lib/scope'
+import { reposOf } from '../lib/companyModel'
+import type { Id } from '@shared/types'
 import { nativeMenu } from '../lib/hive'
-import { Button, EmptyState, ErrorState, Loading, Pill, RelativeTime, SectionHeader, StatusGlyph, Switch, Toolbar, useTick } from '../components/ui'
+import { Button, EmptyState, ErrorState, Loading, Pill, RelativeTime, SectionHeader, StatusGlyph, Toolbar, useTick } from '../components/ui'
 import { errorMessage, hive, useHiveEvent } from '../lib/hive'
 import { runVisual } from '../lib/graph'
 import { firstLine, runTitle } from '../lib/format'
 import { age, clock, duration } from '../lib/time'
 import { useCoalesced } from '../lib/useThrottled'
+import { useTaskCounts } from '../lib/company'
+import '../styles/board.css'
 
 import { cancelRun, rerun, runContextMenu } from '../lib/runActions'
 import { ProviderSwitcher } from '../shell/ProviderSwitcher'
 import {
-  addRepos,
   attempt,
   closeSession,
   focusSession,
   navigate,
   openPalette,
   providerLabel,
-  refreshProviders,
   sessionContextMenu,
   sessionTitle,
-  startSession,
+  departmentsOn,
   toast,
-  updateSettings,
   useStore
 } from '../state/store'
 
@@ -45,6 +51,11 @@ const SEEN_DWELL_MS = 8000
  * Home: "since you were last here" (LIVE.md §8, F5). Needs you · What got done · What agents learned · Activity ·
  * Live now · Coming up · Morning brief. Real data only, from one app:dashboard call, then live via events.
  * Falls back to the classic Home when main doesn't serve app:dashboard.
+ * COMPANY.md §8.4: in a focused company every section shows that company's rows only (All mode with several
+ * companies shows the Portfolio instead). DEPARTMENTS.md §9: a focused company with departments on gets the Overnight
+ * digest (tasks done, parked or awaiting review since the last visit). VOICE.md §3.5: the digest is the "Senate
+ * briefing" card (plain: "Overnight"), grouped by agent; the Needs you header stays plain, its board items name the
+ * agent, and an empty Needs you shows the laurel mosaic. A focused business also gets the Milestones strip (§7).
  */
 export function HomeView(): React.JSX.Element {
   useTick()
@@ -55,9 +66,11 @@ export function HomeView(): React.JSX.Element {
   const repos = useStore((s) => s.repos)
   const settings = useStore((s) => s.settings)
   const winFocused = useStore((s) => s.window.focused)
-  const idx = useAgentIndex()
-  const asks = useOpenAsks()
+  const { scope, nonce } = useScope()
+  const { idx, asks } = useScopedLive(scope)
   const seen = useSeenSet()
+  // focused mode: the company's run and schedule ids, to narrow the (global) dashboard payload
+  const [owned, setOwned] = useState<{ scope: Id; runs: Set<Id>; schedules: Set<Id> } | null>(null)
 
   // The window this visit shows. Pinned on the first load so a markSeen during the visit (blur, another window)
   // never empties "What got done" under the user; only "Mark all seen" or changing the window moves it.
@@ -70,7 +83,16 @@ export function HomeView(): React.JSX.Element {
     m === '24h' ? new Date(Date.now() - 864e5).toISOString() : m === '7d' ? new Date(Date.now() - 7 * 864e5).toISOString() : (pinnedSince.current ?? undefined)
   const load = (m: SinceMode = mode): void => {
     const since = sinceArg(m)
-    hive.app.dashboard(since ? { since } : undefined).then(
+    if (scope) {
+      const forScope = scope
+      void Promise.all([hive.runs.list({ companyId: forScope, limit: 500 }), hive.schedules.list({ companyId: forScope })]).then(
+        ([runs, schedules]) => setOwned({ scope: forScope, runs: new Set(runs.map((r) => r.id)), schedules: new Set(schedules.map((x) => x.id)) }),
+        () => setOwned({ scope: forScope, runs: new Set(), schedules: new Set() })
+      )
+    } else setOwned(null)
+    // COMPANY.md §8.3: focused mode asks main for that company's done runs, learned facts and activity
+    const co = scope ? { companyId: scope } : {}
+    hive.app.dashboard(since || scope ? { ...(since ? { since } : {}), ...co } : undefined).then(
       (d) => {
         if (m === 'last' && !pinnedSince.current) {
           pinnedSince.current = d.since
@@ -82,7 +104,7 @@ export function HomeView(): React.JSX.Element {
         mergeAsks(d.needsYou.asks)
         // nothing new in this window: fetch the last 7 days once for a collapsed "Earlier (n)"
         if (d.done.length === 0 && m === 'last') {
-          void hive.app.dashboard({ since: new Date(Date.now() - 7 * 864e5).toISOString() }).then((e) => setEarlier(e.done), () => setEarlier([]))
+          void hive.app.dashboard({ since: new Date(Date.now() - 7 * 864e5).toISOString(), ...co }).then((e) => setEarlier(e.done), () => setEarlier([]))
         } else setEarlier([])
       },
       (e) => {
@@ -91,7 +113,8 @@ export function HomeView(): React.JSX.Element {
       }
     )
   }
-  useEffect(() => load(), [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => load(), [nonce])
   const refetch = useCoalesced(() => load(), 1000)
   useHiveEvent('run:updated', (r) => r.status !== 'running' && r.status !== 'queued' && refetch())
   useHiveEvent('schedule:updated', refetch)
@@ -129,6 +152,11 @@ export function HomeView(): React.JSX.Element {
   }
 
   const leftovers = useLeftovers()
+  const taskCounts = useTaskCounts()
+  // VOICE.md §3.5: a focused company with departments on gets the briefing card (it carries the greeting); the
+  // milestone strip shows for any focused business (not Personal)
+  const briefing = useStore((s) => !!scope && departmentsOn(s))
+  const milestones = useStore((s) => !!scope && s.companies.some((c) => c.id === scope && !c.system))
   const groups = useMemo(() => hubGroups(idx.roots, asks, seen), [idx, asks, seen])
   // Live now leaves out what is already listed under Needs you
   const liveRoots = useMemo(() => {
@@ -136,9 +164,24 @@ export function HomeView(): React.JSX.Element {
     return idx.roots.filter((r) => isLive(r) && !needIds.has(r.id)).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
   }, [idx, groups])
   const unpriced = useMemo(() => !!data?.activity.days.some((d) => d.byModel.some((m) => m.costUsd == null && m.tokens > 0)), [data])
+  // focused mode: runs carry their company; schedules and learned facts are matched through the company's ids
+  const own = scope && owned?.scope === scope ? owned : null
+  const view = useMemo(() => {
+    if (!data || !scope) return data ? { ...data, earlier } : null
+    const ownRun = (id: Id | null | undefined): boolean => !!id && !!own?.runs.has(id)
+    // a fact learned in a session has no run: its repository decides (never a fact of an unknown origin)
+    const ownRepos = new Set(reposOf(repos, scope).map((r) => r.id))
+    return {
+      ...data,
+      done: data.done.filter((c) => inScope(c.run, scope)),
+      earlier: earlier.filter((c) => inScope(c.run, scope)),
+      learned: data.learned.filter((f) => (f.runId ? ownRun(f.runId) : !!f.fact.repoId && ownRepos.has(f.fact.repoId))),
+      comingUp: own ? data.comingUp.filter((c) => own.schedules.has(c.scheduleId)) : [],
+      morningBrief: data.morningBrief && inScope(data.morningBrief, scope) ? data.morningBrief : null
+    }
+  }, [data, earlier, scope, own, repos])
 
   if (unsupported) return <ClassicHome />
-  const showOnboarding = settings && !settings.onboardingDone && repos.length === 0
   const pickSince = async (): Promise<void> => {
     const id = await nativeMenu([
       { id: 'last', label: 'Since my last visit', type: 'checkbox', checked: mode === 'last' },
@@ -152,6 +195,9 @@ export function HomeView(): React.JSX.Element {
   }
   const needsCount = groups.needs.reduce((n, g) => n + (g.asks.length || 1), 0)
   const leftoverCount = leftovers.items?.length ?? 0
+  // board tasks waiting on you (a running task waiting on a live ask is already one of the live rows: counted once)
+  const taskNeeds = Object.entries(taskCounts).reduce((n, [id, c]) => (!scope || id === scope ? n + c.needsYou - (c.liveAsks ?? 0) : n), 0)
+  const needsTotal = needsCount + taskNeeds + (leftoverCount ? 1 : 0)
 
   return (
     <div className="view">
@@ -165,7 +211,7 @@ export function HomeView(): React.JSX.Element {
           )
         }
       >
-        {data && mode === 'last' && (data.done.length > 0 || data.learned.length > 0) && (
+        {view && mode === 'last' && (view.done.length > 0 || view.learned.length > 0) && (
           <Button size="sm" variant="ghost" onClick={markAllSeen} title="Start “since you were last here” from now">
             Mark all seen
           </Button>
@@ -174,21 +220,21 @@ export function HomeView(): React.JSX.Element {
       </Toolbar>
       <div className="scroll view__body">
         <div className="home home--dash">
-          {showOnboarding && <Onboarding />}
           {error && !data ? (
             <ErrorState error={error} onRetry={() => load()} />
-          ) : !data ? (
+          ) : !data || !view ? (
             <Loading />
           ) : (
             <>
-              {(groups.needs.length > 0 || leftoverCount > 0) && (
+              {!briefing && <HomeGreeting className="home__greet" />}
+              {needsTotal > 0 ? (
                 <>
-                  <SectionHeader title="Needs you" count={<span className="text-needs">{needsCount + (leftoverCount ? 1 : 0)}</span>}>
+                  <NeedsYouHeader count={<span className="text-needs">{needsTotal}</span>}>
                     <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'agents' })}>
                       Agents →
                     </Button>
-                  </SectionHeader>
-                  <div className="group-list hub__list">
+                  </NeedsYouHeader>
+                  {groups.needs.length > 0 && <div className="group-list hub__list">
                     {groups.needs.map(({ root, asks: ra }, i) => (
                       <AgentRow key={root.id} idx={idx} root={root} asks={ra} seen={isSeen(root, seen)}>
                         {ra.length > 0 && (
@@ -201,7 +247,12 @@ export function HomeView(): React.JSX.Element {
                         {ra.length === 0 && isUnseenIdle(root, seen) && <ReplyBox agent={root} onOpen={() => void focusAgent(root.id)} />}
                       </AgentRow>
                     ))}
-                  </div>
+                  </div>}
+                  {taskNeeds > 0 && (
+                    <div className="group-list home__tasks">
+                      <NeedsYouTasks companyId={scope ?? undefined} skipLiveAsks playfulTop={groups.needs.length === 0} />
+                    </div>
+                  )}
                   {leftoverCount > 0 && (
                     <div className="home__leftovers">
                       <div className="hub__sub">Leftover processes</div>
@@ -209,37 +260,49 @@ export function HomeView(): React.JSX.Element {
                     </div>
                   )}
                 </>
-              )}
-
-              {data.morningBrief && <MorningBrief artifact={data.morningBrief} />}
-
-              {data.done.length > 0 && (
+              ) : (
                 <>
-                  <SectionHeader title="What got done" count={<DoneTally cards={data.done} />}>
+                  <NeedsYouHeader />
+                  <NeedsYouEmpty />
+                </>
+              )}
+              {/* CLOUD.md §0.1: one inbox. Cloud asks and passport facts; nothing when this Mac has no cloud */}
+              <CloudNeedsYou companyId={scope ?? undefined} />
+
+              {/* one Latin phrase per screen (VOICE.md §1): with Otium on the empty Needs you above, the digest stays plain */}
+              {briefing && scope && <SenateBriefing companyId={scope} since={pinnedSince.current ?? data.lastSeenAt ?? data.since} latin={needsTotal > 0} />}
+
+              {view.morningBrief && <MorningBrief artifact={view.morningBrief} />}
+
+              {milestones && scope && <MilestoneStrip companyId={scope} />}
+
+              {view.done.length > 0 && (
+                <>
+                  <SectionHeader title="What got done" count={<DoneTally cards={view.done} />}>
                     <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'canvas' })}>
                       Canvas →
                     </Button>
                   </SectionHeader>
                   <div className="rcards">
-                    {data.done
+                    {view.done
                       .filter((c) => !isNothingToDo(c.run))
                       .map((c) => (
                         <RunCardView key={c.run.id} card={c} />
                       ))}
                   </div>
-                  <NothingToDoLine cards={data.done} />
+                  <NothingToDoLine cards={view.done} />
                 </>
               )}
 
-              {data.done.length === 0 && earlier.length > 0 && (
+              {view.done.length === 0 && view.earlier.length > 0 && (
                 <>
                   <SectionHeader title="What got done" count={<span className="text-tertiary">nothing new</span>} />
                   <button type="button" className="home__earlier link-btn" aria-expanded={showEarlier} onClick={() => setShowEarlier((v) => !v)}>
-                    {showEarlier ? '▾' : '▸'} Earlier ({earlier.length})
+                    {showEarlier ? '▾' : '▸'} Earlier ({view.earlier.length})
                   </button>
                   {showEarlier && (
                     <div className="rcards">
-                      {earlier.map((c) => (
+                      {view.earlier.map((c) => (
                         <RunCardView key={c.run.id} card={c} />
                       ))}
                     </div>
@@ -247,14 +310,14 @@ export function HomeView(): React.JSX.Element {
                 </>
               )}
 
-              {data.learned.length > 0 && (
+              {view.learned.length > 0 && (
                 <>
-                  <SectionHeader title="What agents learned" count={data.learned.length}>
+                  <SectionHeader title="What agents learned" count={view.learned.length}>
                     <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'memory' })}>
                       Memory →
                     </Button>
                   </SectionHeader>
-                  <LearnedList facts={data.learned} />
+                  <LearnedList facts={view.learned} />
                 </>
               )}
 
@@ -288,18 +351,18 @@ export function HomeView(): React.JSX.Element {
                 )}
               </div>
 
-              {data.comingUp.length > 0 && (
+              {view.comingUp.length > 0 && (
                 <>
                   <SectionHeader title="Coming up">
                     <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'schedules' })}>
                       Schedules →
                     </Button>
                   </SectionHeader>
-                  <ComingUpList items={data.comingUp} paused={data.status.schedulesPaused} onChanged={() => load()} />
+                  <ComingUpList items={view.comingUp} paused={data.status.schedulesPaused} onChanged={() => load()} />
                 </>
               )}
               <ClaudeHistorySection />
-              {data.done.length === 0 && earlier.length === 0 && data.learned.length === 0 && groups.needs.length === 0 && leftoverCount === 0 && (
+              {view.done.length === 0 && view.earlier.length === 0 && view.learned.length === 0 && needsTotal === 0 && (
                 <div className="home__quiet text-tertiary">Nothing new {mode === 'last' ? 'since your last visit' : 'in this window'}.</div>
               )}
             </>
@@ -348,26 +411,25 @@ function ClassicHome(): React.JSX.Element {
   useTick()
   const [data, setData] = useState<HomeData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const repos = useStore((s) => s.repos)
   const settings = useStore((s) => s.settings)
 
+  const { scope, nonce } = useScope()
   const load = (): void => {
     hive.app.home().then(
       (d) => {
-        setData(d)
+        // focused company (§8.4): its sessions and runs only
+        setData(scope ? { ...d, runningSessions: d.runningSessions.filter((x) => inScope(x, scope)), activeRuns: d.activeRuns.filter((x) => inScope(x, scope)), recentRuns: d.recentRuns.filter((x) => inScope(x, scope)) } : d)
         setError(null)
       },
       (e) => setError(errorMessage(e))
     )
   }
-  useEffect(load, [])
+  useEffect(load, [nonce])
   const refetch = useCoalesced(load, 300)
   useHiveEvent('run:updated', refetch)
   useHiveEvent('session:updated', refetch)
   useHiveEvent('schedule:updated', refetch)
   useHiveEvent('status:changed', refetch)
-
-  const showOnboarding = settings && !settings.onboardingDone && repos.length === 0
 
   return (
     <div className="view">
@@ -376,7 +438,6 @@ function ClassicHome(): React.JSX.Element {
       </Toolbar>
       <div className="scroll view__body">
         <div className="home">
-          {showOnboarding && <Onboarding />}
           {error && !data ? (
             <ErrorState error={error} onRetry={load} />
           ) : !data ? (
@@ -534,54 +595,6 @@ function RunRowItem({ run: r }: { run: Run }): React.JSX.Element {
           </Button>
         )}
       </span>
-    </div>
-  )
-}
-
-function Onboarding(): React.JSX.Element {
-  const providers = useStore((s) => s.providers)
-  const settings = useStore((s) => s.settings)
-  const agents = providers.filter((p) => p.id !== 'shell')
-  return (
-    <div className="onboarding">
-      <div className="onboarding__title">Welcome to Principia</div>
-      <div className="onboarding__step">
-        <span className="onboarding__num">1</span>
-        <span className="flex1">Add your repositories</span>
-        <Button variant="primary" icon="folder" onClick={() => void addRepos()}>
-          Choose Folders…
-        </Button>
-      </div>
-      <div className="onboarding__step">
-        <span className="onboarding__num">2</span>
-        <span className="flex1">
-          Agents found:{' '}
-          {agents.length === 0
-            ? 'checking…'
-            : agents.map((p) => (
-                <span key={p.id} className={`onboarding__agent ${p.available ? '' : 'text-tertiary'}`} title={p.available ? (p.binPath ?? '') : p.installHint}>
-                  {p.available ? '✓' : '⊘'} {p.label}
-                  {p.version ? ` ${p.version}` : ''}
-                </span>
-              ))}
-        </span>
-        <Button icon="refresh" onClick={() => void attempt(() => refreshProviders(true), 'Recheck')}>
-          Recheck
-        </Button>
-      </div>
-      <div className="onboarding__step">
-        <span className="onboarding__num">3</span>
-        <span className="flex1">Keep schedules firing — Launch at Login</span>
-        <Switch checked={!!settings?.launchAtLogin} onChange={(v) => void updateSettings({ launchAtLogin: v })} label="Launch at Login" />
-      </div>
-      <div className="onboarding__footer">
-        <Button variant="ghost" onClick={() => void updateSettings({ onboardingDone: true })}>
-          Dismiss
-        </Button>
-        <Button icon="terminal" onClick={() => void startSession({ repoId: null })}>
-          Start a {providerLabel(settings?.defaultAdapter ?? 'claude')} session
-        </Button>
-      </div>
     </div>
   )
 }

@@ -1,0 +1,34 @@
+# SHA-256 of synthetic credential-shaped test fixtures, reviewed by hand: none is a real key (wrong length or
+# fixture markers, none equal to a configured key). prepare-public-release.mjs exempts exactly these values.
+278418a50d51b487e6c687fc77c6d01fb55bf3153aed84938b42b8a8aa302fda  # cloud/agent.smoke.mjs
+aa929d2a3f6e6fff71d2ac182e8f36cbe3340f78d7c8376926461d98530f8e13  # cloud/agent.smoke.mjs
+3bf95731e5d23fccf7c082c2fd0a72e05b25115f11a0178862168ee1f2c874ea  # cloud/agent.smoke.mjs
+04ce0b419cdd0b5a4feedbd63b0fa4ca0145a2c36a3848e57c20920e2710bf25  # src/cloud/agent/__tests__/passport.test.ts
+34ed1fd25fe9b1a74f00f2f5500ab0268c5f0b9495febb95e2d9563705022ca3  # src/cloud/agent/__tests__/providers.test.ts
+5c52987ff34f7761ef0fff38ee3c83bc1a148d3c802ae07763882cd2c9b6f114  # src/cloud/agent/__tests__/providers.test.ts
+af6f1a17a44a72b853d939ea57001b9152562ecc154d762e5c15042e326c210b  # src/cloud/agent/__tests__/providers.test.ts
+917ba8a7abe356e409bdc512909f55566c137e0c7fc376ed11cd89b2042e3b75  # src/cloud/agent/__tests__/providers.test.ts
+d6c77a673a9024ab63a5f02f275b9b33cf4f444997f4ed8340ba40d007b68a90  # src/cloud/agent/__tests__/qa.test.ts
+d13f13ff2665bca456833dbb8031a7a72242bacaefba6089cb894e86713e9e93  # src/cloud/agent/__tests__/qa.test.ts
+3995af3db491ca4a0bfe2c5192c2d34dc293da33b23faf7b9f332f2a251142df  # src/cloud/agent/__tests__/qa.test.ts
+6b37fc3dc17c1aacff0392dd07c05ead2b03e192b018102155a7bc8bd8258b4c  # src/cloud/agent/__tests__/qa.test.ts
+917d65923dfedfbe0b5adb894d222e813a99be4e83230709d6c5da002e4c25c7  # src/cloud/agent/__tests__/repos.test.ts
+8fef16c08a56e65677fdbce06fd928b6eeda43062169d7030c0bb0bb8c2a6cc2  # src/cloud/agent/__tests__/runtime.test.ts
+7c73be35f240acac2884d8be95467efff8fb567227a8b22281efdb4a33bdab0d  # src/cloud/control/__tests__/auth.test.ts
+47f4ebdc7b354eda0cc065d709ffc86a0aeecf5196944bd21e124114438cdcaf  # src/cloud/control/__tests__/queue.test.ts
+3193831645bd691450f50c575c8f3019bcd83b9be8448321f223ef36671e03c5  # src/cloud/control/__tests__/queue.test.ts
+4fc911bf70ceb54151becbff1fe0750aeee774cae0834ff34d3df017ff2f4d8e  # src/cloud/control/__tests__/readiness.test.ts
+8472854584254cedeedb44a3cff083b8729c4413e28e6bd0538add49cbe2a58e  # src/cloud/control/__tests__/secrets.test.ts
+05675ab74bb87597741d9c18076f7433ab3c5e8c2dcaf4ef2b0c5731563c6d91  # src/cloud/control/__tests__/secrets.test.ts
+c1673a318b68b0cc16a6f2e2a305288dfa142730810f8459fca57ca30dc652ca  # src/cloud/control/__tests__/vault.test.ts
+f04a73363bd8b44c3be922d90268fdb3ef17cef150883c418a0572adb0de8c0d  # src/main/cloud/__tests__/logins.test.ts
+df494c9dc2caa4d95010c0dde801c01446ec4b40083183beeffd55f0ca44fb7c  # src/main/connectors/slack/__tests__/files.test.ts
+ae687f255b10f14beebbcdba4a64ffe02d50ddb9989d904c54b47edc9ab76f11  # src/main/connectors/slack/testing/fakeSlack.ts
+06a6e0d94d41ad892cefb2169795aa942a40d22fc7385e558498436e70d167fa  # src/main/memory/__tests__/openPassport.test.ts
+977b7ec104fb56cc781bf9316d207e203520660807d7a5c10e4894455c43c0e1  # src/main/onboarding/__tests__/keys.test.ts
+a49255bd5bbefd64caa9a8eda55f1d88b29e11bc173c97fb0f000df3d7526870  # src/renderer/src/lib/cloud.test.ts
+57260f4f4ece444882261dcbe3a874795e57b5bd83c86cbcf4023259395b2ab5  # src/renderer/src/lib/cloud.test.ts
+eadf4bcc3aaf5d795af2010e4a66cc488a34f1f712f8d2f86fc415b8917d75e1  # src/renderer/src/lib/slack.test.ts
+620db6c790792b036aecad49231e0a10b8008feea78f81a78943f1f20f71c637  # src/renderer/src/lib/slack.test.ts
+03aafb028d538b06c4341bf8cf2a692a3c6d1f36e34e0e0b376f407c6117a246  # src/shared/onboardingPlan.test.ts
+82be8a4d9cdebab78235e6d0618fdea34065fcb6f498073283ff4ec7376e551a  # src/shared/onboardingPlan.test.ts

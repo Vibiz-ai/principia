@@ -6,6 +6,9 @@ import { Button, EmptyState, ErrorState, Loading, Pill, Toolbar } from '../compo
 import { errorMessage, hive } from '../lib/hive'
 import { filterMarketItems, MARKET_CATEGORIES, MARKET_FILTERS, MARKET_LABELS, marketIcon, marketRuntime } from '../lib/marketplace'
 import { attempt, navigate } from '../state/store'
+import { useScope } from '../components/CompanyChip'
+import { keysForCompany } from '../lib/scope'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 
 const REPO = 'https://github.com/Vibiz-ai/principia'
 
@@ -20,16 +23,18 @@ export function MarketplaceView(): React.JSX.Element {
   const [keys, setKeys] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState<MarketItem | null>(null)
   const request = useRef(0)
+  // COMPANY.md §4: "keys to connect" counts what the focused company's agents would get (Shared + its own)
+  const { scope, nonce } = useScope()
 
   async function load(refresh = false): Promise<void> {
     const id = ++request.current
     setLoading(true)
     setError(null)
     try {
-      const [catalog, secrets] = await Promise.all([hive.marketplace.list({ refresh }), hive.secrets.list().catch(() => [])])
+      const [catalog, secrets] = await Promise.all([hive.marketplace.list({ refresh }), hive.secrets.list(scope ? { companyId: scope } : undefined).catch(() => [])])
       if (id !== request.current) return
       setList(catalog)
-      setKeys(new Set(secrets.map(secret => secret.name)))
+      setKeys(new Set(keysForCompany(secrets, scope ?? PERSONAL_COMPANY_ID).map(secret => secret.name)))
     } catch (e) {
       if (id === request.current) setError(errorMessage(e))
     } finally {
@@ -39,7 +44,8 @@ export function MarketplaceView(): React.JSX.Element {
   useEffect(() => {
     void load()
     return () => { request.current++ }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonce])
 
   const shown = filterMarketItems(list?.items ?? [], query, kind, category, installed)
   const openLink = (url: string): void => { void attempt(() => hive.app.openExternal({ url }), 'Open link') }

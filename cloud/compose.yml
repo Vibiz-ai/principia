@@ -1,18 +1,153 @@
+# Principia Cloud, self-hosted (CLOUD.md §12.1). One file, no clone, no .env:
+#   curl -fsSL https://raw.githubusercontent.com/Vibiz-ai/principia/main/cloud/compose.yml -o compose.yml
+#   docker compose up -d
+#   docker compose logs principia | grep -A1 "Connect link"
+# Public HTTPS in one flag (ChatGPT and Claude.ai reach your Passport; your Mac and phone need no tunnel). Point both
+# domains at this machine, then:
+#   PRINCIPIA_DOMAIN=cloud.example.com PASSPORT_DOMAIN=passport.example.com docker compose --profile caddy up -d
+# Build the images from source instead of pulling them: docker compose -f compose.yml -f compose.build.yml up --build -d
+# `init` generates the master key and the passport admin token into the principia-secrets volume once. Env vars (or a
+# .env next to this file, see .env.example) always win. Back up principia-secrets separately from principia-data.
+# The control plane runs as root with six capabilities and starts every agent as uid 1001, which cannot read
+# /secrets or control.db (CLOUD.md §7.8).
+name: principia-cloud
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
 services:
+  init:
+    image: ghcr.io/vibiz-ai/principia-cloud:${PRINCIPIA_VERSION:-latest}
+    user: '0:0'
+    command: ['principia-cloud', 'init']
+    environment:
+      PRINCIPIA_SECRETS_DIR: /secrets
+      # passport-admin is copied here: the passport container mounts only this volume, never master.key
+      PRINCIPIA_PASSPORT_SECRETS_DIR: /passport-secrets
+      # the passport container's user (node in the Open Passport image)
+      PRINCIPIA_PASSPORT_SECRETS_UID: '1000'
+    volumes:
+      - principia-secrets:/secrets
+      - passport-secrets:/passport-secrets
+    restart: 'no'
+    <<: *hardening
+    # writes the secrets as root and hands the passport copy to the passport container's user
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+
   principia:
-    build:
-      context: ..
-      dockerfile: cloud/Dockerfile
+    image: ghcr.io/vibiz-ai/principia-cloud:${PRINCIPIA_VERSION:-latest}
+    user: '0:0'
     init: true
     restart: unless-stopped
-    env_file: .env
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      passport:
+        condition: service_started
+    environment:
+      PRINCIPIA_PUBLIC_URL: ${PRINCIPIA_PUBLIC_URL:-}
+      PRINCIPIA_DOMAIN: ${PRINCIPIA_DOMAIN:-}
+      PRINCIPIA_MASTER_KEY: ${PRINCIPIA_MASTER_KEY:-}
+      PRINCIPIA_ADMIN_TOKEN: ${PRINCIPIA_ADMIN_TOKEN:-}
+      PRINCIPIA_WORKSPACE_NAME: ${PRINCIPIA_WORKSPACE_NAME:-}
+      PRINCIPIA_LOG_RETENTION_DAYS: ${PRINCIPIA_LOG_RETENTION_DAYS:-}
+      PRINCIPIA_CONNECTOR_ALLOW_PRIVATE: ${PRINCIPIA_CONNECTOR_ALLOW_PRIVATE:-}
+      PRINCIPIA_RUNTIME: ${PRINCIPIA_RUNTIME:-}
+      PRINCIPIA_AGENT_UID: ${PRINCIPIA_AGENT_UID:-1001}
+      OPEN_PASSPORT_INTERNAL_URL: http://passport:8787
+      OPEN_PASSPORT_PUBLIC_URL: ${OPEN_PASSPORT_PUBLIC_URL:-}
+      PASSPORT_DOMAIN: ${PASSPORT_DOMAIN:-}
+      OPEN_PASSPORT_ADMIN_TOKEN: ${OPEN_PASSPORT_ADMIN_TOKEN:-}
     ports:
       - '127.0.0.1:8787:8787'
     volumes:
       - principia-data:/data
-      - ./workspace:/workspace
+      - principia-workspace:/workspace
+      - principia-secrets:/secrets:ro
     stop_grace_period: 20s
-    security_opt:
-      - no-new-privileges:true
+    <<: *hardening
+    # CLOUD.md §7.8: enough to hand folders to the agent user and start agents as it; agents themselves get none
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - KILL
+
+  passport:
+    image: ghcr.io/vibiz-ai/open-passport-host:${OPEN_PASSPORT_VERSION:-latest}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command:
+      - sh
+      - -c
+      - >-
+        export OPEN_PASSPORT_ADMIN_TOKEN="$${OPEN_PASSPORT_ADMIN_TOKEN:-$$(cat /secrets/passport-admin)}";
+        export OPEN_PASSPORT_PUBLIC_URL="$${OPEN_PASSPORT_PUBLIC_URL:-$${PASSPORT_DOMAIN:+https://$$PASSPORT_DOMAIN}}";
+        export OPEN_PASSPORT_PUBLIC_URL="$${OPEN_PASSPORT_PUBLIC_URL:-http://127.0.0.1:8788}";
+        exec node packages/server/src/main.ts
+    environment:
+      OPEN_PASSPORT_ADMIN_TOKEN: ${OPEN_PASSPORT_ADMIN_TOKEN:-}
+      OPEN_PASSPORT_PUBLIC_URL: ${OPEN_PASSPORT_PUBLIC_URL:-}
+      PASSPORT_DOMAIN: ${PASSPORT_DOMAIN:-}
+      HOST: 0.0.0.0
+    ports:
+      - '127.0.0.1:8788:8787'
+    volumes:
+      - passport-data:/data
+      - passport-secrets:/secrets:ro
+    <<: *hardening
+
+  # Public HTTPS: Caddy gets the certificates for both domains and proxies them. Off unless --profile caddy.
+  caddy:
+    image: caddy:2.10-alpine
+    profiles:
+      - caddy
+    restart: unless-stopped
+    depends_on:
+      - principia
+      - passport
+    environment:
+      PRINCIPIA_DOMAIN: ${PRINCIPIA_DOMAIN:-}
+      PASSPORT_DOMAIN: ${PASSPORT_DOMAIN:-}
+    ports:
+      - '80:80'
+      - '443:443'
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
+configs:
+  caddyfile:
+    content: |
+      {$$PRINCIPIA_DOMAIN} {
+        reverse_proxy principia:8787
+      }
+      {$$PASSPORT_DOMAIN} {
+        reverse_proxy passport:8787
+      }
+
 volumes:
   principia-data:
+  principia-workspace:
+  principia-secrets:
+  passport-secrets:
+  passport-data:
+  caddy-data:
+  caddy-config:

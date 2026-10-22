@@ -5,6 +5,7 @@
  * - a Slack-driven run works in its own folder, never the shared scratch dir;
  * - memory is read-only for restricted Slack-driven agents.
  */
+import { attachFakeSlackTools } from './slackToolsFake'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -81,6 +82,7 @@ describe('validation: no step output in a command of a Slack-driven workflow', (
 // NEVER put a destructive command in a fake output: a manual (non-Slack) run legitimately interpolates it into a shell.
 async function setup(nodes: WorkflowNode[], output = 'model said: $(touch pwned) `id`', x: Partial<WorkflowDraft> = {}) {
   const ctx = fakeCtx()
+  attachFakeSlackTools(ctx)
   ctx.profiles.set('p_claude', profile('p_claude', 'claude'))
   const calls: FakeCall[] = []
   const claude = fakeAdapter('claude', calls, () => ({ output }))

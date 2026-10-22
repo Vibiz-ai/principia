@@ -1,0 +1,321 @@
+/**
+ * What the onboarding buttons do (docs/ONBOARDING.md §2, §4, §7): the Next orchestration (site read on Name, plan
+ * tailoring when leaving Goals), the launch / retry / skip / discard calls and the Ready step's start. The state
+ * itself lives in the store (state/store.ts) and the pure reducer (state/onboarding.ts); this module only sequences
+ * IPC calls around them. Keys never pass through here: KeyField sends its value straight to `onboarding:key`.
+ */
+import type { LaunchResult, LaunchStepName, OnboardingDraft, OnboardingStatus, ProgressEvent, SoftLaunchStep } from '@shared/onboarding'
+import { LAUNCH_STEP_LABELS, SOFT_LAUNCH_STEPS } from '@shared/onboarding'
+import { inputsHash } from '@shared/onboardingPlan'
+import { confirmNative, errorMessage, hive } from '../../lib/hive'
+import { draftInputsHash, launchInput, planInput, reconcileLaunchDraft } from '../../state/onboarding'
+import {
+  discardOnboarding,
+  finishOnboarding,
+  flushOnboardingDraft,
+  getState,
+  onboardingDispatch,
+  onboardingPlanContext,
+  requestOnboardingPlan,
+  setState,
+  toast
+} from '../../state/store'
+import { useSyncExternalStore } from 'react'
+import { instagramHandle, siteFetchUrl } from './model'
+
+// ---------- flow-local state (not in the app store: transient, never persisted) ----------
+
+export interface FlowLocal {
+  /** The Name step's site read is in flight (About shows "Reading your site…"). */
+  siteReading: boolean
+  /** A launch call that threw after the journal existed (shown on the failed step). */
+  launchError: string | null
+  /** The last launch result (Ready step: company id and the created schedules). */
+  result: LaunchResult | null
+  /**
+   * VOICE.md §8: the launch ceremony is up (Start now in playful tone, after start() resolved). Its CTA, Skip or Esc
+   * calls finishCeremony(), the existing close + enterCompany path.
+   */
+  ceremony: { companyId: string } | null
+}
+let local: FlowLocal = { siteReading: false, launchError: null, result: null, ceremony: null }
+const listeners = new Set<() => void>()
+export function setLocal(patch: Partial<FlowLocal>): void {
+  local = { ...local, ...patch }
+  listeners.forEach((l) => l())
+}
+export function getLocal(): FlowLocal {
+  return local
+}
+export function useFlowLocal<T>(sel: (s: FlowLocal) => T): T {
+  return useSyncExternalStore(
+    (cb) => (listeners.add(cb), () => void listeners.delete(cb)),
+    () => sel(local),
+    () => sel(local)
+  )
+}
+
+// ---------- small shared bits ----------
+
+/** Installed non-shell adapters (onboarding:status, else the providers the app already detected). */
+export function installedAdapters(status: OnboardingStatus | null = getState().onboardingStatus): string[] {
+  if (status?.providers?.length) return status.providers.filter((p) => p.installed && p.adapter !== 'shell').map((p) => p.adapter)
+  return getState()
+    .providers.filter((p) => p.available && p.id !== 'shell')
+    .map((p) => p.id)
+}
+
+/** The Claude CLI is there (plan tailoring, "Tailor with Claude"). */
+export function hasClaudeCli(status: OnboardingStatus | null = getState().onboardingStatus): boolean {
+  if (status) return !!status.claudeCli
+  return getState().providers.some((p) => p.id === 'claude' && p.available)
+}
+
+export function openLink(url: string): void {
+  void hive.app.openExternal({ url }).catch(() => toast('Couldn’t open the link.', 'error'))
+}
+
+// ---------- plan tailoring (§6.2) ----------
+
+/** The answers hash the last automatic agent request was made for: entering Plan re-asks only when it changed. */
+let lastAgentHash: string | null = null
+
+/** Ask main for a tailored plan for the current answers (needs the Claude CLI). */
+export function tailorPlan(): void {
+  const d = getState().onboardingDraft
+  if (!d || !hasClaudeCli()) return
+  lastAgentHash = draftInputsHash(d, onboardingPlanContext())
+  void requestOnboardingPlan(true)
+}
+
+/** Entering Plan: re-ask once when the answers changed since the last automatic request (keys added on Content). */
+export function maybeRetailor(): void {
+  const s = getState()
+  const d = s.onboardingDraft
+  if (!d || s.onboardingPlanPending || !hasClaudeCli()) return
+  const ctx = onboardingPlanContext()
+  const hash = draftInputsHash(d, ctx)
+  if (lastAgentHash === hash) return
+  if (d.plan && d.plan.source === 'agent' && d.plan.inputsHash === hash) return
+  // only automatic when a request was already made for an earlier version of these answers (left Goals)
+  if (lastAgentHash === null) return
+  tailorPlan()
+}
+
+/** Test seam. */
+export function resetTailorMemory(): void {
+  lastAgentHash = null
+}
+
+// ---------- Next (§2, §3) ----------
+
+/** The site read behind the Name step's Continue (§5.3); failures are quiet (the field is still saved). */
+let siteSeq = 0
+function readSite(raw: string): void {
+  const url = siteFetchUrl(raw)
+  if (!url) return
+  const seq = ++siteSeq
+  setLocal({ siteReading: true })
+  hive.onboarding
+    .fetchSite({ url })
+    .then((site) => {
+      if (seq !== siteSeq) return
+      onboardingDispatch({ type: 'setSite', site })
+      onboardingDispatch({ type: 'applyPrefill' })
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (seq === siteSeq) setLocal({ siteReading: false })
+    })
+}
+
+/**
+ * The primary button on a question step. Name → (website typed) site read in the background; Goals → plan tailoring
+ * starts in the background (§2 S4); Plan → launch.
+ */
+export function next(): void {
+  const d = getState().onboardingDraft
+  if (!d) return
+  if (d.step === 'plan') return void launch()
+  if (d.step === 'name') {
+    const handle = instagramHandle(d.answers.siteUrl)
+    if (handle) onboardingDispatch({ type: 'setAnswers', patch: { instagram: handle, siteUrl: '' } })
+    else if (d.answers.siteUrl.trim()) readSite(d.answers.siteUrl)
+  }
+  onboardingDispatch({ type: 'next' })
+  const after = getState().onboardingDraft
+  if (d.step === 'goals' && after && after.step !== 'goals') tailorPlan()
+}
+
+export function back(): void {
+  onboardingDispatch({ type: 'back' })
+}
+
+// ---------- launch (§7) ----------
+
+let launching = false
+
+function progressFrom(res: Pick<LaunchResult, 'journalId' | 'steps'>): Partial<Record<LaunchStepName, ProgressEvent>> {
+  const out: Partial<Record<LaunchStepName, ProgressEvent>> = {}
+  for (const st of res.steps) {
+    if (st.status === 'pending') continue
+    out[st.name] = { journalId: res.journalId, step: st.name, status: st.status, label: LAUNCH_STEP_LABELS[st.name], ...(st.error ? { error: st.error } : {}) }
+  }
+  return out
+}
+
+function applyResult(res: LaunchResult): void {
+  setLocal({ result: res, launchError: null })
+  setState((s) => ({
+    onboardingProgress: {
+      journalId: res.journalId,
+      steps: { ...(s.onboardingProgress.journalId === res.journalId ? s.onboardingProgress.steps : {}), ...progressFrom(res) },
+      clone: s.onboardingProgress.journalId === res.journalId ? s.onboardingProgress.clone : null
+    }
+  }))
+  onboardingDispatch({ type: 'launchStarted', journalId: res.journalId })
+  if (res.status === 'done') onboardingDispatch({ type: 'launchDone', journalId: res.journalId })
+  else if (res.status === 'failed') onboardingDispatch({ type: 'launchFailed', journalId: res.journalId })
+  else if (res.status === 'discarded') discardOnboarding()
+  flushOnboardingDraft()
+}
+
+async function runLaunch(call: () => Promise<LaunchResult>, d: OnboardingDraft): Promise<void> {
+  launching = true
+  try {
+    applyResult(await call())
+  } catch (e) {
+    const cur = getState().onboardingDraft
+    if (cur && !cur.journalId && !getState().onboardingProgress.journalId) {
+      // main refused before anything was created (preflight): back to Plan with the reason
+      const back = reconcileLaunchDraft(cur, null)
+      if (back) setState({ onboardingDraft: back })
+      flushOnboardingDraft()
+      toast(errorMessage(e), 'error')
+    } else {
+      // the journal may be known only from progress events: keep it, so Retry resumes and Discard undoes it in main
+      const journalId = cur?.journalId ?? d.journalId ?? getState().onboardingProgress.journalId
+      onboardingDispatch({ type: 'launchFailed', ...(journalId ? { journalId } : {}) })
+      setLocal({ launchError: errorMessage(e) })
+    }
+  } finally {
+    launching = false
+  }
+}
+
+/** Plan's primary ("Create Sunday Bakery") and Retry: start the launch, or resume the draft's journal. */
+export async function launch(): Promise<void> {
+  const d = getState().onboardingDraft
+  if (!d || launching) return
+  const input = launchInput(d, onboardingPlanContext())
+  if (!input) {
+    toast(d.plan ? 'Something in the plan can’t be created. Check the names and try again.' : 'The plan isn’t ready yet.', 'error')
+    return
+  }
+  setLocal({ launchError: null })
+  if (d.step === 'plan') {
+    setState({ onboardingProgress: { journalId: null, steps: {}, clone: null } })
+    onboardingDispatch({ type: 'next' })
+  } else {
+    onboardingDispatch({ type: 'launchResumed' })
+  }
+  flushOnboardingDraft()
+  await runLaunch(() => hive.onboarding.launch({ ...(d.journalId ? { journalId: d.journalId } : {}), draftId: d.id, input }), d)
+}
+
+/** Retry needs the answers; a draft rebuilt from a journal alone (another Mac session lost them) can only Discard. */
+export function canRetry(d: OnboardingDraft): boolean {
+  return !!launchInput(d, onboardingPlanContext())
+}
+
+export function isSoftStep(step: LaunchStepName): step is SoftLaunchStep {
+  return (SOFT_LAUNCH_STEPS as readonly string[]).includes(step)
+}
+
+/** "Continue without this" (soft steps only). */
+export async function skipStep(step: LaunchStepName): Promise<void> {
+  const d = getState().onboardingDraft
+  const journalId = d?.journalId ?? getState().onboardingProgress.journalId
+  if (!d || !journalId || launching || !isSoftStep(step)) return
+  setLocal({ launchError: null })
+  onboardingDispatch({ type: 'launchResumed' })
+  await runLaunch(() => hive.onboarding.skipStep({ journalId, step }), d)
+}
+
+/** Discard: confirm, undo in main, close. Folders and clones stay on disk. */
+export async function discard(): Promise<void> {
+  const d = getState().onboardingDraft
+  if (!d || launching) return
+  const name = d.answers.name.trim() || 'this business'
+  const ok = await confirmNative({
+    message: `Archive ${name} and undo what was set up?`,
+    detail: 'Your folders and clones stay on disk.',
+    confirmLabel: 'Discard',
+    destructive: true
+  })
+  if (!ok) return
+  // a journal known only from progress events still has things to undo: never just forget it locally
+  const journalId = d.journalId ?? getState().onboardingProgress.journalId
+  try {
+    if (journalId) await hive.onboarding.discard({ journalId })
+    discardOnboarding()
+    toast(`Discarded ${name}. Your folders and clones stay on disk.`)
+  } catch (e) {
+    toast(errorMessage(e), 'error')
+  }
+}
+
+/**
+ * Ready step: Start now (autopilot on, ticked schedules on by their plan refs, auto agents raised) → company Home; I'll review first →
+ * nothing turned on → the Board.
+ * `ceremony` (Start now in playful tone): once start resolves, the launch ceremony plays instead of closing; it lands
+ * on Home through finishCeremony(). Plain tone and I'll review first never pass it.
+ */
+export async function start(opts: { autopilot: boolean; scheduleRefs: string[]; ceremony?: boolean }): Promise<boolean> {
+  const d = getState().onboardingDraft
+  const res = local.result
+  const journalId = d?.journalId ?? res?.journalId
+  const companyId = res?.companyId ?? getState().onboardingStatus?.journal?.companyId ?? null
+  if (!journalId || !companyId) {
+    toast('Couldn’t find the new company. Open it from the rail.', 'error')
+    return false
+  }
+  if (opts.autopilot) {
+    try {
+      await hive.onboarding.start({ journalId, autopilot: true, scheduleRefs: opts.scheduleRefs })
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+      return false
+    }
+  }
+  if (opts.autopilot && opts.ceremony) {
+    // the draft and the result stay until the ceremony ends: it shows the team from them
+    setLocal({ ceremony: { companyId } })
+    return true
+  }
+  setLocal({ result: null, ceremony: null })
+  await finishOnboarding(companyId, opts.autopilot ? 'home' : 'board')
+  return true
+}
+
+let finishing = false
+/** The ceremony's CTA ("Go to Sunday Bakery"), Skip and Esc: the same close + enterCompany as Start now. Once. */
+export async function finishCeremony(): Promise<void> {
+  const c = local.ceremony
+  if (!c || finishing) return
+  finishing = true
+  try {
+    // finishOnboarding closes the flow synchronously before its first await, so the Ready step never flashes back
+    const done = finishOnboarding(c.companyId, 'home')
+    setLocal({ result: null, ceremony: null })
+    await done
+  } finally {
+    finishing = false
+  }
+}
+
+/** The current draft's plan input hash (the Plan step's template dispatch). */
+export function currentInputs(d: OnboardingDraft): { input: ReturnType<typeof planInput>; hash: string } {
+  const input = planInput(d, onboardingPlanContext())
+  return { input, hash: inputsHash(input) }
+}

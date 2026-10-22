@@ -16,6 +16,9 @@ import { TerminalPane, type TerminalHandle } from '../components/TerminalPane'
 import { Button, EmptyState, IconButton, Toolbar } from '../components/ui'
 import { hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { injectedNames } from '../lib/secrets'
+import { keysForCompany } from '../lib/scope'
+import { companyOf } from '../lib/companyModel'
+import { CompanyChip } from '../components/CompanyChip'
 import { clock } from '../lib/time'
 import { sessionEndLabel, sessionPlace, tildify } from '../lib/format'
 import { ProviderSwitcher } from '../shell/ProviderSwitcher'
@@ -244,7 +247,8 @@ function SessionPane({
   const [artifactCount, setArtifactCount] = useState<number | null>(null)
   const termRef = useRef<TerminalHandle | null>(null)
   const profile = profiles.find((p) => p.id === s.profileId)
-  const keys = injectedNames(profile, secrets)
+  // COMPANY.md §4: Shared keys plus this session's company's (a company key wins), never another company's
+  const keys = injectedNames(profile, keysForCompany(secrets, companyOf(s)))
   const exited = s.status === 'exited'
   const providers = useStore((st) => st.providers)
   const alternatives = providers.filter((p) => p.available && p.id !== s.adapter && (p.id === 'claude' || p.id === 'codex'))
@@ -279,7 +283,7 @@ function SessionPane({
   }, [exited, s.id, s.exitCode])
 
   const startFresh = async (): Promise<void> => {
-    const fresh = await startSession({ repoId: s.repoId, adapter: s.adapter, forceNew: true })
+    const fresh = await startSession({ repoId: s.repoId, adapter: s.adapter, forceNew: true, companyId: companyOf(s) })
     if (!fresh) return
     setState((st) => {
       const grid = st.grid.includes(fresh.id) && st.grid.includes(s.id) ? st.grid.filter((g) => g !== s.id) : st.grid.map((g) => (g === s.id ? fresh.id : g))
@@ -318,7 +322,9 @@ function SessionPane({
   return (
     <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
       <div className="pane__header mono">
-        <span className="pane__cwd selectable" title={s.repoId ? tildify(s.cwd) : 'Principia’s scratch folder, not tied to a repository'}>
+        {/* §8.6: a pane may belong to any company, whatever the focus */}
+        <CompanyChip companyId={s.companyId} always className="pane__company" />
+        <span className="pane__cwd selectable" title={s.repoId ? tildify(s.cwd) : `${tildify(s.cwd)}\nThis company’s chat folder, not tied to a repository`}>
           {sessionPlace(s)}
         </span>
         {s.adapter !== 'shell' && <span className="text-tertiary">· {providerLabel(s.adapter)}</span>}

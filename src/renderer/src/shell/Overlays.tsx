@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Sheet } from '../components/ui'
+import { LatinLine } from '../components/roman'
 import { addRepoPaths, setState, useStore } from '../state/store'
 
 export function Toasts(): React.JSX.Element {
@@ -10,6 +11,12 @@ export function Toasts(): React.JSX.Element {
         <div key={t.id} className={`toast toast--${t.kind}`}>
           {t.kind === 'error' ? '✕ ' : ''}
           {t.text}
+          {t.latin && (
+            <>
+              {' '}
+              <LatinLine pair={t.latin} />
+            </>
+          )}
         </div>
       ))}
     </div>

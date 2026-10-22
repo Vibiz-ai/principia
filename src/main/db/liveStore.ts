@@ -3,7 +3,7 @@
  * Used by main for session-owned rows and (through engineStore.ts) by the engine for run-owned rows.
  * Synchronous (better-sqlite3), no Electron imports. Every text field is redacted + capped on write.
  */
-import type { AdapterId, ISODate, Id } from '../../shared/types'
+import type { AdapterId, CompanyFilter, CompanyStamped, ISODate, Id } from '../../shared/types'
 import type {
   AgentEvent,
   AgentListQuery,
@@ -17,7 +17,8 @@ import type {
 import { HiveError } from '../../shared/errors'
 import path from 'node:path'
 import type { DB } from './index'
-import { buildPatch, json } from './mappers'
+import { buildPatch, json, stamp } from './mappers'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 
 export const LIVE_STATUSES: AgentStatus[] = ['starting', 'working', 'needs_you', 'idle']
 export const TERMINAL_STATUSES: AgentStatus[] = ['done', 'failed', 'canceled']
@@ -87,6 +88,7 @@ interface AgentRow {
   reset_at?: string | null
   retry_at?: string | null
   stalled_since?: string | null
+  company_id?: string | null
   started_at: string
   updated_at: string
   ended_at: string | null
@@ -127,9 +129,11 @@ interface AskRow {
   expires_at: string | null
   draft_id?: string | null
   slack_draft_id?: string | null
+  company_id?: string | null
+  task_id?: string | null
 }
 
-export const agentFromRow = (r: AgentRow): AgentNode => ({
+export const agentFromRow = (r: AgentRow): AgentNode & CompanyStamped => ({
   id: r.id,
   kind: r.kind as AgentNode['kind'],
   parentId: r.parent_id,
@@ -167,7 +171,8 @@ export const agentFromRow = (r: AgentRow): AgentNode => ({
   stalledSince: r.stalled_since ?? null,
   startedAt: r.started_at,
   updatedAt: r.updated_at,
-  endedAt: r.ended_at
+  endedAt: r.ended_at,
+  companyId: stamp(r.company_id)
 })
 export const eventFromRow = (r: EventRow): AgentEvent => ({
   seq: r.seq,
@@ -180,7 +185,7 @@ export const eventFromRow = (r: EventRow): AgentEvent => ({
   detail: r.detail,
   state: r.state as AgentEvent['state']
 })
-export const askFromRow = (r: AskRow): Ask => ({
+export const askFromRow = (r: AskRow): Ask & CompanyStamped => ({
   id: r.id,
   agentId: r.agent_id,
   rootId: r.root_id,
@@ -205,7 +210,10 @@ export const askFromRow = (r: AskRow): Ask => ({
   answeredAt: r.answered_at,
   expiresAt: r.expires_at,
   ...(r.draft_id ? { draftId: r.draft_id } : {}),
-  ...(r.slack_draft_id ? { slackDraftId: r.slack_draft_id } : {})
+  ...(r.slack_draft_id ? { slackDraftId: r.slack_draft_id } : {}),
+  companyId: stamp(r.company_id),
+  // DEPARTMENTS.md §5: a live ask raised during a task run or task session shows on the task's card
+  ...(r.task_id ? { taskId: r.task_id } : {})
 })
 
 const AGENT_COLS: Record<string, { col: string; kind?: 'json' | 'bool' }> = {
@@ -273,6 +281,13 @@ export class LiveStore {
     private now: () => Date = () => new Date()
   ) {}
 
+  /** asks.task_id is healed by openDatabase (DEPARTMENTS.md §1.2); a bare test db may lack it. */
+  private askTaskCol: boolean | null = null
+  private hasAskTask(): boolean {
+    this.askTaskCol ??= (this.db.prepare('PRAGMA table_info(asks)').all() as { name: string }[]).some((c) => c.name === 'task_id')
+    return this.askTaskCol
+  }
+
   private ts(): ISODate {
     return this.now().toISOString()
   }
@@ -291,23 +306,27 @@ export class LiveStore {
   }
 
   // ---------- agents ----------
-  insertAgent(a: AgentNode): AgentNode {
+  /** COMPANY.md §3: explicit companyId, else subagents inherit their root's; roots take their session's or run's. */
+  insertAgent(a: AgentNode & CompanyStamped): AgentNode & CompanyStamped {
     const c = this.cleanAgent(a, a.cwd)
     this.db
       .prepare(
         `INSERT INTO agents(id, kind, parent_id, root_id, session_id, run_id, step_id, provider, repo_id, cwd, title, agent_type,
           external_id, tool_use_id, model, depth, background, attribution, status, needs, seen, activity, last_tool, tool_count,
-          mem_reads, files_json, tokens_in, tokens_out, cost_usd, model_usage_json, report, started_at, updated_at, ended_at)
+          mem_reads, files_json, tokens_in, tokens_out, cost_usd, model_usage_json, report, started_at, updated_at, ended_at, company_id)
          VALUES (@id, @kind, @parentId, @rootId, @sessionId, @runId, @stepId, @provider, @repoId, @cwd, @title, @agentType,
           @externalId, @toolUseId, @model, @depth, @background, @attribution, @status, @needs, @seen, @activity, @lastTool,
-          @toolCount, @memReads, @files, @tokensIn, @tokensOut, @costUsd, @modelUsage, @report, @startedAt, @updatedAt, @endedAt)`
+          @toolCount, @memReads, @files, @tokensIn, @tokensOut, @costUsd, @modelUsage, @report, @startedAt, @updatedAt, @endedAt,
+          COALESCE(@companyId, (SELECT r.company_id FROM agents r WHERE r.id = @rootId AND r.id <> @id),
+            (SELECT company_id FROM sessions WHERE id = @sessionId), (SELECT company_id FROM runs WHERE id = @runId), '${PERSONAL_COMPANY_ID}'))`
       )
       .run({
         ...c,
         background: c.background ? 1 : 0,
         seen: c.seen ? 1 : 0,
         files: JSON.stringify(c.filesTouched ?? []),
-        modelUsage: c.modelUsage ? JSON.stringify(c.modelUsage) : null
+        modelUsage: c.modelUsage ? JSON.stringify(c.modelUsage) : null,
+        companyId: a.companyId ?? null
       })
     return this.getAgent(a.id)!
   }
@@ -328,7 +347,7 @@ export class LiveStore {
     return this.getAgent(id)!
   }
 
-  getAgent(id: Id): AgentNode | null {
+  getAgent(id: Id): (AgentNode & CompanyStamped) | null {
     const r = this.db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as AgentRow | undefined
     return r ? agentFromRow(r) : null
   }
@@ -366,10 +385,14 @@ export class LiveStore {
     return out
   }
 
-  listAgents(q: AgentListQuery = {}): AgentNode[] {
+  listAgents(q: AgentListQuery & CompanyFilter = {}): (AgentNode & CompanyStamped)[] {
     const where: string[] = []
     const params: unknown[] = []
     const statusPart: string[] = []
+    if (q.companyId) {
+      where.push(`COALESCE(company_id, '${PERSONAL_COMPANY_ID}') = ?`)
+      params.push(q.companyId)
+    }
     if (q.status?.length) {
       statusPart.push(`status IN (${q.status.map(() => '?').join(',')})`)
       params.push(...q.status)
@@ -512,12 +535,18 @@ export class LiveStore {
   }
 
   // ---------- asks ----------
-  insertAsk(a: Ask & { gateId?: string | null }): Ask {
+  /**
+   * COMPANY.md §3: denormalized for badges, from the agent (else its run or session). DEPARTMENTS.md §5: asks.task_id
+   * from the ask itself, else its run's runs.task_id, else its session's sessions.task_id.
+   */
+  insertAsk(a: Ask & CompanyStamped & { gateId?: string | null; taskId?: Id | null }): Ask & CompanyStamped {
     this.db
       .prepare(
         `INSERT INTO asks(id, agent_id, root_id, session_id, run_id, step_id, provider, kind, channel, gate_id, title, detail,
-          tool_name, tool_input_json, question, options_json, status, answer_json, answered_via, created_at, answered_at, expires_at, draft_id, slack_draft_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          tool_name, tool_input_json, question, options_json, status, answer_json, answered_via, created_at, answered_at, expires_at, draft_id, slack_draft_id,
+          company_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+          COALESCE(?, (SELECT company_id FROM agents WHERE id = ?), (SELECT company_id FROM runs WHERE id = ?), (SELECT company_id FROM sessions WHERE id = ?), '${PERSONAL_COMPANY_ID}'))`
       )
       .run(
         a.id,
@@ -543,8 +572,16 @@ export class LiveStore {
         a.answeredAt,
         a.expiresAt,
         a.draftId ?? null,
-        a.slackDraftId ?? null
+        a.slackDraftId ?? null,
+        a.companyId ?? null,
+        a.agentId,
+        a.runId,
+        a.sessionId
       )
+    if (this.hasAskTask())
+      this.db
+        .prepare('UPDATE asks SET task_id = COALESCE(?, (SELECT task_id FROM runs WHERE id = ?), (SELECT task_id FROM sessions WHERE id = ?)) WHERE id = ?')
+        .run(a.taskId ?? null, a.runId, a.sessionId, a.id)
     return this.getAsk(a.id)!
   }
 
@@ -564,7 +601,7 @@ export class LiveStore {
     return a
   }
 
-  getAsk(id: Id): Ask | null {
+  getAsk(id: Id): (Ask & CompanyStamped) | null {
     const r = this.db.prepare('SELECT * FROM asks WHERE id = ?').get(id) as AskRow | undefined
     return r ? askFromRow(r) : null
   }
@@ -593,10 +630,14 @@ export class LiveStore {
     return (this.db.prepare(`SELECT * FROM asks WHERE ${where.join(' AND ')} ORDER BY created_at`).all(...params) as AskRow[]).map(askFromRow)
   }
 
-  listAsks(q: { status?: 'open' | 'all'; runId?: Id; sessionId?: Id; limit?: number } = {}): Ask[] {
+  listAsks(q: { status?: 'open' | 'all'; runId?: Id; sessionId?: Id; limit?: number; companyId?: Id } = {}): (Ask & CompanyStamped)[] {
     const where: string[] = []
     const params: unknown[] = []
     if ((q.status ?? 'open') === 'open') where.push("status = 'open'")
+    if (q.companyId) {
+      where.push(`COALESCE(company_id, '${PERSONAL_COMPANY_ID}') = ?`)
+      params.push(q.companyId)
+    }
     if (q.runId) {
       where.push('run_id = ?')
       params.push(q.runId)

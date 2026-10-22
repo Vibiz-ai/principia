@@ -30,7 +30,7 @@ import {
   wouldCycle,
   implicitDeps
 } from '../lib/workflow'
-import { attempt, focusSession, goBack, navigate, openRunInputs, providerLabel, refreshProfiles, setLeaveGuard, toast, useStore } from '../state/store'
+import { attempt, focusSession, goBack, navigate, openRunInputs, providerLabel, refreshProfiles, scopeCompanyId, setLeaveGuard, toast, useStore } from '../state/store'
 import { approveEdited, openApproval } from '../state/authoring'
 import { originDetail, originLine } from '../lib/authoring'
 import { intervalLabel } from '../lib/graph'
@@ -43,6 +43,8 @@ import { SlackTriggerChip } from '../components/slack/TriggerEditor'
 function toDraft(w: WorkflowDraft): WorkflowDraft {
   const d: WorkflowDraft = { name: w.name, description: w.description, inputs: w.inputs, nodes: w.nodes }
   if (w.worktree) d.worktree = w.worktree
+  if (w.slackTools) d.slackTools = true
+  if (w.slackAgentPermissions) d.slackAgentPermissions = w.slackAgentPermissions
   return d
 }
 
@@ -163,7 +165,9 @@ export function WorkflowEditor({ workflowId, nonce, approvalDraftId, script }: {
     }
     setSaving(true)
     try {
-      const w = id ? await hive.workflows.update({ id, draft }) : await hive.workflows.create(draft)
+      // COMPANY.md §3: a new workflow belongs to the focused company (no companyId = Personal)
+      const companyId = scopeCompanyId()
+      const w = id ? await hive.workflows.update({ id, draft }) : await hive.workflows.create(companyId ? { ...draft, companyId } : draft)
       setId(w.id)
       const d = toDraft(w)
       setDraft(d)
@@ -331,6 +335,17 @@ export function WorkflowEditor({ workflowId, nonce, approvalDraftId, script }: {
             <input className="input" value={draft.description} placeholder="What this workflow does" onChange={(e) => set({ ...draft, description: e.target.value })} />
             <label className="editor__meta-label">Inputs</label>
             <InputsEditor inputs={draft.inputs} onChange={(inputs) => set({ ...draft, inputs })} />
+            <label className="editor__meta-label">Slack connection</label>
+            <div>
+              <label><input type="checkbox" checked={!!draft.slackTools} onChange={(e) => set({ ...draft, slackTools: e.target.checked, slackAgentPermissions: 'restricted' })} /> Use company Slack tools</label>
+              {draft.slackTools && <>
+                <select className="input" aria-label="Slack workflow agent permissions" value={draft.slackAgentPermissions ?? 'restricted'} onChange={(e) => set({ ...draft, slackAgentPermissions: e.target.value as 'restricted' | 'profile' })}>
+                  <option value="restricted">Restricted · Claude only</option>
+                  <option value="profile">Use agent profile permissions · Claude and Codex</option>
+                </select>
+                <p className="field-note">Profile permissions let agents write files and run commands while reading Slack. Replies still follow Slack approval rules. Slack-triggered runs keep their trigger’s access settings.</p>
+              </>}
+            </div>
             <WorkflowMemory nodes={draft.nodes} onChange={(nodes) => set({ ...draft, nodes })} />
             <WorktreeEditor draft={draft} repos={repos} onChange={set} problems={problemsByNode.get('worktree') ?? []} />
           </div>

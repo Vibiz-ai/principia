@@ -301,8 +301,10 @@ export interface SlackStore {
 `buildManifest({name:'Hive'}).json` deep-equals it.
 
 - Bot scopes (exactly): `app_mentions:read channels:history channels:read channels:join groups:history groups:read
-  im:history im:read im:write mpim:history mpim:read chat:write users:read reactions:read` (PO-S2 adds `channels:join`
-  and `mpim:read` to the brief's list, so no reinstall is ever needed for them).
+  im:history im:read im:write mpim:history mpim:read chat:write users:read reactions:read files:read` (PO-S2 adds `channels:join`
+  and `mpim:read` to the brief's list, so no reinstall is ever needed for them). `files:read` came later (thread
+  images, §9.6): an app installed before it shows "Reinstall the app: missing files:read" in Settings › Connections
+  until the user adds the scope and reinstalls (see §9.6).
 - Bot events (exactly): `app_mention message.channels message.groups message.im message.mpim member_joined_channel`.
 - The manifest URL: `buildManifest()` also returns `createUrl =
   'https://api.slack.com/apps?new_app=1&manifest_json=' + encodeURIComponent(JSON.stringify(json))`.
@@ -966,6 +968,28 @@ The engine subscribes via `ctx.slack.onMessage(cb)` and gets `SlackInboundMessag
 
 ---
 
+### 9.6 Thread images (`core/files.ts`, `files:read`)
+
+When a Slack-triggered run starts, the executor asks the bridge (`downloadThreadImages`) for the images people shared
+in the triggering thread (DMs: the recent conversation). The connector refreshes the thread (`fetchThread`, raced
+against 3 s; the local mirror otherwise), picks image files posted by humans (never bots or Hive) across the parent and
+replies, newest first, at most 5, and downloads each into `<run artifacts>/slack-images/` (files 0600, sanitized
+unique names). They show in the run's Artifacts. Best effort: any failure is logged (file id only) and the run goes on
+without images.
+
+- `{{trigger.images}}`: the local paths, one per line ('' when none). When there are images, every agent step of the
+  run gets "Images shared in this Slack thread (open them with your Read tool before answering):" plus the paths
+  appended to its prompt (unless the prompt already lists them). claude headless gets `--add-dir <slack-images>` so a
+  restricted step can Read them; codex gets one `-i <file>` per image.
+- Download safety (`transport/node.ts` `download`): GET with the bot token, https only, host `files.slack.com` or a
+  `*.slack.com` subdomain, checked before the request and on every redirect hop (manual redirects, at most 3; a hop to
+  any other host is refused, so the token never leaves Slack). Only `image/png|jpeg|gif|webp` responses are accepted;
+  `text/html` means Slack served its login page because the app lacks `files:read`. 10 MB cap (streamed), 15 s timeout.
+  Neither the token nor the URL is logged; tools never return file URLs (`slack_read_thread` shows `id` and `image`).
+- Installs made before `files:read`: status shows "Reinstall the Slack app to let Principia see images (missing
+  files:read)". In api.slack.com › Your app › OAuth & Permissions add the `files:read` bot scope (or paste the new
+  manifest), click Reinstall to Workspace, then Settings › Connections › Test (refreshes the granted scopes).
+
 ## 10. Notify node: Slack replaces iMessage (S5)
 
 ### 10.1 Type (`src/shared/types.ts`, breaking change to a field, done once with the migration)
@@ -1170,6 +1194,27 @@ The decision is §8.2.
 - Reads are restricted to channels where `is_member = 1` or DMs with the bot. Archived channels are readable.
 - Every write records `slack_drafts` / `slack_outbox` with `run_id`, `step_id` and `session_id`, so the run view shows
   "Drafted a reply in #support" and "Posted in #support" as step activity (an `agent_events` `tool` row is enough).
+
+### 11.4 Slack-started work (`work` toolset, `src/main/connectors/slack/work.ts`)
+
+- Agent steps of Slack-triggered runs get `HIVE_TOOLSETS=slack,work`: `principia_repos` (read) and
+  `principia_start_session` (write). Sessions and `slackTools`-only runs never see or may call them. Each call re-reads
+  the trigger: disabled or reply mode `none` refuses. At most 2 starts (or follow-ups) per run.
+- `principia_repos`: id, name, path, company (more than one company), origin remote (credentials stripped), last
+  session start, README first line, `hint` = the repo last chosen from this channel (`slack_channel_repos`).
+- `principia_start_session {repo_id?, adapter?, title?, task, include_thread?, continue_session_id?}`: a normal
+  interactive session in the repo (sidebar under its repo) whose initialPrompt says who asked where, the task, and points
+  to `<session artifacts>/slack/slack-context.md` (redacted thread transcript + copies of the run's `slack-images`). With
+  `experimental.companies` on, the repo must belong to the workspace's company (else refused; off = warned). The thread
+  ref lives in `slack_work_sessions` (keyed by session id). `continue_session_id` types a follow-up into a session this
+  thread started (only while it waits for the user) and re-arms the report.
+- Report back: the first turn end (root `needs_you`/`idle`, or the pane ending) after work posts one threaded reply with
+  the last assistant message (Claude transcript; else the hook's last message; ≤ 1500 chars, redacted) or "finished its
+  turn, open it in Principia". Later turns started from the app are never reported. The post goes through §8.2 with the
+  original trigger (draft mode, auto list, pause, floors); a draft belongs to the session.
+- The built-in responder prompt tells the agent to pick the repo (thread vs names, remotes, README; prefer the hint),
+  ask with 2-3 numbered options only when genuinely ambiguous, and never start work for plain questions. An unedited
+  seeded prompt is upgraded in place at start.
 
 ---
 
@@ -1446,4 +1491,4 @@ degrades to the setup guide and empty lists. A `lib/slack.fixtures.ts` drives th
   the user's account can do.
 - **Later:** user-token mode (`xoxp`, search.messages, reading every channel the user is in, posting as the user);
   Slack-side Approve/Send buttons (interactivity over Socket Mode); `reaction_added` triggers; mirroring failure alerts;
-  file downloads (`files:read`); multi-workspace UI; Hive Core daemon hosting the connector with a single-owner lease.
+  non-image file downloads; multi-workspace UI; Hive Core daemon hosting the connector with a single-owner lease.

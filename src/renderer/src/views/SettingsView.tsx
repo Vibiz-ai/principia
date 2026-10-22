@@ -9,9 +9,11 @@ import { Button, Field, IconButton, Pill, RelativeTime, Segmented, Sheet, Steppe
 import { LeftoverEmpty, LeftoverList, useLeftovers } from '../components/agents/LimitBits'
 import { confirmNative, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { ADAPTER_AUTH_VARS } from '../lib/secrets'
-import { attempt, navigate, providerLabel, refreshProfiles, refreshProviders, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
+import { personasOn, t, toneOf, type Tone } from '../lib/voice'
+import { attempt, navigate, providerLabel, refreshCompanies, refreshProfiles, refreshProviders, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
 import type { AuthorRunGrant } from '@shared/authoring'
 import type { RunWorktree } from '@shared/types'
+import type { CompanyPassport } from '@shared/company'
 import { worktreeState } from '../lib/authoring'
 import { tildify } from '../lib/format'
 import { slackCall } from '../lib/slackApi'
@@ -87,10 +89,36 @@ function SRow({ label, desc, children }: { label: string; desc?: React.ReactNode
   )
 }
 
+/**
+ * VOICE.md §3.8: Tone (Playful / Plain) and "Agent names and busts". Every flavored string reads the tone through the
+ * copy module, so switching applies live, without a reload. Hook-free so a test can call its handlers.
+ */
+export function VoiceRows({ tone, personas }: { tone: Tone; personas: boolean }): React.JSX.Element {
+  return (
+    <>
+      <SRow label={t('settings.tone.label')} desc={t('settings.tone.desc')}>
+        <Segmented<Tone>
+          size="sm"
+          value={tone}
+          items={[
+            { value: 'playful', label: t('settings.tone.playful') },
+            { value: 'plain', label: t('settings.tone.plain') }
+          ]}
+          onChange={(v) => void updateSettings({ tone: v })}
+        />
+      </SRow>
+      <SRow label={t('settings.personas.label')} desc={t('settings.personas.desc')}>
+        <Switch checked={personas} onChange={(v) => void updateSettings({ personas: v })} label={t('settings.personas.label')} />
+      </SRow>
+    </>
+  )
+}
+
 function General(): React.JSX.Element {
   const s = useStore((st) => st.settings)!
   return (
     <div className="sgroup">
+      <VoiceRows tone={toneOf(s)} personas={personasOn(s)} />
       <SRow label="Launch Principia at login" desc="Schedules only fire while Principia is running. Principia starts hidden in the menu bar.">
         <Switch checked={s.launchAtLogin} onChange={(v) => void updateSettings({ launchAtLogin: v })} label="Launch at login" />
       </SRow>
@@ -547,7 +575,30 @@ function Data(): React.JSX.Element {
       <HistoryToggle />
       <MarketplaceUrlRow />
       <WorktreesSection />
+      <ArchivedCompaniesSection />
+      <ExperimentalSection />
     </div>
+  )
+}
+
+/**
+ * COMPANY.md / DEPARTMENTS.md §0.8: the experimental flags the refusals point at ("Settings → Experimental").
+ * Departments only take effect with Companies on; turning either off never deletes anything, and Autopilot stays off
+ * until turned on per company.
+ */
+function ExperimentalSection(): React.JSX.Element {
+  const flags = useStore((st) => st.settings?.experimental) ?? {}
+  const set = (patch: { companies?: boolean; departments?: boolean }): void => void updateSettings({ experimental: { ...flags, ...patch } })
+  return (
+    <>
+      <div className="sgroup__title">Experimental</div>
+      <SRow label="Companies" desc="Group repos, workflows, keys and runs by company, with company guards enforced.">
+        <Switch checked={!!flags.companies} onChange={(v) => set({ companies: v })} label="Companies" />
+      </SRow>
+      <SRow label="Departments and the company board" desc="Departments, agent seats and one task board per company. Agents start work on their own only where you turn Autopilot on. Needs Companies.">
+        <Switch checked={!!flags.companies && !!flags.departments} disabled={!flags.companies} onChange={(v) => set({ departments: v })} label="Departments" />
+      </SRow>
+    </>
   )
 }
 
@@ -582,6 +633,43 @@ function MarketplaceUrlRow(): React.JSX.Element {
         onKeyDown={(e) => e.key === 'Enter' && commit()}
       />
     </SRow>
+  )
+}
+
+/** COMPANY.md §2.1: archiving hides a company (its data stays); this is where it comes back. */
+function ArchivedCompaniesSection(): React.JSX.Element | null {
+  const [items, setItems] = useState<CompanyPassport[] | null>(null)
+  const load = (): void =>
+    void hive.company.list({ includeArchived: true }).then((list) => setItems(list.filter((c) => !!c.archivedAt)), () => setItems(null))
+  useEffect(load, [])
+  useHiveEvent('data:changed', ({ domain }) => domain === 'company' && load())
+  if (!items?.length) return null
+  const unarchive = async (c: CompanyPassport): Promise<void> => {
+    const r = await attempt(() => hive.company.archive({ id: c.id, archived: false }), 'Unarchive')
+    if (!r) return
+    await refreshCompanies().catch(() => undefined)
+    toast(`${c.name} is back`)
+    load()
+  }
+  return (
+    <div className="settings-leftovers">
+      <div className="srow__title">Archived companies</div>
+      {items.map((c) => (
+        <div key={c.id} className="srow">
+          <div className="srow__text">
+            <div>{c.name}</div>
+            <div className="srow__desc">
+              Archived <RelativeTime iso={c.archivedAt!} /> · its repositories, runs and Passport are kept
+            </div>
+          </div>
+          <div className="srow__ctl">
+            <Button size="sm" onClick={() => void unarchive(c)}>
+              Unarchive
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 

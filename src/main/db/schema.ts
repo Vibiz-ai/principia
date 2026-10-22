@@ -552,6 +552,7 @@ export const SLACK_ADDED_COLUMNS: [table: string, column: string, ddl: string][]
   ['runs', 'slack_json', 'TEXT'],
   ['asks', 'slack_draft_id', 'TEXT'],
   ['workflows', 'slack_tools', 'INTEGER'],
+  ['workflows', 'slack_agent_permissions', 'TEXT'],
   // SLACK.md §9.5: the slack_trigger riding on an agent's create/update draft
   ['author_drafts', 'slack_trigger_json', 'TEXT'],
   // SA2: the agent access of a Slack-triggered run (NULL = restricted, no keys)
@@ -562,3 +563,115 @@ export const SLACK_ADDED_COLUMNS: [table: string, column: string, ddl: string][]
   ['slack_users', 'home_team_id', 'TEXT'],
   ['slack_users', 'enterprise_id', 'TEXT']
 ]
+
+/**
+ * COMPANY.md §2.1 / §4: the company tables (moved here from CompanyStore's lazy CREATE, which stays as a no-op) plus
+ * per-company keys. No version bump (older Hive still opens the db): CREATE IF NOT EXISTS on every open, then
+ * COMPANY_ADDED_COLUMNS. `secrets` stays the Shared namespace; company_secrets is a separate table so older builds'
+ * `ON CONFLICT(name)` on secrets keeps working.
+ */
+export const DDL_COMPANY = /* sql */ `
+CREATE TABLE IF NOT EXISTS company_passports (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_repos (
+  repo_id    TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+  company_id TEXT NOT NULL REFERENCES company_passports(id)
+);
+CREATE TABLE IF NOT EXISTS company_tasks (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+  company_id TEXT NOT NULL REFERENCES company_passports(id),
+  source_key TEXT, run_id TEXT, data TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS company_tasks_source ON company_tasks(company_id, source_key) WHERE source_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS company_tasks_run ON company_tasks(run_id);
+CREATE TABLE IF NOT EXISTS company_task_activity (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+  task_id TEXT NOT NULL REFERENCES company_tasks(id),
+  kind TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS company_secrets (     -- (M) value only as safeStorage ciphertext; overrides a shared key
+  company_id TEXT NOT NULL REFERENCES company_passports(id),
+  name       TEXT NOT NULL,
+  label      TEXT,
+  cipher     BLOB NOT NULL,
+  masked     TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (company_id, name)
+);
+
+-- DEPARTMENTS.md §1.1: departments and agents inside a company. data is JSON (charter, routing defaults / instructions,
+-- autonomy, limits); nothing here is created automatically.
+CREATE TABLE IF NOT EXISTS company_departments (
+  id TEXT PRIMARY KEY,               -- 'dep_…'
+  company_id TEXT NOT NULL,
+  key TEXT NOT NULL,                 -- slug
+  name TEXT NOT NULL, color TEXT, icon TEXT, sort_order INTEGER,
+  archived_at TEXT, created_at TEXT, updated_at TEXT,
+  data TEXT NOT NULL DEFAULT '{}',
+  UNIQUE (company_id, key)
+);
+CREATE TABLE IF NOT EXISTS company_agents (
+  id TEXT PRIMARY KEY,               -- 'agt_…'
+  company_id TEXT NOT NULL,
+  department_id TEXT,                -- null = company-level agent
+  kind TEXT NOT NULL,                -- 'profile' | 'workflow'
+  ref_id TEXT NOT NULL,              -- profiles.id | workflows.id
+  name TEXT NOT NULL,
+  archived_at TEXT, paused_at TEXT, created_at TEXT, updated_at TEXT,
+  data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS company_agents_dept ON company_agents(company_id, department_id);
+`
+
+/**
+ * COMPANY.md §2.1 / §3: nullable columns, so rows written by an older build read as Personal through
+ * COALESCE(company_id, 'co_personal'). company_passports.slug is unique through company_passports_slug (SQLite cannot
+ * ADD a UNIQUE column).
+ */
+export const COMPANY_ADDED_COLUMNS: [table: string, column: string, ddl: string][] = [
+  ['company_passports', 'slug', 'TEXT'],
+  ['company_passports', 'color', 'TEXT'],
+  ['company_passports', 'sort_order', 'INTEGER'],
+  ['company_passports', 'system', 'TEXT'],
+  ['company_passports', 'archived_at', 'TEXT'],
+  ['company_passports', 'vault_path', 'TEXT'],
+  ['sessions', 'company_id', 'TEXT'],
+  ['runs', 'company_id', 'TEXT'],
+  ['workflows', 'company_id', 'TEXT'],
+  ['schedules', 'company_id', 'TEXT'],
+  ['artifacts', 'company_id', 'TEXT'],
+  ['agents', 'company_id', 'TEXT'],
+  ['asks', 'company_id', 'TEXT'],
+  ['slack_workspaces', 'company_id', 'TEXT'],
+  ['author_drafts', 'company_id', 'TEXT'],
+  // DEPARTMENTS.md §1.2: query mirrors of the task JSON (written with it), the run/session/ask -> task links and the
+  // department membership of recurring agents
+  ['company_tasks', 'status', 'TEXT'],
+  ['company_tasks', 'department_id', 'TEXT'],
+  ['company_tasks', 'agent_id', 'TEXT'],
+  ['runs', 'task_id', 'TEXT'],
+  ['runs', 'agent_id', 'TEXT'],
+  ['sessions', 'task_id', 'TEXT'],
+  ['workflows', 'department_id', 'TEXT'],
+  ['schedules', 'department_id', 'TEXT'],
+  ['slack_triggers', 'department_id', 'TEXT'],
+  // §8: 'run' (default, NULL) or 'task'; an older build ignores it and keeps starting runs
+  ['slack_triggers', 'action', 'TEXT'],
+  ['asks', 'task_id', 'TEXT'],
+  // §1.3: who wrote an activity row (human | agent | system); NULL reads as 'system'
+  ['company_task_activity', 'actor', 'TEXT']
+]
+
+/** Indexes over COMPANY_ADDED_COLUMNS (run after the columns exist). */
+export const DDL_COMPANY_INDEXES = /* sql */ `
+CREATE UNIQUE INDEX IF NOT EXISTS company_passports_slug ON company_passports(slug) WHERE slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS sessions_company  ON sessions(company_id);
+CREATE INDEX IF NOT EXISTS runs_company      ON runs(company_id, created_at);
+CREATE INDEX IF NOT EXISTS agents_company    ON agents(company_id);
+CREATE INDEX IF NOT EXISTS asks_company      ON asks(company_id);
+CREATE INDEX IF NOT EXISTS artifacts_company ON artifacts(company_id, created_at);
+CREATE INDEX IF NOT EXISTS company_tasks_status ON company_tasks(company_id, status);
+CREATE INDEX IF NOT EXISTS company_tasks_agent  ON company_tasks(agent_id, status);
+CREATE INDEX IF NOT EXISTS runs_task         ON runs(task_id);
+`

@@ -1,5 +1,5 @@
 /** EngineStore implementation (CONTRACT §5.1). Engine-owned tables: runs, run_steps, schedule fire-state, schedule_events. */
-import type { EngineStore } from '../../shared/engine'
+import type { EngineStore, RunTaskLink } from '../../shared/engine'
 import type { Run, RunDetail, RunStep, Schedule, ScheduleWhen, WorkflowDraft } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { newId } from '../../shared/ids'
@@ -70,8 +70,25 @@ const STEP_COLS: Record<string, { col: string; kind?: 'json' | 'bool' }> = {
   endedAt: { col: 'ended_at' }
 }
 
-/** runs.trigger CHECK predates 'agent' and 'slack' (stored as 'manual' + started_by_json / trigger_ext). */
-const storedTrigger = (t: string): string => (t === 'agent' || t === 'slack' ? 'manual' : t)
+/** runs.trigger CHECK predates 'agent', 'slack' and 'task' (stored as 'manual' + started_by_json / trigger_ext). */
+const storedTrigger = (t: string): string => (t === 'agent' || t === 'slack' || t === 'task' ? 'manual' : t)
+/** The trigger_ext of a trigger the CHECK does not list. */
+const triggerExt = (t: string): string | null => (t === 'slack' || t === 'task' ? t : null)
+type TaskRunRow = RunRow & { task_id?: string | null; agent_id?: string | null }
+/**
+ * DEPARTMENTS.md §1.2, §4.3: a task run reads back with trigger 'task' and its runs.task_id / agent_id. The Run type
+ * gains those fields through its owner; until then they ride along untyped (see runTaskLink).
+ */
+function taskRunFromRow(r: TaskRunRow): Run {
+  const run = runFromRow(r)
+  if (!r.task_id && r.trigger_ext !== 'task') return run
+  return { ...run, ...(r.trigger_ext === 'task' ? { trigger: 'task' as Run['trigger'] } : {}), ...(r.task_id ? { taskId: r.task_id, agentId: r.agent_id ?? null } : {}) } as Run
+}
+/** The board link of a run read through the engine store (null for every other run). */
+export function runTaskLink(run: Run): RunTaskLink | null {
+  const t = run as Run & { taskId?: string | null; agentId?: string | null }
+  return t.taskId ? { taskId: t.taskId, agentId: t.agentId ?? null } : null
+}
 /** run_steps.node_type CHECK predates wait/notify (stored as 'shell' + node_type_ext). */
 const storedNodeType = (t: string): { node_type: string; node_type_ext: string | null } =>
   t === 'wait' || t === 'notify' ? { node_type: 'shell', node_type_ext: t } : { node_type: t, node_type_ext: null }
@@ -82,10 +99,13 @@ export function createEngineStore(
 ): EngineStore {
   const now = opts.now ?? (() => new Date())
   const live = opts.live ?? new LiveStore(db, opts.redact, now)
+  // runs.task_id / agent_id are healed by openDatabase (DEPARTMENTS.md §1.2); a bare test db may lack them
+  const runCols = new Set((db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]).map((c) => c.name))
+  const taskLinks = runCols.has('task_id') && runCols.has('agent_id')
   const triggers = opts.slackTriggers ?? new SlackTriggerStore(db, undefined, now)
   const getRun = (id: string): Run | null => {
-    const r = db.prepare(`${RUN_SELECT} WHERE runs.id = ?`).get(id) as RunRow | undefined
-    return r ? runFromRow(r) : null
+    const r = db.prepare(`${RUN_SELECT} WHERE runs.id = ?`).get(id) as TaskRunRow | undefined
+    return r ? taskRunFromRow(r) : null
   }
   const getStep = (id: string): RunStep | null => {
     const r = db.prepare('SELECT * FROM run_steps WHERE id = ?').get(id) as StepRow | undefined
@@ -97,12 +117,12 @@ export function createEngineStore(
   }
 
   return {
-    insertRun(run: Run, workflowSnapshot: WorkflowDraft | null): void {
+    insertRun(run: Run, workflowSnapshot: WorkflowDraft | null, task?: RunTaskLink | null): void {
       db.prepare(
         `INSERT INTO runs(id, kind, title, target_json, workflow_id, workflow_json, schedule_id, parent_run_id, trigger,
-          status, reason, created_at, started_at, ended_at, artifacts_dir, outcome, started_by_json, trigger_ext, slack_json)
+          status, reason, created_at, started_at, ended_at, artifacts_dir, outcome, started_by_json, trigger_ext, slack_json, company_id)
          VALUES (@id, @kind, @title, @target_json, @workflow_id, @workflow_json, @schedule_id, @parent_run_id, @trigger,
-          @status, @reason, @created_at, @started_at, @ended_at, @artifacts_dir, @outcome, @started_by_json, @trigger_ext, @slack_json)`
+          @status, @reason, @created_at, @started_at, @ended_at, @artifacts_dir, @outcome, @started_by_json, @trigger_ext, @slack_json, @company_id)`
       ).run({
         id: run.id,
         kind: run.kind,
@@ -123,14 +143,19 @@ export function createEngineStore(
         // trigger 'agent' without a startedBy still reads back as 'agent'
         started_by_json: run.startedBy ? JSON.stringify(run.startedBy) : run.trigger === 'agent' ? JSON.stringify({ ownerLabel: 'An agent', ownerKey: '', draftId: null }) : null,
         // SLACK.md §7.1
-        trigger_ext: run.trigger === 'slack' ? 'slack' : null,
-        slack_json: run.slack ? JSON.stringify(run.slack) : null
+        trigger_ext: triggerExt(run.trigger),
+        slack_json: run.slack ? JSON.stringify(run.slack) : null,
+        // COMPANY.md §3: the engine's inherited stamp (NULL reads as Personal)
+        company_id: run.companyId ?? null
       })
+      // DEPARTMENTS.md §1.2: the board joins task runs through runs.task_id / agent_id
+      if (task?.taskId && taskLinks) db.prepare('UPDATE runs SET task_id = ?, agent_id = ? WHERE id = ?').run(task.taskId, task.agentId ?? null, run.id)
     },
     updateRun(id, patch) {
       const p: Record<string, unknown> = { ...patch }
       if (typeof p.trigger === 'string') {
-        if (p.trigger === 'slack') db.prepare("UPDATE runs SET trigger_ext = 'slack' WHERE id = ?").run(id)
+        const ext = triggerExt(p.trigger)
+        if (ext) db.prepare('UPDATE runs SET trigger_ext = ? WHERE id = ?').run(ext, id)
         p.trigger = storedTrigger(p.trigger)
       }
       if ('slack' in p) {
@@ -152,22 +177,22 @@ export function createEngineStore(
     },
     getRun,
     getRunDetail(id: string): RunDetail | null {
-      const r = db.prepare(`${RUN_SELECT} WHERE runs.id = ?`).get(id) as RunRow | undefined
+      const r = db.prepare(`${RUN_SELECT} WHERE runs.id = ?`).get(id) as TaskRunRow | undefined
       if (!r) return null
       const steps = (db.prepare('SELECT * FROM run_steps WHERE run_id = ? ORDER BY seq').all(id) as StepRow[]).map(
         stepFromRow
       )
-      return { run: runFromRow(r), steps, workflow: runSnapshot(r) }
+      return { run: taskRunFromRow(r), steps, workflow: runSnapshot(r) }
     },
     listRetries(): Run[] {
       return (
-        db.prepare(`${RUN_SELECT} WHERE runs.retry_at IS NOT NULL AND runs.retry_run_id IS NULL ORDER BY runs.retry_at`).all() as RunRow[]
-      ).map(runFromRow)
+        db.prepare(`${RUN_SELECT} WHERE runs.retry_at IS NOT NULL AND runs.retry_run_id IS NULL ORDER BY runs.retry_at`).all() as TaskRunRow[]
+      ).map(taskRunFromRow)
     },
     listActiveRuns(): Run[] {
       return (
-        db.prepare(`${RUN_SELECT} WHERE runs.status IN ('queued','running') ORDER BY runs.created_at`).all() as RunRow[]
-      ).map(runFromRow)
+        db.prepare(`${RUN_SELECT} WHERE runs.status IN ('queued','running') ORDER BY runs.created_at`).all() as TaskRunRow[]
+      ).map(taskRunFromRow)
     },
     insertStep(step: RunStep): void {
       db.prepare(

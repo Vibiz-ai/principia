@@ -1,11 +1,13 @@
 import fs from 'node:fs'
 import { HiveError } from '../../shared/errors'
 import { readableLog } from '../engine/adapters'
-import type { RunTarget } from '../../shared/types'
+import type { Id, RunTarget } from '../../shared/types'
+import type { StartRunOptions } from '../../shared/engine'
 import type { Hive } from '../hive'
 import { handle } from '../ipc'
 import { isInsideAny } from '../pathGuard'
 import { trimToLineStart } from '../tailBuffer'
+import { requireCompany } from './companyScope'
 
 export function checkTarget(h: Hive, t: RunTarget): void {
   if (t.kind === 'workflow') {
@@ -17,9 +19,11 @@ export function checkTarget(h: Hive, t: RunTarget): void {
 }
 
 export function registerRunHandlers(h: Hive): void {
-  handle('runs:start', ({ target }) => {
+  handle('runs:start', ({ target, companyId }) => {
     checkTarget(h, target as RunTarget)
-    const run = h.engine.runs.start(target as RunTarget, { trigger: 'manual' })
+    // COMPANY.md §3: the explicit stamp is the last link of the run's inheritance chain (the engine resolves it)
+    const opts: StartRunOptions & { companyId?: Id } = { trigger: 'manual', ...(companyId ? { companyId: requireCompany(h, companyId) } : {}) }
+    const run = h.engine.runs.start(target as RunTarget, opts)
     h.statusChanged()
     return run
   })

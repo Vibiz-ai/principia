@@ -21,7 +21,7 @@ import {
   isMemoryRead,
   summarizeTool
 } from './summary'
-import { ROOT_KEY, type AgentPatch, type HookEvent, type LiveOp, type TrackedAsk } from './types'
+import { ROOT_KEY, type AgentPatch, type AskOpen, type HookEvent, type LiveOp, type TrackedAsk } from './types'
 
 /** Headless asks expire after 60 min (D8). */
 export const ASK_TIMEOUT_MS = 60 * 60_000
@@ -56,6 +56,11 @@ export interface TrackerOptions {
   askTimeoutMs?: number
   /** Extra gemini agent names (from .gemini/agents/*.md). */
   geminiAgents?: string[]
+  /**
+   * DEPARTMENTS.md §5: the board task of the run or session being tracked. Stamped on every opened ask so the store
+   * writes asks.task_id (which otherwise falls back to the run's runs.task_id / the session's sessions.task_id).
+   */
+  taskId?: string | null
 }
 
 export interface AgentTracker {
@@ -313,24 +318,21 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
     n.fresh = false
     recompute(n)
     upsert(n, ops)
-    ops.push({
-      op: 'ask.open',
-      key: n.key,
-      gateId: a.gateId,
-      ask: {
-        provider,
-        kind: a.kind,
-        channel: a.channel,
-        title,
-        detail: a.detail ? clip(a.detail, 300) : null,
-        toolName: a.toolName ?? null,
-        toolInput: a.toolInput ?? null,
-        question: a.question ?? null,
-        options: a.options,
-        createdAt,
-        expiresAt
-      }
-    })
+    const ask: AskOpen & { taskId?: string } = {
+      provider,
+      kind: a.kind,
+      channel: a.channel,
+      title,
+      detail: a.detail ? clip(a.detail, 300) : null,
+      toolName: a.toolName ?? null,
+      toolInput: a.toolInput ?? null,
+      question: a.question ?? null,
+      options: a.options,
+      createdAt,
+      expiresAt,
+      ...(o.taskId ? { taskId: o.taskId } : {})
+    }
+    ops.push({ op: 'ask.open', key: n.key, gateId: a.gateId, ask })
     appendEvent(n, ops, { kind: 'ask', summary: `Waiting for you: ${title}`, detail: a.question ?? a.detail ?? null, name: a.toolName ?? null })
   }
   const resolveAsk = (

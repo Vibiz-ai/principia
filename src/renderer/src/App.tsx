@@ -1,16 +1,30 @@
 import { useEffect } from 'react'
-import { Loading } from './components/ui'
+import { Loading, Toolbar } from './components/ui'
 import { CommandPalette } from './shell/CommandPalette'
+import { CompanyRail, CompanySwitchToast, NewCompanySheet } from './shell/CompanyRail'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
 import { Sidebar } from './shell/Sidebar'
 import { StatusBar } from './shell/StatusBar'
-import { boot, useStore, type ViewState } from './state/store'
+import { activeCompany, boot, departmentsOn, multiCompany, useStore, type ViewState } from './state/store'
+import { windowTitle } from './lib/company'
 import { reportVisibleOwner } from './state/live'
 import { AgentsView } from './views/AgentsView'
 import { ArtifactsView } from './views/ArtifactsView'
 import { CanvasView } from './views/CanvasView'
+import { TasksView } from './views/TasksView'
+import { AgentSeatView } from './views/AgentSeatView'
+import { DepartmentView } from './views/DepartmentView'
+import { EmptyState } from './components/ui'
+import { PassportView } from './views/PassportView'
+import './styles/company.css'
+import './styles/shell.css'
+import './styles/rail.css'
+import './styles/onboarding.css'
+import './styles/cloud.css'
+import { OnboardingFlow } from './views/onboarding/OnboardingFlow'
 import { HomeView } from './views/HomeView'
+import { MilestoneWatcher } from './components/home/MilestoneStrip'
 import { KeysView } from './views/KeysView'
 import { MemoryView } from './views/MemoryView'
 import { RunInputsSheet } from './views/RunInputsSheet'
@@ -19,11 +33,26 @@ import { SchedulesView } from './views/SchedulesView'
 import { SessionView } from './views/SessionView'
 import { SettingsView } from './views/SettingsView'
 import { SlackView } from './views/SlackView'
+import { ForumView } from './views/ForumView'
+import { CloudView } from './views/CloudView'
 import { WorkflowEditor } from './views/WorkflowEditor'
 import { MarketplaceView } from './views/MarketplaceView'
 import { WorkflowsView } from './views/WorkflowsView'
 
+type PassportViewState = Extract<ViewState, { name: 'passport' }>
+/**
+ * Views owned by later packages, picked up when their file exists: PortfolioView (COMPANY.md C6) is Home in All mode;
+ * PassportVaultView (PASSPORT.md P7) is the Passport. Until then Home stays Home and the Passport is the Memory page.
+ */
+const lateViews = import.meta.glob(['./views/PortfolioView.tsx', './views/PassportVaultView.tsx'], { eager: true })
+const PortfolioView = lateViews['./views/PortfolioView.tsx']?.PortfolioView as (() => React.JSX.Element) | undefined
+const PassportVaultView = lateViews['./views/PassportVaultView.tsx']?.PassportVaultView as ((p: { view: PassportViewState }) => React.JSX.Element) | undefined
+
 const TITLES: Record<ViewState['name'], string> = {
+  tasks: 'Tasks',
+  passport: 'Passport',
+  portfolio: 'Portfolio',
+  company: 'Company Settings',
   agents: 'Agents',
   home: 'Home',
   session: 'Session',
@@ -37,7 +66,11 @@ const TITLES: Record<ViewState['name'], string> = {
   keys: 'Keys',
   settings: 'Settings',
   memory: 'Memory',
-  slack: 'Slack'
+  slack: 'Slack',
+  forum: 'Forum',
+  cloud: 'Cloud',
+  department: 'Department',
+  agentSeat: 'Agent'
 }
 
 export function App(): React.JSX.Element {
@@ -45,14 +78,22 @@ export function App(): React.JSX.Element {
   const bootError = useStore((s) => s.bootError)
   const view = useStore((s) => s.view)
   const collapsed = useStore((s) => !!s.settings?.sidebarCollapsed)
+  const multi = useStore((s) => multiCompany(s))
+  const active = useStore((s) => activeCompany(s))
+  const company = useStore((s) => (active === 'all' ? null : (s.companies.find((c) => c.id === active) ?? null)))
+  // ONBOARDING.md §1: the first-run flow fills the window; the sidebar, rail and the rest of the chrome stay hidden
+  const firstRunFlow = useStore((s) => !!s.onboarding?.open && s.onboarding.mode === 'first' && !!s.onboardingDraft)
 
   useEffect(() => {
     void boot()
     return installKeyboard()
   }, [])
+  const board = useStore((s) => departmentsOn(s))
+  const viewTitle = view.name === 'home' && multi && active === 'all' && PortfolioView ? TITLES.portfolio : view.name === 'tasks' && board ? 'Board' : TITLES[view.name]
+  const title = windowTitle(viewTitle, active === 'all' ? 'all' : company, multi)
   useEffect(() => {
-    document.title = `Principia — ${TITLES[view.name]}`
-  }, [view.name])
+    document.title = title
+  }, [title])
   // what the user is looking at: main suppresses notifications for it, and idle sessions on screen count as seen (A3)
   const focusedSession = useStore((s) => s.focusedSession)
   const grid = useStore((s) => s.grid)
@@ -61,8 +102,17 @@ export function App(): React.JSX.Element {
     if (ready) reportVisibleOwner()
   }, [ready, view, focusedSession, grid, winFocused])
 
+  if (firstRunFlow)
+    return (
+      <div className="shell shell--onboarding">
+        <OnboardingFlow />
+        <Toasts />
+      </div>
+    )
+
   return (
-    <div className={`shell ${collapsed ? 'is-collapsed' : ''}`}>
+    <div className={`shell ${collapsed ? 'is-collapsed' : ''} ${multi ? 'has-rail' : ''}`}>
+      <CompanyRail />
       {!collapsed && <Sidebar />}
       <main className="main">
         {!ready ? (
@@ -82,16 +132,40 @@ export function App(): React.JSX.Element {
       <RunInputsSheet />
       <SiblingOffer />
       <Toasts />
+      {/* VOICE.md §7: one toast per company per newly earned milestone (mounted once, outside the first-run flow) */}
+      <MilestoneWatcher />
+      <CompanySwitchToast />
+      <NewCompanySheet />
+      <OnboardingFlow />
     </div>
   )
 }
 
 function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
+  const portfolioHome = useStore((s) => multiCompany(s) && activeCompany(s) === 'all')
+  const departments = useStore((s) => departmentsOn(s))
   switch (view.name) {
+    case 'department':
+    case 'agentSeat':
+      // DEPARTMENTS.md §0.8: a stale deep link with the flag off lands on a plain notice, never a half-working page
+      if (!departments) return <DepartmentsOff />
+      return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} nonce={view.nonce} /> : <AgentSeatView id={view.id} />
+    case 'tasks':
+      return <TasksView />
+    case 'passport':
+      return PassportVaultView ? (
+        <PassportVaultView view={view} />
+      ) : (
+        <MemoryView view={{ name: 'memory', runId: view.runId, sessionId: view.sessionId, search: !!view.search, nonce: view.nonce }} />
+      )
+    case 'company':
+      return <PassportView />
+    case 'portfolio':
+      return PortfolioView ? <PortfolioView /> : <HomeView />
     case 'agents':
       return <AgentsView />
     case 'home':
-      return <HomeView />
+      return portfolioHome && PortfolioView ? <PortfolioView /> : <HomeView />
     case 'session':
       return <SessionView />
     case 'canvas':
@@ -116,5 +190,18 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       return <MemoryView view={view} />
     case 'slack':
       return <SlackView channelId={view.channelId} threadTs={view.threadTs} search={view.search} nonce={view.nonce} />
+    case 'cloud':
+      return <CloudView />
+    case 'forum':
+      return <ForumView companyId={view.companyId} channelId={view.channelId} threadId={view.threadId} nonce={view.nonce} />
   }
+}
+
+function DepartmentsOff(): React.JSX.Element {
+  return (
+    <div className="view">
+      <Toolbar title="Departments" />
+      <EmptyState icon="agents" text="Departments are off. They need the experimental companies and departments settings turned on." />
+    </div>
+  )
 }

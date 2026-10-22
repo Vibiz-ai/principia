@@ -1,0 +1,70 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Ad creative variants",
+    "description": "Writes 4 Meta/Instagram ad angles (copy + visual concept) from an offer, audience and brand colors, then renders one square and one vertical image per angle with fal.ai FLUX (8 images, no baked-in text by default). Images, copy deck and README land in Artifacts.",
+    "inputs": [
+      {
+        "name": "offer",
+        "label": "Offer (what you sell, price/promo if any)",
+        "type": "multiline"
+      },
+      {
+        "name": "audience",
+        "label": "Target audience",
+        "type": "multiline"
+      },
+      {
+        "name": "colors",
+        "label": "Brand colors (names or hex, e.g. #0F172A, #F97316)"
+      },
+      {
+        "name": "vertical",
+        "label": "Vertical format (4:5 for feed, 9:16 for Stories/Reels)",
+        "default": "4:5"
+      },
+      {
+        "name": "text_in_image",
+        "label": "Text in images? (no, or yes: exact words)",
+        "default": "no"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "angles",
+        "type": "agent",
+        "label": "Write 4 ad angles",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "You are a performance creative strategist for Meta / Instagram ads. Write exactly 4 distinct ad angles for the offer below (for example: pain/problem, desired outcome, social proof, objection or urgency; pick whatever fits best, but make the 4 clearly different).\n\nFor each angle give:\n- slug: short lowercase slug, letters/digits/hyphens only (e.g. `pain-relief`)\n- Angle name and one-line hook\n- Primary text (max 125 characters)\n- Headline (max 40 characters)\n- Call to action (one of: Shop now, Learn more, Sign up, Get offer, Book now)\n- Visual concept: one sentence a designer would understand\n- Image prompt: max 70 words for an image model. Be concrete about subject, composition, lighting, style and lens. Use the brand colors as the dominant palette. Leave clean negative space where ad copy could be overlaid later.\n\nText in images: {{inputs.text_in_image}}\nIf this is \"no\" (or empty), every image prompt must end with: \"no text, no letters, no words, no logos, no watermark\". If it says yes, include only the exact words given there, in quotes, and nothing else as text.\n\nKeep claims truthful to the offer: no invented prices, discounts, testimonials, statistics or guarantees, and no before/after or health/financial outcome claims the offer does not state. Do not depict real people, celebrities or trademarked characters.\n\nSave the full copy deck as Markdown to \"$ARTIFACTS_DIR/ad-angles.md\" (one section per angle).\n\nThen output ONLY the 4 angles in this exact plain-text format, one block per angle, so the next step can parse it:\n\nANGLE <n>: <slug>\nHEADLINE: <headline>\nPROMPT: <image prompt>\n\nOffer: {{inputs.offer}}\nAudience: {{inputs.audience}}\nBrand colors: {{inputs.colors}}"
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render 8 images with fal",
+        "after": [
+          "angles"
+        ],
+        "cwd": null,
+        "timeoutMin": 30,
+        "profileId": "prof_claude",
+        "prompt": "Generate ad images with the fal.ai REST API and save them so they appear in Artifacts. Model: FLUX.1 [dev] (`fal-ai/flux/dev`).\n\nBudget: exactly 8 images total = 4 angles x 2 formats, num_images 1 per call. Do not retry a failed call more than once and never generate extra variations.\n\nFor each angle below, make two calls:\n1. Square 1:1 (feed): POST https://fal.run/fal-ai/flux/dev with header `Authorization: Key $FAL_KEY` and JSON body {\"prompt\": <PROMPT>, \"image_size\": \"square_hd\", \"num_images\": 1, \"output_format\": \"png\"}. Download images[0].url to \"$ARTIFACTS_DIR/<n>-<slug>-square.png\".\n2. Vertical ({{inputs.vertical}}): same endpoint and prompt, with \"image_size\" {\"width\": 1024, \"height\": 1280} if the vertical format is 4:5, or {\"width\": 864, \"height\": 1536} if it is 9:16 (4:5 is the default; treat any value other than 9:16 as 4:5), plus \"num_images\": 1 and \"output_format\": \"png\". Download images[0].url to \"$ARTIFACTS_DIR/<n>-<slug>-vertical.png\".\n\nUse curl with -H 'Content-Type: application/json' and build the JSON body safely (e.g. with jq) so quotes in prompts do not break it. Read the key from the FAL_KEY environment variable; never print, echo or log it, and do not write it to any file.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive \u203a Keys.\n\nReply with a list of every saved path, its angle, format and the exact prompt used, plus any call that failed.\n\nAngles:\n{{angles.output}}"
+      },
+      {
+        "id": "readme",
+        "type": "agent",
+        "label": "Write README",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Write a short \"$ARTIFACTS_DIR/README.md\" for this ad creative set. Include:\n- Title: Ad creative variants, with the offer and audience in one line each\n- Model used (fal-ai/flux/dev), formats (square 1:1 and vertical {{inputs.vertical}}) and the number of images generated\n- A table with one row per image file: file name, angle, format, headline\n- The exact image prompt used for each angle\n- A pointer to ad-angles.md for the full copy (primary text, headline, CTA)\n- A one-line note: review images and copy before publishing; images contain no baked-in text unless requested ({{inputs.text_in_image}}).\n\nList only files that actually exist in \"$ARTIFACTS_DIR\" (check with ls) and mark any missing image as failed. Never include API keys. Reply with the README path.\n\nOffer: {{inputs.offer}}\nAudience: {{inputs.audience}}\n\nRender results:\n{{render.output}}\n\nAngles:\n{{angles.output}}"
+      }
+    ]
+  }
+}

@@ -3,6 +3,8 @@
  * history:* (read-only Claude history + Resume in Hive). Every channel answers even when its service is missing.
  */
 import fs from 'node:fs'
+import type { AuthorDraft } from '../../shared/authoring'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import type { WorkflowDraft } from '../../shared/types'
 import type { Hive } from '../hive'
@@ -14,7 +16,18 @@ export function registerAuthorHandlers(h: Hive): void {
     if (!h.author) throw new HiveError('internal', 'Authoring is not available')
     return h.author
   }
-  handle('author:list', (q) => broker().list(q ?? {}))
+  // COMPANY.md §7: drafts list per company; author_drafts.company_id is stamped by wire.ts (empty = Personal)
+  handle('author:list', (q) => {
+    const { companyId, ...rest } = q ?? {}
+    const tag = (list: AuthorDraft[]): AuthorDraft[] => {
+      if (!list.length) return list
+      const rows = h.db.prepare(`SELECT id, company_id FROM author_drafts WHERE id IN (${list.map(() => '?').join(',')})`).all(...list.map((d) => d.id)) as { id: string; company_id: string | null }[]
+      const stamps = new Map(rows.map((r) => [r.id, r.company_id || PERSONAL_COMPANY_ID]))
+      return list.map((d) => ({ ...d, companyId: stamps.get(d.id) ?? PERSONAL_COMPANY_ID }))
+    }
+    if (!companyId) return tag(broker().list(rest))
+    return tag(broker().list({ ...rest, limit: 500 })).filter((d) => d.companyId === companyId).slice(0, rest.limit ?? 100)
+  })
   handle('author:get', ({ id }) => broker().get(id))
   handle('author:decide', (req) => {
     const d = broker().decide({ ...req, draft: req.draft as WorkflowDraft | undefined })
@@ -51,7 +64,7 @@ export function registerAuthorHandlers(h: Hive): void {
     if (!s || !h.history.isInsideRoot(s.path) || !fs.existsSync(s.path)) throw new HiveError('not_found', 'Conversation not found')
     return readTranscript(s, (t) => h.vault.redact(t))
   })
-  handle('history:resume', ({ id, profileId, cols, rows }) => {
+  handle('history:resume', ({ id, profileId, cols, rows, companyId }) => {
     if (!h.history || h.settings().claudeHistory === false) throw new HiveError('not_found', 'Claude history is off')
     const s = h.history.byId(id)
     if (!s) throw new HiveError('not_found', 'Conversation not found')
@@ -67,6 +80,8 @@ export function registerAuthorHandlers(h: Hive): void {
       adapter: profileId ? undefined : 'claude',
       repoId: repo?.id,
       cwd: repo ? undefined : s.cwd,
+      // COMPANY.md §3: a repo decides its company; a loose folder lands in the company the user is in
+      ...(!repo && companyId ? { companyId } : {}),
       cols,
       rows,
       resumeAgentSessionId: s.id

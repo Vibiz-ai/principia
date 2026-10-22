@@ -13,3 +13,4 @@ cloud/.env
 cloud/workspace/
 .env
 .env.local
+.env.gcp

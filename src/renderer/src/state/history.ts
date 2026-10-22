@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ClaudeHistorySession, HistoryListQuery } from '@shared/authoring'
 import type { Session } from '@shared/types'
 import { errorCode, errorMessage, hive, useHiveEvent } from '../lib/hive'
-import { focusSession, getState, refreshSessions, toast, toastError, useStore } from './store'
+import { focusSession, getState, refreshSessions, scopeCompanyId, toast, toastError, useStore } from './store'
 
 export interface HistoryState {
   items: ClaudeHistorySession[]
@@ -55,7 +55,8 @@ export function useClaudeHistory(query: HistoryListQuery, enabled = true): Histo
 export async function resumeHistory(id: string): Promise<Session | undefined> {
   const { cols, rows } = getState().lastTermSize
   try {
-    const sess = await hive.history.resume({ id, cols, rows })
+    const companyId = scopeCompanyId()
+    const sess = await hive.history.resume({ id, cols, rows, ...(companyId ? { companyId } : {}) })
     await refreshSessions().catch(() => undefined)
     focusSession(sess.id)
     toast('Resumed in Principia')

@@ -125,3 +125,25 @@ export function redactCredentials(text: string): string {
   out = out.replace(AWS_SECRET_SHAPE, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) && /[/+]/.test(m) ? '••••credential' : m))
   return out
 }
+
+// ---------- one screen for every write source (PASSPORT.md §7.3) ----------
+export interface ScreenHit {
+  kind: 'secret' | 'credential' | 'imperative'
+  label: string
+}
+
+/**
+ * Secrets (vault fingerprints and credential shapes) refuse a write from any source. The imperative screen applies to
+ * agent text only (`agent`), and holds that line for review instead of refusing the call.
+ */
+export function screenText(fp: FingerprintFile | null, text: string, opts: { agent?: boolean } = {}): ScreenHit | null {
+  const secret = secretHit(fp, text)
+  if (secret) return { kind: 'secret', label: secret }
+  const cred = credentialHit(text)
+  if (cred) return { kind: 'credential', label: cred }
+  if (opts.agent) {
+    const imp = imperativeHit(text)
+    if (imp) return { kind: 'imperative', label: imp }
+  }
+  return null
+}

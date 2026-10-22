@@ -1,6 +1,8 @@
 /**
  * Slack page (SLACK.md §12.2): conversations | timeline | thread. ⌘F searches Principia's local copy. The header carries the
  * Pause auto-replies kill switch (PO-S3e). Everything reads the local mirror; main keeps it fresh.
+ * COMPANY.md §3: the connected workspace belongs to one company (Personal after the upgrade). The header's company
+ * button re-homes it; a focused company that doesn't own it sees where it lives instead of its messages.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { SlackSearchHit, SlackTrigger } from '@shared/slack'
@@ -11,10 +13,12 @@ import { ThreadPane } from '../components/slack/ThreadPane'
 import { SearchPanel } from '../components/slack/SearchPanel'
 import { SlackStatusPill } from '../components/slack/bits'
 import { channelLabel, cmpTs } from '../lib/slack'
-import { errorMessage } from '../lib/hive'
+import { confirmNative, errorMessage, hive, useHiveEvent } from '../lib/hive'
+import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
+import type { Id } from '@shared/types'
 import { onSlackEvent, slackCall } from '../lib/slackApi'
 import { isSetUp, loadSlack, openSlackDraft, refreshChannels, setAutoPaused, usePendingSlackDrafts, useSlack } from '../state/slack'
-import { navigate, useStore } from '../state/store'
+import { attempt, companyName, enterCompany, navigate, toast, useStore } from '../state/store'
 
 export function SlackView({ channelId, threadTs, search, nonce }: { channelId?: string; threadTs?: string; search?: boolean; nonce?: number }): React.JSX.Element {
   const available = useSlack((s) => s.available)
@@ -25,6 +29,32 @@ export function SlackView({ channelId, threadTs, search, nonce }: { channelId?: 
   const [thread, setThread] = useState<string | null>(threadTs ?? null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const [searching, setSearching] = useState(!!search)
+  const { scope, multi, companies } = useScope()
+  // undefined = not loaded (or a main without slack:company); null = no workspace connected
+  const [home, setHome] = useState<{ teamId: string; companyId: Id } | null | undefined>(undefined)
+  // a focused company waits for the answer instead of flashing a workspace another company owns
+  const [homeReady, setHomeReady] = useState(false)
+  const loadHome = (): void =>
+    void hive.slack.company().then(
+      (h) => (setHome(h), setHomeReady(true)),
+      () => (setHome(undefined), setHomeReady(true))
+    )
+  useEffect(loadHome, [status?.workspace?.teamId])
+  useHiveEvent('data:changed', ({ domain }) => domain === 'company' && loadHome())
+  const rehome = async (to?: Id): Promise<void> => {
+    const target = to ?? (await pickCompany(companies, { title: 'This Slack workspace belongs to…', exclude: home?.companyId }))
+    if (!target || target === home?.companyId) return
+    const ok = await confirmNative({
+      message: `Move the Slack workspace to ${companyName(target)}?`,
+      detail: `Alerts and agent drafts follow it. Slack triggers whose workflow belongs to another company stop firing until you move the workflow too.`,
+      confirmLabel: 'Move'
+    }).catch(() => false)
+    if (!ok) return
+    const r = await attempt(() => hive.slack.setCompany({ companyId: target }), 'Move Slack workspace')
+    if (!r) return
+    setHome(r)
+    toast(`Slack now belongs to ${companyName(r.companyId)}`)
+  }
 
   useEffect(() => {
     if (available === null) void loadSlack()
@@ -99,9 +129,39 @@ export function SlackView({ channelId, threadTs, search, nonce }: { channelId?: 
       </div>
     )
 
+  if (multi && scope && !homeReady)
+    return (
+      <div className="view">
+        <Toolbar title="Slack" />
+        <Loading />
+      </div>
+    )
+  const elsewhere = multi && scope && home && home.companyId !== scope ? home.companyId : null
+  const companyButton = multi && home ? (
+    <button type="button" className="slack-company no-drag" onClick={() => void rehome()} title="Which company this Slack workspace belongs to. Click to move it.">
+      <CompanyChip companyId={home.companyId} always />
+      <span className="text-tertiary">▾</span>
+    </button>
+  ) : null
+  if (elsewhere)
+    return (
+      <div className="view">
+        <Toolbar title="Slack" sub={<SlackStatusPill />}>
+          {companyButton}
+        </Toolbar>
+        <EmptyState icon="slack" text={`The connected Slack workspace belongs to ${companyName(elsewhere)}. Its channels, drafts and triggers live there.`}>
+          <Button variant="primary" onClick={() => void enterCompany(elsewhere, { view: { name: 'slack' } })}>
+            Open in {companyName(elsewhere)}
+          </Button>
+          <Button onClick={() => void rehome(scope)}>Move it to {companyName(scope)}</Button>
+        </EmptyState>
+      </div>
+    )
+
   return (
     <div className="view">
       <Toolbar title="Slack" sub={<SlackStatusPill />}>
+        {companyButton}
         <DraftsWaiting />
         <AutoPauseSwitch />
         <Button size="sm" variant="ghost" icon="search" kbd="⌘F" onClick={() => setSearching(true)}>

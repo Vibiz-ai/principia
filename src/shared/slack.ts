@@ -78,6 +78,10 @@ export interface SlackFile {
   mimetype: string | null
   size: number | null
   permalink: string | null
+  /** Slack file id (F…). Absent on rows mirrored before image support. */
+  id?: string | null
+  /** Auth-gated download URL (url_private_download, else url_private). Main-only: never sent to agents or tools. */
+  urlPrivate?: string | null
 }
 export interface SlackMessage {
   teamId: string
@@ -204,6 +208,7 @@ export interface SlackReplyPolicy {
   replyNode: string | null
 }
 export type SlackTriggerOn = 'mention' | 'dm' | 'message'
+export type SlackTriggerAction = 'run' | 'task'
 export interface SlackTriggerMatch {
   on: SlackTriggerOn[]
   channels: string[]
@@ -240,6 +245,13 @@ export interface SlackTriggerInput {
   inputs?: Record<string, string>
   /** Absent = restricted, no keys (SA2). */
   access?: SlackAgentAccess
+  /**
+   * DEPARTMENTS.md §8: 'run' (default) starts the workflow; 'task' creates a board task (source 'slack', one per thread,
+   * later thread messages become comments plus a coalesced wake).
+   */
+  action?: SlackTriggerAction
+  /** DEPARTMENTS.md §8: slack_triggers.department_id; a task-mode trigger routes its tasks here. */
+  departmentId?: Id | null
 }
 export interface SlackTrigger {
   id: Id
@@ -252,6 +264,9 @@ export interface SlackTrigger {
   inputs: Record<string, string>
   /** SA2: restricted by default. Older rows read as restricted. */
   access: SlackAgentAccess
+  /** Absent = 'run'. */
+  action?: SlackTriggerAction
+  departmentId?: Id | null
   origin: WorkflowOrigin | null
   createdAt: ISODate
   updatedAt: ISODate
@@ -388,6 +403,12 @@ export type NotifySlackTarget = { kind: 'me' } | { kind: 'channel'; channel: str
 
 export const SLACK_TOOLS = ['slack_list_channels', 'slack_read_thread', 'slack_search', 'slack_draft_reply', 'slack_post'] as const
 export type SlackTool = (typeof SLACK_TOOLS)[number]
+/**
+ * SLACK.md §11.4: the `work` toolset, listed only for agent steps of Slack-triggered runs: pick a repo and start an
+ * interactive Principia session there with the thread as context (main enforces the trigger, policy and company).
+ */
+export const SLACK_WORK_TOOLS = ['principia_repos', 'principia_start_session'] as const
+export type SlackWorkTool = (typeof SLACK_WORK_TOOLS)[number]
 /** Exactly the manifest's bot scopes (SLACK.md §3.1, PO-S2). */
 export const SLACK_REQUIRED_SCOPES = [
   'app_mentions:read',
@@ -403,7 +424,8 @@ export const SLACK_REQUIRED_SCOPES = [
   'mpim:read',
   'chat:write',
   'users:read',
-  'reactions:read'
+  'reactions:read',
+  'files:read'
 ] as const
 export const SLACK_BOT_EVENTS = ['app_mention', 'message.channels', 'message.groups', 'message.im', 'message.mpim', 'member_joined_channel'] as const
 

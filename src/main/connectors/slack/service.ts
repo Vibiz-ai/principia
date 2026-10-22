@@ -9,7 +9,7 @@ import path from 'node:path'
 import type { LiveOwner, McpServerSpec, SlackBridge } from '../../../shared/engine'
 import { HiveError } from '../../../shared/errors'
 import { newId } from '../../../shared/ids'
-import type { Ask } from '../../../shared/live'
+import type { AgentNode, Ask } from '../../../shared/live'
 import type {
   SlackChannel,
   SlackDraft,
@@ -29,7 +29,8 @@ import type {
 } from '../../../shared/slack'
 import { slackAuthorKind, slackAuthorProblem, slackWhoCanTrigger } from '../../../shared/slack'
 import type { Id, Session, ValidationError, WorkflowDraft } from '../../../shared/types'
-import { validateSlackTrigger } from '../../engine'
+import { matchSlackTrigger, validateSlackTrigger } from '../../engine'
+import { PERSONAL_COMPANY_ID } from '../../../shared/company'
 import type { Hive } from '../../hive'
 import { emit } from '../../ipc'
 import { log } from '../../log'
@@ -43,12 +44,18 @@ import { buildManifest } from './core/manifest'
 import { buildTranscript, maskTokens, parsePermalink, transcriptLine, tsCmp } from './core/format'
 import { userLabel } from './core/ingest'
 import type { Clock, HttpPort, SlackDraftRow, SocketPort } from './core/ports'
-import type { ReplyTriggerView } from './core/policy'
+import { slackCompanyMismatch, type ReplyTriggerView, type SlackCompanyRef } from './core/policy'
 import { createSlackAskPort } from './asks'
+import { diskImageSink } from './images'
 import { ConnectorSecrets } from './secrets'
 import { SlackSqlite, createSqliteSlackStore } from './store/sqlite'
 import { SlackTools } from './tools'
-import { normalizeTrigger, triggerSentence } from './triggerConfig'
+import { SlackWork, claudeLastAssistant, sendWorkReport } from './work'
+import type { SlackWorkSession } from './store/sqlite'
+import { historyRoots } from '../../history'
+import { entriesFrom } from '../../history/transcript'
+import { normalizeTrigger, triggerCompanyErrors, triggerDepartmentErrors, triggerSentence } from './triggerConfig'
+import { departmentsEnabled } from '../../../shared/company'
 import { SlackTriggerStore } from './triggerStore'
 import { nodeHttp, nodeSocket } from './transport/node'
 
@@ -58,6 +65,24 @@ const DAY = 86400_000
 const DEFAULT_RESPONDER_META = 'slack_default_responder'
 const DEFAULT_RESPONDER_SEED = 'slack-default-reply'
 const DEFAULT_RESPONDER_NAME = 'Reply in Slack'
+
+/** The responder prompt shipped before Slack-started work (an unedited copy is upgraded in place at start). */
+export const LEGACY_RESPONDER_PROMPT = [
+  'You are Hive, the team assistant in Slack. {{trigger.user}} addressed you in {{trigger.channel}}.',
+  '',
+  'The conversation so far:',
+  '{{trigger.thread}}',
+  '',
+  'The message(s) to you:',
+  '{{trigger.text}}',
+  '',
+  'Images shared in the thread (local files; open each with your Read tool before answering; empty = none):',
+  '{{trigger.images}}',
+  '',
+  'Write your reply for that thread. Answer directly and helpfully, Slack style: short, plain words, bullets only when they help.',
+  'Use your Slack tools to read more of the channel or search when you need context. If you cannot help, say so in one line.',
+  'Output only the reply text, nothing else.'
+].join('\n')
 
 /** The built-in responder: one Claude step whose output is the reply (restricted like every Slack-triggered agent). */
 export function defaultResponderDraft(profileId: Id): WorkflowDraft {
@@ -83,9 +108,20 @@ export function defaultResponderDraft(profileId: Id): WorkflowDraft {
           'The message(s) to you:',
           '{{trigger.text}}',
           '',
+          'Images shared in the thread (local files; open each with your Read tool before answering; empty = none):',
+          '{{trigger.images}}',
+          '',
           'Write your reply for that thread. Answer directly and helpfully, Slack style: short, plain words, bullets only when they help.',
-          'Use your Slack tools to read more of the channel or search when you need context. If you cannot help, say so in one line.',
-          'Output only the reply text, nothing else.'
+          'Use your Slack tools to read more of the channel or search when you need context.',
+          '',
+          'When the message asks for real work in code (fix it, implement it, "go ahead and take it", "you do it", investigate in the repo), do not refuse and do not say you lack repo access: start a Principia session.',
+          '1. Call principia_repos. Match the thread (product names, file paths, error names, URLs, stack traces) against each repo\'s name, path, remote and readme; prefer the one marked hint (last used from this channel) when it fits.',
+          '2. Only if two or three repos fit equally well, reply asking which one, as a numbered list of 2-3 options (name and one-line why), and start nothing.',
+          '3. Otherwise call principia_start_session with repo_id, a short title and task: what to do and the done criteria in your own words, including the key facts from the thread. Then reply in one line: started <claude|codex> session "<title>" in <repo>, will report back here.',
+          'To add to work this thread already started (the thread shows "session ... in ..."), pass continue_session_id only if you know that session id; otherwise start a new one.',
+          'Never start work for questions, opinions or discussion: answer those. If a tool refuses (another company, disabled), say so in one line.',
+          '',
+          'If you cannot help, say so in one line. Output only the reply text, nothing else.'
         ].join('\n')
       }
     ]
@@ -116,6 +152,8 @@ export class SlackService {
   readonly secrets: ConnectorSecrets
   readonly connector: SlackConnector
   readonly tools: SlackTools
+  /** SLACK.md §11.4: sessions started from Slack threads + their report back. */
+  readonly work: SlackWork
   private listeners = new Set<(m: SlackInboundMessage) => void>()
   private msgBuf = new Map<string, Map<string, SlackMessage>>()
   private msgTimer: NodeJS.Timeout | null = null
@@ -127,6 +165,8 @@ export class SlackService {
   private notifiedDrafts = new Set<string>()
   /** Ask an agent: session id -> its thread transcript file. */
   private askFiles = new Map<Id, string>()
+  /** COMPANY.md §6: last company-mismatch note per trigger (one slack_trigger_events row per trigger per hour). */
+  private companyNotes = new Map<Id, number>()
 
   constructor(
     private h: Hive,
@@ -179,7 +219,43 @@ export class SlackService {
       newId: (k) => newId(k),
       fake: !!t?.fake
     })
+    this.work = new SlackWork({
+      sql: this.sql,
+      redact: (s) => h.vault.redact(s),
+      repos: () => h.store.listRepos(),
+      repoCompany: (repoId) => {
+        const c = h.safe(() => h.company.companyForRepo(repoId), null)
+        return c ? { id: c.id, name: c.name } : this.companyRef(PERSONAL_COMPANY_ID)
+      },
+      teamCompany: (teamId) => this.teamCompany(teamId),
+      enforced: () => h.store.companyGuardsEnforced(),
+      multiCompany: () => h.safe(() => h.company.listPassports().length, 1) > 1,
+      lastActivity: (repoId) => h.safe(() => (h.db.prepare('SELECT MAX(started_at) AS m FROM sessions WHERE repo_id = ?').get(repoId) as { m: string | null } | undefined)?.m ?? null, null),
+      transcript: (channelId, threadTs) => this.transcript(channelId, threadTs),
+      runImagesDir: (runId) => {
+        const run = h.store.getRun(runId)
+        return run?.artifactsDir ? path.join(run.artifactsDir, 'slack-images') : null
+      },
+      createSession: (req) => {
+        const s = h.sessions.create({ adapter: req.adapter, repoId: req.repoId, cols: 120, rows: 32, title: req.title, ...(req.companyId ? { companyId: req.companyId } : {}), initialPromptFor: req.prepare })
+        return { id: s.id, title: s.title }
+      },
+      continueSession: (sessionId, text) => {
+        const live = h.sessionLive?.live(sessionId)
+        if (!live) throw new HiveError('conflict', 'This session has ended')
+        live.reply(text)
+      },
+      lastAssistantMessage: (sessionId) => {
+        const s = h.store.getSession(sessionId)
+        // Codex transcripts are not read here (the hook's last message on the agent row is the fallback)
+        if (!s || s.adapter !== 'claude' || !s.agentSessionId) return null
+        return claudeLastAssistant(historyRoots(process.env), s.agentSessionId, entriesFrom)
+      },
+      postReport: (w, text, agentId) => this.postWorkReport(w, text, agentId),
+      log: { info: (m, meta) => log.info(m, this.safeMeta(meta)), warn: (m, meta) => log.warn(m, this.safeMeta(meta)) }
+    })
     this.tools = new SlackTools({
+      work: this.work,
       connector: this.connector,
       sql: this.sql,
       redact: (s) => h.vault.redact(s),
@@ -210,6 +286,7 @@ export class SlackService {
     this.pruneAskFiles(0)
     await this.connector.start()
     this.ensureDefaultResponder()
+    this.upgradeDefaultResponder()
     this.maintTimer = setInterval(() => void this.maintenance(), DAY)
     this.maintTimer.unref?.()
     setTimeout(() => void this.maintenance(), 60_000).unref?.()
@@ -396,6 +473,16 @@ export class SlackService {
         return
       }
     }
+    // COMPANY.md §6: a team's message never starts another company's workflow (dropped with a note while enforced)
+    const blocked = this.companyBlocked(m)
+    if (blocked.size) {
+      const base = scope ?? new Set(this.triggers.list().filter((t) => t.enabled).map((t) => t.id))
+      scope = new Set([...base].filter((id) => !blocked.has(id)))
+      if (!scope.size) {
+        log.info('slack: message dropped; every matching trigger starts a workflow of another company', { channel: m.channelId })
+        return
+      }
+    }
     this.triggers.scoped(scope, () => {
       for (const cb of this.listeners) {
         try {
@@ -405,6 +492,55 @@ export class SlackService {
         }
       }
     })
+  }
+
+  // ---------- companies (COMPANY.md §3, §6) ----------
+  private companyRef(id: Id): SlackCompanyRef {
+    const c = this.h.safe(() => this.h.company.passport(id), null) ?? this.h.safe(() => this.h.company.passport(PERSONAL_COMPANY_ID), null)
+    return { id: c?.id ?? PERSONAL_COMPANY_ID, name: c?.name ?? 'Personal' }
+  }
+  /** The workspace's company (slack_workspaces.company_id; Personal when unknown). */
+  teamCompany(teamId: string): SlackCompanyRef {
+    const c = this.h.safe(() => this.h.company.companyOf({ teamId }), null)
+    return c ? { id: c.id, name: c.name } : this.companyRef(PERSONAL_COMPANY_ID)
+  }
+  /** A trigger belongs to its workflow's company. */
+  workflowCompany(workflowId: Id): SlackCompanyRef {
+    return this.companyRef(this.h.store.getWorkflow(workflowId)?.companyId ?? PERSONAL_COMPANY_ID)
+  }
+  /**
+   * Enabled triggers whose workflow belongs to another company than the message's team. Enforced
+   * (experimental.companies): returned, so the engine never sees them for this message, and a trigger that would have
+   * fired gets a slack_trigger_events note (at most hourly). Off: logged, nothing is dropped.
+   */
+  private companyBlocked(m: SlackInboundMessage): Set<Id> {
+    const out = new Set<Id>()
+    const enforced = this.h.store.companyGuardsEnforced()
+    let team: SlackCompanyRef | null = null
+    for (const t of this.triggers.list()) {
+      if (!t.enabled) continue
+      team ??= this.teamCompany(m.teamId)
+      const problem = slackCompanyMismatch(team, this.workflowCompany(t.workflowId))
+      if (!problem) continue
+      if (enforced) out.add(t.id)
+      if (m.isOwn || m.fromBot || !matchSlackTrigger(t, m).ok) continue
+      const last = this.companyNotes.get(t.id) ?? 0
+      if (Date.now() - last < HOUR) continue
+      this.companyNotes.set(t.id, Date.now())
+      if (!enforced) {
+        log.warn('slack: company guard (not enforced)', { triggerId: t.id, problem })
+        continue
+      }
+      this.triggers.insertEvent({ triggerId: t.id, kind: 'error', channelId: m.channelId, threadTs: m.threadTs, ts: m.ts, runId: null, message: `Dropped: ${problem}` })
+      emit('slackTrigger:updated', this.triggers.get(t.id) ?? t)
+    }
+    return out
+  }
+  /** "<title> · <company>" once there is more than one company (alerts name the company). */
+  private alertTitle(title: string, triggerId: Id): string {
+    const t = this.triggers.get(triggerId)
+    if (!t || this.h.safe(() => this.h.company.listPassports().length, 1) < 2) return title
+    return `${title} · ${this.workflowCompany(t.workflowId).name}`
   }
 
   // ---------- engine bridge (SLACK.md §9, CONTRACT Slack.3) ----------
@@ -434,6 +570,7 @@ export class SlackService {
         return () => this.listeners.delete(cb)
       },
       threadTranscript: (q) => this.transcript(q.channelId, q.threadTs),
+      downloadThreadImages: (q) => this.connector.threadImages(q.channelId, q.threadTs, diskImageSink(q.destDir)),
       permalink: (channelId, ts) => this.connector.permalink(channelId, ts),
       resolveUserName: (userId) => userLabel(this.connector.names.users.get(userId), userId),
       message: (q) => {
@@ -441,7 +578,7 @@ export class SlackService {
         const m = ws ? this.sql.getMessage(ws.teamId, q.channelId, q.ts) : null
         return m ? { userId: m.userId, userName: m.userId ? userLabel(this.connector.names.users.get(m.userId), m.userId) : null, plain: m.plain } : null
       },
-      alert: (a) => notify({ title: a.title, body: a.message.slice(0, 250), sound: this.h.settings().notificationSound, onClick: () => this.h.windows.command({ kind: 'navigate', view: 'schedules' }) }),
+      alert: (a) => notify({ title: this.alertTitle(a.title, a.triggerId), body: a.message.slice(0, 250), sound: this.h.settings().notificationSound, onClick: () => this.h.windows.command({ kind: 'navigate', view: 'schedules' }) }),
       reply: async (req) => {
         const run = this.h.store.getRun(req.runId)
         const ctx: SlackRunContext | null = run?.slack ?? null
@@ -484,7 +621,8 @@ export class SlackService {
       name: 'hive',
       command: process.execPath,
       args: [script],
-      env: { ELECTRON_RUN_AS_NODE: '1', HIVE_TOOLSETS: 'slack', HIVE_LIVE_DIR: path.join(liveRoot(this.h.paths.userData), owner.stepId) }
+      // SLACK.md §11.4: Slack-triggered runs also list the `work` toolset (principia_repos / principia_start_session)
+      env: { ELECTRON_RUN_AS_NODE: '1', HIVE_TOOLSETS: run.slack ? 'slack,work' : 'slack', HIVE_LIVE_DIR: path.join(liveRoot(this.h.paths.userData), owner.stepId) }
     }
   }
 
@@ -495,6 +633,20 @@ export class SlackService {
 
   toolCall(owner: LiveOwner, tool: Parameters<SlackTools['call']>[1], args: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.tools.call(owner, tool, args)
+  }
+
+  // ---------- Slack-started work: report back (SLACK.md §11.4) ----------
+  /** hive.onLiveEvent: a root agent row changed. */
+  onAgentUpdated(a: AgentNode): void {
+    this.work.onAgent(a)
+  }
+
+  /** The report goes through the original run's trigger policy (post or draft). */
+  async postWorkReport(w: SlackWorkSession, text: string, agentId: string | null): Promise<void> {
+    const run = w.runId ? this.h.store.getRun(w.runId) : null
+    const ctx: SlackRunContext | null = run?.slack ?? null
+    const r = await sendWorkReport(this.connector, { ctx, trigger: ctx ? this.triggerView(ctx.triggerId) : null }, w, text, agentId)
+    if (r !== 'posted' && r !== 'drafted') log.info('slack work: report not sent', { sessionId: w.sessionId, result: r })
   }
 
   // ---------- notify node + mirror (SLACK.md §10) ----------
@@ -552,6 +704,18 @@ export class SlackService {
       }
     } catch {
       /* engine validator unavailable */
+    }
+    // COMPANY.md §6: the connected workspace and the workflow must be in the same company
+    const ws = this.connector.workspace()
+    const companyErrors = triggerCompanyErrors(ws ? this.teamCompany(ws.teamId) : null, this.companyRef(wf.companyId ?? PERSONAL_COMPANY_ID))
+    if (companyErrors.length) {
+      if (this.h.store.companyGuardsEnforced()) errors.push(...companyErrors)
+      else log.warn('slack: company guard (not enforced)', { workflowId: wf.id, problem: companyErrors[0].message })
+    }
+    // DEPARTMENTS.md §8: task mode and a department exist only with Departments on; the department is this company's
+    if (trigger.action === 'task' || trigger.departmentId) {
+      if (!departmentsEnabled(this.h.settings().experimental)) errors.push({ path: 'action', message: 'Departments are experimental. Turn on Companies and Departments under Settings → Experimental to add Slack messages to the board.' })
+      else errors.push(...triggerDepartmentErrors(trigger.departmentId, trigger.departmentId ? this.h.company.departments.get(trigger.departmentId) : null, wf.companyId ?? PERSONAL_COMPANY_ID))
     }
     if (errors.length) throw new HiveError('validation', errors[0].message, errors)
     return trigger
@@ -745,9 +909,13 @@ export class SlackService {
       if (!this.connector.isConfigured() || this.h.store.getMeta(DEFAULT_RESPONDER_META)) return
       const profile = this.h.store.defaultProfileFor('claude')
       if (!profile) return
+      // COMPANY.md §6: the responder belongs to the workspace's company, or its trigger could never fire there
+      const ws = this.connector.workspace()
+      const companyId = ws ? this.teamCompany(ws.teamId).id : PERSONAL_COMPANY_ID
+      const named = this.h.store.listWorkflows().filter((w) => w.name === DEFAULT_RESPONDER_NAME)
       const wf = this.h.store.seedKeyUsed(DEFAULT_RESPONDER_SEED)
-        ? this.h.store.listWorkflows().find((w) => w.name === DEFAULT_RESPONDER_NAME)
-        : this.h.store.createWorkflow(defaultResponderDraft(profile.id), DEFAULT_RESPONDER_SEED)
+        ? named.find((w) => (w.companyId ?? PERSONAL_COMPANY_ID) === companyId) ?? named[0]
+        : this.h.store.createWorkflow(defaultResponderDraft(profile.id), DEFAULT_RESPONDER_SEED, null, companyId)
       if (!wf) return
       this.createTrigger({
         name: 'Reply when tagged',
@@ -761,6 +929,25 @@ export class SlackService {
       log.info('slack: added the default "Reply when tagged" trigger')
     } catch (e) {
       log.warn('slack: default responder not added', { e: String(e) })
+    }
+  }
+
+  /** SLACK.md §11.4: an unedited built-in responder gets the prompt that starts Principia sessions for real work. */
+  upgradeDefaultResponder(): void {
+    try {
+      const row = this.h.db.prepare('SELECT id, nodes_json FROM workflows WHERE seed_key = ?').get(DEFAULT_RESPONDER_SEED) as { id: string; nodes_json: string } | undefined
+      if (!row) return
+      const nodes = JSON.parse(row.nodes_json) as { id?: string; prompt?: string }[]
+      const reply = nodes.find((n) => n.id === 'reply')
+      if (!reply || reply.prompt !== LEGACY_RESPONDER_PROMPT) return
+      const next = (defaultResponderDraft('x').nodes[0] as { prompt?: string }).prompt
+      if (!next) return
+      reply.prompt = next
+      this.h.db.prepare('UPDATE workflows SET nodes_json = ? WHERE id = ?').run(JSON.stringify(nodes), row.id)
+      emit('data:changed', { domain: 'workflows' })
+      log.info('slack: upgraded the "Reply in Slack" prompt (starts Principia sessions for real work)')
+    } catch (e) {
+      log.warn('slack: responder prompt not upgraded', { e: String(e) })
     }
   }
 
@@ -779,7 +966,10 @@ export class SlackService {
     const prompt = `Here is a Slack thread from ${label} (saved at ${file}). Read it and help me with it. You can read more with mcp__hive__slack_read_thread and draft a reply with mcp__hive__slack_draft_reply.`
     let session: Session
     try {
-      session = this.h.sessions.create({ profileId: profile.id, repoId: req.repoId ?? null, cols: req.cols, rows: req.rows, initialPrompt: prompt, title: `Slack · ${label}` })
+      // COMPANY.md §6: a chat about a thread runs in the workspace's company. A repo decides its own while guards are
+      // off; enforced, the team's company is explicit, so another company's repo is refused (the thread never leaves it)
+      const companyId = !req.repoId || this.h.store.companyGuardsEnforced() ? this.teamCompany(ws.teamId).id : undefined
+      session = this.h.sessions.create({ profileId: profile.id, repoId: req.repoId ?? null, cols: req.cols, rows: req.rows, initialPrompt: prompt, title: `Slack · ${label}`, ...(companyId ? { companyId } : {}) })
     } catch (e) {
       this.removeFile(file)
       throw e

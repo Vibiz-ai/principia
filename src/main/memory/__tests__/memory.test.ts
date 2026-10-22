@@ -1,17 +1,36 @@
+// Memory invariants (PASSPORT.md §1, §6, §8, §12, §14 P8.1/P8.3) on the vault-backed store, then the v1 memory.db
+// suites, which keep guarding the legacy path while `experimental.vault` is off (it is deleted at GA).
+//
+// Vault: every write lands in the file first and the index is derived from the files (a rebuild reproduces it); an
+// external edit is never overwritten; supersede and invalidate move lines to History; delete is archive; and no code
+// path removes anything under a vault, observed on the real fs calls across every op. The Northwind fixture vault
+// (fixtures/vault, 41 hand-labelled notes) gates brief recall@5 >= 0.8 and deterministic link precision >= 0.9 in CI.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { VaultOp } from '../../../shared/passport'
 import type { Repo } from '../../../shared/types'
 import { openMemoryDb, MemorySchemaMismatch, type MemDB } from '../db'
 import { MEMORY_SCHEMA_VERSION } from '../schema'
 import { ftsQuery, inferEntityType, MemoryStore, queryKeywords, type GrantRow } from '../store'
 import { buildFingerprints, credentialHit, imperativeHit, redactCredentials, normalizeName, normalizeText, secretHit, textHash } from '../screen'
-import { BRIEF, buildBrief, entityDetail, factsQuery, graphQuery, rankedSearch, recencyWeight, searchPage } from '../search'
+import { BRIEF, buildBrief, entityDetail, factsQuery, globalGraph, graphQuery, outgoingLinks, rankedSearch, recencyWeight, searchPage, vaultSearch } from '../search'
 import { MemoryTools } from '../server/tools'
 import { handleLine, type McpHandlers } from '../server/jsonrpc'
-import { MemoryService, repoForCwd } from '../service'
+import { MemoryService, repoForCwd, type PassportRuntime } from '../service'
+import { buildPassportBrief } from '../brief'
+import { proposalsOp } from '../passportIpc'
+import { readLog } from '../vault/log'
+import { TMP_SUFFIX } from '../vault/fsutil'
+import { loadVaultView, type Candidate } from '../vault/suggest/candidates'
+import { mentionCandidates } from '../vault/suggest/mentions'
+import { ghostCandidates } from '../vault/suggest/ghosts'
+import { dupeCandidates } from '../vault/suggest/dupes'
+import { makeKit } from '../vault/__tests__/vaultTestKit'
+import { briefSectionTitles, copyFixtureVault, LABELS, precisionOf, recallAtK } from './fixtures/vault/fixture'
+import { makeHarness, NW, NW_BILLING, toolJson, type Harness } from './fixtures/vault/harness'
 
 let nativeOk = true
 try {
@@ -120,6 +139,315 @@ describe('screen (pure)', () => {
     expect(recencyWeight('2020-01-01T00:00:00Z', n)).toBe(0.5)
   })
 })
+
+// ======================= the Passport vault (experimental.vault on) =======================
+
+const allBlockIds = (h: Harness, companyId: string): Set<string> => {
+  const ids = new Set<string>()
+  for (const f of h.files(companyId)) for (const m of h.read(companyId, f).matchAll(/\^((?:f|r)-[0-9a-z]{10})\s*$/gm)) ids.add(m[1])
+  return ids
+}
+/** The derived rows of one company, comparable across a rebuild (soft ids, line numbers and statuses included). */
+function derived(rt: PassportRuntime, companyId: string): string {
+  const q = (sql: string) => rt.db.prepare(sql).all(companyId)
+  return JSON.stringify({
+    notes: q(`SELECT id, path, title, type, status, pinned, hash FROM mem_note WHERE company_id = ? AND removed_at IS NULL ORDER BY id`),
+    facts: q(`SELECT id, note_id, block_id, line, section, category, text, status, superseded_by, pinned FROM mem_fact WHERE company_id = ? ORDER BY id`),
+    links: q(`SELECT from_note, line, norm_rel, origin, to_note, to_norm, block_id, status FROM mem_link WHERE company_id = ? ORDER BY from_note, line, to_norm, origin`),
+    tags: q(`SELECT note_id, tag_norm, origin, line FROM mem_tag WHERE company_id = ? ORDER BY note_id, line, tag_norm`)
+  })
+}
+
+d('vault-backed writes: the file first, then the index (§6.2, §6.4)', () => {
+  let h: Harness
+  beforeEach(() => {
+    h = makeHarness()
+  })
+  afterEach(() => h.close())
+
+  it('an agent write is a line in the file; the index row carries its block id and line; a rebuild from the files reproduces the index', async () => {
+    const b = h.server(h.grant(NW))
+    const w = toolJson<{ written: { ref: string; text: string }[]; path: string; created: boolean }>(
+      await h.call(b, 'memory_write', { note: 'Dunning', facts: [{ text: 'Suspended workspaces keep read access to past invoices', kind: 'convention' }] })
+    )
+    expect(w).toMatchObject({ created: false, path: 'Concepts/Dunning.md' })
+    const id = /\^(f-[0-9a-z]{10})/.exec(w.written[0].ref)![1]
+    const lines = h.read(NW, 'Concepts/Dunning.md').split('\n')
+    const at = lines.findIndex((l) => l.endsWith(`^${id}`))
+    expect(lines[at]).toMatch(/^- \[convention\] Suspended workspaces keep read access to past invoices \(claude run#run_p8test0001, \d{4}-\d{2}-\d{2}\) \^f-/)
+    const row = h.rt.db.prepare('SELECT note_id, line, section, status FROM mem_fact WHERE company_id = ? AND block_id = ?').get(NW, id)
+    expect(row).toEqual({ note_id: 'n-nwdun00001', line: at, section: 'obs', status: 'active' })
+    expect(vaultSearch(h.rt.db, { companyId: NW }, 'read access past invoices')[0].note.title).toBe('Dunning')
+    // the log mirrors the write with its provenance chain
+    expect(readLog(h.root(NW)).some((e) => e.blockId === id && e.grantId && e.runId === 'run_p8test0001')).toBe(true)
+
+    // the index is derived: dropping it and rebuilding from the files gives the same rows
+    const before = derived(h.rt, NW)
+    for (const t of ['mem_tag', 'mem_link', 'mem_fact', 'mem_alias']) h.rt.db.prepare(`DELETE FROM ${t} WHERE company_id = ?`).run(NW)
+    h.rt.reindex(NW)
+    expect(derived(h.rt, NW)).toBe(before)
+  })
+
+  it('a hand edit made outside Principia is indexed and survives later agent writes byte for byte', async () => {
+    const rel = 'Concepts/Churn.md'
+    const human = '- [metric] October churn is tracking at 1.8% #board\n'
+    fs.appendFileSync(path.join(h.root(NW), ...rel.split('/')), human)
+    h.rt.index.indexNote(NW, rel)
+    const soft = h.rt.db.prepare(`SELECT id, actor FROM mem_fact WHERE company_id = ? AND text LIKE 'October churn%'`).get(NW) as { id: string; actor: string }
+    expect(soft.id).toMatch(/^h:/) // a soft key: the file is not rewritten to stamp an id
+    expect(soft.actor).toBe('user')
+    const b = h.server(h.grant(NW))
+    await h.call(b, 'memory_write', { note: 'Churn', facts: [{ text: 'Churn is measured on logos, not revenue', kind: 'convention' }] })
+    await h.call(b, 'memory_link', { links: [{ from: 'Churn', type: 'relates_to', to: 'Weekly growth sync' }] })
+    const text = h.read(NW, rel)
+    expect(text).toContain(human)
+    expect(text).toMatch(/Churn is measured on logos/)
+    expect(text).toContain('- relates_to [[Weekly growth sync]]')
+  })
+
+  it('supersede appends the new line and moves the old one to History; the old text stays searchable with history', async () => {
+    const b = h.server(h.grant(NW, { runId: 'run_p8sup00001' }))
+    const first = toolJson<{ written: { ref: string }[] }>(await h.call(b, 'memory_write', { note: 'Dunning', facts: [{ text: 'Reminder emails are sent at 09:00 UTC', kind: 'fact' }] }))
+    const oldId = /\^(f-[0-9a-z]{10})/.exec(first.written[0].ref)![1]
+    const b2 = h.server(h.grant(NW, { runId: 'run_p8sup00002' }))
+    const second = toolJson<{ written: { ref: string }[] }>(
+      await h.call(b2, 'memory_write', { note: 'Dunning', facts: [{ text: 'Reminder emails are sent at 08:00 customer local time', kind: 'fact', supersedes: `^${oldId}` }] })
+    )
+    const newId = /\^(f-[0-9a-z]{10})/.exec(second.written[0].ref)![1]
+    const text = h.read(NW, 'Concepts/Dunning.md')
+    const [obs, hist] = text.split('## History')
+    expect(obs).toMatch(new RegExp(`- \\[fact\\] Reminder emails are sent at 08:00 customer local time .*\\^${newId}`))
+    expect(obs).not.toContain('09:00 UTC')
+    expect(hist).toMatch(new RegExp(`- \\[superseded\\] Reminder emails are sent at 09:00 UTC \\(by \\^${newId};.*\\^${oldId}`))
+    const old = h.rt.db.prepare('SELECT status, section, superseded_by FROM mem_fact WHERE company_id = ? AND block_id = ?').get(NW, oldId) as { status: string; section: string; superseded_by: string }
+    expect(old).toMatchObject({ status: 'superseded', section: 'history' })
+    expect(old.superseded_by).toContain(newId.slice(2))
+    expect(vaultSearch(h.rt.db, { companyId: NW }, '09:00 UTC reminder').flatMap((x) => x.facts.map((f) => f.blockId))).not.toContain(oldId)
+    expect(vaultSearch(h.rt.db, { companyId: NW }, '09:00 UTC reminder', { includeHistory: true }).flatMap((x) => x.facts.map((f) => f.blockId))).toContain(oldId)
+  })
+
+  it('invalidate moves a line to History with its reason; restore moves it back with the same block id', async () => {
+    const id = 'f-dun0000001'
+    expect(h.read(NW, 'Concepts/Dunning.md')).toContain(`^${id}`)
+    const inv = await h.rt.applyOps(NW, [{ op: 'invalidate', blockId: id, reason: 'policy changed' }])
+    expect(inv.results[0].status).toBe('ok')
+    expect(h.read(NW, 'Concepts/Dunning.md').split('## History')[1]).toMatch(new RegExp(`- \\[invalidated\\] Retry failed payments 3 times .*reason: policy changed.*\\^${id}`))
+    await h.rt.applyOps(NW, [{ op: 'restoreLine', blockId: id }])
+    const text = h.read(NW, 'Concepts/Dunning.md')
+    expect(text).not.toContain('## History\n- [invalidated] Retry')
+    expect(text.split('## Relations')[0]).toMatch(new RegExp(`^- \\[\\w+\\] Retry failed payments 3 times over 7 days, then suspend the workspace .*\\^${id}$`, 'm'))
+    expect(h.rt.db.prepare('SELECT status FROM mem_fact WHERE company_id = ? AND block_id = ?').get(NW, id)).toEqual({ status: 'active' })
+  })
+
+  // The History line no longer carries the category; restore reads the original category (the convention kind
+  // drives brief ranking) and author/date back from the invalidate event's before state.
+  it('restore brings back the original category and provenance', async () => {
+    const id = 'f-dun0000001'
+    const before = h.read(NW, 'Concepts/Dunning.md').split('\n').find((l) => l.endsWith(`^${id}`))
+    await h.rt.applyOps(NW, [{ op: 'invalidate', blockId: id, reason: 'policy changed' }])
+    await h.rt.applyOps(NW, [{ op: 'restoreLine', blockId: id }])
+    expect(h.read(NW, 'Concepts/Dunning.md').split('\n').find((l) => l.endsWith(`^${id}`))).toBe(before)
+  })
+
+  it('delete is archive: the file stays, links still resolve, briefs and the default graph hide it; deleting a line invalidates it', async () => {
+    // what memory:delete sends in vault mode (handlers/memory.ts): archive for an entity, invalidate for a line
+    const files = h.files(NW)
+    const ops: VaultOp[] = [
+      { op: 'archive', note: 'n-nwsbx00001' },
+      { op: 'invalidate', blockId: 'f-ann0000002', reason: 'deleted by the user' }
+    ]
+    const res = await h.rt.applyOps(NW, ops, { kind: 'user' })
+    expect(res.results.map((r) => r.status)).toEqual(['ok', 'ok'])
+    expect(h.files(NW)).toEqual(files)
+    expect(h.read(NW, 'Gotchas/Postmark sandbox mode.md')).toMatch(/^status: archived$/m)
+    expect(h.read(NW, 'Decisions/Annual billing discount.md')).toMatch(/- \[invalidated\] Proposed at the Q4 planning meeting/)
+    // Postmark's relation to it still resolves to the archived note
+    expect(outgoingLinks(h.rt.db, NW, 'n-nwpos00001').find((l) => l.toText === 'Postmark sandbox mode')?.toNote).toBe('n-nwsbx00001')
+    const brief = buildPassportBrief(h.rt.db, { companyId: NW, companyName: 'Northwind', query: 'staging emails never delivered sandbox', transport: 'mcp' }).text
+    for (const head of ['## Pinned', '## Relevant to this task', '## Nearby']) expect(briefSectionTitles(brief, head)).not.toContain('Postmark sandbox mode')
+    const inject = buildPassportBrief(h.rt.db, { companyId: NW, companyName: 'Northwind', query: 'staging emails never delivered sandbox', transport: 'inject' }).text
+    expect(inject.split('## Known notes')[1]).not.toContain('[[Postmark sandbox mode]]')
+    expect(globalGraph(h.rt.db, NW).nodes.some((n) => n[0] === 'n-nwsbx00001')).toBe(false)
+    expect(globalGraph(h.rt.db, NW, { includeArchived: true }).nodes.some((n) => n[0] === 'n-nwsbx00001')).toBe(true)
+  })
+})
+
+// §6.5: briefs hide archived notes, including in the edges of live notes ("relates_to [[Postmark sandbox mode]]")
+d('vault-backed writes: archived notes in briefs', () => {
+  it('an archived note is not named by the edges of other notes in a brief', async () => {
+    const h = makeHarness()
+    try {
+      await h.rt.applyOps(NW, [{ op: 'archive', note: 'n-nwsbx00001' }], { kind: 'user' })
+      const brief = buildPassportBrief(h.rt.db, { companyId: NW, companyName: 'Northwind', query: 'staging emails never delivered sandbox', transport: 'mcp' }).text
+      expect(brief).not.toContain('[[Postmark sandbox mode]]')
+    } finally {
+      h.close()
+    }
+  })
+})
+
+d('never delete, observed on the fs (§1.5, §6.4)', () => {
+  it('no op, accept, revert, rescan or release removes or replaces anything under a vault', async () => {
+    const h = makeHarness()
+    const real = { unlinkSync: fs.unlinkSync, rmSync: fs.rmSync, rmdirSync: fs.rmdirSync, renameSync: fs.renameSync }
+    const removals: string[] = []
+    const renames: { from: string; to: string; content: string | null }[] = []
+    // every removal and rename anywhere in the process is recorded, then performed
+    vi.spyOn(fs, 'unlinkSync').mockImplementation((p) => (removals.push(`unlinkSync ${String(p)}`), real.unlinkSync(p)))
+    vi.spyOn(fs, 'rmSync').mockImplementation((p, o) => (removals.push(`rmSync ${String(p)}`), real.rmSync(p, o)))
+    vi.spyOn(fs, 'rmdirSync').mockImplementation((p, o) => (removals.push(`rmdirSync ${String(p)}`), real.rmdirSync(p, o)))
+    for (const k of ['unlink', 'rm', 'rmdir'] as const) {
+      const orig = fs.promises[k].bind(fs.promises) as (...a: unknown[]) => Promise<void>
+      vi.spyOn(fs.promises, k).mockImplementation(((p: unknown, ...rest: unknown[]) => (removals.push(`promises.${k} ${String(p)}`), orig(p, ...rest))) as never)
+    }
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      const f = String(from)
+      renames.push({ from: f, to: String(to), content: fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null })
+      return real.renameSync(from, to)
+    })
+    const realRename = fs.promises.rename.bind(fs.promises)
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      const f = String(from)
+      renames.push({ from: f, to: String(to), content: fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null })
+      return realRename(from, to)
+    })
+    try {
+      const root = h.root(NW)
+      const startFiles = h.files(NW)
+      const startBlocks = allBlockIds(h, NW)
+      const g = h.grant(NW, { runId: 'run_p8del00001' })
+      const b = h.server(g)
+      await h.call(b, 'memory_write', {
+        note: 'Refund policy',
+        type: 'process',
+        facts: [{ text: 'Refunds over 500 EUR need Bruno Costa to approve', kind: 'convention' }],
+        relations: [{ type: 'relates_to', to: 'Dunning' }, { type: 'relates_to', to: 'Chargeback playbook' }]
+      })
+      const w = toolJson<{ written: { ref: string }[] }>(await h.call(b, 'memory_write', { note: 'Dunning', facts: [{ text: 'Suspension emails go out through Postmark', kind: 'fact' }] }))
+      const agentLine = /\^(f-[0-9a-z]{10})/.exec(w.written[0].ref)![1]
+      await h.call(b, 'memory_write', { note: 'Dunning', facts: [{ text: 'Suspension emails go out through Postmark at 09:00', supersedes: `^${agentLine}` }] })
+      await h.call(b, 'memory_invalidate', { refs: ['[[Churn#^f-chu0000001]]'], reason: 'restated by finance' })
+      await h.call(b, 'memory_link', { links: [{ from: 'Refund policy', type: 'part_of', to: 'billing-worker' }] })
+      const user: VaultOp[] = [
+        { op: 'createNote', title: 'Chargeback playbook', type: 'process' },
+        { op: 'setProperty', note: 'Refund policy', key: 'owner', value: '[[Diego Alvarez]]' },
+        { op: 'addAlias', note: 'Refund policy', alias: 'Refunds' },
+        { op: 'rename', note: 'Chargeback playbook', newTitle: 'Chargebacks' },
+        { op: 'createNote', title: 'Refund Policy Draft', type: 'process' },
+        { op: 'merge', from: 'Refund Policy Draft', into: 'Refund policy' },
+        { op: 'archive', note: 'Drop IE11 support' }
+      ]
+      const res = await h.rt.applyOps(NW, user, { kind: 'user' })
+      expect(res.results.map((r) => r.status)).toEqual(user.map(() => 'ok'))
+      // accept a deterministic suggestion (a linkMention), then revert the agent run
+      const view = loadVaultView(h.rt.db, NW)
+      const mention = mentionCandidates(view, ['n-nwq4000001'], (n) => ({ text: h.read(NW, n.path), hash: 'h' }))[0]
+      await h.rt.applyOps(NW, mention.ops, { kind: 'user' })
+      await h.svc.revertRun('run_p8del00001')
+      // a human deletes a file in Finder: a review item, and reject restores it
+      const victim = path.join(root, 'Concepts', 'Usage-based billing.md')
+      const victimText = fs.readFileSync(victim, 'utf8')
+      real.unlinkSync(victim) // the human, not Principia: not recorded
+      h.rt.index.indexNote(NW, 'Concepts/Usage-based billing.md')
+      const list = (await proposalsOp(h.rt, { op: 'list', companyId: NW, kinds: ['external_removal'] })) as { items: { id: string }[] }
+      expect(list.items).toHaveLength(1)
+      await proposalsOp(h.rt, { op: 'reject', companyId: NW, ids: [list.items[0].id] })
+      expect(fs.readFileSync(victim, 'utf8')).toBe(victimText)
+      h.rt.reindex(NW)
+      h.svc.release(g.grantId) // removes the grant's spool folder (outside every vault)
+
+      // nothing inside the vault was removed
+      expect(removals.filter((r) => r.includes(root))).toEqual([])
+      // nothing was moved out of the vault (a rename out is a removal)
+      expect(renames.filter((x) => x.from.startsWith(root + path.sep) && !x.to.startsWith(root + path.sep))).toEqual([])
+      // every rename into the vault is tmp -> target, or a note rename that moves the bytes it read
+      for (const r of renames.filter((x) => x.to.startsWith(root))) {
+        if (path.basename(r.from).endsWith(TMP_SUFFIX)) {
+          expect(path.dirname(r.from)).toBe(path.dirname(r.to))
+          expect(path.basename(r.from)).toBe(`.${path.basename(r.to)}${TMP_SUFFIX}`)
+        } else {
+          expect(r.from.startsWith(root)).toBe(true)
+          expect(fs.existsSync(r.to)).toBe(true)
+          expect(r.content).not.toBeNull()
+        }
+      }
+      const moved = renames.filter((x) => x.to.startsWith(root) && !path.basename(x.from).endsWith(TMP_SUFFIX)).map((x) => path.relative(root, x.from).split(path.sep).join('/'))
+      expect(moved).toEqual(['Processes/Chargeback playbook.md'])
+      // every note the vault ever had is still there (or was moved by that rename); no block id ever vanished
+      const now = h.files(NW)
+      expect(now).toEqual(expect.arrayContaining(startFiles))
+      expect(now).toEqual(expect.arrayContaining(['Processes/Chargebacks.md', 'Processes/Refund policy.md', 'Processes/Refund Policy Draft.md']))
+      const blocks = allBlockIds(h, NW)
+      for (const id of startBlocks) expect(blocks.has(id), id).toBe(true)
+      expect(blocks.has(agentLine)).toBe(true)
+      // the merged-away note is archived with merged_into, its line carried over; the run's lines are invalidated
+      expect(h.read(NW, 'Processes/Refund Policy Draft.md')).toMatch(/merged_into: "\[\[Refund policy\]\]"/)
+      expect(h.read(NW, 'Processes/Refund policy.md')).toMatch(/- \[invalidated\] Refunds over 500 EUR need \[\[Bruno Costa\]\] to approve/)
+    } finally {
+      vi.restoreAllMocks()
+      h.close()
+    }
+  })
+})
+
+d('fixture vault evals (PASSPORT.md §14 P8.3, gated in CI)', () => {
+  const describeCand = (view: ReturnType<typeof loadVaultView>) => (c: Candidate): string => {
+    const op = c.ops[0]
+    if (op.op === 'linkMention') return `${op.note} -> ${op.target}`
+    if (op.op === 'addAlias') return `${op.alias} -> ${op.note}`
+    if (op.op === 'createNote') return op.title
+    if (op.op === 'merge') return `${op.from} => ${op.into}`
+    return `${c.kind}:${c.key}:${view.companyId}`
+  }
+
+  it('brief recall@5 >= 0.8 over the labelled prompts', () => {
+    const k = makeKit({ companyId: NW })
+    try {
+      copyFixtureVault(k.root)
+      k.index.rebuild(NW)
+      const now = new Date('2026-10-20T12:00:00.000Z')
+      const rank = (prompt: string) =>
+        briefSectionTitles(buildPassportBrief(k.db, { companyId: NW, companyName: 'Northwind', query: prompt, transport: 'mcp', now }).text, '## Relevant to this task')
+      const r = recallAtK(LABELS.brief, rank, 5)
+      const misses = r.perPrompt.filter((p) => p.hits < p.expect.length).map((p) => `${p.prompt} -> want ${p.expect.join(', ')}; got ${p.got.join(', ')}`)
+      expect(r.recall, misses.join('\n')).toBeGreaterThanOrEqual(0.8)
+      // a repo-scoped brief ranks the same top note for a task in that repo
+      const scoped = buildPassportBrief(k.db, { companyId: NW, companyName: 'Northwind', repo: { id: NW_BILLING.id, name: NW_BILLING.name }, query: LABELS.brief[0].prompt, transport: 'mcp', now }).text
+      expect(briefSectionTitles(scoped, '## Relevant to this task').slice(0, 5)).toContain('Stripe webhook raw body')
+    } finally {
+      k.close()
+    }
+  })
+
+  it('deterministic link suggestions (mentions + ghost retargets) have precision >= 0.9; promotions and merges are labelled too', () => {
+    const k = makeKit({ companyId: NW })
+    try {
+      copyFixtureVault(k.root)
+      k.index.rebuild(NW)
+      const view = loadVaultView(k.db, NW)
+      const read = (n: { path: string }) => ({ text: k.read(n.path), hash: 'fixture' })
+      const ghosts = ghostCandidates(view)
+      const links = [...mentionCandidates(view, null, read), ...ghosts.filter((c) => c.kind === 'retarget')]
+      const truth = [...LABELS.links.map(([a, b]) => `${a} -> ${b}`), ...LABELS.retarget.map(([a, b]) => `${a} -> ${b}`)]
+      const p = precisionOf(links, describeCand(view), truth)
+      // each suggestion counts once: a repeated correct candidate must not inflate precision
+      const proposed = links.map(describeCand(view)).map((x) => x.toLowerCase())
+      expect(new Set(proposed).size, 'duplicate link suggestions').toBe(proposed.length)
+      expect(p.precision, `false positives: ${p.falsePositives.join('; ')}`).toBeGreaterThanOrEqual(0.9)
+      // the known trap is the only false positive: a generic "stripe" (a version ghost one character from v3,
+      // [[Pricing v2]] -> Pricing v3, is refused since retargets never cross different numbers)
+      expect(p.falsePositives.sort()).toEqual(['Brand voice -> Stripe'])
+      expect(p.missed).toEqual([])
+      const entities = precisionOf(ghosts.filter((c) => c.kind === 'entity'), describeCand(view), LABELS.entities)
+      expect(entities).toMatchObject({ precision: 1, missed: [] })
+      expect(dupeCandidates(view)).toEqual([]) // the fixture has no duplicate notes
+    } finally {
+      k.close()
+    }
+  })
+})
+
+// ======================= v1 memory.db (legacy path while experimental.vault is off) =======================
 
 d('memory.db', () => {
   it('migrates to MEMORY_SCHEMA_VERSION and the server refuses a mismatch', () => {

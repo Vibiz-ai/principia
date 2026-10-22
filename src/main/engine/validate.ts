@@ -265,6 +265,8 @@ export function validateWorkflow(draft: WorkflowDraft, deps0: ValidateDeps): Val
 
   const st = (draft as { slackTools?: unknown }).slackTools
   if (st !== undefined && st !== null && typeof st !== 'boolean') err('slackTools', 'slackTools must be true or false')
+  if (draft.slackAgentPermissions !== undefined && !['restricted', 'profile'].includes(draft.slackAgentPermissions)) err('slackAgentPermissions', 'Slack agent permissions must be restricted or profile')
+  if (draft.slackAgentPermissions === 'profile' && st !== true) err('slackAgentPermissions', 'Enable Slack tools before choosing profile permissions')
   if (deps0.slackTriggered || st === true) errs.push(...slackOutputInCommands({ nodes: okNodes }))
 
   const { cycle } = topoOrder(deps)

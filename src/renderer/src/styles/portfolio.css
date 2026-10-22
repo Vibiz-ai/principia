@@ -1,0 +1,41 @@
+/* Portfolio (COMPANY.md §8.5): company cards on --surface-1, then the merged Needs-you list. DESIGN.md card language. */
+.portfolio { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 4px; max-width: 1280px; }
+.portfolio__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.portfolio .text-running { color: var(--status-running); }
+
+.pcard { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); min-width: 0; }
+.pcard.is-needs { border-color: color-mix(in srgb, var(--status-needs) 45%, var(--border)); }
+.pcard__head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pcard__title { flex: 1; min-width: 0; }
+.pcard__name { display: block; max-width: 100%; color: var(--text-primary); font-size: var(--text-md, 14px); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.pcard__name:hover { color: var(--accent); text-decoration: none; }
+.pcard__status { font-size: var(--text-xs); margin-top: 3px; }
+.pcard__badges { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.pcard__mission { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; min-height: 1.5em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pcard__runs { display: flex; flex-direction: column; gap: 1px; border-top: 1px solid var(--border); padding-top: 8px; min-height: 88px; }
+.pcard__run { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 6px; margin: 0 -6px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-primary); font-size: var(--text-sm); text-align: left; }
+.pcard__run:hover { background: var(--row-hover); }
+.pcard__run-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard__run-time { flex: none; font-size: var(--text-xs); }
+.pcard__none { font-size: var(--text-sm); padding: 6px 0; }
+.pcard__stats { display: grid; grid-template-columns: auto auto 1fr; gap: 16px; margin: 0; padding-top: 8px; border-top: 1px solid var(--border); }
+.pcard__stats > div { min-width: 0; }
+.pcard__stats dt { font-size: var(--text-xs); color: var(--text-tertiary); margin-bottom: 3px; white-space: nowrap; }
+.pcard__stats dd { margin: 0; font-size: var(--text-sm); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard__actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+
+.portfolio__needs { margin-bottom: 16px; }
+.portfolio__need { cursor: default; }
+.portfolio__need .glyph { width: 14px; text-align: center; flex: none; }
+.portfolio__need-title { font-weight: var(--weight-medium, 500); }
+
+/* VOICE.md §5.3, §5.6, §5.8: the card tablet (inscription and seal), the medallion, the coin mosaic empty state */
+.pcard__tablet { margin: -4px -4px 4px; padding-bottom: 6px; cursor: pointer; }
+.pcard__tablet .rm-pp--card { min-height: 118px; }
+/* the engraved coin keeps a 36 px box; the laurel ring grows around it through the Medallion's negative margin */
+.pcard__coin { display: inline-grid; place-items: center; width: 36px; height: 36px; flex: none; line-height: 0; }
+.pcard__coin .rm-medallion__fail { box-shadow: 0 0 0 2px var(--surface-1); }
+.portfolio-empty { flex: 1; display: grid; place-items: center; padding: 48px 24px; }
+.portfolio-empty .rm-mosaic-empty { gap: 14px; }
+.portfolio-empty p { margin: 0; max-width: 380px; font-size: var(--text-md); line-height: 1.55; color: var(--text-secondary); }
+.portfolio__none { margin-bottom: 16px; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hash32, layoutMemoryGraph, layoutMemoryGroups, lcg, type LayoutEdge, type LayoutFrame, type LayoutNode } from './memoryLayout'
+import { hash32, layoutMemoryGraph, layoutMemoryGroups, lcg, seedPositions, type LayoutEdge, type LayoutFrame, type LayoutNode } from './memoryLayout'
 
 function synth(n: number, edgeEvery = 1): { nodes: LayoutNode[]; edges: LayoutEdge[] } {
   const rand = lcg(42)
@@ -151,5 +151,64 @@ describe('layoutMemoryGroups', () => {
     ]
     const e = [{ source: 'a', target: 'b' }]
     expect(layoutMemoryGroups(groups, e)).toEqual(layoutMemoryGroups(groups, e))
+  })
+})
+
+describe('seedPositions (Passport graph first paint)', () => {
+  it('keeps saved positions exactly', () => {
+    const saved = new Map([
+      ['a', { x: 10, y: -20 }],
+      ['b', { x: 300, y: 40 }]
+    ])
+    const out = seedPositions(['a', 'b'], [{ source: 'a', target: 'b' }], saved)
+    expect(out.get('a')).toEqual({ x: 10, y: -20 })
+    expect(out.get('b')).toEqual({ x: 300, y: 40 })
+  })
+
+  it('puts a new node next to its placed neighbours, then their neighbours', () => {
+    const saved = new Map([
+      ['a', { x: 1000, y: 1000 }],
+      ['b', { x: 1100, y: 1000 }]
+    ])
+    const edges = [
+      { source: 'new', target: 'a' },
+      { source: 'new', target: 'b' },
+      { source: 'leaf', target: 'new' }
+    ]
+    const out = seedPositions(['a', 'b', 'new', 'leaf'], edges, saved)
+    const n = out.get('new')!
+    expect(Math.hypot(n.x - 1050, n.y - 1000)).toBeLessThan(45)
+    const l = out.get('leaf')!
+    expect(Math.hypot(l.x - n.x, l.y - n.y)).toBeLessThan(45)
+  })
+
+  it('spirals unconnected nodes outside the placed picture, deterministically and order-independently', () => {
+    const saved = new Map([['a', { x: 0, y: 0 }]])
+    const ids = ['a', 'x', 'y', 'z']
+    const one = seedPositions(ids, [], saved)
+    const two = seedPositions([...ids].reverse(), [], saved)
+    expect([...one.entries()].sort()).toEqual([...two.entries()].sort())
+    for (const id of ['x', 'y', 'z']) expect(Math.hypot(one.get(id)!.x, one.get(id)!.y)).toBeGreaterThanOrEqual(40)
+    expect(new Set(['x', 'y', 'z'].map((id) => `${one.get(id)!.x},${one.get(id)!.y}`)).size).toBe(3)
+  })
+
+  it('seeds everything on a spiral when nothing is saved, and ignores edges to unknown ids', () => {
+    const out = seedPositions(['p', 'q'], [{ source: 'p', target: 'ghost:gone' }], new Map())
+    expect(out.size).toBe(2)
+    for (const p of out.values()) expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true)
+  })
+})
+
+describe('seedPositions with a hub note', () => {
+  it('seeds a 3k-link hub quickly and deterministically', () => {
+    const ids = Array.from({ length: 3000 }, (_, i) => `n-${i}`)
+    const edges = ids.slice(1).map((id) => ({ source: 'n-0', target: id }))
+    const saved = new Map([['n-0', { x: 0, y: 0 }]])
+    const t0 = performance.now()
+    const a = seedPositions(ids, edges, saved)
+    expect(performance.now() - t0).toBeLessThan(500)
+    expect(a.size).toBe(3000)
+    expect(a.get('n-0')).toEqual({ x: 0, y: 0 })
+    expect(JSON.stringify([...seedPositions(ids, edges, saved)])).toBe(JSON.stringify([...a]))
   })
 })

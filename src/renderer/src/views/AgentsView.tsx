@@ -1,9 +1,12 @@
 /**
  * Agents hub (LIVE.md §6, F3): every running, waiting and recent agent across all repos in one place.
  * Groups: Needs you · Working (+ dimmed Open sessions) · Done recently. Click a row to focus or open it; answer
- * asks and reply to idle sessions inline.
+ * asks and reply to idle sessions inline. COMPANY.md §8.3-8.4: focused mode shows the active company's agents only;
+ * All mode shows every company's, each row tagged with its company. DEPARTMENTS.md §9: a board task's run row shows
+ * "PRN-42 · Marketing/Copywriter" (TaskRunChip), which opens the card.
  */
 import { useMemo, useState } from 'react'
+import type { AgentNode } from '@shared/live'
 import type { Id } from '@shared/types'
 import { hubGroups, isSeen, isUnseenIdle } from '../lib/live'
 import { AgentRow } from '../components/agents/AgentTree'
@@ -12,33 +15,47 @@ import { ReplyBox } from '../components/agents/ReplyBox'
 import { ApprovalCard } from '../components/author/ApprovalCard'
 import { usePendingDrafts } from '../state/authoring'
 import { Button, EmptyState, Kbd, Loading, SectionHeader, Toolbar, useTick } from '../components/ui'
-import { focusAgent, goNextNeedsYou, useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
+import { focusAgent, goNextNeedsYou, useSeenSet } from '../state/live'
+import { CompanyTagged, useAgentCompany, useScope, useScopedLive } from '../components/CompanyChip'
+import { inScope } from '../lib/scope'
 import { loadJson, openPalette, saveJson, useStore } from '../state/store'
+import { TaskRunChip } from '../components/board/TaskRunChip'
 
 export function AgentsView(): React.JSX.Element {
   useTick()
-  const idx = useAgentIndex()
+  const { scope, chips } = useScope()
+  const { idx, asks: allAsks } = useScopedLive(scope)
+  const companyOfAgent = useAgentCompany()
+  const sessions = useStore((s) => s.sessions)
   // approval asks are shown as cards from the drafts slice (Approvals), not as ask rows
-  const allAsks = useOpenAsks()
   const asks = useMemo(() => allAsks.filter((a) => a.kind !== 'approval'), [allAsks])
-  const drafts = usePendingDrafts()
+  const allDrafts = usePendingDrafts()
+  // a draft belongs to its authoring session's company (Personal when it has none)
+  const drafts = useMemo(() => (scope ? allDrafts.filter((d) => inScope(d.sessionId ? sessions.find((s) => s.id === d.sessionId) : null, scope)) : allDrafts), [allDrafts, sessions, scope])
   const approvalFocus = useStore((s) => s.approvalFocus)
   const seen = useSeenSet()
   const repos = useStore((s) => s.repos)
   const available = useStore((s) => s.liveAvailable)
   const focus = useStore((s) => s.agentFocus)
-  const [repoId, setRepoId] = useState<Id | null>(() => loadJson<Id | null>('hive.agentsRepo', null))
+  const [savedRepo, setRepoId] = useState<Id | null>(() => loadJson<Id | null>('hive.agentsRepo', null))
   const pickRepo = (id: Id | null): void => {
     setRepoId(id)
     saveJson('hive.agentsRepo', id)
   }
 
   const roots = idx.roots
-  const groups = useMemo(() => hubGroups(roots, asks, seen, { repoId }), [roots, asks, seen, repoId])
   const repoChips = useMemo(() => {
     const used = new Set(roots.map((r) => r.repoId).filter(Boolean) as Id[])
     return repos.filter((r) => used.has(r.id))
   }, [roots, repos])
+  // a remembered repo of another company (or one with no agents left) filters nothing
+  const repoId = savedRepo && repoChips.some((r) => r.id === savedRepo) ? savedRepo : null
+  const groups = useMemo(() => hubGroups(roots, asks, seen, { repoId }), [roots, asks, seen, repoId])
+  const tag = (root: AgentNode, row: React.ReactNode): React.ReactNode => (
+    <CompanyTagged key={root.id} companyId={companyOfAgent(idx.byId.get(root.id) ?? root)} chips={chips}>
+      {row}
+    </CompanyTagged>
+  )
   const shownDrafts = repoId ? drafts.filter((d) => !d.sessionId || roots.some((r) => r.sessionId === d.sessionId && r.repoId === repoId)) : drafts
   const empty = !shownDrafts.length && !groups.needs.length && !groups.working.length && !groups.open.length && !groups.done.length
   const focusedDraft = approvalFocus && shownDrafts.some((d) => d.id === approvalFocus.draftId) ? approvalFocus.draftId : null
@@ -71,7 +88,7 @@ export function AgentsView(): React.JSX.Element {
           {available === null ? (
             <Loading />
           ) : empty ? (
-            <EmptyState icon="agents" text={repoId ? 'No agents in this repository in the last 24 hours.' : 'No agents running. Sessions, workflow steps and their subagents show up here while they work.'}>
+            <EmptyState icon="agents" text={repoId ? 'No agents in this repository in the last 24 hours.' : scope ? 'No agents running in this company. Its sessions, workflow steps and their subagents show up here while they work.' : 'No agents running. Sessions, workflow steps and their subagents show up here while they work.'}>
               {repoId ? (
                 <Button onClick={() => pickRepo(null)}>Show all repos</Button>
               ) : (
@@ -90,7 +107,9 @@ export function AgentsView(): React.JSX.Element {
                   <SectionHeader title="Approvals" count={<span className="text-needs">{shownDrafts.length}</span>} />
                   <div className="hub__approvals">
                     {shownDrafts.map((d) => (
-                      <ApprovalCard key={d.id} draft={d} hotkeys={d.id === hotDraft} />
+                      <CompanyTagged key={d.id} companyId={sessions.find((x) => x.id === d.sessionId)?.companyId} chips={chips}>
+                        <ApprovalCard draft={d} hotkeys={d.id === hotDraft} />
+                      </CompanyTagged>
                     ))}
                   </div>
                 </>
@@ -103,8 +122,9 @@ export function AgentsView(): React.JSX.Element {
                     </span>
                   </SectionHeader>
                   <div className="group-list hub__list">
-                    {groups.needs.map(({ root, asks: ra }) => (
+                    {groups.needs.map(({ root, asks: ra }) => tag(root,
                       <AgentRow key={root.id} idx={idx} root={root} asks={ra} seen={isSeen(root, seen)}>
+                        <TaskRunChip runId={root.runId} sessionId={root.sessionId} />
                         {ra.length > 0 && (
                           <div className="arow__asks">
                             {ra.map((a) => (
@@ -122,17 +142,16 @@ export function AgentsView(): React.JSX.Element {
                 <>
                   <SectionHeader title="Working" count={groups.working.length || undefined} />
                   <div className="group-list hub__list">
-                    {groups.working.map((r) => (
-                      <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen={false} />
-                    ))}
+                    {groups.working.map((r) => tag(r, <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen={false}><TaskRunChip runId={r.runId} sessionId={r.sessionId} /></AgentRow>))}
                     {groups.working.length === 0 && <div className="hub__none text-tertiary">Nothing working right now.</div>}
                   </div>
                   {groups.open.length > 0 && (
                     <>
                       <div className="hub__sub">Open sessions</div>
                       <div className="group-list hub__list">
-                        {groups.open.map((r) => (
+                        {groups.open.map((r) => tag(r,
                           <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen dim>
+                            <TaskRunChip runId={r.runId} sessionId={r.sessionId} />
                             {r.status === 'needs_you' && r.needs === 'idle' && <ReplyBox agent={r} onOpen={() => void focusAgent(r.id)} />}
                           </AgentRow>
                         ))}
@@ -145,9 +164,7 @@ export function AgentsView(): React.JSX.Element {
                 <>
                   <SectionHeader title="Done recently" count={groups.done.length} />
                   <div className="group-list hub__list">
-                    {groups.done.map((r) => (
-                      <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen compact />
-                    ))}
+                    {groups.done.map((r) => tag(r, <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen compact><TaskRunChip runId={r.runId} sessionId={r.sessionId} /></AgentRow>))}
                   </div>
                 </>
               )}

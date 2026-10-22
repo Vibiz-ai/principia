@@ -15,6 +15,8 @@ export function registerProfileHandlers(h: Hive): void {
     return p
   })
   handle('profiles:remove', ({ id }) => {
+    // DEPARTMENTS.md §1.1: an agent seat never points at a deleted profile
+    h.company.departments.assertNotBacking('profile', id)
     h.store.removeProfile(id)
     emit('data:changed', { domain: 'profiles' })
   })

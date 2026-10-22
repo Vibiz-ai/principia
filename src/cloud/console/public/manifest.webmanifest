@@ -1,0 +1,10 @@
+{
+  "name": "Principia Cloud",
+  "short_name": "Principia",
+  "start_url": "/console/",
+  "scope": "/console/",
+  "display": "standalone",
+  "background_color": "#17181b",
+  "theme_color": "#17181b",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -65,6 +65,8 @@ export interface AuthorDraft {
   summary: string
   workflowId: Id | null
   workflowName: string
+  /** COMPANY.md §3: author_drafts.company_id (empty stamp = Personal). Set by author:list. */
+  companyId?: Id
   flags: AuthorFlags
   warnings: string[]
   decisionNote: string | null
@@ -470,6 +472,7 @@ export function normalizeAuthoredDraft(raw: unknown, ctx: AuthoringContext): { d
   } else if (w.worktree === null) draft.worktree = null
   // SLACK.md §9.4: kept as given (the strict schema reports a non-boolean)
   if (w.slackTools !== undefined) draft.slackTools = w.slackTools as boolean
+  if (w.slackAgentPermissions !== undefined) draft.slackAgentPermissions = w.slackAgentPermissions as WorkflowDraft['slackAgentPermissions']
   return { draft, errors }
 }
 

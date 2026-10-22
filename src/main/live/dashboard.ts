@@ -17,7 +17,7 @@ export interface DashboardDeps {
   live: LiveStore
   status(): StatusSnapshot
   nextRuns(limit: number): NextFire[]
-  factsSince?(since: ISODate, limit: number): LearnedFact[]
+  factsSince?(since: ISODate, limit: number, companyId?: string): LearnedFact[]
   now?: () => Date
 }
 
@@ -109,7 +109,7 @@ function runCard(d: DashboardDeps, run: Run): RunCard {
   }
 }
 
-export function activity(d: DashboardDeps, now: Date): { days: ActivityDay[]; successRate: number | null } {
+export function activity(d: DashboardDeps, now: Date, companyId?: string): { days: ActivityDay[]; successRate: number | null } {
   const db = d.store.db
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (ACTIVITY_DAYS - 1))
   const startIso = start.toISOString()
@@ -118,7 +118,10 @@ export function activity(d: DashboardDeps, now: Date): { days: ActivityDay[]; su
     const day = localDay(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
     days.set(day, { date: day, runs: 0, passed: 0, failed: 0, tokens: 0, costUsd: null, byModel: [], models: new Map() })
   }
-  const runs = db.prepare('SELECT status, created_at FROM runs WHERE created_at >= ?').all(startIso) as { status: string; created_at: string }[]
+  // COMPANY.md §8.3: focused mode counts only that company's runs and agents (empty stamp = Personal)
+  const co = companyId ? " AND COALESCE(company_id, 'co_personal') = ?" : ''
+  const coArgs = companyId ? [companyId] : []
+  const runs = db.prepare(`SELECT status, created_at FROM runs WHERE created_at >= ?${co}`).all(startIso, ...coArgs) as { status: string; created_at: string }[]
   let passed = 0
   let failed = 0
   for (const r of runs) {
@@ -136,9 +139,9 @@ export function activity(d: DashboardDeps, now: Date): { days: ActivityDay[]; su
   const roots = db
     .prepare(
       `SELECT run_id, model, provider, tokens_in, tokens_out, cost_usd, model_usage_json, files_json, started_at
-       FROM agents WHERE parent_id IS NULL AND started_at >= ?`
+       FROM agents WHERE parent_id IS NULL AND started_at >= ?${co}`
     )
-    .all(startIso) as RootUsageRow[]
+    .all(startIso, ...coArgs) as RootUsageRow[]
   for (const r of roots) {
     const day = days.get(localDay(r.started_at))
     if (!day) continue
@@ -198,7 +201,8 @@ function morningBrief(d: DashboardDeps): Artifact | null {
   return null
 }
 
-export function dashboard(d: DashboardDeps, arg?: { since?: string }): DashboardData {
+export function dashboard(d: DashboardDeps, arg?: { since?: string; companyId?: string }): DashboardData {
+  const companyId = arg?.companyId
   const now = d.now?.() ?? new Date()
   const lastSeenAt = d.store.getMeta(LAST_SEEN_KEY)
   const since = resolveSince(arg?.since, lastSeenAt, now)
@@ -206,7 +210,7 @@ export function dashboard(d: DashboardDeps, arg?: { since?: string }): Dashboard
   const idle: AgentNode[] = live.filter((a) => a.kind === 'session' && a.parentId === null && a.needs === 'idle')
   let learned: LearnedFact[] = []
   try {
-    learned = d.factsSince?.(since, 10) ?? []
+    learned = d.factsSince?.(since, 10, companyId) ?? []
   } catch {
     learned = []
   }
@@ -215,9 +219,9 @@ export function dashboard(d: DashboardDeps, arg?: { since?: string }): Dashboard
     lastSeenAt,
     status: d.status(),
     needsYou: { asks: d.live.listOpenAsks(), idle },
-    done: d.store.endedRunsSince(since, 20).map((r) => runCard(d, r)),
+    done: d.store.endedRunsSince(since, 20, companyId).map((r) => runCard(d, r)),
     learned,
-    activity: activity(d, now),
+    activity: activity(d, now, companyId),
     live,
     comingUp: comingUp(d),
     morningBrief: morningBrief(d)

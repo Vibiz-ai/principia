@@ -4,10 +4,12 @@
  * AUTHORING.md §5 (stop-if), §6 (worktree per run + PO5 push guard), §7 (wait, notify).
  */
 import { attachGateway } from '../gateway/attach'
+import { attachForum } from '../forum/attach'
+import { isHarnessAuthFailure } from './harnessFailure'
 import { createWriteStream, existsSync, mkdirSync, rmdirSync, writeFileSync, type WriteStream } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import type { EngineContext, McpServerSpec, MemoryGrant } from '../../shared/engine'
+import { TASK_WRAP_UP_MS, TASK_WRAP_UP_TEXT, type EngineContext, type ForumSpawn, type McpServerSpec, type MemoryGrant, type RunTaskLink, type TaskToolset } from '../../shared/engine'
 import type { NotifyResult } from '../../shared/authoring'
 import type { Ask, AskAnswer } from '../../shared/live'
 import type { MemoryMode } from '../../shared/memory'
@@ -41,6 +43,7 @@ import {
   MCP_VERIFIED,
   agentBrief,
   claudeSessionMcpAttach,
+  codexToolsAttach,
   isMemoryMode,
   memoryTransport,
   nodeMemoryMode,
@@ -52,10 +55,11 @@ import {
 import { startProcess, type ProcHandle, type ProcResult } from './process'
 import { StepLive } from './stepLive'
 import { classifyLimitText, classifyStreamLine, laterReset, type LimitHit } from './live/limits'
+import { claudeUserMessage } from './live/claudeControl'
 import type { StallMonitor } from './live/stall'
 import { parseRefs, render, type RenderScope, type TriggerVars } from './templates'
 import { TRIGGER_IN_COMMAND, hiveOutVar, slackCommandHint } from './validate'
-import { SLACK_TOOLS, slackAccessOf, type NotifySlackTarget, type SlackAgentAccess } from '../../shared/slack'
+import { SLACK_TOOLS, SLACK_WORK_TOOLS, slackAccessOf, type NotifySlackTarget, type SlackAgentAccess } from '../../shared/slack'
 import { UNTRUSTED_SLACK_NOTE, triggerVars } from './slackTriggers'
 import { FEEDBACK_TAIL, LineBuffer, OUTPUT_CAP, Semaphore, cap, isDir, tail } from './util'
 
@@ -71,6 +75,21 @@ export interface ExecDeps {
   stall?: StallMonitor
   /** Length of one wait-node "second" (interval, per-try cap, timeoutMin budget). Default 1000; tests shrink it. */
   waitSecondMs?: number
+  /** Length of one task-run cap "minute" (TaskRun.runMinutes). Default 60 000; tests shrink it. */
+  taskMinuteMs?: number
+  /**
+   * May a step of this run fall back to another harness (usage limit, auth failure)? Absent = yes, whenever it is
+   * installed (desktop). The cloud allows only harnesses the run has an account for (CLOUD.md §7.2).
+   */
+  harnessFallback?: (runId: string, to: AdapterId) => boolean
+}
+
+/** DEPARTMENTS.md §3.6, §4.3: what a board task run adds to an execution (StartRunOptions.taskId…). */
+export interface TaskRun extends RunTaskLink {
+  /** a resumed Claude turn: `--resume` this conversation (prompt runs) */
+  resumeSessionId: string | null
+  /** the time cap; warned in-band ~2 min before, then the run is canceled. null = no cap */
+  runMinutes: number | null
 }
 
 /** Step error for the other steps of a run that a HIVE_STOP ended (AUTHORING.md §5). */
@@ -161,6 +180,8 @@ interface StepSpec {
 export interface StepOutcome {
   /** Internal: this attempt ended on a provider usage limit. */
   limitHit?: LimitHit
+  /** Provider unavailable or unable to authenticate; ordinary task errors never set this. */
+  harnessUnavailable?: boolean
   status: 'passed' | 'failed' | 'canceled'
   stepId: string | null
   output: string
@@ -213,7 +234,8 @@ export class Execution {
   constructor(
     private d: ExecDeps,
     public run: Run,
-    private workflow: WorkflowDraft | null
+    private workflow: WorkflowDraft | null,
+    private task: TaskRun | null = null
   ) {
     this.done = new Promise((r) => (this.resolveDone = r))
     const t = run.target
@@ -230,6 +252,26 @@ export class Execution {
     }
   }
 
+  /** SLACK.md §9.6: images people shared in the triggering thread, downloaded into the run's artifacts at run start. */
+  private slackImages: string[] = []
+  private async loadSlackImages(): Promise<void> {
+    const sl = this.run.slack
+    const fetch = this.ctx.slack?.downloadThreadImages
+    if (!sl || !fetch) return
+    try {
+      const paths = await fetch.call(this.ctx.slack, { channelId: sl.channelId, threadTs: sl.threadTs, destDir: join(this.run.artifactsDir, 'slack-images') })
+      this.slackImages = (paths ?? []).filter((p) => typeof p === 'string' && p.length > 0).slice(0, 5)
+    } catch (e) {
+      // best effort: the run goes on without images
+      this.ctx.log.warn('engine: slack thread images failed', { runId: this.run.id, error: String(e) })
+    }
+  }
+  /** The prompt block that points a Slack-triggered agent at the thread's images ('' when none or already listed). */
+  private slackImagesNote(prompt: string): string {
+    if (!this.run.slack || !this.slackImages.length || this.slackImages.every((p) => prompt.includes(p))) return ''
+    return `Images shared in this Slack thread (open them with your Read tool before answering):\n${this.slackImages.join('\n')}`
+  }
+
   /** SLACK.md §9.2: `{{trigger.*}}` values, computed once at run start (thread transcript from main's mirror). */
   private triggerScope: TriggerVars | null | undefined = undefined
   private triggerValues(): TriggerVars | null {
@@ -242,7 +284,7 @@ export class Execution {
     } catch (e) {
       this.ctx.log.warn('engine: slack thread transcript failed', { runId: this.run.id, error: String(e) })
     }
-    const v = triggerVars(sl, thread)
+    const v = triggerVars(sl, thread, this.slackImages)
     const red = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, this.redact(x)])) as TriggerVars
     return (this.triggerScope = red)
   }
@@ -254,7 +296,7 @@ export class Execution {
    */
   slackAccess(): (SlackAgentAccess & { keys: 'trigger' | 'profile' }) | null {
     if (this.run.slack) return { ...slackAccessOf(this.run.slack.access), keys: 'trigger' }
-    if (this.workflow?.slackTools) return { fullPermissions: false, secretNames: [], keys: 'profile' }
+    if (this.workflow?.slackTools) return { fullPermissions: this.workflow.slackAgentPermissions === 'profile', secretNames: [], keys: 'profile' }
     return null
   }
 
@@ -279,7 +321,8 @@ export class Execution {
    * would share Claude's per-folder conversation store with every Chat session.
    */
   private defaultCwd(): string {
-    if (!this.slackDriven()) return this.ctx.paths.scratchDir
+    // COMPANY.md §3: a company's repo-less nodes run in its workspace, never in a folder shared with other companies
+    if (!this.slackDriven()) return this.companyWorkspace() ?? this.ctx.paths.scratchDir
     const dir = join(this.ctx.paths.scratchDir, 'slack-runs', this.run.id)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     return dir
@@ -368,6 +411,8 @@ export class Execution {
       const missing = this.missingAdapter()
       if (missing) return this.close('failed', missing)
       this.updateRun({ status: 'running', startedAt: this.iso() })
+      this.startTaskCap()
+      await this.loadSlackImages()
       if (this.run.target.kind === 'prompt') await this.executePrompt()
       else await this.executeWorkflow()
     } catch (e) {
@@ -420,6 +465,8 @@ export class Execution {
     const limited = status === 'failed' && this.limit ? this.limit : null
     const extra: Partial<Run> = limited ? { stopReason: 'rate_limited', resetAt: limited.resetAt, ...this.autoRetry(limited.resetAt) } : {}
     this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), ...extra, ...more })
+    for (const t of this.capTimers) clearTimeout(t)
+    this.capTimers = []
     this.cleanupRunDir()
     this.resolveDone()
   }
@@ -439,6 +486,94 @@ export class Execution {
   /** Step ids running right now (their tagged processes are not leftovers). */
   runningStepIds(): string[] {
     return [...this.lives.keys()]
+  }
+
+  // ---------- board task runs (DEPARTMENTS.md §3.6, §4.3, §6) ----------
+
+  private capTimers: NodeJS.Timeout[] = []
+  /** Running claude steps with stream-json stdin open: the in-band channel of the wrap-up warning. */
+  private inband = new Map<string, ProcHandle>()
+  /** §3.6: limits.runMinutes as a run-wide timer: the in-band warning ~2 min before, then cancel (the task parks limit). */
+  private startTaskCap(): void {
+    const minutes = this.task?.runMinutes
+    if (!minutes) return
+    const unit = this.d.taskMinuteMs ?? 60_000
+    const total = minutes * unit
+    const lead = Math.min((TASK_WRAP_UP_MS / 60_000) * unit, total / 2)
+    const warn = setTimeout(() => this.warnWrapUp(), Math.max(0, total - lead))
+    const stop = setTimeout(() => void this.hitTimeLimit(minutes), total)
+    warn.unref?.()
+    stop.unref?.()
+    this.capTimers.push(warn, stop)
+  }
+  /** Claude reads it as a user message on its open stdin; every running step also shows it as a notice in its tree. */
+  private warnWrapUp(): void {
+    if (this.run.status !== 'running' || this.stopped) return
+    for (const [stepId, live] of this.lives) {
+      live.hook({ kind: 'notice', text: TASK_WRAP_UP_TEXT })
+      const h = this.inband.get(stepId)
+      if (h && !h.write(claudeUserMessage(TASK_WRAP_UP_TEXT))) this.ctx.log.info('engine: wrap-up warning not delivered in-band', { runId: this.run.id, stepId })
+    }
+  }
+  private async hitTimeLimit(minutes: number): Promise<void> {
+    if ((this.run.status !== 'queued' && this.run.status !== 'running') || !this.task) return
+    try {
+      this.ctx.company?.tasks?.timeLimit?.({ runId: this.run.id, taskId: this.task.taskId, minutes })
+    } catch (e) {
+      this.ctx.log.warn('engine: task time limit hook failed', { runId: this.run.id, error: String(e) })
+    }
+    await this.cancel(`Time limit reached (${minutes} min)`)
+  }
+  /** §4.3: the provider conversation id of a claude step of a task run, once per value (task.agentSessionId). */
+  private lastTaskSession: string | null = null
+  private noteTaskSession(adapter: AdapterId, agentSessionId: string | null): void {
+    if (!this.task || adapter !== 'claude' || !agentSessionId || agentSessionId === this.lastTaskSession) return
+    this.lastTaskSession = agentSessionId
+    try {
+      this.ctx.company?.tasks?.sessionCaptured?.({ runId: this.run.id, taskId: this.task.taskId, adapter, agentSessionId })
+    } catch (e) {
+      this.ctx.log.warn('engine: task session capture failed', { runId: this.run.id, error: String(e) })
+    }
+  }
+  /**
+   * §6: the hivetask toolset rides on the step's hivemem server (env + allowed tool names), for claude steps of a task
+   * run. Main's factory decides the tools; null or a failure = the step runs without them (fenced report fallback).
+   */
+  private withTaskTools(grant: MemoryGrant, s: StepSpec, stepId: string): MemoryGrant {
+    if (!this.task || s.adapterId !== 'claude') return grant
+    let tools: TaskToolset | null = null
+    try {
+      tools = this.ctx.company?.tasks?.toolset?.({ runId: this.run.id, taskId: this.task.taskId, agentId: this.task.agentId, stepId, adapter: s.adapterId, companyId: this.run.companyId ?? null }) ?? null
+    } catch (e) {
+      this.ctx.log.warn('engine: task toolset failed; step runs without it', { runId: this.run.id, stepId, error: String(e) })
+    }
+    if (!tools?.toolNames.length) return grant
+    return { ...grant, server: { ...grant.server, env: { ...grant.server.env, ...tools.env } }, toolNames: [...new Set([...grant.toolNames, ...tools.toolNames])] }
+  }
+
+  /** FORUM.md §3: Forum access for a step of a run with an agent seat; none, or a failure, = no Forum. */
+  private openForum(s: StepSpec, stepId: string): ForumSpawn | null {
+    const agentId = this.task?.agentId ?? null
+    if (!this.ctx.forum || !agentId) return null
+    try {
+      return this.ctx.forum.open({ runId: this.run.id, stepId, taskId: this.task?.taskId ?? null, agentId, adapter: s.adapterId, companyId: this.run.companyId ?? null })
+    } catch (e) {
+      this.ctx.log.warn('engine: forum open failed; step runs without it', { runId: this.run.id, stepId, error: String(e) })
+      return null
+    }
+  }
+
+  /** COMPANY.md §5: the run's company Passport (cwd only without a company); DEPARTMENTS.md §7: a task run's adds its department. */
+  private passportFor(cwd: string): string | null | undefined {
+    const tasks = this.ctx.company?.tasks
+    if (this.task && this.run.companyId && tasks?.passportContext) {
+      try {
+        return tasks.passportContext({ taskId: this.task.taskId, companyId: this.run.companyId })
+      } catch (e) {
+        this.ctx.log.warn('engine: task passport failed; company passport used', { runId: this.run.id, error: String(e) })
+      }
+    }
+    return this.run.companyId ? this.ctx.passportContext?.(cwd, this.run.companyId) : this.ctx.passportContext?.(cwd)
   }
 
   /** Cancel from outside: kill the tree, mark canceled. Resolves when the run ended. */
@@ -516,17 +651,59 @@ export class Execution {
         adapter = p.adapter
       }
       const info = this.d.provider(adapter!)
-      if (!info.available) return `${info.label} not installed: ${info.installHint}`
+      if (!info.available && (!u.profileId || !this.nextHarness(new Set([adapter!])))) return `${info.label} not installed: ${info.installHint}`
     }
     return null
   }
 
-  /** Paths of every repository added to Hive, one per line (HIVE_REPOS). */
+  /**
+   * Paths of the repositories added to Hive, one per line (HIVE_REPOS). COMPANY.md §6: with company guards enforced,
+   * only the run's company's repos (another company's paths are never handed to its agents).
+   */
   private repoPaths(): string {
     try {
-      return (this.ctx.listRepos?.() ?? []).map((r) => r.path).join('\n')
+      let repos = this.ctx.listRepos?.() ?? []
+      const co = this.ctx.company
+      if (co && this.run.companyId && co.enforced()) {
+        const own = new Set(co.repoIds(this.run.companyId))
+        repos = repos.filter((r) => own.has(r.id))
+      }
+      return repos.map((r) => r.path).join('\n')
     } catch {
       return ''
+    }
+  }
+
+  // ---------- companies (COMPANY.md §6) ----------
+
+  /**
+   * Every step's repo target and folder must belong to the run's company. Enforced (experimental.companies): the step
+   * fails with the guard's message. Otherwise the mismatch is logged and the step goes ahead.
+   */
+  private checkCompany(refs: { repoId?: string | null; cwd?: string | null }): void {
+    const co = this.ctx.company
+    const companyId = this.run.companyId
+    if (!co || !companyId) return
+    let problem: string | null
+    try {
+      problem = co.crossCompany(companyId, refs)
+    } catch (e) {
+      problem = e instanceof Error ? e.message : String(e)
+    }
+    if (!problem) return
+    if (co.enforced()) throw new StepError(problem)
+    this.ctx.log.warn('engine: company guard (not enforced)', { runId: this.run.id, companyId, problem })
+  }
+
+  /** The company's workspace folder (repo-less nodes), or null without companies. */
+  private companyWorkspace(): string | null {
+    const co = this.ctx.company
+    if (!co || !this.run.companyId) return null
+    try {
+      return co.workspaceDir(this.run.companyId)
+    } catch (e) {
+      this.ctx.log.warn('engine: company workspace unavailable; using the scratch folder', { runId: this.run.id, error: String(e) })
+      return null
     }
   }
 
@@ -542,42 +719,61 @@ export class Execution {
     if (v === '~' || v.startsWith('~/')) v = join(homedir(), v.slice(1))
     if (!isAbsolute(v)) throw new StepError(`Folder must be absolute: ${v}`)
     if (!isDir(v)) throw new StepError(`Folder not found: ${v}`)
+    // realpath match: a template, a symlink or a path inside another company's repo is caught here too
+    this.checkCompany({ cwd: v })
     return v
   }
 
   // ---------- single step ----------
 
+  /** Fallback never widens Slack restrictions or chooses a harness without the required MCP transport. */
+  private nextHarness(tried: Set<AdapterId>): AdapterId | undefined {
+    const access = this.slackAccess()
+    return (['codex', 'claude', 'gemini', 'cursor'] as const).find((id) => {
+      const info = this.d.provider(id)
+      return !tried.has(id) && info.available && !!info.binPath && (this.d.harnessFallback?.(this.run.id, id) ?? true) &&
+        (!access || access.fullPermissions || id === 'claude') &&
+        (!this.slackToolsWanted() || id === 'claude' || id === 'codex')
+    })
+  }
+
   private async runStep(s: StepSpec): Promise<StepOutcome> {
     let spec = s
     const tried = new Set<AdapterId>([s.adapterId])
+    const attempts: string[] = []
     let resetAt: string | null = null
+    let limited = false
     for (;;) {
       const outcome = await this.runStepAttempt(spec)
-      if (!outcome.limitHit || this.stopped) {
+      if (outcome.stepId) attempts.push(outcome.stepId)
+      if (outcome.limitHit) {
+        limited = true
+        resetAt = laterReset(resetAt, outcome.limitHit.resetAt)
+      }
+      if ((!outcome.limitHit && !outcome.harnessUnavailable) || this.stopped) {
         // Session identifiers belong to a harness; never resume one with the original provider.
         return spec.adapterId === s.adapterId ? outcome : { ...outcome, agentSessionId: null }
       }
-      resetAt = laterReset(resetAt, outcome.limitHit.resetAt)
-      const access = this.slackAccess()
-      const next = (['codex', 'claude', 'gemini', 'cursor'] as const).find((id) => {
-        const info = this.d.provider(id)
-        return !tried.has(id) && info.available && !!info.binPath &&
-          (!access || access.fullPermissions || id === 'claude')
-      })
+      const next = this.nextHarness(tried)
       if (!next || !s.profile) {
-        this.limit = { resetAt: laterReset(this.limit?.resetAt, resetAt) }
-        return outcome
+        if (limited) this.limit = { resetAt: laterReset(this.limit?.resetAt, resetAt) }
+        const restriction = this.slackAccess()
+        const explanation = restriction && !restriction.fullPermissions
+          ? ' Automatic fallback is blocked because this workflow requires restricted Slack permissions; other harnesses do not yet support the same restrictions.'
+          : ' No other compatible installed harness is available.'
+        return { ...outcome, error: `${outcome.error ?? 'Harness unavailable'}.${explanation}` }
       }
       tried.add(next)
-      this.ctx.log.info('Usage limit: switching workflow harness', { runId: this.run.id, nodeId: s.nodeId, from: spec.adapterId, to: next })
+      this.ctx.log.info('Switching workflow harness', { runId: this.run.id, nodeId: s.nodeId, from: spec.adapterId, to: next,
+        reason: outcome.limitHit ? 'usage limit' : 'unavailable or authentication failed' })
       spec = {
         ...s,
         adapterId: next,
         profile: { ...s.profile, adapter: next, model: null, extraArgs: [], useApiKeyAuth: false },
         resumeId: null,
         prompt: [s.resumeId ? this.originalPrompt.get(s.nodeId) : null, s.prompt,
-          'A previous harness hit its usage limit. Inspect the current files before continuing; some work may already be complete.'].filter(Boolean).join('\n\n'),
-        sourceStepIds: [...s.sourceStepIds, ...(outcome.stepId ? [outcome.stepId] : [])]
+          'A previous harness became unavailable. Inspect the current files and existing external actions before continuing; some work may already be complete. Do not duplicate completed actions.'].filter(Boolean).join('\n\n'),
+        sourceStepIds: [...new Set([...s.sourceStepIds, ...attempts])]
       }
     }
   }
@@ -601,12 +797,13 @@ export class Execution {
     let liveFiles: McpAttachment['files'] = []
     let liveStepId: string | null = null
     let slackMcp: McpAttachment | null = null
+    let forum: ForumSpawn | null = null
     try {
       if (this.stopped) return canceled
       const adapter = this.d.adapters[s.adapterId]
       const info = this.d.provider(s.adapterId)
       const stepId = newId('step')
-      const hasLive = s.adapterId === 'claude' || s.adapterId === 'gemini' || s.adapterId === 'cursor'
+      const hasLive = s.adapterId === 'claude' || s.adapterId === 'gemini' || s.adapterId === 'cursor' || (s.adapterId === 'codex' && this.slackToolsWanted())
       const runnable = info.available && !!info.binPath
       // F1: the step's root agent (and, for agent CLIs, its live channel for hooks / ask_user)
       live = new StepLive({
@@ -627,17 +824,40 @@ export class Execution {
       this.lives.set(stepId, live)
       mem = runnable ? this.openMemory(s, stepId, adapter, live) : null
       // SLACK.md §9.2: Slack text is untrusted. claude gets it in --append-system-prompt, the other CLIs as a prefix.
-      const slackNote = this.run.slack && s.adapterId !== 'shell' ? UNTRUSTED_SLACK_NOTE : null
-      const basePrompt = slackNote && s.adapterId !== 'claude' && !s.resumeId ? `${slackNote}\n\n${s.prompt}` : s.prompt
+      const slackNote = this.slackDriven() && s.adapterId !== 'shell' ? UNTRUSTED_SLACK_NOTE : null
+      const notedPrompt = slackNote && s.adapterId !== 'claude' && !s.resumeId ? `${slackNote}\n\n${s.prompt}` : s.prompt
+      const imagesNote = s.adapterId !== 'shell' && !s.resumeId ? this.slackImagesNote(notedPrompt) : ''
+      const basePrompt = imagesNote ? `${notedPrompt}\n\n${imagesNote}` : notedPrompt
+      // An isolated checkout still belongs to its original company's repository.
+      const contextCwd = this.worktree?.path === s.cwd ? this.worktree.repoPath : s.cwd
+      // COMPANY.md §5: the run's company decides the Passport (cwd only without a company bridge)
+      const passport = s.adapterId !== 'shell' && !s.resumeId ? this.passportFor(contextCwd) : null
+      // Task launches already carry their exact company Passport. Do not duplicate it.
+      const companyPrompt = passport && !basePrompt.includes(passport) ? `${this.redact(passport)}\n\n${basePrompt}` : basePrompt
       // Brief prefixed once (MEMORY.md 6.3); a claude --resume retry only sends the feedback, as today.
-      const prompt = mem && !s.resumeId ? withBrief(agentBrief(mem.grant, !!mem.attachment), basePrompt) : basePrompt
+      // FORUM.md §3, §5: a seat's step gets the Forum (token, `forum` CLI, MCP for claude/codex) and its brief block
+      forum = runnable && s.adapterId !== 'shell' ? this.openForum(s, stepId) : null
+      const forumPrompt = forum?.prompt && !s.resumeId ? `${forum.prompt}\n\n${companyPrompt}` : companyPrompt
+      const prompt = mem && !s.resumeId ? withBrief(agentBrief(mem.grant, !!mem.attachment), forumPrompt) : forumPrompt
       // SLACK.md §9.4 / SA2: the `hive` server with only the slack toolset, in ONE --mcp-config next to hivemem
-      if (runnable && s.adapterId === 'claude' && adapter.mcpAttach && this.slackToolsWanted()) {
-        slackMcp = this.attachSlackTools(stepId, mem, live)
+      if (runnable && (s.adapterId === 'claude' || s.adapterId === 'codex') && this.slackToolsWanted()) {
+        slackMcp = this.attachSlackTools(s.adapterId, stepId, mem, live)
       }
-      if (runnable && !this.slackAccess() && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
-        const gateway = this.ctx.gateway?.attachment(s.cwd)
+      if (runnable && (!this.slackAccess() || this.slackAccess()?.fullPermissions) && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
+        const gateway = this.run.companyId ? this.ctx.gateway?.attachment(s.cwd, this.run.companyId) : this.ctx.gateway?.attachment(s.cwd)
         if (gateway) { slackMcp = attachGateway(s.adapterId, gateway, slackMcp ?? mem?.attachment ?? null, gateway.env.PRINCIPIA_GATEWAY_DIR); if (slackMcp) writeMcpFiles(slackMcp.files) }
+      }
+      if (forum?.server && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
+        try {
+          const dir = live?.channel?.dir ?? mem?.grant.spawnDir ?? join(this.ctx.paths.runLogsDir, this.run.id)
+          const att = attachForum(s.adapterId, forum.server, forum.toolNames, slackMcp ?? mem?.attachment ?? null, join(dir, `${stepId}.forum.mcp.json`))
+          if (att) {
+            writeMcpFiles(att.files)
+            slackMcp = att
+          }
+        } catch (e) {
+          this.ctx.log.warn('engine: forum MCP attach failed; the step keeps the CLI and the fenced block', { stepId, error: String(e) })
+        }
       }
       const logDir = join(this.ctx.paths.runLogsDir, this.run.id)
       mkdirSync(logDir, { recursive: true })
@@ -687,6 +907,8 @@ export class Execution {
           ...(hit ? { stopReason: 'rate_limited' as const, resetAt: hit.resetAt } : {})
         })
         this.ctx.emit({ type: 'step.updated', step: updated })
+        if (s.adapterId !== 'shell') this.stepOutput(s, stepId, skip ? 'canceled' : o.status, updated.output ?? '', mem)
+        this.noteTaskSession(s.adapterId, o.agentSessionId)
         return { ...o, stepId, ...(hit ? { limitHit: hit } : {}) }
       }
 
@@ -694,7 +916,10 @@ export class Execution {
       this.ctx.emit({ type: 'step.updated', step })
 
       if (!info.available || !info.binPath) {
-        return end({ ...canceled, status: 'failed', error: `${info.label} not installed: ${info.installHint}` })
+        return end({ ...canceled, status: 'failed', error: `${info.label} not installed: ${info.installHint}`, harnessUnavailable: true })
+      }
+      if (s.adapterId !== 'shell' && this.workflow?.slackTools && (!this.slackToolsWanted() || !slackMcp)) {
+        return end({ ...canceled, status: 'failed', error: 'Required Slack connection is unavailable. Connect Slack in Settings → Connections before running this workflow.' })
       }
       // SA2: Slack text is untrusted. Only claude has a verified restricted mode; other agents need full permissions.
       const access = this.slackAccess()
@@ -732,7 +957,7 @@ export class Execution {
         profile: s.profile,
         prompt,
         artifactsDir: this.run.artifactsDir,
-        keyNames: childKeyNames(this.ctx, adapter, s.profile, this.secretOverride()),
+        keyNames: childKeyNames(this.ctx, adapter, s.profile, this.secretOverride(), this.run.companyId),
         resumeId: s.resumeId,
         shell: info.binPath,
         ...(slackMcp ? { mcpArgs: slackMcp.args } : mem?.attachment ? { mcpArgs: mem.attachment.args } : {}),
@@ -740,7 +965,8 @@ export class Execution {
         ...(hookArgs.length ? { hookArgs } : {}),
         ...(gated && liveFiles.length ? { gated: true } : {}),
         ...(slackNote && s.adapterId === 'claude' ? { systemNote: slackNote } : {}),
-        ...(restricted ? { restricted: true } : {})
+        ...(restricted ? { restricted: true } : {}),
+        ...(this.run.slack && this.slackImages.length && s.adapterId !== 'shell' ? { images: this.slackImages } : {})
       })
       const env = buildChildEnv(this.ctx, adapter, s.profile, {
         ARTIFACTS_DIR: this.run.artifactsDir,
@@ -752,9 +978,14 @@ export class Execution {
         ...this.runVars(),
         // CONTRACT §13: HIVE_SPAWN_ID=<step id> (+ HIVE_USER_DATA) on the whole tree, so the reaper finds escapees
         ...(this.ctx.reaper?.tag(stepId) ?? {})
-      }, this.secretOverride())
+      }, this.secretOverride(), this.run.companyId)
       if (s.extraEnv) Object.assign(env, s.extraEnv)
       if (mem?.attachment) Object.assign(env, mem.attachment.env)
+      // FORUM.md §4.1: PRINCIPIA_FORUM_* and the `forum` CLI on PATH, for any harness
+      if (forum) {
+        Object.assign(env, forum.env)
+        if (forum.binDir) env.PATH = `${forum.binDir}:${env.PATH ?? process.env.PATH ?? '/usr/bin:/bin'}`
+      }
       // older gemini memory file vs the merged live settings file: the live one carries hooks (and hivemem when verified)
       Object.assign(env, hookEnv)
       // A5: claude's MCP client must outlive an ask_user wait (per spawn, never global config)
@@ -785,7 +1016,10 @@ export class Execution {
         log.write(`${this.redact(line)}\n`)
         if (classify) noteLimit(classifyStreamLine(s.adapterId, line, this.d.now()))
         for (const ev of parser.line(line)) {
-          if (ev.kind === 'session' && !agentSessionId) agentSessionId = ev.id
+          if (ev.kind === 'session' && !agentSessionId) {
+            agentSessionId = ev.id
+            this.noteTaskSession(s.adapterId, agentSessionId)
+          }
           live?.stream(ev)
           emitChunk(eventToChunk(ev))
         }
@@ -806,6 +1040,7 @@ export class Execution {
           stdin: inv.stdin ? 'pipe' : 'ignore',
           timeoutMs: Math.max(1, s.timeoutMin) * 60_000,
           ...(this.ctx.reaper ? { reap: { spawnId: stepId, reaper: this.ctx.reaper } } : {}),
+          user: this.ctx.spawnUser?.() ?? null,
           onStdout: (c) => {
             this.d.stall?.touch(stepId)
             if (raw.length < MAX_RAW) raw += c
@@ -820,7 +1055,7 @@ export class Execution {
         })
       } catch (e) {
         log.end()
-        return end({ ...canceled, status: 'failed', error: `Could not start ${info.label}: ${String(e)}` })
+        return end({ ...canceled, status: 'failed', error: `Could not start ${info.label}: ${String(e)}`, harnessUnavailable: s.adapterId !== 'shell' })
       }
       live.attach(handle)
       // CONTRACT §13: "Stalled?" after Settings.stallMinutes with no output and no hook line (never while an ask waits)
@@ -835,6 +1070,8 @@ export class Execution {
         const u = this.ctx.store.updateStep(stepId, { pid: handle.pid, agentSessionId })
         this.ctx.emit({ type: 'step.updated', step: u })
       }
+      this.noteTaskSession(s.adapterId, agentSessionId)
+      if (inv.stdin && this.task) this.inband.set(stepId, handle)
       if (this.stopped) void handle.kill()
 
       const r = await handle.done
@@ -870,16 +1107,18 @@ export class Execution {
       } else if (result?.isError) error = result.text || `Agent error (${result.subtype ?? 'unknown'})`
       else if (parser.incomplete?.()) error = parser.incomplete!()
 
-      const o: StepOutcome = { ...base, stepId, status: error ? 'failed' : 'passed', error }
+      const harnessUnavailable = s.adapterId !== 'shell' && (!!r.spawnError || (!!result?.isError && isHarnessAuthFailure(s.adapterId, result.text ?? '')))
+      const o: StepOutcome = { ...base, stepId, status: error ? 'failed' : 'passed', error, harnessUnavailable }
       if (s.finalize && !r.spawnError) {
         const f = s.finalize(o)
         liveStatus = f.status === 'passed' ? 'done' : 'failed'
-        return end({ ...base, status: f.status, verdict: f.verdict, error: f.error })
+        return end({ ...base, status: f.status, verdict: f.verdict, error: f.error, harnessUnavailable })
       }
       liveStatus = o.status === 'passed' ? 'done' : 'failed'
-      return end({ ...base, status: o.status, error })
+      return end({ ...base, status: o.status, error, harnessUnavailable })
     } finally {
       if (liveStepId) this.d.stall?.untrack(liveStepId)
+      if (liveStepId) this.inband.delete(liveStepId)
       if (live) {
         if (this.stopped === 'canceled' && liveStatus === 'failed') liveStatus = 'canceled'
         live.finish(liveStatus)
@@ -888,6 +1127,13 @@ export class Execution {
       if (liveFiles.length) removeMcpFiles(liveFiles)
       if (slackMcp) removeMcpFiles(slackMcp.files)
       if (mem) this.closeMemory(mem)
+      if (forum && liveStepId) {
+        try {
+          this.ctx.forum?.close(liveStepId)
+        } catch {
+          /* the token expires with the process anyway */
+        }
+      }
       release()
     }
   }
@@ -905,28 +1151,56 @@ export class Execution {
    * One grant per spawned agent process. No bridge, mode off, shell, or a bridge failure = no memory (the step
    * runs exactly as before). Adapters without verified MCP get the brief only, as a read grant.
    */
+  /** The memory mode a step gets. Review fix: a restricted Slack-driven agent reads memory but never writes it (untrusted text could plant facts). */
+  private memoryMode(s: StepSpec): MemoryMode {
+    const asked = isMemoryMode(s.memory) ? s.memory : 'off'
+    const access = this.slackAccess()
+    return asked === 'read-write' && access && !access.fullPermissions ? 'read' : asked
+  }
+
+  /** PASSPORT.md §7.6: the harvester's hook. Never breaks a step. */
+  private stepOutput(s: StepSpec, stepId: string, status: 'passed' | 'failed' | 'canceled', output: string, mem: OpenMemory | null): void {
+    if (!this.ctx.onStepOutput) return
+    try {
+      this.ctx.onStepOutput({
+        runId: this.run.id,
+        stepId,
+        nodeId: s.nodeId,
+        adapter: s.adapterId,
+        companyId: this.run.companyId ?? null,
+        memory: this.memoryMode(s),
+        transport: !mem || mem.askOnly ? null : mem.attachment ? 'mcp' : 'inject',
+        status,
+        output
+      })
+    } catch (e) {
+      this.ctx.log.warn('engine: onStepOutput failed', { runId: this.run.id, stepId, error: String(e) })
+    }
+  }
+
   private openMemory(s: StepSpec, stepId: string, adapter: Adapter, live: StepLive | null): OpenMemory | null {
     const bridge = this.ctx.memory
-    const asked = isMemoryMode(s.memory) ? s.memory : 'off'
-    // Review fix: a restricted Slack-driven agent reads memory but never writes it (untrusted text could plant facts)
-    const access = this.slackAccess()
-    const mode: MemoryMode = asked === 'read-write' && access && !access.fullPermissions ? 'read' : asked
+    const mode = this.memoryMode(s)
     // LIVE.md §4.2 / A2: hivemem's ask_user goes to every headless claude step that has a live channel
     const channel = live?.channel ?? null
     const askUser = s.adapterId === 'claude' && !!channel && MCP_VERIFIED.claude && !!adapter.mcpAttach
     if (!bridge) return null
-    if (mode === 'off') return askUser ? this.openAskOnly(stepId, adapter, channel!) : null
+    if (mode === 'off') return askUser ? this.openAskOnly(s, stepId, adapter, channel!) : null
     const transport = memoryTransport(s.adapterId)
     if (!transport) return null
     const useMcp = transport === 'mcp' && !!adapter.mcpAttach
     let grant: MemoryGrant | null = null
     try {
       grant = bridge.grant({
-        mode: useMcp ? mode : 'read',
+        // inject keeps the asked mode: a read-write vault grant then carries the harvest rules (PASSPORT.md §7.6);
+        // the v1 store clamps inject grants to read itself
+        mode,
         adapter: s.adapterId,
         transport: useMcp ? 'mcp' : 'inject',
         profile: s.profile,
         cwd: s.cwd,
+        // PASSPORT.md §7.5: the grant is bound to the run's company, never to whatever the cwd suggests
+        ...(this.run.companyId ? { companyId: this.run.companyId } : {}),
         runId: this.run.id,
         runTitle: this.run.title,
         workflowId: this.run.workflowId,
@@ -940,9 +1214,10 @@ export class Execution {
       this.ctx.log.warn('engine: memory grant failed', { runId: this.run.id, nodeId: s.nodeId, error: String(e) })
       return null
     }
-    if (!grant) return askUser ? this.openAskOnly(stepId, adapter, channel!) : null
+    if (!grant) return askUser ? this.openAskOnly(s, stepId, adapter, channel!) : null
     // CONTRACT §13: the hivemem child the CLI starts carries the step's spawn tag too
     grant = { ...grant, server: { ...grant.server, env: { ...grant.server.env, ...(this.ctx.reaper?.tag(stepId) ?? {}) } } }
+    grant = this.withTaskTools(grant, s, stepId)
     let attachment: McpAttachment | null = null
     let servers: OpenMemory['servers'] = []
     const withAsk = askUser && useMcp
@@ -962,7 +1237,7 @@ export class Execution {
   }
 
   /** Memory off: hivemem with an empty grant, listing only ask_user (LIVE.md §4.2). No mem_grant row. */
-  private openAskOnly(stepId: string, adapter: Adapter, channel: NonNullable<StepLive['channel']>): OpenMemory | null {
+  private openAskOnly(s: StepSpec, stepId: string, adapter: Adapter, channel: NonNullable<StepLive['channel']>): OpenMemory | null {
     const server = (() => {
       try {
         return this.ctx.memory?.askOnlyServer?.() ?? null
@@ -972,17 +1247,18 @@ export class Execution {
       }
     })()
     if (!server) return null
-    const grant: MemoryGrant = {
+    // the hivetask toolset (§6) rides on this server too when memory is off
+    const grant: MemoryGrant = this.withTaskTools({
       grantId: `ask-${stepId}`,
       server: { ...server, env: { ...server.env, ...channel.mcpEnv, ...(this.ctx.reaper?.tag(stepId) ?? {}) } },
       toolNames: [],
       spawnDir: channel.dir,
       brief: ''
-    }
+    }, s, stepId)
     try {
       const attachment = adapter.mcpAttach!(grant, { askUser: true })
       writeMcpFiles(attachment.files)
-      return { grant, attachment, askUser: true, askOnly: true, servers: [{ server: grant.server, toolNames: ['ask_user'] }] }
+      return { grant, attachment, askUser: true, askOnly: true, servers: [{ server: grant.server, toolNames: [...grant.toolNames, 'ask_user'] }] }
     } catch (e) {
       this.ctx.log.warn('engine: ask_user attach failed', { stepId, error: String(e) })
       return null
@@ -994,7 +1270,7 @@ export class Execution {
    * the 5 mcp__hive__slack_* tools are pre-allowed. Main decides the toolset from the owner, never from this env.
    * null = not available (the step runs without Slack tools and relies on replyNode).
    */
-  private attachSlackTools(stepId: string, mem: OpenMemory | null, live: StepLive | null): McpAttachment | null {
+  private attachSlackTools(adapter: 'claude' | 'codex', stepId: string, mem: OpenMemory | null, live: StepLive | null): McpAttachment | null {
     let spec: McpServerSpec | null = null
     try {
       spec = this.ctx.slack?.toolServer({ stepId, runId: this.run.id }) ?? null
@@ -1011,10 +1287,12 @@ export class Execution {
       ...spec,
       env: { ...(live?.channel?.mcpEnv ?? {}), ...spec.env, ...(this.ctx.reaper?.tag(stepId) ?? {}) }
     }
+    // SLACK.md §11.4: main lists the `work` toolset (principia_*) for Slack-triggered runs; pre-allow those names too
+    const toolNames: string[] = [...SLACK_TOOLS, ...((server.env?.HIVE_TOOLSETS ?? '').split(',').includes('work') ? SLACK_WORK_TOOLS : [])]
     try {
-      const att = claudeSessionMcpAttach(join(dir, `${stepId}.hive.mcp.json`), [
+      const att = adapter === 'codex' ? codexToolsAttach(server, toolNames, mem?.attachment ?? null) : claudeSessionMcpAttach(join(dir, `${stepId}.hive.mcp.json`), [
         ...(mem?.attachment ? (mem.servers ?? []) : []),
-        { server, toolNames: [...SLACK_TOOLS] }
+        { server, toolNames }
       ])
       writeMcpFiles(att.files)
       return att
@@ -1057,7 +1335,8 @@ export class Execution {
       adapterId: profile.adapter,
       cwd,
       prompt,
-      resumeId: null,
+      // DEPARTMENTS.md §4.2: a resumed Claude task turn continues its conversation (the prompt is only wake + rules)
+      resumeId: profile.adapter === 'claude' ? (this.task?.resumeSessionId ?? null) : null,
       sourceStepIds: [],
       timeoutMin: 60,
       // LIVE.md §7 / F4: prompt runs default to read-write like new steps (writes stay within the repo; no repo =
@@ -1473,6 +1752,7 @@ export class Execution {
         repo = r.path
       }
       if (!isAbsolute(repo)) throw new StepError(`Worktree repository must be a repository: ${repo || '(empty)'}`)
+      this.checkCompany({ cwd: repo })
       let wt: RunWorktree
       try {
         wt = await bridge.ensure({ runId: this.run.id, workflowName: this.run.title, repo, base: spec.base?.trim() || null, dryRun: this.dryRun })
@@ -1522,7 +1802,7 @@ export class Execution {
       HIVE_REPOS: this.repoPaths(),
       ...this.runVars(),
       ...(this.ctx.reaper?.tag(stepId) ?? {})
-    }, this.secretOverride())
+    }, this.secretOverride(), this.run.companyId)
   }
 
   /** SA2: a Slack-triggered run gets only the vault keys its trigger allow-lists (default none), shell steps included. */
@@ -1638,6 +1918,7 @@ export class Execution {
             env,
             timeoutMs,
             ...(this.ctx.reaper ? { reap: { spawnId: stepId, reaper: this.ctx.reaper } } : {}),
+            user: this.ctx.spawnUser?.() ?? null,
             onStdout: (c) => {
               if (out.length < OUTPUT_CAP * 4) out += c
             },

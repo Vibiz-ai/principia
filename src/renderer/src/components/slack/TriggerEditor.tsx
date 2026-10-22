@@ -15,7 +15,8 @@ import { clock } from '../../lib/time'
 import { confirmNative, errorMessage, hive, nativeMenu } from '../../lib/hive'
 import { onSlackEvent, slackCall } from '../../lib/slackApi'
 import { isConnected, isSetUp, useSlack } from '../../state/slack'
-import { attempt, navigate, toast, useStore } from '../../state/store'
+import { attempt, navigate, scopeCompanyId, toast, useStore } from '../../state/store'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { ChannelMultiPicker, UserPicker } from './bits'
 import { autoModeProblem } from '@shared/slack'
 
@@ -82,6 +83,10 @@ export function SlackTriggersTab({ seedWorkflowId, nonce }: { seedWorkflowId?: s
   const [sel, setSel] = useState<string | null>(null)
   const [sheet, setSheet] = useState<{ edit: SlackTrigger | null; workflowId?: string } | null>(null)
   useEffect(() => void hive.workflows.list().then(setWorkflows, () => undefined), [])
+  // COMPANY.md §6: a trigger runs in the workspace's company; in a focused company (which owns the workspace whenever
+  // this tab shows) the picker offers only its workflows. Names of existing triggers still resolve from the full list.
+  const scope = useStore((s) => scopeCompanyId(s))
+  const pickable = useMemo(() => (scope ? workflows.filter((w) => (w.companyId ?? PERSONAL_COMPANY_ID) === scope) : workflows), [workflows, scope])
   useEffect(() => {
     if (seedWorkflowId) setSheet({ edit: null, workflowId: seedWorkflowId })
   }, [seedWorkflowId, nonce])
@@ -192,7 +197,7 @@ export function SlackTriggersTab({ seedWorkflowId, nonce }: { seedWorkflowId?: s
       {sheet && (
         <TriggerSheet
           existing={sheet.edit}
-          workflows={workflows}
+          workflows={pickable}
           seedWorkflowId={sheet.workflowId}
           onClose={() => setSheet(null)}
           onSaved={(t) => {

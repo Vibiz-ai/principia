@@ -4,7 +4,12 @@
  */
 import os from 'node:os'
 import { app, dialog, powerSaveBlocker } from 'electron'
-import type { Engine, ProcessReaper } from '../shared/engine'
+import type { CompanyStore } from './company'
+import { createCompanyBridge } from './companyBridge'
+import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge } from './company/dispatcher'
+import { recurringBoards } from './company/recurring'
+import { departmentsEnabled } from '../shared/company'
+import type { CompanyBridge, Engine, ProcessReaper, StepOutputEvent, TaskRunBridge, TaskToolset } from '../shared/engine'
 import type { EngineEvent, Id, LeftoverProcess, NextFire, Run, Settings, StatusSnapshot } from '../shared/types'
 import { HiveError } from '../shared/errors'
 import type { UiCommand } from '../shared/ipc'
@@ -34,6 +39,8 @@ import type { WorktreeManager } from './worktrees'
 import type { NotifyNode } from './notifyNode'
 import type { ClaudeHistory } from './history'
 import type { SlackService } from './connectors/slack/service'
+import type { ForumService } from './forum/service'
+import { createCloud, type CloudWiring } from './cloud/wire'
 
 /** "15:00" today, else "Tue 15:00" (notification copy). */
 export function clockLabel(iso: string, now = new Date()): string {
@@ -46,13 +53,38 @@ const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 const OUTPUT_COALESCE_MS = 50
 
 export class Hive {
+  private companyStore: HookedCompanyStore | null = null
+  /** DEPARTMENTS.md §3: the store tells the dispatcher about every task write (routing on create, wakes on comments). */
+  get company(): CompanyStore {
+    return (this.companyStore ??= new HookedCompanyStore(this.store, this.paths?.companiesRoot ? { companiesRoot: this.paths.companiesRoot } : {}))
+  }
+  /**
+   * DEPARTMENTS.md §3: the board's dispatcher (null until startDispatcher, which runs after CompanyStore.reconcile).
+   * The board handlers reach openSession / takeover / stop / pump through it.
+   */
+  dispatcher: Dispatcher | null = null
+  /** §6: the hivetask toolset factory for headless task steps (set by the hivetask wiring; null = no tools, fenced report only). */
+  taskToolset: ((req: Parameters<NonNullable<TaskRunBridge['toolset']>>[0]) => TaskToolset | null) | null = null
   engine!: Engine
   sessions!: SessionManager
   indexer!: ArtifactIndexer
   windows!: WindowManager
   tray: HiveTray | null = null
-  /** Shared memory (memory.db); null if it could not be opened. */
-  memory: MemoryService | null = null
+  private memoryService: MemoryService | null = null
+  /**
+   * Shared memory (memory.db); null if it could not be opened. COMPANY.md C4 / PASSPORT.md §7.5: setting it injects
+   * the CompanyStore, so grants resolve and bind their company through the one resolver (scope.ts).
+   */
+  get memory(): MemoryService | null {
+    return this.memoryService
+  }
+  set memory(m: MemoryService | null) {
+    this.memoryService = m
+    const inject = (m as { setCompanies?: (c: CompanyStore) => void } | null)?.setCompanies
+    if (m && inject) this.safe(() => inject.call(m, this.company), undefined)
+  }
+  /** PASSPORT.md §7.6: called when an agent step ends (the harvester registers here). Must not throw or block. */
+  stepOutputHooks: ((e: StepOutputEvent) => void)[] = []
   rebuildMenu: () => void = () => {}
   /** Live agents (LIVE.md): agents/asks repository, session wiring, notifications. */
   live!: LiveStore
@@ -78,8 +110,15 @@ export class Hive {
   /** SLACK.md: the Slack connector service (null until wired / on failure). */
   gateway: import('./gateway/service').GatewayService | null = null
   slack: SlackService | null = null
+  /** FORUM.md: the company Forum (null until wired / on failure). */
+  forum: ForumService | null = null
+  private cloudWiring: CloudWiring | null = null
+  /** CLOUD.md §4.1: this Mac's link to a Principia Cloud workspace (built on first use; idle until paired). */
+  get cloud(): CloudWiring {
+    return (this.cloudWiring ??= createCloud(this))
+  }
   /** The `hive` server spec factory for interactive claude sessions (author/wire.ts). */
-  authorAttach: { server(sessionId: Id, liveDir: string): import('../shared/engine').McpServerSpec | null; tools: string[]; spawnDir: string } | null = null
+  authorAttach: { server(sessionId: Id, liveDir: string, companyId?: Id | null): import('../shared/engine').McpServerSpec | null; tools: string[]; spawnDir: string } | null = null
   /** Called on every run.updated (raw engine run), before the renderer hears about it. Must not throw or block. */
   runHooks: ((run: Run) => void)[] = []
   private approvalNotified = new Set<Id>()
@@ -112,6 +151,90 @@ export class Hive {
 
   settings(): Settings {
     return this.store.getSettings()
+  }
+
+  // ---------- companies (COMPANY.md §5, §6) ----------
+  /** The engine's and sessions' view of the company module: one resolver, one guard switch (experimental.companies). */
+  companyBridge(): CompanyBridge {
+    return {
+      ...createCompanyBridge(this.company, this.store),
+      // DEPARTMENTS.md §4.3: task runs inherit the task's company, take the seat's time cap and report their session id
+      tasks: taskRunBridge({
+        company: () => this.company,
+        dispatcher: () => this.dispatcher,
+        toolset: () => this.taskToolset,
+        passport: (companyId, departmentId) => this.passportContext('', companyId, departmentId)
+      }),
+      // §8: task-mode schedules and Slack triggers comment on their card and wake through the dispatcher (queued until it exists)
+      boards: recurringBoards({
+        company: () => this.company,
+        dispatcher: () => this.dispatcher,
+        enabled: () => departmentsEnabled(this.settings().experimental)
+      })
+    }
+  }
+
+  // ---------- the company board (DEPARTMENTS.md §3, §4.4) ----------
+  /**
+   * Builds the dispatcher once: hooks the company store, listens to run ends, starts the 60 s tick and pumps every
+   * company (the boot trigger). Call after CompanyStore.reconcile() (registerCompanyHandlers) so interrupted tasks are
+   * parked before the first pump; they are never rerun.
+   */
+  startDispatcher(): Dispatcher {
+    if (this.dispatcher) return this.dispatcher
+    const company = this.company as HookedCompanyStore
+    const d = new Dispatcher({
+      company,
+      startRun: (target, opts) => this.engine.runs.start(target, opts),
+      cancelRun: (id) => this.engine.runs.cancel(id),
+      enabled: () => departmentsEnabled(this.settings().experimental),
+      sessions: {
+        create: (req) => this.sessions.create(req),
+        isLive: (id) => this.sessions.isLive(id),
+        kill: (id) => this.sessions.kill(id)
+      },
+      onChange: () => {
+        emit('data:changed', { domain: 'tasks' })
+        this.statusChanged()
+      },
+      log
+    })
+    this.dispatcher = d
+    company.hooks = d.hooks()
+    this.runHooks.push((run) => d.onRunUpdated(run))
+    void d.start().catch((e) => log.warn('dispatcher boot pump failed', { e: String(e) }))
+    return d
+  }
+
+  /** Rail "Pause all agents" (§3): autopilot off for every company. Works before the dispatcher exists. */
+  pauseAllAgents(): string[] {
+    if (this.dispatcher) return this.dispatcher.pauseAll()
+    const ids = pauseAllAgents(this.company)
+    if (ids.length) emit('data:changed', { domain: 'company' })
+    return ids
+  }
+
+  /**
+   * The Passport block of one spawn, redacted: the company's when known, else the cwd's company (older callers).
+   * DEPARTMENTS.md §7: a task run passes its task's department, which adds the department slot.
+   */
+  passportContext(cwd: string, companyId?: Id | null, departmentId?: Id | null): string | null {
+    const text = companyId
+      ? this.company.passportContextFor(companyId, departmentId ? { departmentId } : undefined)
+      : cwd
+        ? this.company.contextForDirectory(cwd)
+        : null
+    return text ? this.vault.redact(text) : null
+  }
+  /** EngineContext.onStepOutput: fans out to stepOutputHooks; one failing hook never affects the others or the run. */
+  onStepOutput(e: StepOutputEvent): void {
+    for (const fn of this.stepOutputHooks) {
+      try {
+        fn(e)
+      } catch (err) {
+        log.warn('step output hook failed', { runId: e.runId, stepId: e.stepId, e: String(err) })
+      }
+    }
   }
 
   // ---------- status ----------
@@ -178,6 +301,8 @@ export class Hive {
         if (e.agent.parentId === null) {
           this.statusChanged()
           this.onRootStall(e.agent)
+          // SLACK.md §11.4: a Slack-started session finished its turn -> report in its thread
+          if (e.agent.sessionId) this.safe(() => this.slack?.onAgentUpdated(e.agent), undefined)
         }
         return
       case 'agent.events':
@@ -377,6 +502,8 @@ export class Hive {
     if (this.statusTimer) return
     this.statusTimer = setTimeout(() => {
       this.statusTimer = null
+      // §4.4: a session that closed while holding a task parks it (no_report); session changes land here
+      this.safe(() => this.dispatcher?.checkSessions(), undefined)
       const s = this.status()
       emit('status:changed', s)
       this.tray?.update()
@@ -664,6 +791,8 @@ export class Hive {
     }
     this.shuttingDown = true
     this.windows.quitting = true
+    // DEPARTMENTS.md §3: before the engine cancels its runs, so their run ends start nothing new during the quit
+    this.dispatcher?.dispose()
     const timeout = new Promise<void>((r) => setTimeout(r, 6000))
     await Promise.race([
       Promise.all([
@@ -674,6 +803,7 @@ export class Hive {
     ])
     this.safe(() => this.engine.scheduler.stop(), undefined)
     this.safe(() => this.engine.slackTriggers?.stop(), undefined)
+    this.dispatcher?.dispose()
     // SLACK.md §2.3: close the socket with 1000, no retries
     await this.slack?.stop().catch(() => undefined)
     for (const t of this.sessionRetries.values()) clearTimeout(t)
@@ -685,6 +815,7 @@ export class Hive {
     this.tray?.destroy()
     if (this.blockerId !== null) powerSaveBlocker.stop(this.blockerId)
     this.memory?.stop()
+    this.safe(() => (this.cloudWiring?.logins.cancel(), this.cloudWiring?.link.stop()), undefined)
     this.shutdownDone = true
     // Deferred: when requestQuit ran synchronously inside the first before-quit (nothing running, e.g. SIGTERM or
     // tray Quit), a nested app.quit() is overwritten by the outer, prevented quit and the app just hides instead of

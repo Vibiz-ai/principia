@@ -1,0 +1,313 @@
+{
+  "_comment": "Hand labels for the Northwind fixture vault (PASSPORT.md §14 P8.3), written with the notes. brief: task prompts and the notes a good brief must surface. links: [source, target] plain-text mentions that should become [[links]]. retarget: [ghost, note] near-miss ghosts that mean that note. entities: ghosts that deserve a note. Everything a suggester proposes outside these lists counts as a false positive. Known traps: 'teal stripe' in Brand voice is not the payment provider; [[Pricing v2]] is an older decision, not a typo of Pricing v3; `billing.dunning.v2` is code.",
+  "company": {
+    "id": "co_northwind",
+    "name": "Northwind"
+  },
+  "brief": [
+    {
+      "prompt": "Stripe webhooks are failing signature verification in production. Fix the webhook handler.",
+      "expect": [
+        "Stripe webhook raw body"
+      ]
+    },
+    {
+      "prompt": "Customers in Asia say their invoices are dated a day early. Find out why.",
+      "expect": [
+        "Invoice cutoff timezone"
+      ]
+    },
+    {
+      "prompt": "Add the 15% discount for customers who prepay a year to the checkout page.",
+      "expect": [
+        "Annual billing discount"
+      ]
+    },
+    {
+      "prompt": "Add an amount column to the new refunds table. How should money amounts be stored?",
+      "expect": [
+        "Money as integer cents"
+      ]
+    },
+    {
+      "prompt": "Prepare the notes for the Mercury Bank renewal in November.",
+      "expect": [
+        "Mercury Bank",
+        "Mercury Bank renewal call"
+      ]
+    },
+    {
+      "prompt": "Change how many times we retry failed card payments before suspending a workspace.",
+      "expect": [
+        "Dunning"
+      ]
+    },
+    {
+      "prompt": "Ship version 2.4 to production this week. What are the release steps?",
+      "expect": [
+        "Release process"
+      ]
+    },
+    {
+      "prompt": "Emails sent from staging never arrive in anyone's inbox. Debug it.",
+      "expect": [
+        "Postmark sandbox mode"
+      ]
+    },
+    {
+      "prompt": "The checkout e2e test keeps failing randomly on CI. Make it reliable.",
+      "expect": [
+        "Flaky checkout e2e test"
+      ]
+    },
+    {
+      "prompt": "Helios Clinics wants their invoices synced to QuickBooks every hour instead of every 15 minutes.",
+      "expect": [
+        "Helios Clinics",
+        "Ledger Sync"
+      ]
+    },
+    {
+      "prompt": "Production is down and payments return 500 errors. What is our incident procedure?",
+      "expect": [
+        "Incident response"
+      ]
+    },
+    {
+      "prompt": "Write the welcome email in our brand voice.",
+      "expect": [
+        "Brand voice"
+      ]
+    },
+    {
+      "prompt": "Compute VAT with reverse charge for an EU buyer on an invoice line.",
+      "expect": [
+        "Tax engine"
+      ]
+    },
+    {
+      "prompt": "Enable SAML single sign-on for a new workspace.",
+      "expect": [
+        "Auth service"
+      ]
+    },
+    {
+      "prompt": "Plan the database upgrade to Postgres 16 and the cutover.",
+      "expect": [
+        "Move to Postgres 16"
+      ]
+    },
+    {
+      "prompt": "Which plan includes the accounting sync, and what does it cost per month?",
+      "expect": [
+        "Ledger Sync",
+        "Growth Plan"
+      ]
+    },
+    {
+      "prompt": "A customer cannot see their API token again after creating it. Is that a bug?",
+      "expect": [
+        "Auth service"
+      ]
+    },
+    {
+      "prompt": "Who has to approve a production deploy, and on which day do we ship?",
+      "expect": [
+        "Release process"
+      ]
+    },
+    {
+      "prompt": "Our biggest bank customer says the PDFs are rejected by their archive system.",
+      "expect": [
+        "Mercury Bank",
+        "Invoice Composer"
+      ]
+    },
+    {
+      "prompt": "Name the new feature flag for the second version of payment retries.",
+      "expect": [
+        "Feature flag naming"
+      ]
+    }
+  ],
+  "links": [
+    [
+      "Ana Ruiz",
+      "Weekly growth sync"
+    ],
+    [
+      "Ana Ruiz",
+      "Q4 planning meeting"
+    ],
+    [
+      "Bruno Costa",
+      "northwind-web"
+    ],
+    [
+      "Bruno Costa",
+      "Auth service"
+    ],
+    [
+      "Chloe Martin",
+      "Customer onboarding"
+    ],
+    [
+      "Chloe Martin",
+      "Incident response"
+    ],
+    [
+      "Diego Alvarez",
+      "Tax engine"
+    ],
+    [
+      "Diego Alvarez",
+      "Dunning"
+    ],
+    [
+      "Priya Nair",
+      "Brand voice"
+    ],
+    [
+      "Priya Nair",
+      "Invoice Composer"
+    ],
+    [
+      "Helios Clinics",
+      "Ledger Sync"
+    ],
+    [
+      "Helios Clinics",
+      "Growth Plan"
+    ],
+    [
+      "Orbit Freight",
+      "Starter Plan"
+    ],
+    [
+      "Orbit Freight",
+      "Usage-based billing"
+    ],
+    [
+      "Starter Plan",
+      "Ledger Sync"
+    ],
+    [
+      "Starter Plan",
+      "Invoice Composer"
+    ],
+    [
+      "Enterprise Plan",
+      "Auth service"
+    ],
+    [
+      "Postmark",
+      "northwind-web"
+    ],
+    [
+      "Ledger Sync",
+      "Growth Plan"
+    ],
+    [
+      "Ledger Sync",
+      "Enterprise Plan"
+    ],
+    [
+      "Invoice Composer",
+      "Mercury Bank"
+    ],
+    [
+      "northwind-web",
+      "Flaky checkout e2e test"
+    ],
+    [
+      "billing-worker",
+      "Dunning"
+    ],
+    [
+      "billing-worker",
+      "Ledger Sync"
+    ],
+    [
+      "Pricing v3",
+      "Bruno Costa"
+    ],
+    [
+      "Annual billing discount",
+      "Q4 planning meeting"
+    ],
+    [
+      "Annual billing discount",
+      "Churn"
+    ],
+    [
+      "Drop IE11 support",
+      "northwind-web"
+    ],
+    [
+      "Flaky checkout e2e test",
+      "Stripe"
+    ],
+    [
+      "Release process",
+      "Bruno Costa"
+    ],
+    [
+      "Customer onboarding",
+      "Stripe"
+    ],
+    [
+      "Q4 planning meeting",
+      "Ana Ruiz"
+    ],
+    [
+      "Q4 planning meeting",
+      "Bruno Costa"
+    ],
+    [
+      "Q4 planning meeting",
+      "Diego Alvarez"
+    ],
+    [
+      "Q4 planning meeting",
+      "Churn"
+    ],
+    [
+      "Mercury Bank renewal call",
+      "Ledger Sync"
+    ],
+    [
+      "Weekly growth sync",
+      "Ana Ruiz"
+    ],
+    [
+      "Weekly growth sync",
+      "Orbit Freight"
+    ],
+    [
+      "Dunning",
+      "Postmark"
+    ],
+    [
+      "Usage-based billing",
+      "Growth Plan"
+    ],
+    [
+      "Auth service",
+      "Enterprise Plan"
+    ]
+  ],
+  "retarget": [
+    [
+      "Ana Ruis",
+      "Ana Ruiz"
+    ],
+    [
+      "Growth Plans",
+      "Growth Plan"
+    ]
+  ],
+  "entities": [
+    "SOC 2 audit",
+    "QuickBooks"
+  ]
+}

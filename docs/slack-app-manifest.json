@@ -6,7 +6,7 @@
   "display_information": {
     "name": "Hive",
     "description": "Hive on your Mac: read your Slack threads, draft replies with agents, and get your Hive alerts here.",
-    "long_description": "Hive is a native Mac cockpit for coding agents. This app connects your workspace to Hive over Socket Mode (an outbound connection from your Mac; nothing is hosted publicly). Hive reads the channels you invite it to, direct messages with the bot, and messages that mention it, keeps a local copy for search, and lets agents draft replies that you approve in Hive before they are sent. Workflows can also be triggered by Slack messages, and Hive sends your workflow alerts to you as direct messages. Beyond reading channels, DMs and mentions, it asks for three permissions so you never need to reinstall: channels:join (join a public channel only when you click Join in Hive), mpim:read with message.mpim (group DMs the bot is added to) and member_joined_channel (notice when the bot is invited, to load that channel). Remove the bot from a channel at any time to stop Hive from reading it.",
+    "long_description": "Hive is a native Mac cockpit for coding agents. This app connects your workspace to Hive over Socket Mode (an outbound connection from your Mac; nothing is hosted publicly). Hive reads the channels you invite it to, direct messages with the bot, and messages that mention it, keeps a local copy for search, and lets agents draft replies that you approve in Hive before they are sent. Workflows can also be triggered by Slack messages, and Hive sends your workflow alerts to you as direct messages. Beyond reading channels, DMs and mentions, it asks for three permissions so you never need to reinstall: channels:join (join a public channel only when you click Join in Hive), mpim:read with message.mpim (group DMs the bot is added to) and member_joined_channel (notice when the bot is invited, to load that channel). It also asks for files:read so agents can look at screenshots and images people share in a thread they are asked about (images are downloaded to your Mac only for that run). Remove the bot from a channel at any time to stop Hive from reading it.",
     "background_color": "#1a1a1a"
   },
   "features": {
@@ -36,7 +36,8 @@
         "mpim:read",
         "chat:write",
         "users:read",
-        "reactions:read"
+        "reactions:read",
+        "files:read"
       ]
     }
   },

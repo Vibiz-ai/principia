@@ -1,12 +1,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, dialog } from 'electron'
-import type { Repo } from '../../shared/types'
+import type { Id, Repo } from '../../shared/types'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
+import { requireCompany } from './companyScope'
 
-export function addRepoPaths(h: Hive, paths: string[]): { all: Repo[]; created: Repo[] } {
+/**
+ * companyId (COMPANY.md §3, "adding a repo (⌘O) assigns it to this company"): newly added repos are assigned to it.
+ * A repo that was already in Hive keeps its owner; moving it is company:assignRepo.
+ */
+export function addRepoPaths(h: Hive, paths: string[], companyId?: Id): { all: Repo[]; created: Repo[] } {
+  const target = companyId ? requireCompany(h, companyId) : PERSONAL_COMPANY_ID
   const all: Repo[] = []
   const created: Repo[] = []
   for (const p of paths) {
@@ -21,7 +28,9 @@ export function addRepoPaths(h: Hive, paths: string[]): { all: Repo[]; created: 
     all.push(repo)
     if (isNew) created.push(repo)
   }
+  if (target !== PERSONAL_COMPANY_ID) for (const r of created) h.company.assignRepo(r.id, target)
   if (created.length) {
+    if (target !== PERSONAL_COMPANY_ID) emit('data:changed', { domain: 'company' })
     emit('data:changed', { domain: 'repos' })
     h.tray?.update()
   }
@@ -32,8 +41,8 @@ export function addRepoPaths(h: Hive, paths: string[]): { all: Repo[]; created: 
 
 export function registerRepoHandlers(h: Hive): void {
   const live = (id: string) => h.sessions.liveCountForRepo(id)
-  handle('repos:list', () => h.store.listRepos(live))
-  handle('repos:pick', async (_req, sender) => {
+  handle('repos:list', (q) => h.store.listRepos(live, q?.companyId))
+  handle('repos:pick', async (q, sender) => {
     const win = BrowserWindow.fromWebContents(sender)
     const opts: Electron.OpenDialogOptions = {
       title: 'Add Repository',
@@ -42,9 +51,9 @@ export function registerRepoHandlers(h: Hive): void {
     }
     const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (r.canceled || !r.filePaths.length) return []
-    return addRepoPaths(h, r.filePaths).created
+    return addRepoPaths(h, r.filePaths, q?.companyId).created
   })
-  handle('repos:add', ({ paths }) => addRepoPaths(h, paths).all)
+  handle('repos:add', ({ paths, companyId }) => addRepoPaths(h, paths, companyId).all)
   handle('repos:update', ({ id, name }) => {
     h.store.renameRepo(id, name)
     emit('data:changed', { domain: 'repos' })

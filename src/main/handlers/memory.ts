@@ -1,13 +1,24 @@
-/** memory:* IPC handlers (CONTRACT §11.5, PO10). Every string that may hold agent text is vault-redacted. */
+/**
+ * memory:* IPC handlers (CONTRACT §11.5, PO10; PASSPORT.md §11, amended to 17 channels). Every string that may hold
+ * agent text is vault-redacted. The v1 channels serve memory.db while `experimental.vault` is off; with it on, writes
+ * go to the company Passport vaults (delete = archive, revertRun = invalidate) and memory.db is only read.
+ */
 import fs from 'node:fs'
-import { BrowserWindow, dialog } from 'electron'
+import path from 'node:path'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { MemoryMutation, MemoryMutationResult, MemoryOverview } from '../../shared/memory'
+import { isPassportGraphRequest, type PassportVaultRequest, type PassportVaultResults, type VaultOp } from '../../shared/passport'
 import { HiveError } from '../../shared/errors'
+import { v1EntityToNoteId, v1ToBlockId } from '../../shared/vault/ids'
+import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { Hive } from '../hive'
 import { handle } from '../ipc'
 import { MemoryRefusal, RowMapper } from '../memory/store'
-import type { MemoryService } from '../memory/service'
+import type { MemoryService, PassportRuntime } from '../memory/service'
 import { entityDetail, exportLines, factsQuery, graphQuery, overviewCore, searchPage } from '../memory/search'
+import { graphOp, linksOp, noteOp, proposalsOp } from '../memory/passportIpc'
+import { indexDbPath, toVaultAbs } from '../memory/vault/paths'
+import { isLlmOptedIn, llmActivity, llmCallsOn, llmDailyCap, setLlmDailyCap, setLlmOptIn } from '../memory/vault/suggest/llm'
 
 function svc(h: Hive): MemoryService {
   if (!h.memory) throw new HiveError('internal', 'Memory is unavailable (memory.db could not be opened; see logs)')
@@ -15,20 +26,45 @@ function svc(h: Hive): MemoryService {
 }
 
 /** Store refusals -> HiveError codes the renderer understands. */
+function toHive(e: unknown): unknown {
+  if (e instanceof MemoryRefusal) {
+    const code = e.code === 'refused' ? 'conflict' : e.code
+    return new HiveError(code, e.message.replace(/^Refused: /, ''))
+  }
+  return e
+}
 function wrap<T>(fn: () => T): T {
   try {
     return fn()
   } catch (e) {
-    if (e instanceof MemoryRefusal) {
-      const code = e.code === 'refused' ? 'conflict' : e.code
-      throw new HiveError(code, e.message.replace(/^Refused: /, ''))
-    }
-    throw e
+    throw toHive(e)
+  }
+}
+async function wrapAsync<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    throw toHive(e)
   }
 }
 
-export function overview(h: Hive): MemoryOverview {
+/** The vault runtime for a Passport channel; refuses while vault mode is off (the v1 page still works). */
+function rt(h: Hive): PassportRuntime {
   const m = svc(h)
+  if (!m.vaultMode()) throw new HiveError('not_implemented', 'The Passport vault is off (Settings → Experimental → Passport vault)')
+  return wrap(() => m.passport())
+}
+
+/** v1 ids map 1:1 onto vault ids (PASSPORT.md §3.2): ment_x -> n-x, mfa_x -> ^f-x, mrel_x -> ^r-x. */
+function vaultRef(kind: 'entity' | 'fact' | 'relation', id: string): string {
+  const ref = kind === 'entity' ? v1EntityToNoteId(id) : v1ToBlockId(id)
+  if (!ref) throw new HiveError('not_found', 'This memory item has no Passport counterpart')
+  return ref
+}
+
+export function overview(h: Hive, companyId?: string): MemoryOverview {
+  const m = svc(h)
+  if (m.vaultMode()) return vaultOverview(h, m, companyId)
   const core = overviewCore(m.store)
   const repos = core.repos.map((r) => ({
     repoId: r.repoId,
@@ -53,6 +89,61 @@ export function overview(h: Hive): MemoryOverview {
     dbPath: m.paths.dbPath,
     dbBytes
   }
+}
+
+/** The overview in vault mode: index counts for one company (or every company), no per-repo picker. */
+function vaultOverview(h: Hive, m: MemoryService, companyId?: string): MemoryOverview {
+  const p = m.passport()
+  const where = companyId ? 'company_id = ? AND' : ''
+  const args = companyId ? [companyId] : []
+  const q = (sql: string) => (p.db.prepare(sql).get(...args) as { n: number }).n
+  const file = indexDbPath(h.paths.userData)
+  let dbBytes = 0
+  for (const f of [file, `${file}-wal`]) {
+    try {
+      dbBytes += fs.statSync(f).size
+    } catch {
+      /* missing wal */
+    }
+  }
+  return {
+    agentWritesPaused: p.isPaused(),
+    counts: {
+      entities: q(`SELECT count(*) AS n FROM mem_note WHERE ${where} removed_at IS NULL AND status = 'active'`),
+      facts: q(`SELECT count(*) AS n FROM mem_fact WHERE ${where} status = 'active'`),
+      relations: q(`SELECT count(*) AS n FROM mem_link WHERE ${where} origin = 'relation' AND status = 'active'`),
+      pending: q(`SELECT count(*) AS n FROM mem_proposal WHERE ${where} status = 'pending'`),
+      unreviewed: q(`SELECT count(*) AS n FROM mem_fact WHERE ${where} status = 'active' AND reviewed = 0 AND actor NOT LIKE 'user%'`)
+    },
+    repos: [],
+    defaultRepoId: h.settings().lastRepoId ?? null,
+    lastSeq: (p.db.prepare('SELECT ifnull(max(seq), 0) AS n FROM mem_event').get() as { n: number }).n,
+    dbPath: file,
+    dbBytes
+  }
+}
+
+/** v1 page edits in vault mode, mapped onto writer ops (the user is acting, so policy treats them as user writes). */
+async function vaultMutate(p: PassportRuntime, companyId: string, req: MemoryMutation): Promise<MemoryMutationResult> {
+  let ops: VaultOp[]
+  switch (req.op) {
+    case 'invalidate':
+      ops = req.ids.map((id) => ({ op: 'invalidate', blockId: vaultRef(req.target, id), reason: req.reason }))
+      break
+    case 'restore':
+      ops = req.ids.map((id) => ({ op: 'restoreLine', blockId: vaultRef(req.target, id) }))
+      break
+    case 'rename':
+      ops = [{ op: 'rename', note: vaultRef('entity', req.id), newTitle: req.name }]
+      break
+    case 'merge':
+      ops = req.sourceIds.map((id) => ({ op: 'merge', from: vaultRef('entity', id), into: vaultRef('entity', req.targetId) }))
+      break
+    default:
+      throw new HiveError('bad_request', 'Edit this in the Passport (memory moved to the company vault)')
+  }
+  const res = await p.applyOps(companyId, ops, { kind: 'user' })
+  return { affected: res.results.filter((r) => r.status === 'ok').length }
 }
 
 export function mutate(m: MemoryService, req: MemoryMutation, redact: (s: string) => string): MemoryMutationResult {
@@ -94,8 +185,10 @@ export function registerMemoryHandlers(h: Hive): void {
     h.memory?.flush()
     return v
   }
-  handle('memory:overview', () => overview(h))
-  handle('memory:graph', (q) => graphQuery(svc(h).store, q, redact))
+  /** The company a v1-shaped vault edit lands in: the request's, else Personal. */
+  const companyOf = (q: { companyId?: string | null } | undefined) => q?.companyId ?? PERSONAL_COMPANY_ID
+  handle('memory:overview', (q) => overview(h, q?.companyId ?? undefined))
+  handle('memory:graph', (q) => (isPassportGraphRequest(q) ? wrap(() => graphOp(rt(h), q)) : graphQuery(svc(h).store, q, redact)))
   handle('memory:entity', ({ id }) => {
     const d = entityDetail(svc(h).store, id, redact)
     if (!d) throw new HiveError('not_found', 'Memory entity not found')
@@ -103,16 +196,31 @@ export function registerMemoryHandlers(h: Hive): void {
   })
   handle('memory:search', (q) => searchPage(svc(h).store, q, redact))
   handle('memory:facts', (q) => factsQuery(svc(h).store, q, redact))
-  handle('memory:mutate', (req) => after(mutate(svc(h), req, redact)))
-  handle('memory:delete', ({ kind, ids }) => {
-    wrap(() => svc(h).store.userDelete(kind, ids))
+  handle('memory:mutate', async (req) => {
+    const m = svc(h)
+    if (m.vaultMode()) return wrapAsync(() => vaultMutate(m.passport(), companyOf(req), req))
+    return after(mutate(m, req, redact))
+  })
+  handle('memory:delete', async ({ kind, ids, companyId }) => {
+    const m = svc(h)
+    if (m.vaultMode()) {
+      // PASSPORT.md §1.5: delete archives a note and moves lines to History; nothing is removed
+      const ops: VaultOp[] = ids.map((id) =>
+        kind === 'entity' ? { op: 'archive', note: vaultRef('entity', id) } : { op: 'invalidate', blockId: vaultRef(kind, id), reason: 'deleted by the user' }
+      )
+      const res = await wrapAsync(() => m.passport().applyOps(companyOf({ companyId }), ops, { kind: 'user' }))
+      const bad = res.results.find((r) => r.status === 'error' || r.status === 'conflict')
+      if (bad) throw new HiveError('conflict', bad.reason ?? 'Some items could not be archived; reload and try again')
+      return
+    }
+    wrap(() => m.store.userDelete(kind, ids))
     after(undefined)
   })
-  handle('memory:revertRun', ({ runId }) => after(wrap(() => svc(h).store.revertRun(runId))))
+  handle('memory:revertRun', async ({ runId }) => after(await wrapAsync(() => svc(h).revertRun(runId))))
   // LIVE.md §7: `reads` = memory_search/memory_get calls by the grant's step/session agent tree (hive.db)
   handle('memory:grants', (q) =>
     svc(h)
-      .store.listGrants(q ?? {})
+      .listGrants(q ?? {})
       .map((g) => ({
         ...g,
         runTitle: g.runTitle ? redact(g.runTitle) : g.runTitle,
@@ -120,7 +228,7 @@ export function registerMemoryHandlers(h: Hive): void {
       }))
   )
   handle('memory:setPaused', ({ paused }) => {
-    svc(h).store.setPaused(paused)
+    svc(h).setPaused(paused)
     h.memory?.flush()
     return overview(h)
   })
@@ -138,4 +246,69 @@ export function registerMemoryHandlers(h: Hive): void {
     fs.writeFileSync(r.filePath, lines.join('\n') + (lines.length ? '\n' : ''), { mode: 0o600 })
     return { path: r.filePath }
   })
+
+  // ---------- Passport vault (PASSPORT.md §11) ----------
+  handle('memory:note', (req) => wrapAsync(() => noteOp(rt(h), req, redact)))
+  handle('memory:links', (req) => wrap(() => linksOp(rt(h), req, redact)))
+  handle('memory:proposals', (req) => wrapAsync(() => proposalsOp(rt(h), req)))
+  handle('memory:vault', (req, sender) => wrapAsync(() => vaultOp(h, req, sender)))
+}
+
+async function vaultOp(h: Hive, req: PassportVaultRequest, sender: Electron.WebContents): Promise<PassportVaultResults[keyof PassportVaultResults]> {
+  if (req.op === 'migrate') {
+    // runs when the flag is first turned on, so it does not require vault mode yet (the service keeps the runtime open)
+    const report = await svc(h).migrate({ dryRun: req.dryRun })
+    if (!report) throw new HiveError('not_implemented', 'The Passport migration is not available in this build yet')
+    return report
+  }
+  const p = rt(h)
+  switch (req.op) {
+    case 'aiSettings':
+    case 'setAi': {
+      p.company(req.companyId) // unknown company -> not_found
+      const now = new Date()
+      if (req.op === 'setAi') {
+        if (req.optedIn !== undefined) setLlmOptIn(p.db, req.companyId, req.optedIn, now)
+        if (req.dailyCap !== undefined) setLlmDailyCap(p.db, req.companyId, req.dailyCap, now)
+      }
+      return {
+        enabled: h.settings().experimental?.vaultAI === true,
+        optedIn: isLlmOptedIn(p.db, req.companyId),
+        dailyCap: llmDailyCap(p.db, req.companyId),
+        callsToday: llmCallsOn(p.db, req.companyId, now.toISOString().slice(0, 10)),
+        activity: llmActivity(p.db, req.companyId)
+      }
+    }
+    case 'status':
+      return p.status(req.companyId)
+    case 'reindex':
+      return p.reindex(req.companyId)
+    case 'openInObsidian': {
+      const root = p.ensure(req.companyId)
+      const target = req.path ? toVaultAbs(root, req.path) : root
+      if (app.getApplicationNameForProtocol('obsidian://')) {
+        await shell.openExternal(`obsidian://open?path=${encodeURIComponent(target)}`)
+        return { opened: 'obsidian', hint: null }
+      }
+      await shell.openPath(req.path ? path.dirname(target) : root)
+      return { opened: 'folder', hint: 'Obsidian is not installed. In Obsidian, choose "Open folder as vault" and pick this folder.' }
+    }
+    case 'reveal': {
+      const root = p.ensure(req.companyId)
+      if (req.path) shell.showItemInFolder(toVaultAbs(root, req.path))
+      else await shell.openPath(root)
+      return
+    }
+    case 'setPath': {
+      let target: string | null
+      if ('pick' in req) {
+        const win = BrowserWindow.fromWebContents(sender)
+        const opts: Electron.OpenDialogOptions = { title: 'Use a folder as this company\u2019s Passport', properties: ['openDirectory', 'createDirectory'] }
+        const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (r.canceled || !r.filePaths[0]) return null
+        target = r.filePaths[0]
+      } else target = req.path
+      return p.setPath(req.companyId, target)
+    }
+  }
 }

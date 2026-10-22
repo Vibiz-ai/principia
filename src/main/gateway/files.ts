@@ -20,12 +20,16 @@ export function readPrivateJson(file: string, limit: number): unknown {
   } finally { fs.closeSync(fd) }
 }
 
-/** A peer cannot preplant a predictable temporary symlink to redirect writes. */
-export function writePrivateJson(file: string, value: unknown): void {
+/**
+ * A peer cannot preplant a predictable temporary symlink to redirect writes. `owner` (Principia Cloud, CLOUD.md §7.8):
+ * the file belongs to that user before it appears under its name, so a bridge running as the agent can read it.
+ */
+export function writePrivateJson(file: string, value: unknown, owner?: { uid: number; gid: number } | null): void {
   const temp = `${file}.${crypto.randomBytes(16).toString('hex')}.tmp`
   let fd: number | undefined
   try {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600)
+    if (owner) fs.fchownSync(fd, owner.uid, owner.gid)
     fs.writeFileSync(fd, JSON.stringify(value))
     fs.closeSync(fd); fd = undefined
     fs.renameSync(temp, file)

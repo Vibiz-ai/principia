@@ -1,0 +1,60 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Brand kit starter",
+    "description": "From a business name and vibe, proposes 3 logo directions, renders a logo mark concept for each plus a moodboard with fal.ai FLUX (4 images), builds a color palette and writes brand-kit.md. Everything lands in Artifacts.",
+    "inputs": [
+      {
+        "name": "business",
+        "label": "Business name"
+      },
+      {
+        "name": "vibe",
+        "label": "Vibe, audience and what you sell (e.g. calm, premium, eco-friendly skincare for busy parents)",
+        "type": "multiline"
+      },
+      {
+        "name": "avoid",
+        "label": "Anything to avoid (colors, styles, competitors' looks) - optional",
+        "default": "none"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "directions",
+        "type": "agent",
+        "label": "Propose 3 logo directions",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "You are a brand designer. Propose exactly 3 distinct logo directions and one shared color palette for this business. Do not call any API and do not create files; output text only.\n\nBusiness name: {{inputs.business}}\nVibe / audience / offer: {{inputs.vibe}}\nAvoid: {{inputs.avoid}}\n\nOutput Markdown in exactly this structure:\n\n## Direction 1: <short name>\n- Idea: <one sentence: the concept and why it fits>\n- Mark: <the symbol, shape language, line weight>\n- Typography pairing: <wordmark font style, e.g. geometric sans, high-contrast serif>\n- Image prompt: <one image-generation prompt, max 60 words, for a symbol-only logo mark: flat vector, centered on a plain white background, no text, no letters, no mockup, 1-2 colors from the palette named by hex>\n\n(repeat for Direction 2 and Direction 3; make the three clearly different: e.g. abstract geometric, pictorial, monogram-inspired shape)\n\n## Palette\nA table with 5 rows: role (primary, secondary, accent, dark neutral, light neutral) | name | hex | usage. Check that text on the light neutral using the dark neutral is readable.\n\n## Moodboard prompt\nOne image-generation prompt (max 90 words) for a single landscape moodboard collage: photography, textures, materials, typography samples and color swatches that capture the vibe, using the palette. No real brand logos, no recognizable people.\n\n## Voice\nThree adjectives for the brand voice and one example tagline."
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render logo marks and moodboard (fal, 4 images)",
+        "after": [
+          "directions"
+        ],
+        "cwd": null,
+        "timeoutMin": 20,
+        "profileId": "prof_claude",
+        "prompt": "Render the brand visuals with the fal.ai REST API (model fal-ai/flux/dev) and save them. Generate exactly 4 images in total, one request each, num_images 1. Do not retry more than once per image.\n\nFor each image: POST https://fal.run/fal-ai/flux/dev with headers `Authorization: Key $FAL_KEY` and `Content-Type: application/json`, body {\"prompt\": <prompt>, \"image_size\": <size>, \"num_images\": 1}. Use curl; read the key from the FAL_KEY environment variable, never print it or echo commands that expand it. Download images[0].url to the path below. If the response has no images[0].url, do not write a file for that image; note the error message from the response (never the key) and continue with the next image.\n\n1. Direction 1 \"Image prompt\", image_size \"square_hd\" -> \"$ARTIFACTS_DIR/logo-1.png\"\n2. Direction 2 \"Image prompt\", image_size \"square_hd\" -> \"$ARTIFACTS_DIR/logo-2.png\"\n3. Direction 3 \"Image prompt\", image_size \"square_hd\" -> \"$ARTIFACTS_DIR/logo-3.png\"\n4. \"Moodboard prompt\", image_size \"landscape_16_9\" -> \"$ARTIFACTS_DIR/moodboard.png\"\n\nAlso write the palette (no API call) as \"$ARTIFACTS_DIR/palette.svg\": a 1000x300 SVG with 5 equal color swatches from the Palette table, each labelled below with its role, name and hex in a readable color.\n\nIf FAL_KEY is not set, skip the 4 images, still write palette.svg, and say: add FAL_KEY in Hive › Keys.\n\nReply with: each saved path and the exact prompt used for it (or the error if one failed).\n\nDirections:\n{{directions.output}}"
+      },
+      {
+        "id": "kit",
+        "type": "agent",
+        "label": "Write brand-kit.md and README",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Write two Markdown files. Do not call any image API.\n\n1. \"$ARTIFACTS_DIR/brand-kit.md\": a concise brand kit for {{inputs.business}}. Sections: Overview (vibe in 2 sentences), Logo directions (for each of the 3: name, idea, typography pairing, and the image as ![](logo-N.png) if it was saved), Recommended direction (pick one and say why in 2-3 sentences), Color palette (the table, plus ![](palette.svg)), Moodboard (![](moodboard.png) if saved), Voice (adjectives + tagline), Next steps (3 bullets, e.g. refine the chosen mark in a vector tool, test at favicon size, check trademark availability). Note that AI logo concepts are starting points, not final trademark-ready artwork.\n\n2. \"$ARTIFACTS_DIR/README.md\": a short list of every file this run saved in $ARTIFACTS_DIR (check with ls) with a one-line description each, then the exact prompts used for each image and the model (fal-ai/flux/dev).\n\nReply with the two paths and the recommended direction in one line.\n\nDirections:\n{{directions.output}}\n\nRender results:\n{{render.output}}"
+      }
+    ]
+  }
+}

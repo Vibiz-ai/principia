@@ -1,5 +1,7 @@
 /** Line icons (16px, 1.5 stroke), inline SVG so the app works offline. */
 const P: Record<string, string> = {
+  tasks: 'M3 3h10v11H3zM6 1.5v3h4v-3zM5.5 8l1.2 1.2L9 7M5.5 11.5h5',
+  passport: 'M4 2h8a1 1 0 0 1 1 1v11H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM3 12h10M8 9.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM5.5 7h5M8 4.5c1.5 1.5 1.5 3.5 0 5-1.5-1.5-1.5-3.5 0-5',
   marketplace: 'M2 6l1-3h10l1 3M2 6v1a1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0V6zM3 8.5V14h10V8.5M6 14v-4h4v4',
   book: 'M8 4C6 2.5 3.5 2.5 1.5 3v10c2-.5 4.5-.5 6.5 1 2-1.5 4.5-1.5 6.5-1V3C12.5 2.5 10 2.5 8 4v10',
   code: 'M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11',
@@ -53,6 +55,8 @@ const P: Record<string, string> = {
   agents: 'M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.5 3.5-3.5S9 11 9 13M11 7.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM10.2 9.7c.3-.1.5-.1.8-.1 1.7 0 3 1.3 3 3.2',
   reply: 'M6.5 4 3 7.5 6.5 11M3 7.5h6.5a3.5 3.5 0 0 1 3.5 3.5v1',
   /** hash in a speech bubble: the Slack page (generic glyph, not the Slack logo) */
+  // FORUM.md §8: a pediment over a speech bubble
+  forum: 'M2.5 5.5 8 2l5.5 3.5zM3 7.5h10a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5H7.5L5 14.5v-2H3a.5.5 0 0 1-.5-.5V8a.5.5 0 0 1 .5-.5z',
   slack: 'M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1zM6.7 5.5l-.6 4M9.4 5.5l-.6 4M5.3 6.7h5M5 8.4h5'
 }
 

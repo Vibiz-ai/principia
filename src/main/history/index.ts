@@ -376,6 +376,8 @@ export class ClaudeHistory {
     if (this.changedTimer) clearTimeout(this.changedTimer)
     this.changedTimer = setTimeout(() => {
       this.changedTimer = null
+      // the debounce can outlive the db on quit (and in tests)
+      if (!this.d.db.open) return
       const total = (this.d.db.prepare('SELECT count(*) AS n FROM claude_history').get() as { n: number }).n
       this.d.emitChanged(total)
     }, 1000)

@@ -31,6 +31,8 @@ import type { AgentEvent, AgentNode as LiveAgentNode, Ask, AskAnswer } from './l
 import type { NotifyResult } from './authoring'
 import type { NotifySlackTarget, SlackInboundMessage, SlackRunContext, SlackTrigger, SlackTriggerEvent, SlackTriggerInput, SlackTriggerTestResult } from './slack'
 import type { RunStatus, RunWorktree } from './types'
+import type { ScheduleBoard, ScheduleFireResult } from '../main/engine/scheduler'
+import type { SlackTaskBoard } from '../main/engine/slackTriggers'
 
 export interface EnginePaths {
   userData: string // app.getPath('userData') or $HIVE_USER_DATA
@@ -41,7 +43,8 @@ export interface EnginePaths {
 
 /** Persistence for engine-owned tables. Implemented by main (src/main/db/engineStore.ts). Synchronous (better-sqlite3). */
 export interface EngineStore {
-  insertRun(run: Run, workflowSnapshot: WorkflowDraft | null): void
+  /** `task`: DEPARTMENTS.md §1.2 runs.task_id / runs.agent_id of a task run (absent for every other run). */
+  insertRun(run: Run, workflowSnapshot: WorkflowDraft | null, task?: RunTaskLink | null): void
   updateRun(id: Id, patch: Partial<Omit<Run, 'id'>>): Run
   getRun(id: Id): Run | null
   getRunDetail(id: Id): RunDetail | null
@@ -102,18 +105,35 @@ export interface EngineLogger {
 }
 
 export interface EngineContext {
-  gateway?: { attachment(cwd: string): McpServerSpec | null }
+  /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
+  gateway?: { attachment(cwd: string, companyId?: Id | null): McpServerSpec | null }
+  /**
+   * Company context for one spawn; never global chat context. COMPANY.md §5: with `companyId` it is that company's
+   * Passport (passportContextFor); without it, the company of the working directory (older callers).
+   */
+  passportContext?(cwd: string, companyId?: Id | null): string | null
+  /** COMPANY.md §5, §6: company resolution and guards. Absent = no companies (tests, older main): nothing is stamped or checked. */
+  company?: CompanyBridge
+  /**
+   * PASSPORT.md §7.6: called once when an agent step ends (any status), after the step row is persisted. The
+   * harvester parses `<passport-notes>` from `output`. Must not throw or block; errors are logged and ignored.
+   */
+  onStepOutput?(e: StepOutputEvent): void
   paths: EnginePaths
   store: EngineStore
   /** Login-shell environment (resolved PATH, HOME, LANG...). No secrets. Fresh copy per call. */
   baseEnv(): Record<string, string>
   secrets: {
-    /** Decrypts the named secrets (['*'] = all) -> { NAME: value }. Unknown names are skipped. Marks lastUsedAt. */
-    resolve(names: string[]): Record<string, string>
-    /** Replaces every known secret value (len >= 4) with `••••NAME`. Apply to ALL persisted/streamed text. */
+    /**
+     * Decrypts the named secrets (['*'] = all) -> { NAME: value }. Unknown names are skipped. Marks lastUsedAt.
+     * COMPANY.md §4: `companyId` overlays that company's keys on the shared ones ('*' = every shared key plus this
+     * company's, never another company's). Absent = shared keys only.
+     */
+    resolve(names: string[], companyId?: Id | null): Record<string, string>
+    /** Replaces every known secret value (len >= 4) with `••••NAME`. Apply to ALL persisted/streamed text. Global over every company. */
     redact(text: string): string
     /** Names (no values, no decryption) of the vault secrets a selection covers (['*'] = all). For the agent's keys hint. */
-    names?(names: string[]): string[]
+    names?(names: string[], companyId?: Id | null): string[]
   }
   getSettings(): Settings
   getProfile(id: Id): AgentProfile | null
@@ -141,6 +161,108 @@ export interface EngineContext {
   notifier?: NotifyBridge
   /** SLACK.md §9 (CONTRACT Slack.3): Slack triggers, reply binding, the slack toolset for headless claude. Absent = no Slack. */
   slack?: SlackBridge
+  /** FORUM.md §3: Forum access for steps of runs with an agent seat. Absent = no Forum (tests, older main). */
+  forum?: ForumBridge
+  /**
+   * CLOUD.md §7.8 (Principia Cloud): the user every step process starts as, so agents cannot read the control plane's
+   * secrets. Absent or null = the engine's own user (the desktop).
+   */
+  spawnUser?(): { uid: number; gid: number } | null
+}
+
+// ---------- the Forum (FORUM.md §3, §4). The engine never imports src/main/forum/**. ----------
+
+/** One step's Forum access: env (URL, token), the `forum` CLI dir for PATH, the MCP server and the brief block. */
+export interface ForumSpawn {
+  env: Record<string, string>
+  /** folder holding the `forum` shim; prepended to PATH. null = no CLI */
+  binDir: string | null
+  /** the principia-forum stdio MCP server (claude, codex); null = none */
+  server: McpServerSpec | null
+  /** unprefixed tool names to pre-allow (forum_read…) */
+  toolNames: string[]
+  /** the <principia-forum> brief block, prefixed to the step prompt (not on a resumed turn) */
+  prompt: string
+}
+/** Implemented by main (forum/service.ts). Members must not throw. */
+export interface ForumBridge {
+  open(req: { runId: Id; stepId: Id; taskId: Id | null; agentId: Id | null; adapter: AdapterId; companyId: Id | null }): ForumSpawn | null
+  /** the step ended: the token expires, the shim folder goes */
+  close(stepId: Id): void
+}
+
+// ---------- companies (COMPANY.md §5, §6). The engine never imports src/main/company/**. ----------
+
+/** Implemented by main over CompanyStore (hive.ts companyBridge). */
+export interface CompanyBridge {
+  /**
+   * The company of an owning entity, explicit id first, then run, session, workflow, schedule, repo, cwd; Personal
+   * otherwise. not_found for an unknown explicit id or entity.
+   */
+  resolve(q: { companyId?: Id | null; runId?: Id | null; sessionId?: Id | null; workflowId?: Id | null; scheduleId?: Id | null; repoId?: Id | null; cwd?: string | null }): Id
+  /** The refusal message when a repo, workflow or cwd belongs to a company other than `companyId`, else null. */
+  crossCompany(companyId: Id, refs: { repoId?: Id | null; workflowId?: Id | null; cwd?: string | null }): string | null
+  /** settings.experimental.companies: guards throw (true) or log a warning and still stamp (false). */
+  enforced(): boolean
+  /** `<userData>/companies/<slug>/workspace`, created if missing: the cwd of repo-less spawns. null = no company folders. */
+  workspaceDir(companyId: Id): string | null
+  /** Ids of the repos this company owns (Personal: every unowned repo). */
+  repoIds(companyId: Id): Id[]
+  /** DEPARTMENTS.md §4.3: the board's view of task runs. Absent = no board (tests, older main). */
+  tasks?: TaskRunBridge
+  /** DEPARTMENTS.md §8: the board side of task-mode schedules and Slack triggers (company/recurring.ts). Absent = no board. */
+  boards?: { schedules: ScheduleBoard; slack: SlackTaskBoard } | null
+}
+
+// ---------- the company board (DEPARTMENTS.md §3, §4, §6). The engine never imports src/main/company/**. ----------
+
+/** A run started for a board task (StartRunOptions.taskId / agentId), persisted in runs.task_id / runs.agent_id. */
+export interface RunTaskLink {
+  taskId: Id
+  agentId: Id | null
+}
+/** The hivetask toolset of one headless step: merged into the step's hivemem server (env) and its allowed tools. */
+export interface TaskToolset {
+  env: Record<string, string>
+  /** unprefixed, like MemoryGrant.toolNames (task_get, task_report…) */
+  toolNames: string[]
+}
+/** Implemented by main over CompanyStore and the dispatcher (hive.ts companyBridge). Every member must not throw. */
+export interface TaskRunBridge {
+  /** The task's company: a task run inherits it first (COMPANY.md §3 stamping order). null = unknown task. */
+  companyOf(taskId: Id): Id | null
+  /** The seat's limits.runMinutes, when StartRunOptions.runMinutes is absent. null = no cap. */
+  runMinutes?(agentId: Id): number | null
+  /** §6: the hivetask toolset for one step of a task run (claude only for now); null = none. */
+  toolset?(req: { runId: Id; taskId: Id; agentId: Id | null; stepId: Id; adapter: AdapterId; companyId: Id | null }): TaskToolset | null
+  /** §4.3: the provider conversation id of a task run's step, as soon as it is known (task.agentSessionId). */
+  sessionCaptured?(e: { runId: Id; taskId: Id; adapter: AdapterId; agentSessionId: string }): void
+  /** §3.6: the run hit limits.runMinutes and is about to be canceled; the task then parks with blocked(limit). */
+  timeLimit?(e: { runId: Id; taskId: Id; minutes: number }): void
+  /**
+   * §7: the Passport block of a task run's spawn, with the task's department slot (redacted). When present it replaces
+   * EngineContext.passportContext for task runs; null = nothing to say.
+   */
+  passportContext?(e: { taskId: Id; companyId: Id }): string | null
+}
+/** §3.6: the in-band warning, about 2 minutes before a task run's time cap. */
+export const TASK_WRAP_UP_MS = 2 * 60_000
+export const TASK_WRAP_UP_TEXT =
+  'Principia: about 2 minutes are left before this task run is stopped. Wrap up now: save your work and call task_report (or task_ask if you need the human).'
+
+/** EngineContext.onStepOutput (PASSPORT.md §7.6). `output` is the step's final answer, already redacted. */
+export interface StepOutputEvent {
+  runId: Id
+  stepId: Id
+  nodeId: string
+  adapter: AdapterId
+  companyId: Id | null
+  /** The memory mode the step asked for (after the Slack restriction); the harvester acts on 'read-write' only. */
+  memory: 'off' | 'read' | 'read-write'
+  /** How memory reached the agent: 'mcp' (it writes itself), 'inject' (brief only: harvest), null (no memory). */
+  transport: MemoryTransport | null
+  status: 'passed' | 'failed' | 'canceled'
+  output: string
 }
 
 // ---------- Slack (SLACK.md §9, CONTRACT Slack.3). The engine never imports src/main/connectors/**. ----------
@@ -152,6 +274,11 @@ export interface SlackBridge {
   onMessage(cb: (m: SlackInboundMessage) => void): () => void
   /** `{{trigger.thread}}` text from the local mirror (≤ 50 msgs, 20,000 chars). DMs: the recent DM conversation. */
   threadTranscript(q: { channelId: string; threadTs: string }): string
+  /**
+   * (add-only, SLACK.md §9.6) Download the images people shared in the thread (DMs: the recent conversation) into
+   * `destDir`; returns the local paths (≤ 5, newest first). Best effort: [] on any failure. Absent = no images.
+   */
+  downloadThreadImages?(q: { channelId: string; threadTs: string; destDir: string }): Promise<string[]>
   permalink(channelId: string, ts: string): Promise<string>
   resolveUserName(userId: string): string
   /** Post-run reply (replyNode). Main applies SLACK.md §8.2 using the run's SlackRunContext. threadTs null = top-level (DMs, PO-S4). */
@@ -266,7 +393,7 @@ export interface LiveBridge {
 /** The hivemem stdio MCP server, as each agent CLI must spawn it. */
 export interface McpServerSpec {
   /** 'hive' = the authoring server (AUTHORING.md §1.1), interactive claude sessions only (PO1, PO7). */
-  name: 'hivemem' | 'hive' | 'principia'
+  name: 'hivemem' | 'hive' | 'principia' | 'principia-forum'
   command: string // process.execPath
   args: string[] // [<abs>/out/main/mcp-memory.js]
   /** ELECTRON_RUN_AS_NODE=1, HIVE_MEM_DB, HIVE_MEM_GRANT, HIVE_MEM_FP. Goes into the MCP config, never the agent env. */
@@ -280,6 +407,8 @@ export interface MemoryGrantRequest {
   profile: AgentProfile | null
   /** Main resolves repoId = longest repo path prefix; no repo = read-only on global (PO2). */
   cwd: string
+  /** COMPANY.md §6, PASSPORT.md §7.5: the spawn's company (session or run stamp). Absent = resolved from cwd. */
+  companyId?: Id | null
   runId?: Id | null
   runTitle?: string | null
   workflowId?: Id | null
@@ -322,6 +451,8 @@ export interface SpawnSpec {
 }
 export interface InteractiveSpawnOptions {
   cwd?: string
+  /** COMPANY.md §6: the session's company. Decides the Passport context and the gateway connections. */
+  companyId?: Id | null
   /** Resume this agent conversation instead of starting fresh (Restart, runs:openAsSession). */
   resumeAgentSessionId?: string | null
   /** Start a new conversation under this id (claude --session-id) — Restart when no conversation was recorded yet. */
@@ -353,13 +484,27 @@ export interface InteractiveSpawnOptions {
 }
 
 export interface StartRunOptions {
-  trigger: RunTrigger
+  /** 'task': a board task run (DEPARTMENTS.md §3.4); stored as 'manual' + trigger_ext until RunTrigger lists it. */
+  trigger: RunTrigger | 'task'
   scheduleId?: Id | null
   parentRunId?: Id | null
   /** AUTHORING.md §2.4: runs an agent started (trigger 'agent'). Persisted on the Run. */
   startedBy?: { ownerLabel: string; ownerKey: string; draftId: Id | null } | null
   /** SLACK.md §9.4: with trigger 'slack'. Persisted on the Run. */
   slack?: SlackRunContext | null
+  /**
+   * COMPANY.md §3: the explicit company, the last link of the run's inheritance (workflow, schedule, repo come first).
+   * A conflicting explicit id is a cross-company launch (guarded).
+   */
+  companyId?: Id | null
+  /** DEPARTMENTS.md §4.3: the board task this run works on (runs.task_id); its company is inherited first. */
+  taskId?: Id | null
+  /** The task's agent seat (runs.agent_id). */
+  agentId?: Id | null
+  /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
+  resumeSessionId?: string | null
+  /** §3.6 task runs: the time cap in minutes (warned ~2 min before, then canceled). Absent = the seat's limits.runMinutes. */
+  runMinutes?: number | null
 }
 
 export interface Engine {
@@ -421,6 +566,8 @@ export interface Engine {
     remove(id: Id): void
     /** Fire now regardless of time/enabled/paused (overlap still skips -> throws HiveError('conflict')). */
     runNow(id: Id): Run
+    /** DEPARTMENTS.md §8: "Run now" for any mode: a run ('run' mode) or the standing card it woke ('task' mode). */
+    fireNow?(id: Id): ScheduleFireResult
     /** Validates + describes a when-spec; next 3 fires. Enforces >= 5 min interval. */
     preview(when: ScheduleWhen): SchedulePreview
     /** Human sentence, e.g. "Every weekday at 9:00 (Europe/Madrid)". Pure. */

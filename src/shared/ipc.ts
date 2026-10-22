@@ -1,3 +1,7 @@
+import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
+import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
+import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
+import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyOverview, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
 /**
  * Typed IPC contract between main and renderer. The ONLY bridge is `window.hive` (src/preload).
  * Channel naming: invoke `<domain>:<verb>`, fire-and-forget send `<domain>:<verb>`, events `evt:<name>`.
@@ -10,6 +14,8 @@ import type {
   Artifact,
   ArtifactKind,
   CanvasSnapshot,
+  CompanyFilter,
+  CompanyStamped,
   EnvImportEntry,
   HiveErrorShape,
   HomeData,
@@ -56,6 +62,29 @@ import type {
 } from './memory'
 import type { AgentDetail, AgentEvent, AgentListQuery, AgentNode as LiveAgentNode, Ask, AskAnswer, DashboardData } from './live'
 import type {
+  OpenPassportExportResult,
+  OpenPassportImportResult,
+  OpenPassportPreview,
+  OpenPassportSyncRequest,
+  OpenPassportSyncResult,
+  OpResult,
+  PassportConnectRequest,
+  PassportConnectResult,
+  PassportImportRequest,
+  PassportImportResult,
+  PassportChangedFields,
+  PassportGraphRequest,
+  PassportGraphResults,
+  PassportLinksRequest,
+  PassportLinksResults,
+  PassportNoteRequest,
+  PassportNoteResults,
+  PassportProposalsRequest,
+  PassportProposalsResults,
+  PassportVaultRequest,
+  PassportVaultResults
+} from './passport'
+import type {
   AuthorDecideRequest,
   AuthorDraft,
   AuthorDraftDetail,
@@ -86,11 +115,125 @@ import type {
   SlackTriggerTestResult,
   SlackUser
 } from './slack'
+import type {
+  CloneProgressEvent,
+  FolderCandidate,
+  GithubRepo,
+  KeyCheckResult,
+  LaunchInput,
+  LaunchResult,
+  OnboardingKeyRequest,
+  OnboardingStatus,
+  PlanInput,
+  PlanResult,
+  ProgressEvent,
+  ScanResult,
+  SiteSummary,
+  SoftLaunchStep
+} from './onboarding'
 
 type V = void
+/** COMPANY.md §7: live agents and asks carry their company (denormalized for badges). */
+export type CompanyAgentNode = LiveAgentNode & CompanyStamped
+export type CompanyAsk = Ask & CompanyStamped
+/** COMPANY.md §4: null = Shared keys; absent = Shared (pre-company callers). */
+type KeySpace = { companyId?: Id | null }
 
 /** invoke channels: [request, response]. `void` request = call with no argument. */
 export interface InvokeMap {
+  /** Rail order, Personal last; archived companies only with includeArchived (Settings → Companies). */
+  'company:list': [{ includeArchived?: boolean } | V, CompanyPassport[]]
+  'company:save': [{id?: string; passport: CompanyPassportInput}, CompanyPassport]
+  // COMPANY.md §7: the company is renderer state; main keeps no "current company", so there is no company:switch
+  'company:create': [CompanyCreateInput, CompanyPassport]
+  'company:update': [{ id: Id; patch: CompanyUpdateInput }, CompanyPassport] // name, colour, sort, vault path
+  /** Archive replaces delete (data kept); archived: false restores. Personal cannot be archived. */
+  'company:archive': [{ id: Id; archived?: boolean }, CompanyPassport]
+  'company:reorder': [{ ids: Id[] }, CompanyPassport[]]
+  /** Future runs and sessions only. Refused with open tasks or anything live on the repo. companyId co_personal = unassign. */
+  'company:assignRepo': [{ repoId: Id; companyId: Id }, CompanyPassport]
+  'company:overview': [V, CompanyOverview[]]
+  'company:export': [{id: string}, PassportExport]
+  'company:previewImport': [{json: string}, PassportExport]
+  'company:import': [{json: string; repoIds: string[]}, CompanyPassport]
+  /** Open Passport (open-passport SPEC.md): main asks where to save the `.passport.zip`; null when cancelled */
+  'company:exportOpenPassport': [{id: Id}, OpenPassportExportResult | null]
+  /** reads a passport folder or `.passport.zip` (main shows the picker when `source` is absent); null when cancelled */
+  'company:previewOpenPassport': [{source?: string} | V, OpenPassportPreview | null]
+  /** `new` creates a company (and its departments) from the passport; `merge` merges it into `companyId` */
+  'company:importOpenPassport': [{source: string; mode: 'new' | 'merge'; companyId?: Id; repoIds?: Id[]}, OpenPassportImportResult]
+  /** Publish / sync with an Open Passport host (SPEC.md §11.4): get / set / clear the company's host, or sync now */
+  'company:openPassportSync': [OpenPassportSyncRequest, OpenPassportSyncResult]
+  /** "Use this Passport in other apps": configs, one-click installs (only on click), host sign-in, queued writes → Inbox */
+  'company:passportConnect': [PassportConnectRequest, PassportConnectResult]
+  /** "Import into Passport": a ChatGPT / Claude export, a folder, a website or text → Inbox proposals; null when the picker is cancelled */
+  'company:passportImport': [PassportImportRequest, PassportImportResult | null]
+  'tasks:previewGithub': [{url: string}, GithubTaskPreview]
+  'tasks:list': [{companyId?: string} | V, CompanyTask[]]
+  'tasks:create': [{task: CompanyTaskInput}, CompanyTask]
+  'tasks:update': [{id: string; patch: Partial<CompanyTaskInput>}, CompanyTask]
+  'tasks:get': [{id: string}, TaskDetail]
+  'tasks:start': [{id: string; profileId?: string}, CompanyTask]
+  'tasks:comment': [{id: string; message: string}, TaskActivity]
+  // DEPARTMENTS.md §10. Every channel below refuses (forbidden) unless experimental.companies and .departments are on.
+  /** companyId absent = every company. Sidebar order; archived only with includeArchived. */
+  'departments:list': [{ companyId?: Id; includeArchived?: boolean } | V, Department[]]
+  /** No id = create. The key is fixed at creation; companyId never changes. */
+  'departments:save': [DepartmentSaveInput, Department]
+  /** Refused (conflict) while the department has open tasks; the message names them. archived=false restores. */
+  'departments:archive': [{ id: Id; archived?: boolean }, Department]
+  'departments:reorder': [{ companyId: Id; ids: Id[] }, Department[]]
+  /** §9 preset chips: all six (or `keys`) in one call, idempotent by key. Returns the company's departments. */
+  'departments:createPresets': [{ companyId: Id; keys?: DepartmentPresetKey[] }, Department[]]
+  /** Named apart from the live hub's agents:*. departmentId null = company-level agents only. */
+  'companyAgents:list': [{ companyId?: Id; departmentId?: Id | null; includeArchived?: boolean } | V, CompanyAgent[]]
+  'companyAgents:save': [CompanyAgentSaveInput, CompanyAgent]
+  /** Refused (conflict) while the agent has a task in flight. archived=false restores. */
+  'companyAgents:archive': [{ id: Id; archived?: boolean }, CompanyAgent]
+  'companyAgents:pause': [{ id: Id }, CompanyAgent]
+  'companyAgents:resume': [{ id: Id }, CompanyAgent]
+  /** Sets department and/or agent (absent = unchanged, null = clear); routing.by 'human'. Refused while in flight. */
+  'tasks:assign': [{ id: Id; departmentId?: Id | null; agentId?: Id | null }, CompanyTask]
+  /** Applies the task's model routing suggestion (§2 step 4). */
+  'tasks:acceptRoute': [{ id: Id }, CompanyTask]
+  /** Answers the board ask of a blocked(needs_input) task: back to todo and the same agent resumes. */
+  'tasks:answer': [{ id: Id; answer: string }, CompanyTask]
+  /** in_review -> done, human only; the note is required. */
+  'tasks:approve': [{ id: Id; doneNote: string }, CompanyTask]
+  /** in_review -> todo + wake; the note becomes the next turn's prompt. */
+  'tasks:sendBack': [{ id: Id; note: string }, CompanyTask]
+  /** blocked (any reason but deps) -> todo; resets the wake counter. */
+  'tasks:unpark': [{ id: Id }, CompanyTask]
+  /** Starts the task as an interactive PTY session (sessions.task_id) holding the lease. */
+  'tasks:openSession': [{ id: Id; cols: number; rows: number }, { task: CompanyTask; session: Session }]
+  /** Cancels the in-flight headless run and opens a session resuming agentSessionId. */
+  'tasks:takeover': [{ id: Id; cols: number; rows: number }, { task: CompanyTask; session: Session }]
+  /** Cancels the task's run or session; the task parks per §1.4. */
+  'tasks:stop': [{ id: Id }, CompanyTask]
+  /** The company's Autopilot switch (default off); maxInFlight optional (default 3). */
+  'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number }, BoardSettings]
+  // FORUM.md §9: the company Forum. Refused (forbidden) unless experimental.companies and .departments are on.
+  'forum:state': [{ companyId: Id }, ForumState]
+  'forum:messages': [{ companyId: Id; channelId: Id; beforeSeq?: number; limit?: number }, { messages: ForumMessage[]; hasMore: boolean }]
+  'forum:thread': [{ messageId: Id }, { root: ForumMessage; replies: ForumMessage[] }]
+  'forum:post': [ForumPostRequest, ForumMessage]
+  /** text null = delete */
+  'forum:edit': [{ messageId: Id; text: string | null }, ForumMessage]
+  'forum:react': [{ messageId: Id; emoji: string }, ForumMessage]
+  'forum:markRead': [{ channelId: Id; seq?: number }, void]
+  'forum:createChannel': [ForumCreateChannelRequest, ForumChannel]
+  'forum:updateChannel': [{ channelId: Id; topic?: string; purpose?: string; archived?: boolean }, ForumChannel]
+  'forum:membership': [{ op: 'join' | 'leave'; channelId: Id } | { op: 'add'; channelId: Id; memberIds: Id[] } | { op: 'remove'; memberId: Id }, void]
+  'forum:openDm': [{ companyId: Id; memberIds: Id[] }, ForumChannel]
+  'forum:search': [{ companyId: Id; query: string; limit?: number }, ForumMessage[]]
+  'forum:decide': [ForumDecideRequest, ForumMessage]
+  'forum:answer': [{ messageId: Id; answer: string }, ForumMessage]
+  'forum:invite': [ForumInviteRequest, ForumInvite]
+  'forum:invites': [{ companyId: Id }, ForumInvite[]]
+  'forum:revokeInvite': [{ inviteId: Id }, ForumInvite]
+  'forum:acceptInvite': [{ code: string; name: string; handle?: string }, ForumMember]
+  'forum:toTask': [{ messageId: Id; agentId?: Id | null }, { id: Id; identifier: string }]
+
   'gateway:connect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:disconnect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:list': [void, import('./gateway').GatewayConnection[]]
@@ -101,7 +244,7 @@ export interface InvokeMap {
   'app:info': [V, AppInfo]
   'app:status': [V, StatusSnapshot]
   'app:home': [V, HomeData]
-  'app:canvas': [V, CanvasSnapshot]
+  'app:canvas': [CompanyFilter | V, CanvasSnapshot] // companyId: that company's runs, schedules, sessions
   'app:quit': [V, V] // goes through the Cmd+Q confirm
   'app:openExternal': [{ url: string }, V] // http(s) web links only
   'app:showItemInFolder': [{ path: string }, V] // path confined to repos / userData
@@ -113,10 +256,12 @@ export interface InvokeMap {
   // providers
   'providers:list': [{ refresh?: boolean } | V, ProviderInfo[]]
   // repos
-  'repos:list': [V, Repo[]]
-  'repos:pick': [V, Repo[]] // native folder picker (multi), returns newly added
-  'repos:add': [{ paths: string[] }, Repo[]] // drag-drop from Finder
+  'repos:list': [CompanyFilter | V, Repo[]] // with companyId: that company's repos in its repo_order:<companyId>
+  /** Native folder picker (multi), returns newly added. companyId: new repos are assigned to that company (§3). */
+  'repos:pick': [CompanyFilter | V, Repo[]]
+  'repos:add': [{ paths: string[]; companyId?: Id }, Repo[]] // drag-drop from Finder
   'repos:update': [{ id: Id; name: string }, Repo]
+  /** Within the moved repo's company (both must share one; cross-company moves go through company:assignRepo). Returns all repos. */
   'repos:move': [{ id: Id; targetId: Id; placement: 'before' | 'after' }, Repo[]]
   'repos:remove': [{ id: Id }, V] // DB row only, never touches files
   'repos:siblings': [{ id: Id }, { path: string; name: string }[]] // git dirs next to repo, not yet added
@@ -126,7 +271,7 @@ export interface InvokeMap {
   'profiles:update': [{ id: Id } & Partial<AgentProfileInput>, AgentProfile]
   'profiles:remove': [{ id: Id }, V] // conflict if used by workflows/schedules
   // sessions (interactive PTY)
-  'sessions:list': [{ status?: SessionStatus | 'all' } | V, Session[]]
+  'sessions:list': [{ status?: SessionStatus | 'all'; companyId?: Id } | V, Session[]]
   'sessions:create': [SessionCreateRequest, Session]
   'sessions:attach': [{ id: Id }, { session: Session; scrollback: string }]
   'sessions:kill': [{ id: Id }, Session] // resolves once exited (<= 2 s)
@@ -138,21 +283,23 @@ export interface InvokeMap {
   /** Image pasted or dropped without a file path (clipboard, browser drag) -> saved under userData/pastes; its path. */
   'sessions:saveImage': [{ id: Id; data: Uint8Array; type: PastedImageType }, { path: string }]
   // workflows
-  'workflows:list': [V, Workflow[]]
+  'workflows:list': [CompanyFilter | V, Workflow[]]
   'workflows:get': [{ id: Id }, Workflow]
-  'workflows:create': [WorkflowDraft, Workflow] // validation error -> code 'validation'
+  'workflows:create': [WorkflowDraft & CompanyFilter, Workflow] // validation error -> code 'validation'; no companyId = Personal
   'workflows:update': [{ id: Id; draft: WorkflowDraft }, Workflow]
   'workflows:remove': [{ id: Id }, V]
-  'workflows:duplicate': [{ id: Id }, Workflow]
+  /** companyId: "Duplicate to company…" (new row, no seed key); absent = the source's company. */
+  'workflows:duplicate': [{ id: Id; companyId?: Id }, Workflow]
   'workflows:validate': [WorkflowDraft, ValidationError[]]
   'workflows:export': [{ id: Id }, { path: string } | null] // native save dialog; null = canceled
-  'workflows:import': [V, Workflow | null] // native open dialog
+  'workflows:import': [CompanyFilter | V, Workflow | null] // native open dialog; installs into companyId (else Personal)
   // marketplace (built-in catalog + Settings.marketplaceUrl)
   'marketplace:list': [{ refresh?: boolean } | V, MarketList]
   'marketplace:preview': [MarketRef, MarketPreview]
-  'marketplace:install': [MarketRef & { overwrite?: boolean }, MarketInstallResult]
+  'marketplace:install': [MarketRef & { overwrite?: boolean; companyId?: Id }, MarketInstallResult] // workflows go to companyId (else Personal)
   // runs
-  'runs:start': [{ target: RunTarget }, Run]
+  /** companyId: the explicit stamp, last in the inheritance chain (workflow, then target repo, then this, §3). */
+  'runs:start': [{ target: RunTarget; companyId?: Id }, Run]
   'runs:list': [RunListQuery | V, Run[]]
   'runs:get': [{ id: Id }, RunDetail]
   'runs:cancel': [{ id: Id }, V]
@@ -160,24 +307,29 @@ export interface InvokeMap {
   'runs:stepLog': [{ runId: Id; stepId: Id; tailBytes?: number; view?: 'raw' | 'readable' }, { text: string; truncated: boolean }]
   'runs:openAsSession': [{ runId: Id; stepId?: Id }, Session]
   // schedules
-  'schedules:list': [V, Schedule[]]
-  'schedules:create': [ScheduleInput, Schedule]
+  'schedules:list': [CompanyFilter | V, Schedule[]]
+  /** Stamped from its workflow (or the prompt's repo, then companyId, then Personal); cross-company targets are guarded. */
+  'schedules:create': [ScheduleInput & CompanyFilter, Schedule]
   'schedules:update': [{ id: Id; input: ScheduleInput }, Schedule]
   'schedules:remove': [{ id: Id }, V]
   'schedules:setEnabled': [{ id: Id; enabled: boolean }, Schedule]
-  'schedules:runNow': [{ id: Id }, Run]
+  /** null: a task-mode schedule posted to its standing board card instead (DEPARTMENTS.md §8) */
+  'schedules:runNow': [{ id: Id }, Run | null]
   'schedules:preview': [{ when: ScheduleWhen }, SchedulePreview]
   'schedules:events': [{ scheduleId: Id; limit?: number }, ScheduleEvent[]]
   'schedules:pauseAll': [{ paused: boolean }, StatusSnapshot]
-  // secrets (vault)
-  'secrets:list': [V, SecretMeta[]]
-  'secrets:set': [{ name: string; value: string; label?: string }, SecretMeta]
-  'secrets:remove': [{ name: string }, V]
-  'secrets:reveal': [{ name: string }, { value: string }] // explicit user action only
-  'secrets:copy': [{ name: string }, V] // main writes clipboard, plaintext never crosses IPC
-  'secrets:parseEnv': [{ text: string }, EnvImportEntry[]] // preview, stores nothing
-  'secrets:importEnv': [{ text: string; names: string[] }, SecretMeta[]] // commit selected names
-  'secrets:pickEnvFile': [V, { path: string; entries: EnvImportEntry[]; text: string } | null]
+  // secrets (vault). COMPANY.md §4: companyId null/absent = Shared, else that company's keys (override a shared name)
+  /** absent: every key (shared + all companies); null: shared only; an id: that company's keys + shared. */
+  'secrets:list': [KeySpace | V, SecretMeta[]]
+  'secrets:set': [{ name: string; value: string; label?: string } & KeySpace, SecretMeta]
+  'secrets:remove': [{ name: string } & KeySpace, V]
+  'secrets:reveal': [{ name: string } & KeySpace, { value: string }] // explicit user action only
+  'secrets:copy': [{ name: string } & KeySpace, V] // main writes clipboard, plaintext never crosses IPC
+  'secrets:parseEnv': [{ text: string } & KeySpace, EnvImportEntry[]] // preview, stores nothing; `exists` within that space
+  'secrets:importEnv': [{ text: string; names: string[] } & KeySpace, SecretMeta[]] // commit selected names
+  'secrets:pickEnvFile': [KeySpace | V, { path: string; entries: EnvImportEntry[]; text: string } | null]
+  /** "Move to company…" / "Make shared" (to: null). conflict when the target already has that name. Plaintext stays in main. */
+  'secrets:move': [{ name: string; from: Id | null; to: Id | null }, SecretMeta]
   // artifacts
   'artifacts:list': [ArtifactQuery | V, Artifact[]]
   /** PNG data URL from the macOS Quick Look thumbnailer (nativeImage.createThumbnailFromPath), cached in
@@ -196,31 +348,37 @@ export interface InvokeMap {
   'ui:confirm': [ConfirmRequest, boolean] // dialog.showMessageBox; true = confirm button
   'ui:setEdited': [{ edited: boolean }, V] // win.setDocumentEdited
   'clipboard:writeText': [{ text: string }, V]
-  // memory (CONTRACT §11.5, PO10: <= 12 channels)
-  'memory:overview': [V, MemoryOverview]
-  'memory:graph': [MemoryGraphQuery, MemoryGraph] // <= 150 entities ranked by degree + facts + recency
-  'memory:entity': [{ id: Id }, MemoryEntityDetail] // not_found if deleted
-  'memory:search': [MemorySearchQuery, MemorySearchHit[]] // same ranking as the MCP tools
-  'memory:facts': [MemoryFactQuery, { items: MemoryFact[]; total: number }] // newest first
-  'memory:mutate': [MemoryMutation, MemoryMutationResult]
-  /** Hard delete + event scrub; renderer must ui:confirm first. */
-  'memory:delete': [{ kind: MemoryTargetKind; ids: Id[] }, V]
+  // memory (CONTRACT §11.5; PO10 amended to 17 channels by PASSPORT.md §11). Every request may name its company.
+  'memory:overview': [CompanyFilter | V, MemoryOverview]
+  /** v1 query (no `op`): <= 150 entities ranked by degree + facts + recency. Passport ops: global, local, layout. */
+  'memory:graph': [(MemoryGraphQuery & CompanyFilter) | PassportGraphRequest, MemoryGraph | PassportGraphResults[keyof PassportGraphResults]]
+  'memory:entity': [{ id: Id } & CompanyFilter, MemoryEntityDetail] // not_found if deleted
+  'memory:search': [MemorySearchQuery & CompanyFilter, MemorySearchHit[]] // same ranking as the MCP tools
+  'memory:facts': [MemoryFactQuery & CompanyFilter, { items: MemoryFact[]; total: number }] // newest first
+  'memory:mutate': [MemoryMutation & CompanyFilter, MemoryMutationResult]
+  /** Hard delete + event scrub; renderer must ui:confirm first. (Vault mode: archive, never a deletion.) */
+  'memory:delete': [{ kind: MemoryTargetKind; ids: Id[] } & CompanyFilter, V]
   /** Invalidates the run's live writes and restores what they superseded. One-way; restore single rows from History. */
   'memory:revertRun': [{ runId: Id }, { invalidated: number; restored: number }]
-  'memory:grants': [{ runId?: Id; sessionId?: Id }, MemoryGrantInfo[]]
+  'memory:grants': [{ runId?: Id; sessionId?: Id } & CompanyFilter, MemoryGrantInfo[]]
   'memory:setPaused': [{ paused: boolean }, MemoryOverview] // "Pause agent writes"
   /** Native save dialog, JSONL; null = canceled. */
-  'memory:export': [{ scope: MemoryScopeFilter['scope'] }, { path: string } | null]
+  'memory:export': [{ scope: MemoryScopeFilter['scope'] } & CompanyFilter, { path: string } | null]
+  // Passport vault (PASSPORT.md §11): op-multiplexed; window.hive.memory.<channel>(req) is typed per op (see HiveApi)
+  'memory:note': [PassportNoteRequest, PassportNoteResults[keyof PassportNoteResults]]
+  'memory:links': [PassportLinksRequest, PassportLinksResults[keyof PassportLinksResults]]
+  'memory:proposals': [PassportProposalsRequest, PassportProposalsResults[keyof PassportProposalsResults]]
+  'memory:vault': [PassportVaultRequest, PassportVaultResults[keyof PassportVaultResults]]
   // live agents (CONTRACT §12.6)
-  'agents:list': [AgentListQuery, LiveAgentNode[]]
+  'agents:list': [AgentListQuery & CompanyFilter, CompanyAgentNode[]]
   'agents:get': [{ id: Id; eventsLimit?: number }, AgentDetail]
   'agents:events': [{ agentId: Id; beforeSeq?: number; limit?: number }, AgentEvent[]]
   /** Live session root with needs='idle': PTY write text + '\r'. Otherwise conflict. */
   'agents:reply': [{ agentId: Id; text: string }, V]
-  'asks:list': [{ status?: 'open' | 'all'; runId?: Id; sessionId?: Id; limit?: number } | V, Ask[]]
+  'asks:list': [{ status?: 'open' | 'all'; runId?: Id; sessionId?: Id; limit?: number; companyId?: Id } | V, CompanyAsk[]]
   /** conflict if not open (or the PTY prompt changed, A9); bad_request for an option not offered. */
   'asks:answer': [AskAnswer, Ask]
-  'app:dashboard': [{ since?: string } | V, DashboardData]
+  'app:dashboard': [({ since?: string } & CompanyFilter) | V, DashboardData] // companyId: done, learned, activity of that company
   'app:markSeen': [V, V]
   'schedules:skipNext': [{ id: Id }, Schedule]
   // usage limits + leftover processes (CONTRACT §13)
@@ -233,7 +391,7 @@ export interface InvokeMap {
   /** Stops those leftovers (and their process trees). Only pids that are still leftovers are touched. */
   'processes:stop': [{ pids: number[] }, { stopped: number }]
   // authoring (CONTRACT §14.5, AUTHORING.md)
-  'author:list': [{ status?: AuthorDraftStatus[]; limit?: number } | V, AuthorDraft[]]
+  'author:list': [({ status?: AuthorDraftStatus[]; limit?: number } & CompanyFilter) | V, AuthorDraft[]] // COMPANY.md §7
   'author:get': [{ id: Id }, AuthorDraftDetail]
   /** conflict if not pending; validation if the (edited) draft is invalid (draft stays pending). */
   'author:decide': [AuthorDecideRequest, AuthorDraft]
@@ -247,7 +405,7 @@ export interface InvokeMap {
   'worktrees:deleteBranches': [{ runId: Id; branches: { repoPath: string; name: string }[] }, RunBranch[]]
   'history:list': [HistoryListQuery | V, HistoryListResult]
   'history:get': [{ id: string }, ClaudeTranscript]
-  'history:resume': [{ id: string; profileId?: Id; cols: number; rows: number }, Session]
+  'history:resume': [{ id: string; profileId?: Id; cols: number; rows: number } & CompanyFilter, Session] // companyId: for a folder no repo owns
   // Slack (CONTRACT "Slack.5", SLACK.md §0.3 PO-S1/PO-S2). The renderer never receives a token value.
   'slack:status': [V, SlackStatus]
   'slack:manifest': [{ name?: string } | V, { json: string; yaml: string; createUrl: string }]
@@ -273,13 +431,76 @@ export interface InvokeMap {
   'slack:draftDecide': [{ id: Id; decision: 'send' | 'discard'; text?: string }, SlackDraft]
   'slack:testAlert': [V, NotifyResult]
   'slack:permalink': [{ channelId: string; ts: string }, { url: string }]
-  'slackTriggers:list': [{ workflowId?: Id } | V, SlackTrigger[]]
+  /** COMPANY.md §3: the connected workspace's company (Personal after the migration); null = not connected. */
+  'slack:company': [V, { teamId: string; companyId: Id } | null]
+  /** Re-homes the connected workspace. Triggers whose workflow is in another company stop firing (the C4 guard). */
+  'slack:setCompany': [{ companyId: Id }, { teamId: string; companyId: Id }]
+  /** companyId: triggers whose workflow belongs to that company. Every trigger carries its workflow's company. */
+  'slackTriggers:list': [{ workflowId?: Id; companyId?: Id } | V, (SlackTrigger & CompanyStamped)[]]
   'slackTriggers:create': [SlackTriggerInput, SlackTrigger]
   'slackTriggers:update': [{ id: Id; input: SlackTriggerInput }, SlackTrigger]
   'slackTriggers:remove': [{ id: Id }, V]
   'slackTriggers:setEnabled': [{ id: Id; enabled: boolean }, SlackTrigger]
   'slackTriggers:test': [{ input: SlackTriggerInput; sample: { permalink: string } | { channelId: string; ts: string } }, SlackTriggerTestResult]
   'slackTriggers:events': [{ triggerId: Id; limit?: number }, SlackTriggerEvent[]]
+  // Business-first onboarding (ONBOARDING.md §4). Metadata and read-only intake until launch; keys cross IPC only in `key`.
+  'onboarding:status': [V, OnboardingStatus]
+  /** Native multi-folder dialog. Adds nothing: repos are attached at launch. */
+  'onboarding:pickFolders': [V, FolderCandidate[]]
+  /** Same checks as pickFolders, for drag-drop (≤ 8 paths). */
+  'onboarding:inspectFolders': [{ paths: string[] }, FolderCandidate[]]
+  /** Read-only, byte-capped, redacted, 5 s budget. */
+  'onboarding:scan': [{ paths?: string[]; github?: { fullName: string } }, ScanResult]
+  'onboarding:fetchSite': [{ url: string }, SiteSummary]
+  'onboarding:github': [{ op: 'list'; query?: string }, GithubRepo[]]
+  'onboarding:pickCloneDir': [V, string | null]
+  /** check → KeyCheckResult (the value never comes back); forget → void. Typed per op on window.hive.onboarding.key. */
+  'onboarding:key': [OnboardingKeyRequest, KeyCheckResult | V]
+  /** Main recomputes what is available; the renderer cannot claim workflows or adapters. */
+  'onboarding:plan': [{ requestId: string; input: PlanInput; useAgent: boolean }, PlanResult]
+  'onboarding:cancelPlan': [{ requestId: string }, V]
+  /** A given journalId resumes. Emits onboarding:progress. One launch at a time per draft. */
+  'onboarding:launch': [{ journalId?: string; draftId: string; input: LaunchInput }, LaunchResult]
+  'onboarding:skipStep': [{ journalId: string; step: SoftLaunchStep }, LaunchResult]
+  'onboarding:discard': [{ journalId: string }, { undone: string[] }]
+  /** Only for the journal's own company; scheduleRefs are plan refs of schedules this journal created. */
+  'onboarding:start': [{ journalId: string; autopilot: boolean; scheduleRefs: string[] }, BoardSettings | null]
+  // Principia Cloud (CLOUD.md §13.1): the desktop link. No response carries a token, key or credential.
+  'cloud:state': [V, CloudLinkState]
+  /** the connect link (`<url>/pair#XXXX-XXXX`), or url + code from the hidden fallback */
+  'cloud:pair': [{ link?: string; url?: string; code?: string }, CloudLinkState]
+  'cloud:unlink': [V, CloudLinkState]
+  'cloud:summary': [V, WorkspaceSummary]
+  'cloud:providers': [V, ProviderAccount[]]
+  /** a pasted key or token: write-only, crosses IPC only here */
+  'cloud:providerPut': [{ adapter: CloudAdapter; kind: ProviderCredentialKind; value: string }, ProviderAccount[]]
+  'cloud:providerDelete': [{ adapter: CloudAdapter }, ProviderAccount[]]
+  'cloud:providerTest': [{ adapter: CloudAdapter; live?: boolean }, ProviderTestResponse]
+  /** CLOUD.md §7.2: Connect Claude / Sign in with ChatGPT run on this Mac; progress arrives as evt:cloud state.login */
+  'cloud:loginClaude': [V, CloudLoginStatus]
+  'cloud:loginCodex': [V, CloudLoginStatus]
+  'cloud:loginCancel': [V, V]
+  'cloud:movePlan': [{ companyId: Id }, CloudMovePlan]
+  'cloud:move': [CloudMoveChoices, CloudMoveResult]
+  'cloud:runOnce': [{ companyId: Id; workflowId?: Id }, CloudRunSummary]
+  /** schedules back to this Mac, then the company is deleted from the cloud (the renderer confirms first) */
+  'cloud:bringBack': [{ companyId: Id }, CloudLinkState]
+  'cloud:runs': [{ companyId?: Id; limit?: number } | V, CloudRunSummary[]]
+  'cloud:run': [{ id: Id }, CloudRunDetail]
+  'cloud:runLog': [{ id: Id; stepId?: Id; tail?: number }, { lines: string[] }]
+  'cloud:runCancel': [{ id: Id }, V]
+  'cloud:asks': [V, CloudAsk[]]
+  'cloud:answer': [{ id: Id; answer: string }, CloudAsk]
+  'cloud:proposals': [{ companyId: Id }, PassportProposal[]]
+  'cloud:decideProposal': [{ companyId: Id; proposalId: string; decision: 'accept' | 'reject' }, V]
+  'cloud:devices': [V, CloudDevice[]]
+  'cloud:revokeDevice': [{ id: Id }, CloudDevice[]]
+  /** a fresh one-time console login link (open: also opens it in the browser) */
+  'cloud:loginLink': [{ open?: boolean } | V, LoginLinkResponse]
+  'cloud:pause': [{ paused: boolean }, CloudWorkspace]
+  'cloud:pauseCompany': [{ companyId: Id; paused: boolean }, CloudCompany]
+  /** opens the provider's consent page in the browser; it calls back to the cloud */
+  'cloud:connectionAuthorize': [{ companyId: Id; connectionId: string }, AuthorizeConnectionResponse]
 }
 
 export interface NativeMenuItem {
@@ -330,14 +551,14 @@ export interface EventMap {
   /** Window focus / fullscreen, drives .is-inactive / .is-fullscreen on <html>. */
   'window:state': { focused: boolean; fullscreen: boolean }
   /** Coarse invalidation for lists without dedicated events. */
-  'data:changed': { domain: 'repos' | 'profiles' | 'workflows' | 'secrets' | 'schedules' }
+  'data:changed': { domain: 'company' | 'tasks' | 'departments' | 'repos' | 'profiles' | 'workflows' | 'secrets' | 'schedules' }
   /** Navigation/commands from app menu, tray, notifications, dock. */
   'ui:command': UiCommand
   /** New mem_event rows (any process) or a page write committed. Refetch visible data, debounced. */
-  'memory:changed': MemoryChangedEvent
-  'agent:updated': LiveAgentNode // coalesced 150 ms
+  'memory:changed': MemoryChangedEvent & PassportChangedFields
+  'agent:updated': CompanyAgentNode // coalesced 150 ms
   'agent:events': { agentId: Id; events: AgentEvent[] } // coalesced 100 ms
-  'ask:updated': Ask
+  'ask:updated': CompanyAsk
   /** Leftover processes changed (launch scan, Stop, Stop all). */
   'processes:changed': LeftoverProcess[]
   // authoring (CONTRACT §14.5)
@@ -350,6 +571,13 @@ export interface EventMap {
   'slack:messages': { channelId: string; messages: SlackMessage[] }
   'slack:draft': SlackDraft
   'slackTrigger:updated': SlackTrigger
+  // ONBOARDING.md §4
+  'onboarding:progress': ProgressEvent
+  'onboarding:cloneProgress': CloneProgressEvent
+  // FORUM.md §9
+  'forum:event': ForumEvent
+  // CLOUD.md §13.1: the desktop link's state, server changes and SSE events (evt:cloud)
+  cloud: CloudDesktopEvent
 }
 
 export type UiCommand =
@@ -373,6 +601,11 @@ export type UiCommand =
 export type View = 'home' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
 
 export interface SessionCreateRequest {
+  /**
+   * COMPANY.md §6: the launching company ("+" in a company group). Absent = the repo's company, else Personal. Decides
+   * keys, Passport, memory and the repo-less chat dir; a cwd inside another company's repo is refused.
+   */
+  companyId?: Id
   /** One of profileId | adapter. adapter -> the seeded default profile for that adapter. */
   profileId?: Id
   adapter?: AdapterId
@@ -390,12 +623,14 @@ export interface RunListQuery {
   scheduleId?: Id
   since?: string // ISO
   limit?: number // default 100
+  companyId?: Id
 }
 export interface ArtifactQuery {
   runId?: Id
   sessionId?: Id
   kind?: ArtifactKind
   limit?: number // default 500, newest first
+  companyId?: Id
 }
 
 // ---------- helpers that build the renderer-facing API type ----------
@@ -424,8 +659,26 @@ type DomainApi<D extends string> = {
 export const PASTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
 export type PastedImageType = (typeof PASTED_IMAGE_TYPES)[number]
 
+/** PASSPORT.md §11 op channels: the result type follows the request's `op`. */
+type OpFn<Req extends { op: string }, Results> = <R extends Req>(req: R) => Promise<OpResult<Results, R>>
+type MemoryApi = Omit<DomainApi<'memory'>, 'note' | 'graph' | 'links' | 'proposals' | 'vault'> & {
+  note: OpFn<PassportNoteRequest, PassportNoteResults>
+  /** v1 query (no op) -> MemoryGraph; { op: 'global' | 'local' | 'layout' } -> the Passport graph results. */
+  graph: <R extends (MemoryGraphQuery & CompanyFilter) | PassportGraphRequest>(
+    req: R
+  ) => Promise<R extends { op: string } ? OpResult<PassportGraphResults, R> : MemoryGraph>
+  links: OpFn<PassportLinksRequest, PassportLinksResults>
+  proposals: OpFn<PassportProposalsRequest, PassportProposalsResults>
+  vault: OpFn<PassportVaultRequest, PassportVaultResults>
+}
+
+/** ONBOARDING.md §4: `key` is op-multiplexed; check returns the result, forget returns nothing. */
+type OnboardingApi = Omit<DomainApi<'onboarding'>, 'key'> & {
+  key: <R extends OnboardingKeyRequest>(req: R) => Promise<R extends { op: 'check' } ? KeyCheckResult : void>
+}
+
 /** `window.hive` */
-export type HiveApi = { [D in Domains]: DomainApi<D> } & {
+export type HiveApi = { [D in Exclude<Domains, 'memory' | 'onboarding'>]: DomainApi<D> } & { memory: MemoryApi; onboarding: OnboardingApi } & {
   /** Fire-and-forget. */
   send<C extends SendChannel>(channel: C, payload: SendMap[C]): void
   /** Subscribe; returns unsubscribe. */
@@ -437,6 +690,18 @@ export type HiveApi = { [D in Domains]: DomainApi<D> } & {
 
 /** Runtime list of invoke channels (preload builds the facade from this; main asserts every one is handled). */
 export const INVOKE_CHANNELS = [
+  'company:list', 'company:save', 'company:export', 'company:previewImport', 'company:import',
+  'company:exportOpenPassport', 'company:previewOpenPassport', 'company:importOpenPassport', 'company:openPassportSync',
+  'company:passportConnect', 'company:passportImport',
+  'company:create', 'company:update', 'company:archive', 'company:reorder', 'company:assignRepo', 'company:overview',
+  'tasks:previewGithub', 'tasks:list', 'tasks:create', 'tasks:update', 'tasks:get', 'tasks:start', 'tasks:comment',
+  'departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets',
+  'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
+  'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop',
+  'board:autopilot',
+  'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
+  'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
+  'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask',
   'gateway:connect', 'gateway:disconnect', 'gateway:list', 'gateway:save', 'gateway:remove', 'gateway:test',
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',
@@ -453,12 +718,13 @@ export const INVOKE_CHANNELS = [
   'schedules:list', 'schedules:create', 'schedules:update', 'schedules:remove', 'schedules:setEnabled',
   'schedules:runNow', 'schedules:preview', 'schedules:events', 'schedules:pauseAll',
   'secrets:list', 'secrets:set', 'secrets:remove', 'secrets:reveal', 'secrets:copy', 'secrets:parseEnv',
-  'secrets:importEnv', 'secrets:pickEnvFile',
+  'secrets:importEnv', 'secrets:pickEnvFile', 'secrets:move',
   'artifacts:list', 'artifacts:thumbnail', 'artifacts:trash', 'artifacts:quickLook', 'artifacts:open',
   'artifacts:reveal', 'artifacts:copyPath', 'artifacts:openDir', 'artifacts:peek',
   'ui:contextMenu', 'ui:confirm', 'ui:setEdited', 'clipboard:writeText',
   'memory:overview', 'memory:graph', 'memory:entity', 'memory:search', 'memory:facts', 'memory:mutate',
   'memory:delete', 'memory:revertRun', 'memory:grants', 'memory:setPaused', 'memory:export',
+  'memory:note', 'memory:links', 'memory:proposals', 'memory:vault',
   'agents:list', 'agents:get', 'agents:events', 'agents:reply', 'asks:list', 'asks:answer', 'app:dashboard',
   'app:markSeen', 'schedules:skipNext',
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
@@ -467,8 +733,15 @@ export const INVOKE_CHANNELS = [
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
   'slack:backfill', 'slack:askAgent', 'slack:drafts', 'slack:draftGet', 'slack:draftDecide', 'slack:testAlert',
-  'slack:permalink', 'slackTriggers:list', 'slackTriggers:create', 'slackTriggers:update', 'slackTriggers:remove',
-  'slackTriggers:setEnabled', 'slackTriggers:test', 'slackTriggers:events'
+  'slack:permalink', 'slack:company', 'slack:setCompany', 'slackTriggers:list', 'slackTriggers:create', 'slackTriggers:update', 'slackTriggers:remove',
+  'slackTriggers:setEnabled', 'slackTriggers:test', 'slackTriggers:events',
+  'onboarding:status', 'onboarding:pickFolders', 'onboarding:inspectFolders', 'onboarding:scan', 'onboarding:fetchSite',
+  'onboarding:github', 'onboarding:pickCloneDir', 'onboarding:key', 'onboarding:plan', 'onboarding:cancelPlan',
+  'onboarding:launch', 'onboarding:skipStep', 'onboarding:discard', 'onboarding:start',
+  'cloud:state', 'cloud:pair', 'cloud:unlink', 'cloud:summary', 'cloud:providers', 'cloud:providerPut', 'cloud:providerDelete',
+  'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
+  'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
+  'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize'
 ] as const satisfies readonly InvokeChannel[]
 
 // compile-time check: INVOKE_CHANNELS covers InvokeMap exactly
@@ -482,7 +755,8 @@ export const EVENT_NAMES = [
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
   'settings:changed', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
   'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'worktree:updated', 'history:changed',
-  'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated'
+  'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',
+  'onboarding:progress', 'onboarding:cloneProgress', 'forum:event', 'cloud'
 ] as const satisfies readonly EventName[]
 type _MissingEv = Exclude<EventName, (typeof EVENT_NAMES)[number]>
 const _exhaustiveEv: [_MissingEv] extends [never] ? true : _MissingEv = true

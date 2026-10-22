@@ -7,6 +7,7 @@
 .aglyph { font-size: 11px; width: 12px; text-align: center; flex: none; line-height: 1; color: var(--status-idle); }
 .aglyph--needs { color: var(--status-needs); animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }
 .aglyph--running { color: var(--status-running); animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }
+.side-row--session .aglyph--idle { color: var(--status-needs); } /* finished turn, already seen: still your move */
 .aglyph--passed { color: var(--status-success); }
 .aglyph--failed { color: var(--status-failed); }
 .aglyph--scheduled { color: var(--status-scheduled); }
