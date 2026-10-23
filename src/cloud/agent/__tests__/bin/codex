@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+// Fake Codex CLI for Principia Cloud tests: login (API key on stdin, status), exec --json with token counts.
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+const home = process.env.CODEX_HOME || path.join(process.env.HOME || '/tmp', '.codex')
+const auth = path.join(home, 'auth.json')
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+if (args.includes('--version')) { console.log('codex-cli 0.120.0'); process.exit(0) }
+const read = () => { try { return JSON.parse(fs.readFileSync(auth, 'utf8')) } catch { return null } }
+if (args[0] === 'login' && args.includes('--with-api-key')) {
+  let key = ''
+  process.stdin.on('data', (c) => (key += c))
+  process.stdin.on('end', () => {
+    key = key.trim()
+    if (!key.startsWith('sk-') || key.includes('bad')) { console.error('Invalid API key'); process.exit(1) }
+    fs.mkdirSync(home, { recursive: true })
+    fs.writeFileSync(auth, JSON.stringify({ OPENAI_API_KEY: key }), { mode: 0o600 })
+    // the argv must never carry the key
+    if (process.argv.join(' ').includes(key)) process.exit(3)
+    console.log('Successfully logged in')
+  })
+  return
+}
+if (args[0] === 'login' && args[1] === 'status') {
+  const a = read()
+  if (a && a.tokens && a.tokens.refresh_token && !String(a.tokens.refresh_token).includes('revoked')) { console.log('Logged in using ChatGPT'); process.exit(0) }
+  if (a && a.OPENAI_API_KEY) { console.log('Logged in using an API key'); process.exit(0) }
+  console.log('Not logged in'); process.exit(1)
+}
+if (args[0] === 'exec') {
+  const a = read()
+  const config = fs.existsSync(path.join(home, 'config.toml')) ? fs.readFileSync(path.join(home, 'config.toml'), 'utf8') : ''
+  if (!a) { out({ type: 'error', message: 'Not logged in. Run codex login.' }); process.exit(1) }
+  const prompt = args[args.length - 1]
+  const notes = [`auth=${a.tokens ? 'chatgpt' : 'apikey'}`, `store=${config.includes('cli_auth_credentials_store = "file"') ? 'file' : 'none'}`, `sandbox=${args.includes('workspace-write') ? 'workspace-write' : 'other'}`]
+  if (prompt.includes('REFRESH_AUTH') && a.tokens) {
+    a.tokens.access_token = 'refreshed-access-token-0123456789'
+    a.last_refresh = '2026-10-21T12:00:00Z'
+    fs.writeFileSync(auth, JSON.stringify(a, null, 2))
+    notes.push('refreshed')
+  }
+  if (prompt.includes('Acme sells')) notes.push('PASSPORT_SEEN')
+  if (prompt.includes('FORUM_CLI_POST')) {
+    // the per-step `forum` shim on PATH (FORUM.md §4.1)
+    const r = require('node:child_process').spawnSync('forum', ['post', '#general', 'Weekly numbers are in.'], { encoding: 'utf8' })
+    notes.push(`forum-cli=${r.status}`)
+  }
+  if (prompt.includes('HANG')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000)
+  if (prompt.includes('SLOW')) {
+    const start = Date.now()
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400)
+    if (process.env.ARTIFACTS_DIR) fs.writeFileSync(path.join(process.env.ARTIFACTS_DIR, 'codex-times.json'), JSON.stringify({ start, end: Date.now() }))
+  }
+  if (process.env.ARTIFACTS_DIR) fs.writeFileSync(path.join(process.env.ARTIFACTS_DIR, 'codex-env.json'), JSON.stringify({ names: Object.keys(process.env).sort(), cwd: process.cwd() }))
+  out({ type: 'thread.started', thread_id: 'fake-thread' })
+  out({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: `fake-codex-ok ${notes.join(' ')}` } })
+  out({ type: 'turn.completed', usage: { input_tokens: 200, cached_input_tokens: 0, output_tokens: 40 } })
+  process.exit(0)
+}
+console.error('fake codex: unsupported ' + args.join(' '))
+process.exit(2)

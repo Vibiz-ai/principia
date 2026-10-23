@@ -244,6 +244,10 @@ export function fakeAdapter(
 }
 
 export function fakeProviders(available: AdapterId[] = [...ADAPTER_IDS]): () => Promise<ProviderInfo[]> {
+  // These fixtures launch process.execPath with -e. Electron would open desktop
+  // windows because production child environments intentionally omit its Node flag.
+  // Native SQLite tests may use Electron; process/engine tests must use plain Node.
+  if (process.versions.electron) throw new Error('Run engine process tests with Node, not Electron; fake agents must never launch desktop windows.')
   return async () =>
     ADAPTER_IDS.map((id) => ({
       id,

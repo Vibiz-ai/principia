@@ -51,6 +51,15 @@ d('migrations', () => {
     expect(currentVersion(again)).toBe(SCHEMA_VERSION)
     again.close()
   })
+  it('heals the company tables and Personal without a version bump (COMPANY.md §2)', () => {
+    const file = path.join(tmp, 'hive.db')
+    openDatabase(file).close()
+    const again = openDatabase(file)
+    expect(again.prepare('SELECT id FROM company_passports').all()).toEqual([{ id: 'co_personal' }])
+    expect(again.prepare("SELECT value FROM meta WHERE key = 'company_migrated'").get()).toEqual({ value: '1' })
+    expect(currentVersion(again)).toBe(SCHEMA_VERSION)
+    again.close()
+  })
 })
 
 d('settings', () => {
@@ -297,5 +306,17 @@ d('ArtifactIndexer', () => {
     fs.rmSync(path.join(root, 'r_abc', 'a.png'))
     expect(idx.rescan(path.join(root, 'r_abc'))).toEqual({ added: 0, removed: 1 })
     expect(removed).toHaveLength(1)
+  })
+})
+
+d('workflow Slack permissions', () => {
+  it('preserves explicit profile permissions and clears them when Slack is disabled', () => {
+    const draft = { name: 'Slack coding', description: '', inputs: [], nodes: [], slackTools: true, slackAgentPermissions: 'profile' as const }
+    const workflow = store.createWorkflow(draft)
+    expect(store.getWorkflow(workflow.id)).toMatchObject({ slackTools: true, slackAgentPermissions: 'profile' })
+    store.updateWorkflow(workflow.id, { ...draft, slackAgentPermissions: 'restricted' })
+    expect(store.getWorkflow(workflow.id)?.slackAgentPermissions).toBeUndefined()
+    store.updateWorkflow(workflow.id, { ...draft, slackTools: false })
+    expect(store.getWorkflow(workflow.id)?.slackAgentPermissions).toBeUndefined()
   })
 })

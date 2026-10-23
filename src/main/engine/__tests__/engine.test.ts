@@ -90,7 +90,8 @@ describe('prompt runs', () => {
 
   it('missing adapter fails the run immediately with the install hint', async () => {
     const ctx = setup()
-    const engine = await makeEngine(ctx, { available: ['claude', 'shell'] })
+    // no other agent harness installed: harness fallback (runStep) has nowhere to go
+    const engine = await makeEngine(ctx, { available: ['shell'] })
     const run = engine.runs.start({ kind: 'prompt', profileId: 'p_codex', repoId: null, prompt: 'x' }, { trigger: 'manual' })
     const done = await waitRun(ctx, run.id)
     expect(done.status).toBe('failed')

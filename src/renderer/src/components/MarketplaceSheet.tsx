@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { MarketItem, MarketPreview } from '@shared/marketplace'
 import { errorMessage, hive } from '../lib/hive'
-import { attempt, navigate, toast } from '../state/store'
+import { attempt, navigate, scopeCompanyId, toast } from '../state/store'
 import { Button, ErrorState, Loading, Pill, Sheet } from './ui'
 
 export function InstallSheet({
@@ -34,7 +34,9 @@ export function InstallSheet({
 
   const install = async (): Promise<void> => {
     setBusy(true)
-    const r = await attempt(() => hive.marketplace.install({ source: item.source, id: item.id, overwrite: p?.overwrites }), 'Install')
+    // COMPANY.md §3: workflows install into the focused company (All mode: Personal)
+    const companyId = scopeCompanyId()
+    const r = await attempt(() => hive.marketplace.install({ source: item.source, id: item.id, overwrite: p?.overwrites, ...(companyId ? { companyId } : {}) }), 'Install')
     setBusy(false)
     if (!r) return
     onInstalled()

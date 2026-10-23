@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+// Fake Gemini CLI for Principia Cloud tests: stream-json with stats.
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+if (args.includes('--version')) { console.log('0.9.0'); process.exit(0) }
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+const settings = path.join(process.env.HOME || '/tmp', '.gemini', 'settings.json')
+const ok = process.env.GEMINI_API_KEY || (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS))
+if (!ok) { console.error('API key not valid. Please pass a valid API key.'); process.exit(1) }
+const mode = fs.existsSync(settings) ? JSON.parse(fs.readFileSync(settings, 'utf8')).security.auth.selectedType : 'none'
+if (args.includes('-o') && args[args.indexOf('-o') + 1] === 'json') { console.log(JSON.stringify({ response: 'OK', stats: {} })); process.exit(0) }
+out({ type: 'init', session_id: 'fake-gemini', model: 'gemini-fake' })
+out({ type: 'message', role: 'assistant', content: `fake-gemini-ok auth=${mode}` })
+out({ type: 'result', status: 'success', stats: { input_tokens: 50, output_tokens: 7, total_tokens: 57 } })

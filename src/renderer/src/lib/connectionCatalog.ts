@@ -1,3 +1,5 @@
+import { VIBIZ_CONNECTION_ID, VIBIZ_MCP_URL } from '@shared/gateway'
+
 /** Official server presets. Checked 2026-10-19; account/plan/admin policies still apply. */
 export interface ConnectionPreset {
   id: string
@@ -10,8 +12,11 @@ export interface ConnectionPreset {
   docs: string
   note?: string
   setupRequired?: boolean
+  /** Shown first and highlighted: Principia's own platform, added to every install by default. */
+  featured?: boolean
 }
 export const CONNECTION_CATALOG: ConnectionPreset[] = [
+  { id: VIBIZ_CONNECTION_ID, name: 'Vibiz', category: 'Marketing', description: 'Brand kit, ad creatives, campaigns, and analytics for your companies.', keywords: 'ads creatives marketing brand growth social campaigns analytics content', url: VIBIZ_MCP_URL, auth: 'oauth', docs: 'https://www.vibiz.ai/docs/mcp', featured: true, note: 'Sign in with your Vibiz account. Agents get the workspace you choose during sign-in.' },
   { id: 'granola', name: 'Granola', category: 'Knowledge', description: 'Meeting notes, decisions, and follow-ups.', keywords: 'meetings transcripts calls notes', url: 'https://mcp.granola.ai/mcp', auth: 'oauth', docs: 'https://docs.granola.ai/help-center/sharing/integrations/mcp', note: 'Sign in to Granola. Enterprise workspaces may require an admin to enable MCP.' },
   { id: 'notion', name: 'Notion', category: 'Knowledge', description: 'Company docs, wikis, and project knowledge.', keywords: 'documents wiki pages databases', url: 'https://mcp.notion.com/mcp', auth: 'oauth', docs: 'https://developers.notion.com/guides/mcp/get-started-with-mcp', note: 'Your workspace admin may restrict which MCP clients can connect.' },
   { id: 'linear', name: 'Linear', category: 'Projects', description: 'Issues, projects, roadmaps, and team updates.', keywords: 'tasks tickets engineering planning', url: 'https://mcp.linear.app/mcp', auth: 'oauth', docs: 'https://linear.app/docs/mcp' },

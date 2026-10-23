@@ -40,17 +40,19 @@ export function registerAppHandlers(h: Hive): void {
       nextFires: h.settings().schedulesPaused ? [] : h.safe(() => h.engine.scheduler.nextRuns(5), [])
     }
   })
-  handle('app:canvas', (): CanvasSnapshot => {
+  // COMPANY.md §8.3: with companyId, only that company's runs, schedules and sessions (the 40-run cap is per company)
+  handle('app:canvas', (req): CanvasSnapshot => {
+    const companyId = req?.companyId
     const since = new Date(Date.now() - DAY).toISOString()
-    const active = h.store.listRuns({ status: ['queued', 'running'], limit: 40 })
-    const ended = h.store.endedRunsSince(since, 40)
+    const active = h.store.listRuns({ status: ['queued', 'running'], limit: 40, ...(companyId ? { companyId } : {}) })
+    const ended = h.store.endedRunsSince(since, 40, companyId)
     const runIds = [...new Set([...active, ...ended].map((r) => r.id))].slice(0, 40)
     const runs = runIds.map((id) => h.store.getRunDetail(id)).filter((d) => d !== null)
-    const schedules = h.store.listSchedules().filter((s) => s.enabled)
+    const schedules = h.store.listSchedules(companyId).filter((s) => s.enabled)
     const wfIds = new Set<Id>()
     for (const d of runs) if (d.run.workflowId) wfIds.add(d.run.workflowId)
     for (const s of schedules) if (s.target.kind === 'workflow') wfIds.add(s.target.workflowId)
-    const sessions = h.store.listSessions('all', since)
+    const sessions = h.store.listSessions('all', since, companyId)
     // LIVE.md §10: live trees + the trees of the included runs and sessions (<= 400)
     const agentMap = new Map<Id, LiveAgentNode>()
     for (const a of h.safe(() => h.live.liveTrees(400), [])) agentMap.set(a.id, a)
@@ -76,7 +78,7 @@ export function registerAppHandlers(h: Hive): void {
         live: h.live,
         status: () => h.status(),
         nextRuns: (n) => (h.settings().schedulesPaused ? [] : h.safe(() => h.engine.scheduler.nextRuns(n), [])),
-        factsSince: h.memory ? (since, n) => h.memory!.factsSince(since, n) : undefined
+        factsSince: h.memory ? (since, n, companyId) => h.memory!.factsSince(since, n, companyId) : undefined
       },
       req ?? undefined
     )

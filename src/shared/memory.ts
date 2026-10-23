@@ -22,6 +22,11 @@ export type MemoryTargetKind = 'entity' | 'fact' | 'relation'
 /** MCP tool names (PO3), unprefixed. Claude exposes them as mcp__hivemem__<name>. */
 export const MEMORY_READ_TOOLS = ['memory_search', 'memory_get'] as const
 export const MEMORY_WRITE_TOOLS = ['memory_write', 'memory_invalidate'] as const
+/**
+ * PASSPORT.md §7.2: vault grants add memory_link (cheap relation-only writes) and memory_taste (Open Passport taste,
+ * filed for review). The v1 grants keep MEMORY_WRITE_TOOLS.
+ */
+export const VAULT_WRITE_TOOLS = ['memory_write', 'memory_link', 'memory_invalidate', 'memory_taste'] as const
 export const MEMORY_SERVER_NAME = 'hivemem'
 
 /** Denormalized from mem_grant. Null for user-authored rows. */
@@ -256,3 +261,139 @@ export interface MemoryChangedEvent {
   /** True when the pending (Review) count may have changed. */
   pendingDelta: boolean
 }
+
+// ======================================================================================
+// Passport vault agent interface (PASSPORT.md §7). Main and the hivemem server share these shapes: the server reads
+// passport-index.db read-only and sends every write to main through the per-grant spool (§7.1).
+
+/** memory_write (§7.2). `entity` is the legacy name of `note`. */
+export interface VaultWriteArgs {
+  note: string
+  entity?: string
+  type?: string
+  aliases?: string[]
+  tags?: string[]
+  summary?: string
+  /** `kind` is the observation category (fact, decision, convention, gotcha or any extended category). */
+  facts?: { text: string; kind?: string; supersedes?: string | string[] }[]
+  relations?: { type: string; to: string; context?: string }[]
+  /** Create `Inbox/` stubs for ghost targets; otherwise ghosts stay ghosts (legal). */
+  create_missing?: boolean
+}
+export interface VaultUnresolved {
+  to: string
+  status: 'ghost' | 'ambiguous'
+  did_you_mean: string[]
+}
+/** Lines that were not written: contested supersedes and instruction-looking text wait in the Passport Inbox. */
+export interface VaultPendingLine {
+  text: string
+  why: string
+  proposal: string | null
+}
+export interface VaultWriteResult {
+  note: string // "[[Title]]"
+  created: boolean
+  path: string | null
+  written: { ref: string; text: string }[]
+  duplicates: { ref: string; text: string }[]
+  similar: { ref: string; text: string }[]
+  linked: { to: string; via: string; type: string }[]
+  autolinked: string[]
+  unresolved: VaultUnresolved[]
+  pending: VaultPendingLine[]
+  conflicts: string[]
+  hints: { unlinked: string[] }
+  next: string | null
+  writes_left: number
+}
+/** memory_link (§7.2): relation-only writes; `type` defaults to relates_to. */
+export interface VaultLinkArgs {
+  links: { from: string; type?: string; to: string; context?: string }[]
+}
+export interface VaultLinkResult {
+  linked: { from: string; type: string; to: string; ref: string | null; result: 'added' | 'duplicate' | 'error'; why?: string }[]
+  unresolved: VaultUnresolved[]
+  writes_left: number
+}
+/** memory_invalidate (§7.2): moves lines to History; soft ids are materialized first. */
+export interface VaultInvalidateArgs {
+  refs: string[]
+  reason: string
+  replaced_by?: string
+}
+export interface VaultInvalidateResult {
+  items: { ref: string; result: 'invalidated' | 'contested' | 'not_found' | 'already_invalid' | 'conflict'; why?: string }[]
+  writes_left: number
+}
+
+// ---------- the write spool (§7.1) ----------
+/**
+ * One request file per call in `HIVE_MEM_SPOOL` (`<userData>/mem-rpc/<grantId>/`): the server writes `<id>.request`
+ * (0600, tmp + rename), main answers `<id>.answer` and drops the request; the server reads and drops the answer.
+ * `hit` reports notes fetched with memory_get after they appeared in the brief (§8.3 brief_hits).
+ */
+export const MEM_RPC = {
+  version: 1,
+  requestSuffix: '.request',
+  answerSuffix: '.answer',
+  /** a request main has claimed (renamed from .request) and is applying */
+  takingSuffix: '.taking',
+  /** request and answer cap (the gateway's private-json pattern) */
+  maxBytes: 256 * 1024,
+  /** client poll backoff 5 -> 100 ms, then "Principia is not running; memory is read-only" */
+  pollMinMs: 5,
+  pollMaxMs: 100,
+  timeoutMs: 10_000,
+  idPattern: /^[a-z0-9]{8,64}$/
+} as const
+export const MEM_RPC_METHODS = ['write', 'link', 'invalidate', 'hit', 'taste'] as const
+export type MemRpcMethod = (typeof MEM_RPC_METHODS)[number]
+export interface MemRpcArgs {
+  write: VaultWriteArgs
+  link: VaultLinkArgs
+  invalidate: VaultInvalidateArgs
+  hit: { notes: string[] }
+  taste: VaultTasteArgs
+}
+/**
+ * memory_taste (Open Passport `passport_taste_feedback`): `scope` is `company`, `department` (the run's own) or
+ * `department:<name>`. Filed as a proposal unless `stated_by_user` (the person said it; quote them in `example`).
+ */
+export interface VaultTasteArgs {
+  scope: string
+  polarity: 'likes' | 'dislikes' | 'prefers' | 'avoid'
+  text: string
+  example: string
+  stated_by_user?: boolean
+}
+export interface VaultTasteResult {
+  /** written = on the note now; proposed = waiting in the Inbox; known = this exact signal was filed before */
+  status: 'written' | 'proposed' | 'known'
+  note: string
+  reinforced: boolean
+  proposal?: string
+}
+export interface MemRpcResults {
+  write: VaultWriteResult
+  link: VaultLinkResult
+  invalidate: VaultInvalidateResult
+  hit: { counted: number }
+  taste: VaultTasteResult
+}
+export interface MemRpcRequest<M extends MemRpcMethod = MemRpcMethod> {
+  v: 1
+  grantId: Id
+  /** HIVE_COMPANY_ID; the bridge refuses a request whose grant belongs to another company */
+  companyId: Id
+  method: M
+  args: MemRpcArgs[M]
+  /** MCP call id: opId = grantId + callId, so a replayed call returns the first result */
+  callId?: string
+}
+export type MemRpcErrorCode = 'refused' | 'validation' | 'not_found' | 'conflict' | 'company' | 'internal'
+export type MemRpcAnswer<M extends MemRpcMethod = MemRpcMethod> = { ok: true; result: MemRpcResults[M] } | { ok: false; code: MemRpcErrorCode; error: string }
+export const MEM_UNREACHABLE = 'Principia is not running; memory is read-only'
+
+/** Env of a vault-mode hivemem spawn (§7.1). HIVE_VAULT is for messages only. */
+export const VAULT_MEM_ENV = ['HIVE_MEM_INDEX', 'HIVE_MEM_GRANT', 'HIVE_MEM_FP', 'HIVE_MEM_SPOOL', 'HIVE_COMPANY_ID', 'HIVE_VAULT'] as const

@@ -1,8 +1,9 @@
 /** Global ⌘-chords. The app menu sends the same commands via `ui:command`; runCommand dedupes. */
 import type { AdapterId } from '@shared/types'
 import { SWITCHER_ADAPTERS } from '@shared/types'
-import { attempt, getState, hive, navigate, runCommand, setProvider } from '../state/store'
+import { attempt, enterCompanySlot, getState, hive, multiCompany, navigate, openPalette, runCommand, setProvider } from '../state/store'
 
+/** ⌘7 'memory' opens the Passport (goView maps it, so the app menu's ⌘7 dedupes with this one). */
 const VIEW_KEYS = ['home', 'canvas', 'workflows', 'schedules', 'artifacts', 'keys', 'memory'] as const
 
 function inTerminal(t: EventTarget | null): boolean {
@@ -13,7 +14,13 @@ export function installKeyboard(): () => void {
   const onKey = (e: KeyboardEvent): void => {
     if (e.defaultPrevented) return
     const term = inTerminal(e.target)
-    // ⌃1-4 provider switcher — never steal Ctrl chords from a focused terminal
+    // COMPANY.md §8.2: with companies, ⌃1…⌃9 select company N and ⌃0 selects All (the rail order). Personal-only users
+    // keep ⌃1-4 as the provider switcher. Never steal Ctrl chords from a focused terminal.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !term && multiCompany() && /^Digit[0-9]$/.test(e.code)) {
+      e.preventDefault()
+      enterCompanySlot(Number(e.code.slice(5)))
+      return
+    }
     if (e.ctrlKey && !e.metaKey && !e.altKey && !term && /^Digit[1-4]$/.test(e.code)) {
       e.preventDefault()
       setProvider(SWITCHER_ADAPTERS[Number(e.code.slice(5)) - 1] as AdapterId)
@@ -32,6 +39,10 @@ export function installKeyboard(): () => void {
       // SLACK.md §12.2: ⌘⇧L opens the Slack page
       handled()
       void navigate({ name: 'slack', nonce: Date.now() })
+    } else if (code === 'KeyF' && e.shiftKey && !e.altKey) {
+      // FORUM.md §8: ⇧⌘F opens the company Forum
+      handled()
+      void navigate({ name: 'forum', nonce: Date.now() })
     } else if (code === 'KeyJ' && !e.shiftKey && !e.altKey) {
       handled()
       runCommand({ kind: 'nextNeedsYou' })
@@ -46,6 +57,10 @@ export function installKeyboard(): () => void {
     } else if (code === 'KeyO' && !e.shiftKey && !e.altKey) {
       handled()
       runCommand({ kind: 'addRepo' })
+    } else if (code === 'KeyO' && e.shiftKey && !e.altKey) {
+      // ⇧⌘O: company switcher in the palette
+      handled()
+      openPalette('companies')
     } else if (code === 'Comma') {
       handled()
       runCommand({ kind: 'openSettings' })

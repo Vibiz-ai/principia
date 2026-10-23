@@ -22,6 +22,8 @@ interface TriggerRow {
   inputs_json: string
   limits_json: string
   access_json?: string | null
+  action?: string | null
+  department_id?: string | null
   origin_json: string | null
   note: string | null
   created_at: string
@@ -74,7 +76,10 @@ export class SlackTriggerStore {
       lastFiredAt: r.last_fired_at,
       lastRunId: r.last_run_id,
       lastRunStatus: (r.last_run_status as RunStatus | null) ?? null,
-      note: r.note
+      note: r.note,
+      // DEPARTMENTS.md §8: absent = 'run' / no department, so older rows keep their shape
+      ...(r.action === 'task' ? { action: 'task' as const } : {}),
+      ...(r.department_id ? { departmentId: r.department_id } : {})
     }
     t.sentence = triggerSentence(t, this.channelName)
     return t
@@ -101,6 +106,16 @@ export class SlackTriggerStore {
       this.scope = prev
     }
   }
+  private boardCols: boolean | null = null
+  /** §8: action / department_id (healed by openDatabase; a bare test db may lack them). */
+  private writeBoard(id: string, t: Pick<NormalizedTrigger, 'action' | 'departmentId'>): void {
+    if (this.boardCols === null) {
+      const cols = new Set((this.db.prepare('PRAGMA table_info(slack_triggers)').all() as { name: string }[]).map((c) => c.name))
+      this.boardCols = cols.has('action') && cols.has('department_id')
+    }
+    if (!this.boardCols) return
+    this.db.prepare('UPDATE slack_triggers SET action = ?, department_id = ? WHERE id = ?').run(t.action === 'task' ? 'task' : null, t.departmentId ?? null, id)
+  }
   get(id: string): SlackTrigger | null {
     const r = this.db.prepare(`${SELECT} WHERE t.id = ?`).get(id) as TriggerRow | undefined
     return r ? this.fromRow(r) : null
@@ -114,6 +129,7 @@ export class SlackTriggerStore {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(id, t.name, t.workflowId, t.enabled ? 1 : 0, JSON.stringify(t.match), JSON.stringify(t.reply), JSON.stringify(t.inputs), JSON.stringify(t.limits), JSON.stringify(slackAccessOf(t.access)), origin ? JSON.stringify(origin) : null, note, ts, ts)
+    this.writeBoard(id, t)
     return this.get(id)!
   }
   update(id: string, t: NormalizedTrigger): SlackTrigger {
@@ -123,6 +139,7 @@ export class SlackTriggerStore {
       )
       .run(t.name, t.workflowId, t.enabled ? 1 : 0, JSON.stringify(t.match), JSON.stringify(t.reply), JSON.stringify(t.inputs), JSON.stringify(t.limits), JSON.stringify(slackAccessOf(t.access)), this.now().toISOString(), id)
     if (!r.changes) throw new HiveError('not_found', 'Slack trigger not found')
+    this.writeBoard(id, t)
     return this.get(id)!
   }
   remove(id: string): void {

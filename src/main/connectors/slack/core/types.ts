@@ -8,7 +8,16 @@ const str = z.string()
 const optStr = z.string().nullish()
 
 export const fileSchema = z
-  .object({ name: optStr, title: optStr, mimetype: optStr, size: z.number().nullish(), permalink: optStr })
+  .object({
+    id: optStr,
+    name: optStr,
+    title: optStr,
+    mimetype: optStr,
+    size: z.number().nullish(),
+    permalink: optStr,
+    url_private: optStr,
+    url_private_download: optStr
+  })
   .passthrough()
 export const reactionSchema = z.object({ name: str, count: z.number().int().nonnegative() }).passthrough()
 

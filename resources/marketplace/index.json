@@ -113,6 +113,145 @@
       "author": "Principia"
     },
     {
+      "id": "product-photo-studio",
+      "kind": "workflow",
+      "name": "Product photo studio",
+      "description": "Turns a product photo or a description into up to 4 e-commerce shots (white background, lifestyle, flat lay) with fal.ai FLUX. Can remove the background first. Images land in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "design",
+        "marketing"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/product-photo-studio.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "ad-creative-variants",
+      "kind": "workflow",
+      "name": "Ad creative variants",
+      "description": "Writes 4 Meta/Instagram ad angles (copy + visual concept) from your offer, audience and brand colors. It then renders a square and a vertical image for each angle with fal.ai FLUX, 8 images in all. The images and the copy deck land in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "marketing",
+        "content",
+        "design"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/ad-creative-variants.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "social-post-carousel",
+      "kind": "workflow",
+      "name": "Instagram carousel",
+      "description": "Plans a 5-slide carousel (hook, 3 value slides, CTA) from a topic and brand voice, renders matching 4:5 backgrounds with fal.ai FLUX and writes the caption with hashtags. Everything lands in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "social",
+        "marketing"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/social-post-carousel.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "brand-kit-starter",
+      "kind": "workflow",
+      "name": "Brand kit starter",
+      "description": "From a business name and vibe, proposes 3 logo directions, renders 3 logo marks and a moodboard with fal.ai FLUX (4 images), builds a color palette and writes brand-kit.md to Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "design",
+        "branding"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/brand-kit-starter.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "youtube-thumbnail",
+      "kind": "workflow",
+      "name": "YouTube thumbnails",
+      "description": "Turn a video title (and an optional face or product photo) into 3 high-contrast 16:9 thumbnails with fal.ai FLUX, then pick the best.",
+      "tags": [
+        "image",
+        "fal",
+        "marketing",
+        "youtube",
+        "content"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/youtube-thumbnail.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "landing-hero-images",
+      "kind": "workflow",
+      "name": "Landing page hero images",
+      "description": "Reads a landing page URL or description, derives one visual direction, and renders wide hero images plus 3 feature illustrations in a consistent style with fal.ai FLUX. PNGs and a README land in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "design",
+        "marketing",
+        "landing-page"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/landing-hero-images.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "image-edit-upscale",
+      "kind": "workflow",
+      "name": "Edit and upscale an image",
+      "description": "Applies a plain-language edit to an image with fal.ai FLUX Kontext, then upscales it 2x or 4x with ESRGAN. Before, edited and upscaled images land in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "design",
+        "editing"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/image-edit-upscale.hive.json",
+      "author": "Principia"
+    },
+    {
+      "id": "local-business-photos",
+      "kind": "workflow",
+      "name": "Local business photo pack",
+      "description": "A matching set of four photos for a local business (interior, service in action, team-style shot, seasonal promo) for Google Business Profile and social, made with fal.ai FLUX. PNGs and a README land in Artifacts.",
+      "tags": [
+        "image",
+        "fal",
+        "marketing",
+        "local-business"
+      ],
+      "keys": [
+        "FAL_KEY"
+      ],
+      "path": "workflows/local-business-photos.hive.json",
+      "author": "Principia"
+    },
+    {
       "id": "scrape-site-firecrawl",
       "kind": "workflow",
       "name": "Scrape a site to Markdown (Firecrawl)",

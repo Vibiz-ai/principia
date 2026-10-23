@@ -74,7 +74,8 @@ export const authoredDraftSchema = z.strictObject({
     .max(50),
   nodes: z.array(node).min(1, 'Add at least one node').max(MAX_NODES, `At most ${MAX_NODES} nodes`),
   worktree: z.strictObject({ repo: z.string().min(1).max(4096), base: z.string().max(200).nullish(), pushBranches: z.array(z.string().regex(/^[A-Za-z0-9._/*-]{1,100}$/, 'branch pattern: letters, digits, . _ / - and *')).max(20).nullish() }).nullish(),
-  slackTools: z.boolean().optional()
+  slackTools: z.boolean().optional(),
+  slackAgentPermissions: z.enum(['restricted', 'profile']).optional()
 })
 
 const zodToErrors = (e: z.ZodError, draft: WorkflowDraft): ValidationError[] =>
@@ -118,6 +119,7 @@ export function validateAuthoredDraft(raw: unknown, deps: AuthorValidateDeps, op
   const flags = authorFlags(draft, { ...deps, ...(opts.flagCtx ?? {}) })
   if (size > MAX_DRAFT_BYTES) return { ok: false, errors: [{ path: 'workflow', message: 'Workflow too large (max 256 KB)' }], warnings: [], normalized: draft, flags }
   const errors: ValidationError[] = [...normErrors]
+  if (opts.agentAuthored && draft.slackAgentPermissions === 'profile') errors.push({ path: 'slackAgentPermissions', message: 'Profile permissions for Slack workflows must be selected by the user in the workflow editor.' })
   const shape = authoredDraftSchema.safeParse(draft)
   if (!shape.success) errors.push(...zodToErrors(shape.error, draft))
   if (shape.success) {

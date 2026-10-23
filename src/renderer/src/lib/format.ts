@@ -24,6 +24,12 @@ const NOISE = /^(cd|export|set|source|\.|mkdir|pushd|popd|unset|true)\b/
  * reads "Weekly report". Natural-language prompts are left alone apart from leading markdown markers.
  */
 export function promptTitle(text: string, max = 40): string {
+  // a board task turn (main/company/taskPrompt.ts) opens with the <principia-role> frame: the task's title is the
+  // name, never the raw frame; a resumed turn (wake and rules only) has no title in it
+  if (/^\s*<principia-[a-z]/i.test(text)) {
+    const title = /<principia-task\b[^>]*>\s*Title:[ \t]*([^\n]*)/i.exec(text)?.[1]?.trim()
+    return title ? capWords(title, max) : 'Task follow-up'
+  }
   let line = firstLine(text, 1000)
   const shell = SHELLISH.test(line)
   if (shell) {
@@ -70,9 +76,13 @@ export function tildify(p: string): string {
   return p.replace(/^\/Users\/[^/]+(?=\/|$)/, '~')
 }
 
-/** Folder shown for a session: "Chat" for the scratch folder, else ~/path. */
-export function sessionPlace(s: Pick<Session, 'repoId' | 'cwd'>): string {
-  return s.repoId ? tildify(s.cwd) : 'Chat'
+/**
+ * Folder shown for a session: ~/path for a repo session, the department's name for a department chat (DEPARTMENTS.md
+ * §9; `departmentName` when known), else "Chat".
+ */
+export function sessionPlace(s: Pick<Session, 'repoId' | 'cwd' | 'departmentId'>, departmentName?: string | null): string {
+  if (s.repoId) return tildify(s.cwd)
+  return s.departmentId && departmentName ? departmentName : 'Chat'
 }
 
 /** Signals Principia sends on Kill (HUP/TERM/KILL, as 128+n or the bare signal number), or no code at all. */

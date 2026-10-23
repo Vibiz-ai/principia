@@ -115,8 +115,7 @@ const DROP_EXACT = new Set([
   'HIVE_SMOKE',
   'HIVE_NO_SCHEDULER',
   'HIVE_RESOLVING_ENV',
-  'CODEX_SANDBOX',
-  'CODEX_SANDBOX_NETWORK_DISABLED',
+  'NO_COLOR', // agent tool shells (Codex) set it; a Hive launched from one would hand colorless TUIs to every pane
   'GEMINI_CLI',
   'CURSOR_AGENT',
   'npm_config_prefix'
@@ -128,6 +127,7 @@ export function isInheritedMarker(k: string): boolean {
   if (k.startsWith('ELECTRON_') || k.startsWith('VITE_') || k.startsWith('npm_')) return true
   if (k.startsWith('CLAUDE_CODE_') && !KEEP_CLAUDE_VARS.has(k)) return true
   if (k.startsWith('CLAUDE_AGENT_')) return true
+  if (k.startsWith('CODEX_') && k !== 'CODEX_HOME') return true
   return false
 }
 

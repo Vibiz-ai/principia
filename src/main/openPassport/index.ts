@@ -1,0 +1,18 @@
+// Vendored from open-passport 0.1.0 (packages/js/src/core/index.ts). Do not edit here: change it upstream and re-run scripts/vendor.mjs.
+// Open Passport reference implementation, core (pure: no node imports). SPEC.md is normative.
+export * from './grammar'
+export * from './note'
+export * from './passport'
+export * from './render'
+export * from './manifest'
+export * from './merge'
+export * from './search'
+export * from './validate'
+export * from './screen'
+export * from './notes'
+export { sha256Hex } from './sha256'
+export * from './tools'
+export * from './delta'
+export * from './mcpProtocol'
+export * from './proposals'
+export * from './importers'

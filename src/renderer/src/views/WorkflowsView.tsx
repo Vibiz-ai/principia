@@ -5,12 +5,20 @@ import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../
 import { runVisual } from '../lib/graph'
 import { isScript, shapeSummary } from '../lib/workflow'
 import { useCoalesced } from '../lib/useThrottled'
-import { attempt, navigate, openRunInputs, providerLabel, toast } from '../state/store'
+import { attempt, companyName, enterCompany, navigate, openRunInputs, providerLabel, toast, type ViewState } from '../state/store'
+import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
+import { companyLabel, companyOf } from '../lib/companyModel'
+import { inScope } from '../lib/scope'
 import { isNothingToDo, originLine } from '../lib/authoring'
 
 type SortKey = 'name' | 'updated' | 'lastRun'
 
+/**
+ * Workflows (COMPANY.md §3, §8.3-8.4): the focused company's workflows, or every company's with a chip in All mode.
+ * New / Import land in the focused company (All mode asks which one); "Duplicate to company…" copies across.
+ */
 export function WorkflowsView(): React.JSX.Element {
+  const { scope, chips, multi, companies, nonce } = useScope()
   const [workflows, setWorkflows] = useState<Workflow[] | null>(null)
   const [runs, setRuns] = useState<Run[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
@@ -18,21 +26,23 @@ export function WorkflowsView(): React.JSX.Element {
   const [sel, setSel] = useState<string | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'updated', dir: -1 })
 
+  const filter = scope ? { companyId: scope } : undefined
   const load = (): void => {
-    hive.workflows.list().then(
+    hive.workflows.list(filter).then(
       (w) => {
         setWorkflows(w)
         setError(null)
       },
       (e) => setError(errorMessage(e))
     )
-    hive.runs.list({ limit: 300 }).then(setRuns, () => undefined)
-    hive.schedules.list().then(setSchedules, () => undefined)
+    hive.runs.list({ limit: 300, ...filter }).then(setRuns, () => undefined)
+    hive.schedules.list(filter).then(setSchedules, () => undefined)
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [nonce])
   const refetch = useCoalesced(load, 400)
   useHiveEvent('data:changed', ({ domain }) => (domain === 'workflows' || domain === 'schedules') && refetch())
-  useHiveEvent('run:updated', (r) => r.workflowId && setRuns((l) => [r, ...l.filter((x) => x.id !== r.id)]))
+  useHiveEvent('run:updated', (r) => r.workflowId && inScope(r, scope) && setRuns((l) => [r, ...l.filter((x) => x.id !== r.id)]))
 
   const lastRun = useMemo(() => {
     const m = new Map<string, Run>()
@@ -54,6 +64,25 @@ export function WorkflowsView(): React.JSX.Element {
   }, [workflows, sort, lastRun])
 
   const edit = (id: string): void => void navigate({ name: 'editor', workflowId: id, nonce: Date.now() })
+  /** The company new workflows go to: the focused one, or (All mode) the one the user picks. null = canceled. */
+  const targetCompany = async (verb: string): Promise<string | undefined | null> => {
+    if (scope || !multi) return scope
+    return pickCompany(companies, { title: `${verb} in…` })
+  }
+  /** New Workflow / New Script: All mode enters the picked company first, so the editor saves into it. */
+  const create = async (script: boolean): Promise<void> => {
+    const view: ViewState = { name: 'editor', workflowId: null, nonce: Date.now(), ...(script ? { script: true } : {}) }
+    if (scope || !multi) return void navigate(view)
+    const id = await targetCompany(script ? 'New script' : 'New workflow')
+    if (id) void enterCompany(id, { view })
+  }
+  const duplicateTo = async (w: Workflow, companyId: string): Promise<void> => {
+    const d = await attempt(() => hive.workflows.duplicate({ id: w.id, companyId }), 'Duplicate')
+    if (!d) return
+    load()
+    if (inScope(d, scope)) setSel(d.id)
+    toast(companyOf(d) === companyOf(w) ? `Duplicated ${w.name}` : `Copied ${w.name} to ${companyName(companyOf(d))}`)
+  }
   const remove = async (w: Workflow): Promise<void> => {
     const ok = await confirmNative({ message: `Delete “${w.name}”?`, detail: schedCount(w.id) ? 'Remove its schedules first.' : 'Past runs are kept.', confirmLabel: 'Delete Workflow', destructive: true }).catch(() => false)
     if (!ok) return
@@ -65,6 +94,9 @@ export function WorkflowsView(): React.JSX.Element {
       { id: 'run', label: 'Run…' },
       { id: 'edit', label: 'Edit' },
       { id: 'dup', label: 'Duplicate' },
+      ...(multi
+        ? [{ label: 'Duplicate to Company', submenu: companies.map((c) => ({ id: `dupTo:${c.id}`, label: companyLabel(c, true), enabled: c.id !== companyOf(w) })) }]
+        : []),
       { id: 'schedule', label: 'Schedule…' },
       { id: 'export', label: 'Export…' },
       { type: 'separator' },
@@ -72,13 +104,8 @@ export function WorkflowsView(): React.JSX.Element {
     ])
     if (id === 'run') openRunInputs(w.id)
     if (id === 'edit') edit(w.id)
-    if (id === 'dup') {
-      const d = await attempt(() => hive.workflows.duplicate({ id: w.id }), 'Duplicate')
-      if (d) {
-        load()
-        setSel(d.id)
-      }
-    }
+    if (id === 'dup') void duplicateTo(w, companyOf(w))
+    if (id?.startsWith('dupTo:')) void duplicateTo(w, id.slice(6))
     if (id === 'schedule') void navigate({ name: 'schedules', seed: { workflowId: w.id }, nonce: Date.now() })
     if (id === 'export') {
       const r = await attempt(() => hive.workflows.export({ id: w.id }), 'Export')
@@ -87,7 +114,9 @@ export function WorkflowsView(): React.JSX.Element {
     if (id === 'delete') void remove(w)
   }
   const importWf = async (): Promise<void> => {
-    const w = await attempt(() => hive.workflows.import(), 'Import')
+    const companyId = await targetCompany('Import')
+    if (companyId === null) return
+    const w = await attempt(() => hive.workflows.import(companyId ? { companyId } : undefined), 'Import')
     if (w) {
       load()
       edit(w.id)
@@ -120,13 +149,13 @@ export function WorkflowsView(): React.JSX.Element {
     <div className="view">
       <Toolbar title="Workflows">
         <Button onClick={() => void navigate({ name: 'marketplace' })}>Marketplace</Button>
-        <Button icon="plus" onClick={() => void navigate({ name: 'editor', workflowId: null, nonce: Date.now(), script: true })} title="A deterministic script (Python, Node or shell): no agents, no tokens. Runs on demand, on a schedule or from Slack, with your Keys as env vars.">
+        <Button icon="plus" onClick={() => void create(true)} title="A deterministic script (Python, Node or shell): no agents, no tokens. Runs on demand, on a schedule or from Slack, with your Keys as env vars.">
           New Script
         </Button>
         <Button icon="download" onClick={() => void importWf()}>
           Import…
         </Button>
-        <Button variant="primary" icon="plus" onClick={() => void navigate({ name: 'editor', workflowId: null, nonce: Date.now() })} kbd="⌘⇧N">
+        <Button variant="primary" icon="plus" onClick={() => void create(false)} kbd="⌘⇧N">
           New Workflow
         </Button>
       </Toolbar>
@@ -139,12 +168,12 @@ export function WorkflowsView(): React.JSX.Element {
           icon="workflows"
           text={
             <>
-              Save chains of agents that check each other.
+              {scope && multi ? 'No workflows in this company yet. ' : ''}Save chains of agents that check each other.
               <div className="text-tertiary">Or describe one to Claude in a session (“every weekday at 9, review open PRs and text me”) and approve its card.</div>
             </>
           }
         >
-          <Button variant="primary" icon="plus" onClick={() => void navigate({ name: 'editor', workflowId: null, nonce: Date.now() })}>
+          <Button variant="primary" icon="plus" onClick={() => void create(false)}>
             New Workflow
           </Button>
           <Button icon="download" onClick={() => void importWf()}>
@@ -180,6 +209,7 @@ export function WorkflowsView(): React.JSX.Element {
                 }}
               >
                 <span className="td td--main" title={[w.description, w.origin ? originLine(w.origin, providerLabel) : ''].filter(Boolean).join('\n')}>
+                  {chips && <CompanyChip companyId={w.companyId} className="wf-company" />}
                   {w.name}
                   {isScript(w) && <Pill tone="scheduled" title="Script: deterministic steps only, no agents">Script</Pill>}
                   {w.origin && <span className="wf-origin">✦ {originLine(w.origin, providerLabel)}</span>}

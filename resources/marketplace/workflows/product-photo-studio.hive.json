@@ -1,0 +1,84 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Product photo studio",
+    "description": "Turns a product photo URL or description into clean e-commerce shots (white background, lifestyle, flat lay) with fal.ai. Optional background removal first. One image per scene, max 4. Images land in Artifacts.",
+    "inputs": [
+      {
+        "name": "product",
+        "label": "Product photo URL (https://...) or a product description",
+        "type": "multiline"
+      },
+      {
+        "name": "scenes",
+        "label": "Scenes, comma-separated (max 4, one image each)",
+        "default": "white background, lifestyle, flat lay"
+      },
+      {
+        "name": "style",
+        "label": "Brand style or notes (optional, e.g. warm minimal, pastel, premium)",
+        "default": ""
+      },
+      {
+        "name": "remove_bg",
+        "label": "Remove the background from the photo first",
+        "type": "boolean",
+        "default": "false"
+      },
+      {
+        "name": "size",
+        "label": "Size (square_hd, portrait_4_3, landscape_4_3)",
+        "default": "square_hd"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "prep",
+        "type": "agent",
+        "label": "Prepare the product",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Prepare the product reference for a photo shoot. Use curl; read the key from the FAL_KEY environment variable and never print it. If FAL_KEY is not set, stop and say: add FAL_KEY in Hive \u203a Keys.\n\nProduct input:\n{{inputs.product}}\n\nRemove background: {{inputs.remove_bg}}\n\n1. If the input contains an image URL (http/https), download it to \"$ARTIFACTS_DIR/source.<ext>\" (keep its real extension: png, jpg or webp) and look at it. Otherwise there is no source image: skip to step 3.\n2. Only if a source image exists AND remove background is true: POST https://fal.run/fal-ai/birefnet with headers `Authorization: Key $FAL_KEY` and `Content-Type: application/json` and JSON {\"image_url\": <the product URL>}. The response is {\"image\": {\"url\": ...}}; download image.url into \"$ARTIFACTS_DIR/cutout.png\". This is one call; do not retry more than once.\n3. Reply in exactly this format and nothing else:\nREFERENCE_URL: <the cutout image.url if made, else the original product image URL, else none>\nPRODUCT: <a precise 1-3 sentence visual description of the product: type, shape, materials, colors, finish, labels/text visible, proportions>"
+      },
+      {
+        "id": "prompts",
+        "type": "agent",
+        "label": "Write scene prompts",
+        "after": [
+          "prep"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Write one image prompt per scene for e-commerce product photography. Use at most the first 4 scenes listed; ignore any beyond that.\n\nScenes: {{inputs.scenes}}\nBrand style: {{inputs.style}}\n\nProduct notes:\n{{prep.output}}\n\nRules for each prompt (max 70 words): keep the product exactly as described (same shape, colors, label, proportions), make it the clear hero and fully in frame; be concrete about surface, props, composition, lighting and lens. White background = pure seamless #FFFFFF studio sweep, soft even light, subtle contact shadow, no props. Lifestyle = realistic in-use setting that fits the product's buyer, shallow depth of field. Flat lay = top-down overhead on a styled surface with a few complementary props. No added text, logos or watermarks.\n\nOutput only lines in this format, one per scene:\n<scene-slug>: <prompt>\nwhere scene-slug is lowercase-with-dashes (e.g. white-background)."
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render the shots with fal",
+        "after": [
+          "prompts"
+        ],
+        "cwd": null,
+        "timeoutMin": 25,
+        "profileId": "prof_claude",
+        "prompt": "Render each scene prompt below with the fal.ai REST API: exactly one image per line, at most 4 images in total. Use curl with headers `Authorization: Key $FAL_KEY` and `Content-Type: application/json`; read the key from the FAL_KEY environment variable and never print it. If FAL_KEY is not set, stop and say: add FAL_KEY in Hive \u203a Keys.\n\nPick the model from the REFERENCE_URL in the product notes:\n- REFERENCE_URL is a URL: POST https://fal.run/fal-ai/flux-pro/kontext with JSON {\"prompt\": <scene prompt, phrased as: place this exact product in ...>, \"image_url\": <REFERENCE_URL>, \"num_images\": 1, \"aspect_ratio\": <\"1:1\" for square_hd, \"3:4\" for portrait_4_3, \"4:3\" for landscape_4_3; size is {{inputs.size}}>} (FLUX.1 Kontext [pro]; it takes aspect_ratio, not image_size). This keeps the real product and changes only the scene.\n- REFERENCE_URL is none: POST https://fal.run/fal-ai/flux/dev (FLUX.1 [dev]) with JSON {\"prompt\": <scene prompt>, \"image_size\": \"{{inputs.size}}\", \"num_images\": 1}.\n\nFor each line, download images[0].url into \"$ARTIFACTS_DIR/shot-<scene-slug>.png\". If one call fails, retry it once, then move on and note the failure (never more than 8 image calls in total).\n\nReply with one line per scene: <saved path> | <model used> | <prompt used>.\n\nProduct notes:\n{{prep.output}}\n\nScene prompts:\n{{prompts.output}}"
+      },
+      {
+        "id": "readme",
+        "type": "agent",
+        "label": "Write the README",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 5,
+        "profileId": "prof_claude",
+        "prompt": "Write a short Markdown file to \"$ARTIFACTS_DIR/README.md\" (do not call any image API). Include: a title \"Product photo studio\", the product input (one line), whether the background was removed, then a table with columns File, Scene, Model, Prompt listing every image saved in $ARTIFACTS_DIR (the source image and cutout.png too, if present). Add one line of listing tips (e.g. use the white-background shot as the main image). Reply with the README path.\n\nProduct input:\n{{inputs.product}}\n\nPrep notes:\n{{prep.output}}\n\nRender results:\n{{render.output}}"
+      }
+    ]
+  }
+}

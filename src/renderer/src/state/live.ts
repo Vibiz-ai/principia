@@ -10,7 +10,7 @@ import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
 import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
-import { focusSession, getState, navigate, setState, toast, toastError, useStore } from './store'
+import { focusSession, followCompany, getState, navigate, setState, toast, toastError, useStore } from './store'
 
 const DAY = 24 * 60 * 60_000
 
@@ -298,7 +298,16 @@ export async function focusAgent(agentId: Id, askId: Id | null = null): Promise<
     const sess = getState().sessions.find((s) => s.id === root.sessionId)
     if (sess) return focusSession(sess.id)
   }
-  if (root.runId) return void navigate({ name: 'run', runId: root.runId, stepId: root.stepId ?? undefined, agentId: a.id })
+  if (root.runId) {
+    // COMPANY.md §8.4: opening another company's run follows it (sessions follow through focusSession)
+    const stamp = (root as { companyId?: Id }).companyId ?? (a as { companyId?: Id }).companyId
+    if (stamp) followCompany(stamp)
+    else {
+      const run = await hive.runs.get({ id: root.runId }).catch(() => null)
+      if (run?.run.companyId) followCompany(run.run.companyId)
+    }
+    return void navigate({ name: 'run', runId: root.runId, stepId: root.stepId ?? undefined, agentId: a.id })
+  }
   void navigate({ name: 'agents' })
 }
 

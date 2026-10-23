@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Ask, AskOption } from '@shared/live'
 import { answerText, optionOf } from '../../lib/live'
+import { hotkeyBlocked } from '../../lib/hotkeys'
 import { providerLabel, useStore } from '../../state/store'
 import { answerAsk, focusAgent } from '../../state/live'
 import { openApproval } from '../../state/authoring'
@@ -19,10 +20,6 @@ const LABEL: Partial<Record<AskOption['kind'], string>> = {
   allow_step: 'Allow for this step',
   deny: 'Deny',
   focus: 'Open terminal'
-}
-
-function inTerminal(t: EventTarget | null): boolean {
-  return !!(t as HTMLElement | null)?.closest?.('.xterm')
 }
 
 export function AskCard(props: { ask: Ask; hotkeys?: boolean; compact?: boolean; onOpen?: () => void }): React.JSX.Element {
@@ -115,7 +112,7 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
   useEffect(() => {
     if (!hotkeys || !open) return
     const onKey = (e: KeyboardEvent): void => {
-      if (!e.metaKey || e.altKey || e.ctrlKey || inTerminal(e.target)) return
+      if (!e.metaKey || e.altKey || e.ctrlKey || hotkeyBlocked(e.target, ref.current)) return
       if (e.key === 'Enter' && allow) {
         e.preventDefault()
         void send(allow)

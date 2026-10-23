@@ -27,10 +27,15 @@ import { importWorkflowFromDialog } from './handlers/workflows'
 import { closeLog, initLog, log, setLogRedactor } from './log'
 import { claudeConversationExists, trustFolderForClaude } from './claudeTrust'
 import { MemoryService, resolveServerScript } from './memory/service'
+import { createMigrator } from './memory/vault/migrate'
+import { LLM_CLI_KEYS, LLM_CLI_ORDER, installSuggestions, type LlmCli } from './memory/vault/suggest'
+import { pickCli, strippedChildEnv } from './oneshot'
 import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
 import { bootAuthoring, wireAuthoring } from './author/wire'
+import { wireForum } from './forum/wire'
+import { wireDashboards } from './dashboards/wire'
 import { SlackService } from './connectors/slack/service'
 
 applyUserDataOverride()
@@ -161,7 +166,9 @@ if (!app.requestSingleInstanceLock()) {
 
     const h = new Hive(db, store, vault, paths)
     hive = h
-    h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv() })
+    // COMPANY.md §6: a connection limited to some companies reaches only their spawns
+    h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(), seedDefaults: true,
+      companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) } })
     app.on('will-quit', () => h.gateway?.close())
 
     // shared memory (MEMORY.md): separate memory.db, opened + migrated by main only. Failure = memory off, Hive runs.
@@ -181,6 +188,25 @@ if (!app.requestSingleInstanceLock()) {
       memory.start()
       vault.setChangeListener(() => memory.refreshFingerprints())
       h.memory = memory
+      // PASSPORT.md §9: v1 memory.db + legacy Passports -> vault, behind memory:vault migrate (h.memory.migrate)
+      memory.setMigrator(createMigrator({ userData: paths.userData, companies: h.company, listRepos: () => store.listRepos(), runtime: () => memory.passport(), log }))
+      // PASSPORT.md §12: link suggestions, the harvester on step output, and the opt-in AI tier
+      const suggest = installSuggestions(memory, {
+        redact: (t) => vault.redact(t),
+        log,
+        stepOutputHooks: h.stepOutputHooks,
+        llm: {
+          enabled: () => store.getSettings().experimental?.vaultAI === true,
+          cli: () => pickCli(h.safe(() => h.engine.providers.cached(), []), LLM_CLI_ORDER),
+          // §12 billing stays in the company: only that company's own provider key, never a shared or other provider key
+          env: (companyId: string, cli: LlmCli) => strippedChildEnv(vault.resolveCompanyOnly(LLM_CLI_KEYS[cli], companyId))
+        }
+      })
+      app.on('will-quit', () => suggest.stop())
+      // §6.3: window focus rescans every watched vault (edits made in Obsidian while Principia was in the background)
+      app.on('browser-window-focus', () => {
+        if (memory.vaultMode()) h.safe(() => memory.passport().rescanAll(), undefined)
+      })
     } catch (e) {
       log.error('memory.db unavailable; shared memory is off', { e: String(e) })
     }
@@ -222,6 +248,18 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('authoring unavailable', { e: String(e) })
     }
+    // FORUM.md §3: the company Forum (store, agent endpoint, harvest); failure = no Forum, Principia runs
+    try {
+      h.forum = wireForum(h, { mainDir: __dirname })
+    } catch (e) {
+      log.error('forum unavailable', { e: String(e) })
+    }
+    // DASHBOARDS.md: department dashboards (fetch and refresh in main); failure = no dashboards, Principia runs
+    try {
+      h.dashboards = wireDashboards(h, cipher)
+    } catch (e) {
+      log.error('dashboards unavailable', { e: String(e) })
+    }
     // SLACK.md §2.3: the Slack connector (no tokens = zero outbound requests). The dev-only fake transport exists only
     // in a build made with HIVE_BUILD_FAKE_SLACK=1 (the define removes this branch from every normal build).
     try {
@@ -252,6 +290,8 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     const engineStore = createEngineStore(db, { describe: () => (w) => h.engine.scheduler.describe(w), live, slackTriggers: h.slack?.triggers })
+    // CLOUD.md §8: schedules placed in the cloud fire there only, never from this Mac's scheduler
+    h.safe(() => h.cloud.link.guardSchedules(engineStore), engineStore)
     h.engine = createEngine({
       paths: {
         userData: paths.userData,
@@ -261,11 +301,15 @@ if (!app.requestSingleInstanceLock()) {
       },
       store: engineStore,
       baseEnv: () => baseChildEnv(),
-      secrets: { resolve: (names) => vault.resolve(names), redact: (t) => vault.redact(t), names: (n) => vault.names(n) },
+      // COMPANY.md §4: a run's company keys overlay the shared ones
+      secrets: { resolve: (names, companyId) => vault.resolve(names, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
       getSettings: () => store.getSettings(),
       getProfile: (id) => store.getProfile(id),
       getRepo: (id) => store.getRepo(id, (rid) => h.sessions?.liveCountForRepo(rid) ?? 0),
       listRepos: () => store.listRepos(),
+      passportContext: (cwd, companyId, departmentId) => h.passportContext(cwd, companyId, departmentId),
+      company: h.companyBridge(),
+      onStepOutput: (e) => h.onStepOutput(e),
       getWorkflow: (id) => store.getWorkflow(id),
       emit: (e) => h.onEngineEvent(e),
       log,
@@ -275,7 +319,8 @@ if (!app.requestSingleInstanceLock()) {
       reaper,
       worktrees: h.worktrees ?? undefined,
       notifier: h.notifyNode ?? undefined,
-      slack: h.slack?.bridge()
+      slack: h.slack?.bridge(),
+      forum: h.forum ?? undefined
     })
     store.setDescribe((w) => h.engine.scheduler.describe(w))
 
@@ -285,7 +330,9 @@ if (!app.requestSingleInstanceLock()) {
       spawnPty: (file, args, opts) => pty.spawn(file, args, opts),
       interactiveSpawn: (profile, opts) => h.engine.providers.interactiveSpawn(profile, opts),
       baseEnv: () => baseChildEnv(),
-      secrets: { resolve: (n) => vault.resolve(n), redact: (t) => vault.redact(t), names: (n) => vault.names(n) },
+      secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
+      company: h.companyBridge(),
+      chat: (req) => h.safe(() => h.chatContext(req), null),
       trustFolder: (cwd, env) => {
         if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
       },
@@ -296,7 +343,7 @@ if (!app.requestSingleInstanceLock()) {
             release: (gid) => h.memory?.release(gid),
             transportFor: (adapter) => h.safe(() => h.engine.providers.cached().find((p) => p.id === adapter)?.memory ?? null, null),
             lastMode: (sid) => {
-              const g = h.memory?.store.listGrants({ sessionId: sid }).pop()
+              const g = h.memory?.listGrants({ sessionId: sid }).pop()
               return g ? g.mode : null
             }
           }
@@ -383,6 +430,12 @@ if (!app.requestSingleInstanceLock()) {
       return !!w && wc.id === w.webContents.id
     })
     registerAllHandlers(h)
+    // DEPARTMENTS.md §3: the board dispatcher starts after registerCompanyHandlers ran CompanyStore.reconcile()
+    try {
+      h.startDispatcher()
+    } catch (e) {
+      log.error('dispatcher start failed', { e: String(e) })
+    }
 
     // artifacts indexer
     h.indexer = new ArtifactIndexer(

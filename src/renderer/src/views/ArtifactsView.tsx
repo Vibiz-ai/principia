@@ -6,6 +6,8 @@ import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../
 import { absolute, bytes, dayLabel, relative } from '../lib/time'
 import { runTitle as shortRunTitle } from '../lib/format'
 import { attempt, loadJson, navigate, providerLabel, saveJson, setStatusHint, toast, useStore } from '../state/store'
+import { CompanyChip, useScope } from '../components/CompanyChip'
+import { inScope } from '../lib/scope'
 
 type KindFilter = 'all' | 'image' | 'video' | 'docs' | 'code' | 'other'
 const KINDS: { value: KindFilter; label: string; title?: string }[] = [
@@ -19,7 +21,9 @@ const KINDS: { value: KindFilter; label: string; title?: string }[] = [
 const KIND_NAME: Record<KindFilter, string> = { all: 'files', image: 'images', video: 'videos', docs: 'documents', code: 'code files', other: 'other files' }
 const KIND_MATCH: Record<Exclude<KindFilter, 'all'>, string[]> = { image: ['image'], video: ['video'], docs: ['markdown', 'html', 'pdf'], code: ['code'], other: ['audio', 'other'] }
 
+/** COMPANY.md §3, §8.3-8.4: the focused company's files (stamped from their run or session), or all with a chip. */
 export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?: string }): React.JSX.Element {
+  const { scope, chips, nonce } = useScope()
   const sessions = useStore((s) => s.sessions)
   const repos = useStore((s) => s.repos)
   const info = useStore((s) => s.info)
@@ -34,17 +38,18 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
 
   useEffect(() => setOwner(runId ? `r:${runId}` : sessionId ? `s:${sessionId}` : ''), [runId, sessionId])
   const load = (): void => {
-    hive.artifacts.list({ limit: 2000 }).then(
+    hive.artifacts.list({ limit: 2000, ...(scope ? { companyId: scope } : {}) }).then(
       (l) => {
         setList(l)
         setError(null)
       },
       (e) => setError(errorMessage(e))
     )
-    hive.runs.list({ limit: 300 }).then(setRuns, () => undefined)
+    hive.runs.list({ limit: 300, ...(scope ? { companyId: scope } : {}) }).then(setRuns, () => undefined)
   }
-  useEffect(load, [])
-  useHiveEvent('artifact:added', (a) => setList((l) => (l ? [a, ...l.filter((x) => x.id !== a.id)] : l)))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [nonce])
+  useHiveEvent('artifact:added', (a) => inScope(a, scope) && setList((l) => (l ? [a, ...l.filter((x) => x.id !== a.id)] : l)))
   useHiveEvent('artifact:removed', ({ id }) => {
     dropThumb(id)
     setList((l) => l?.filter((x) => x.id !== id) ?? l)
@@ -229,7 +234,7 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
       ) : !list ? (
         <Loading />
       ) : list.length === 0 ? (
-        <EmptyState icon="artifacts" text="Files agents save appear here (Principia tells every agent to save into $ARTIFACTS_DIR).">
+        <EmptyState icon="artifacts" text={`${scope ? 'No files from this company yet. ' : ''}Files agents save appear here (Principia tells every agent to save into $ARTIFACTS_DIR).`}>
           <Button onClick={openRoot}>Open Artifacts Folder</Button>
         </EmptyState>
       ) : filtered.length === 0 ? (
@@ -253,7 +258,10 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
                   <div key={a.id} className={`tile ${sel === a.id ? 'is-selected' : ''}`} {...tileProps(a)} title={`${a.name}\n${bytes(a.bytes)} · ${absolute(a.createdAt)}\nSpace: Quick Look · Enter: Open`}>
                     <ArtifactThumb artifact={a} />
                     <div className="tile__name">{a.name}</div>
-                    <div className="tile__src">{source(a)}</div>
+                    <div className="tile__src">
+                      {chips && <CompanyChip companyId={a.companyId} avatarOnly size={12} className="tile__company" />}
+                      {source(a)}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -276,7 +284,10 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
               </span>
               <span className="td text-secondary">{a.kind}</span>
               <span className="td text-secondary">{bytes(a.bytes)}</span>
-              <span className="td text-secondary td--ellipsis">{source(a)}</span>
+              <span className="td text-secondary td--ellipsis">
+                {chips && <CompanyChip companyId={a.companyId} className="wf-company" />}
+                {source(a)}
+              </span>
               <span className="td text-tertiary">{absolute(a.createdAt)}</span>
             </div>
           ))}

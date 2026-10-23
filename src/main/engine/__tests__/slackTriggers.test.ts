@@ -752,12 +752,12 @@ describe('slack-triggered runs in the engine (reply binding, env, tools, untrust
     expect(e.slack.replies).toHaveLength(0)
   })
 
-  it('a manual run of a slackTools workflow gets the slack toolset but no trigger values or note', async () => {
+  it('a manual run of a slackTools workflow gets the slack toolset and untrusted-content note without trigger values', async () => {
     const s = await setup(() => ({ output: 'x' }), { slackTools: true })
     const run = s.engine.runs.start({ kind: 'workflow', workflowId: s.wf.id, inputs: { question: 'q' } }, { trigger: 'manual' })
     await waitRun(s.ctx, run.id)
     expect(s.calls[0]!.prompt).toContain('Answer this from  in : q')
-    expect(s.calls[0]!.systemNote).toBeUndefined()
+    expect(s.calls[0]!.systemNote).toBe(UNTRUSTED_SLACK_NOTE)
     expect(s.calls[0]!.mcpArgs!.join(' ')).toContain('mcp__hive__slack_search')
   })
 
@@ -844,13 +844,14 @@ describe('slack-triggered runs in the engine (reply binding, env, tools, untrust
     expect(s.store.stepsOf(run.id)[0]!.output).toContain('GH_TOKEN=••••GH_TOKEN')
   })
 
-  it('without a Slack connection, steps get no slack toolset', async () => {
+  it('a workflow requiring Slack fails before spawning when disconnected', async () => {
     const s = await setup(() => ({ output: 'x' }), { slackTools: true })
     s.slack.isConnected = false
     const run = s.engine.runs.start({ kind: 'workflow', workflowId: s.wf.id, inputs: { question: 'q' } }, { trigger: 'manual' })
     await waitRun(s.ctx, run.id)
     expect(s.slack.toolCalls).toHaveLength(0)
-    expect((s.calls[0]!.mcpArgs ?? []).join(' ')).not.toContain('mcp__hive__')
+    expect(s.calls).toHaveLength(0)
+    expect(s.ctx.store.getRun(run.id)?.reason).toContain('Required Slack connection is unavailable')
   })
 })
 

@@ -313,7 +313,8 @@ export function Sheet({
   primaryTitle,
   footerLeft,
   width,
-  destructive
+  destructive,
+  cancelLabel = 'Cancel'
 }: {
   title: string
   children: ReactNode
@@ -325,6 +326,8 @@ export function Sheet({
   footerLeft?: ReactNode
   width?: number
   destructive?: boolean
+  /** the secondary footer button ("Done" when there is nothing to cancel) */
+  cancelLabel?: string
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -353,7 +356,7 @@ export function Sheet({
         <div className="sheet__body">{children}</div>
         <div className="sheet__footer">
           <div className="sheet__footer-left">{footerLeft}</div>
-          <Button onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>{cancelLabel}</Button>
           {onPrimary && (
             <Button variant={destructive ? 'destructive' : 'primary'} onClick={onPrimary} disabled={primaryDisabled} title={primaryTitle} kbd="⌘↵">
               {primaryLabel}

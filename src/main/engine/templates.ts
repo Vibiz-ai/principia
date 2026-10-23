@@ -12,8 +12,8 @@ export type TemplateRef =
   | { kind: 'trigger'; field: TriggerField; raw: string }
   | { kind: 'invalid'; raw: string }
 
-/** SLACK.md §9.2: the `{{trigger.*}}` namespace of a Slack-triggered run. */
-export const TRIGGER_FIELDS = ['text', 'thread', 'channel', 'channel_id', 'ts', 'thread_ts', 'user', 'user_id', 'permalink'] as const
+/** SLACK.md §9.2: the `{{trigger.*}}` namespace of a Slack-triggered run (`images`: §9.6, local paths one per line). */
+export const TRIGGER_FIELDS = ['text', 'thread', 'channel', 'channel_id', 'ts', 'thread_ts', 'user', 'user_id', 'permalink', 'images'] as const
 export type TriggerField = (typeof TRIGGER_FIELDS)[number]
 export type TriggerVars = Record<TriggerField, string>
 const TRIGGER_RE = new RegExp(`^trigger\\.(${TRIGGER_FIELDS.join('|')})$`)

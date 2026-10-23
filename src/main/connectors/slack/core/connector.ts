@@ -6,6 +6,7 @@
  * ingest releases its event_id and is retried locally, then fetched from Slack (reingest).
  * One socket (PO-S6): warning / refresh_requested / close -> reconnect at once (attempt 0) + gap-fill.
  */
+import { downloadThreadImages, type ImageSink } from './files'
 import { HiveError } from '../../../../shared/errors'
 import { SLACK_AUTO_LIMITS, slackAuthorKind, type SlackChannel, type SlackChannelKind, type SlackInboundMessage, type SlackMessage, type SlackStatus, type SlackTestResult } from '../../../../shared/slack'
 import { SlackApi, SlackApiError, AUTH_ERRORS } from './api'
@@ -174,6 +175,35 @@ export class SlackConnector {
   isConfigured(): boolean {
     return this.state !== 'disabled'
   }
+  /**
+   * SLACK.md §9.6: download the images people shared in a thread (DM: recent conversation) through `sink`. Best effort:
+   * [] when not configured, no token, or the transport cannot download.
+   */
+  async threadImages(channelId: string, threadTs: string, sink: ImageSink, opts: { signal?: AbortSignal } = {}): Promise<string[]> {
+    const ws = this.ws
+    const download = this.d.http.download?.bind(this.d.http)
+    if (!ws || !download) return []
+    const token = await this.token('bot')
+    if (!token) return []
+    const ch = await this.d.store.getChannel(ws.teamId, channelId)
+    return downloadThreadImages(
+      {
+        store: this.d.store,
+        teamId: ws.teamId,
+        token,
+        download,
+        fetchThread: () => this.sync.fetchThread(channelId, threadTs),
+        isBotUser: (id) => id === ws.botUserId || !!this.names.users.get(id)?.isBot,
+        isDm: ch?.kind === 'dm' || ch?.kind === 'group_dm' || channelId.startsWith('D'),
+        clock: this.d.clock,
+        log: this.d.log,
+        signal: opts.signal
+      },
+      channelId,
+      threadTs,
+      sink
+    )
+  }
   channelLabel(id: string): string {
     const n = this.names.channel(id)
     return n ? (id.startsWith('D') ? `the DM with ${n}` : `#${n}`) : id
@@ -193,7 +223,8 @@ export class SlackConnector {
     const rl = this.limiter.rateLimited()
     const warnings: string[] = []
     const missing = this.ws ? REQUIRED_SCOPES.filter((s) => !this.ws!.scopes.includes(s)) : []
-    if (missing.length) warnings.push(`Reinstall the app: missing ${missing.join(', ')}`)
+    if (missing.length === 1 && missing[0] === 'files:read') warnings.push('Reinstall the Slack app to let Principia see images (missing files:read)')
+    else if (missing.length) warnings.push(`Reinstall the app: missing ${missing.join(', ')}`)
     if (this.numConnections > 1) warnings.push('Another Hive is connected with this Slack app; events are split between them')
     if (rl) warnings.push(`Slack asked Hive to slow down (${rl.method.split('.').pop()}) · resumes ${new Date(rl.until).toISOString()}`)
     const p = this.sync.progress
@@ -710,6 +741,12 @@ export class SlackConnector {
         out.botToken = 'ok'
         out.scopes = (r.scopes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
         out.missingScopes = REQUIRED_SCOPES.filter((s) => !out.scopes.includes(s))
+        // after a reinstall (e.g. adding files:read) the same token carries new scopes: keep the workspace row current
+        if (this.ws && out.scopes.length && out.scopes.join(',') !== this.ws.scopes.join(',')) {
+          this.ws = { ...this.ws, scopes: out.scopes, updatedAt: new Date(this.d.clock.now()).toISOString() }
+          await this.d.store.saveWorkspace(this.ws)
+          this.emitStatus()
+        }
       } catch (e) {
         out.botToken = e instanceof SlackApiError ? e.slack : String(e)
       }

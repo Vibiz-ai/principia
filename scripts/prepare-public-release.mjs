@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Export a fresh, screened source snapshot. Never exports git history or runtime data. */
 import { promises as fs } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -15,7 +16,7 @@ if (!target || target === root || target.startsWith(root + path.sep)) {
   throw new Error('Usage: node scripts/prepare-public-release.mjs /absolute/new-empty-directory (outside source tree)')
 }
 const roots = ['src', 'resources', 'scripts', '.github', 'cloud', 'website']
-const files = ['.dockerignore', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'vitest.config.ts', 'vite.cloud.config.ts', 'build/icon.icns', 'build/icon.png', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/slack-app-manifest.json', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md', 'docs/GTM.md']
+const files = ['.dockerignore', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'vitest.config.ts', 'vite.cloud.config.ts', 'vite.console.config.ts', 'render.yaml', 'build/icon.icns', 'build/icon.png', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/slack-app-manifest.json', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md', 'docs/GTM.md']
 const banned = /(?:^|\/)(?:node_modules|\.git|\.claude|\.codex|\.aws|\.hive-dev-data|out|dist|release)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite|sqlite3|db|log|pem|p12|pfx)$/i
 const secretPatterns = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]{10,}?-----END/],
@@ -24,6 +25,10 @@ const secretPatterns = [
   ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g],
   ['AWS access key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/]
 ]
+// Reviewed synthetic test fixtures that look like credentials, by SHA-256 of the exact value (values never stored).
+const fixtureHashes = new Set((await fs.readFile(path.join(root, 'scripts/public-release-fixtures.sha256'), 'utf8').catch(() => ''))
+  .split('\n').map(line => line.replace(/#.*/, '').trim()).filter(Boolean))
+const reviewedFixture = value => fixtureHashes.has(createHash('sha256').update(value).digest('hex'))
 const candidates = []
 async function walk(relative) {
   let stat
@@ -44,7 +49,7 @@ for (const relative of candidates.sort()) {
   for (const [kind, pattern] of secretPatterns) {
     const matches = [...text.matchAll(new RegExp(pattern.source, 'g'))]
     // Exact deliberately synthetic Slack fixtures; never broadly exempt test files.
-    const hits = matches.filter(m => m[0] !== 'AKIAIOSFODNN7EXAMPLE' && !/^xoxb-(?:fake-0000000000-0000000000000-fakefakefakefakefake|test-0000000000-1111111111111-abcdefghijklmnop|1234567890-1234567890-abcdef(?:ABCDEF)?)$/.test(m[0]))
+    const hits = matches.filter(m => m[0] !== 'AKIAIOSFODNN7EXAMPLE' && !reviewedFixture(m[0]) && !/^xoxb-(?:fake-0000000000-0000000000000-fakefakefakefakefake|test-0000000000-1111111111111-abcdefghijklmnop|1234567890-1234567890-abcdef(?:ABCDEF)?)$/.test(m[0]))
     if (hits.length) violations.push(`${relative}: ${kind} (${hits.length})`)
   }
 }
@@ -59,8 +64,11 @@ for (const relative of candidates) {
     .replaceAll(`/Users/${privateUser}/`, '/Users/example/')
     .replaceAll(privateAccount, 'example-user')
     .replaceAll(privateOrg, 'example-org')
-    .replace(/https:\/\/github\.com\/example-org\/principia(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
+    // the public repositories keep their real address (the README, compose and the Render button point at them)
+    .replace(/https:\/\/(?:github\.com|raw\.githubusercontent\.com)\/example-org\/(?:principia|open-passport)(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
     .replaceAll(privateProject, 'example-project'))
+  // keep the permission bits: the fake CLIs the tests spawn (src/cloud/agent/__tests__/bin) must stay executable
+  await fs.chmod(path.join(target, relative), (await fs.stat(path.join(root, relative))).mode & 0o777)
 }
 console.log(`Exported ${candidates.length} screened files. Git history, screenshots, internal research, and runtime data excluded.`)
 console.log('Review the snapshot and license, then initialize a NEW Git repository. Pattern screening is not a guarantee that no sensitive content remains.')

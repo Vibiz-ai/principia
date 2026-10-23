@@ -1,0 +1,66 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Instagram carousel",
+    "description": "Plans a 5-slide Instagram carousel (hook, 3 value slides, CTA) from a topic and brand voice, renders a consistent-style background per slide with fal.ai FLUX, and writes the caption and hashtags. Everything lands in Artifacts.",
+    "inputs": [
+      {
+        "name": "topic",
+        "label": "Carousel topic (what the post teaches or announces)",
+        "type": "multiline"
+      },
+      {
+        "name": "voice",
+        "label": "Brand voice (e.g. friendly, expert, playful; who it talks to)",
+        "type": "multiline"
+      },
+      {
+        "name": "style",
+        "label": "Visual style for all backgrounds (colors, mood, medium)",
+        "default": "soft gradient, minimal abstract shapes, warm pastel palette, plenty of empty space for text"
+      },
+      {
+        "name": "cta",
+        "label": "Call to action for the last slide",
+        "default": "Follow for more and save this post"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "plan",
+        "type": "agent",
+        "label": "Plan the 5 slides",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Plan an Instagram carousel of exactly 5 slides about the topic below, written in the given brand voice.\n\nStructure:\n- Slide 1: Hook (a bold claim, question or promise; max 10 words).\n- Slides 2-4: One concrete value point each (headline max 8 words + body max 25 words).\n- Slide 5: CTA using: {{inputs.cta}}\n\nFor each slide also write a background image prompt (max 50 words) that is purely visual with NO text, letters, logos or words in the image, leaves clear empty space for overlaid text, and ends with this exact shared style line so all 5 match: \"Style: {{inputs.style}}\".\n\nSave the plan as Markdown to \"$ARTIFACTS_DIR/plan.md\".\n\nOutput the plan in this exact format, one block per slide:\nSLIDE <n>\nHEADLINE: ...\nBODY: ...\nIMAGE PROMPT: ...\n\nTopic: {{inputs.topic}}\nBrand voice: {{inputs.voice}}"
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render 5 backgrounds with fal",
+        "after": [
+          "plan"
+        ],
+        "cwd": null,
+        "timeoutMin": 20,
+        "profileId": "prof_claude",
+        "prompt": "Generate exactly 5 background images (one per slide, no more) with the fal.ai REST API using the model fal-ai/flux/dev, and save them.\n\nFor each slide n = 1..5:\n1. POST https://fal.run/fal-ai/flux/dev with headers `Authorization: Key $FAL_KEY` and `Content-Type: application/json`, JSON body {\"prompt\": <that slide's IMAGE PROMPT>, \"image_size\": {\"width\": 1024, \"height\": 1280}, \"num_images\": 1, \"seed\": 4242} (4:5 portrait, the Instagram feed carousel ratio). Use the same seed for every slide so the style stays consistent. Use curl and build the JSON body with jq so quotes in prompts are escaped. Read the key from the FAL_KEY environment variable; never print, echo or log it, and do not write it to any file.\n2. Download images[0].url with curl into \"$ARTIFACTS_DIR/slide-<n>.png\" and check the file is non-empty.\n\nIf a request fails, retry it once; if it still fails, skip that slide and note the error. Do not generate extra images.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive › Keys.\n\nReply with a list of saved paths and the exact prompt used for each slide.\n\nPlan:\n{{plan.output}}"
+      },
+      {
+        "id": "caption",
+        "type": "agent",
+        "label": "Write caption, hashtags and README",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Using the plan and render results below, in the brand voice ({{inputs.voice}}):\n\n1. Write the Instagram caption: a strong first line that echoes the hook, 3-5 short lines of value, the CTA ({{inputs.cta}}), then 15-20 relevant hashtags (mix of broad and niche, no banned or misleading tags). Save it to \"$ARTIFACTS_DIR/caption.md\".\n2. Write a short \"$ARTIFACTS_DIR/README.md\" with: the topic, a table of slides (file name slide-<n>.png, headline and body text to overlay, image prompt used), which model generated the images (fal-ai/flux/dev, 1024x1280 4:5 portrait, seed 4242), any slides that failed, and the files plan.md and caption.md. Never include API keys.\n\nReply with the caption and the list of files in Artifacts.\n\nPlan:\n{{plan.output}}\n\nRender results:\n{{render.output}}"
+      }
+    ]
+  }
+}

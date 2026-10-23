@@ -1,8 +1,23 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SlackRunContext } from '../../../../shared/slack'
-import { buildAuthorHandlers, parseToolsets } from '../../../author/server/tools'
+
+// the service emits IPC events and Mac notifications: no Electron in unit tests
+vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), on: vi.fn() }, Notification: { isSupported: () => false } }))
+
+import type { SlackInboundMessage, SlackRunContext, SlackTriggerInput } from '../../../../shared/slack'
+import { AUTHOR_COMPANY_NOTE, buildAuthorHandlers, callHive, parseToolsets } from '../../../author/server/tools'
 import { SlackTools } from '../tools'
-import { CHANNELS, connect, makeHarness, nativeOk, settle, type Harness } from './harness'
+import { SlackService } from '../service'
+import { slackCompanyMismatch } from '../core/policy'
+import { normalizeTrigger, triggerCompanyErrors } from '../triggerConfig'
+import { Store } from '../../../db/store'
+import { CompanyStore } from '../../../company'
+import { Vault } from '../../../vault'
+import { ensureDefaultProfile } from '../../../db/seed'
+import { PERSONAL_COMPANY_ID } from '../../../../shared/company'
+import { CHANNELS, connect, fakeCipher, makeHarness, nativeOk, settle, type Harness } from './harness'
 
 const d = nativeOk ? describe : describe.skip
 let h: Harness
@@ -223,5 +238,145 @@ describe('hive MCP server toolsets (SLACK.md §11.1)', () => {
     expect(step.listTools().map((t) => t.name)).toEqual(['slack_list_channels', 'slack_read_thread', 'slack_search', 'slack_draft_reply', 'slack_post'])
     const both = buildAuthorHandlers({ HIVE_LIVE_DIR: dir, HIVE_TOOLSETS: 'author,slack' })
     expect(both.listTools().length).toBe(16) // 11 author + 5 slack
+  })
+})
+
+// ---------- COMPANY.md §6: Slack and authoring stay inside one company ----------
+
+describe('Slack company rule (pure)', () => {
+  const acme = { id: 'co_acme', name: 'Acme' }
+  const personal = { id: PERSONAL_COMPANY_ID, name: 'Personal' }
+  it('a team may only start its own company\'s workflows; saving a mismatched trigger is a validation error', () => {
+    expect(slackCompanyMismatch(acme, acme)).toBeNull()
+    expect(slackCompanyMismatch(acme, personal)).toMatch(/belongs to Acme, but the workflow belongs to Personal/)
+    expect(triggerCompanyErrors(acme, personal)).toEqual([{ path: 'workflowId', message: expect.stringMatching(/belongs to Acme/) }])
+    expect(triggerCompanyErrors(acme, acme)).toEqual([])
+    // not connected yet: nothing to compare (checked again on every inbound event)
+    expect(triggerCompanyErrors(null, personal)).toEqual([])
+  })
+})
+
+const ds = nativeOk ? describe : describe.skip
+ds('Slack inbound: team/workflow company mismatch (service)', () => {
+  let tmp: string
+  const trigger = (workflowId: string, name: string): SlackTriggerInput => ({
+    name, workflowId, enabled: true,
+    match: { on: ['mention'], channels: [], keywords: [], regex: null, fromUsers: [] },
+    reply: { mode: 'draft', autoChannels: [] }
+  })
+  const message = (o: Partial<SlackInboundMessage> = {}): SlackInboundMessage => ({
+    teamId: 'T1', channelId: 'C1', channelKind: 'channel', channelName: 'support', ts: '1760605200.000100', threadTs: null,
+    userId: 'U1', userName: 'Dana', botId: null, subtype: null, plain: '@hive help', isMention: true, isDmToBot: false,
+    isOwn: false, fromBot: false, eventTime: 1760605200, receivedAt: 1760605200000, source: 'event', catchup: false, author: 'member', ...o
+  })
+  function world() {
+    h = makeHarness()
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hive-slack-co-'))
+    const store = new Store(h.db)
+    const company = new CompanyStore(store, { companiesRoot: null })
+    const acme = company.create({ name: 'Acme' })
+    const node = { id: 'reply', type: 'agent' as const, label: 'Reply', after: [], cwd: null, timeoutMin: 1, profileId: 'p', prompt: '{{inputs.text}}' }
+    const draft = (name: string) => ({ name, description: '', inputs: [{ name: 'text', label: 'Text', default: 'x' }], nodes: [node] })
+    const wfAcme = store.createWorkflow(draft('Acme support'), null, null, acme.id)
+    const wfPersonal = store.createWorkflow(draft('Personal helper'))
+    h.db.prepare("INSERT INTO slack_workspaces(team_id, team_name, bot_user_id, bot_id, connected_at, updated_at, company_id) VALUES ('T1', 'Acme Inc', 'UBOT', 'BBOT', 'x', 'x', ?)").run(acme.id)
+    const hive = {
+      db: h.db, store, company, vault: new Vault(h.db, fakeCipher()), live: null,
+      settings: () => store.getSettings(),
+      safe: <T,>(fn: () => T, fb: T): T => { try { return fn() } catch { return fb } },
+      windows: { command() {} }
+    }
+    const svc = new SlackService(hive as never, { cipher: fakeCipher(), mainDir: tmp, transport: { http: h.fake.http, socket: h.fake.socket, fake: true } })
+    const tA = svc.triggers.insert(normalizeTrigger(trigger(wfAcme.id, 'Acme mention'), wfAcme).trigger)
+    const tP = svc.triggers.insert(normalizeTrigger(trigger(wfPersonal.id, 'Personal mention'), wfPersonal).trigger)
+    const seen: string[][] = []
+    svc.bridge().onMessage(() => void seen.push(svc.triggers.list().map((t) => t.id)))
+    const dispatch = (m: SlackInboundMessage) => (svc as unknown as { dispatchInbound(m: SlackInboundMessage): void }).dispatchInbound(m)
+    return { store, svc, tA, tP, seen, dispatch, acme, company, hive }
+  }
+  /** The service's connector as connected to team T1 (the harness connected its own connector on the same db). */
+  const connected = (svc: SlackService) => {
+    const c = svc.connector as unknown as { ws: unknown; state: string }
+    c.ws = { teamId: 'T1', teamName: 'Acme Inc', botUserId: 'UBOT', botId: 'BBOT' }
+    c.state = 'connected'
+  }
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }))
+
+  it("enforced: the engine never sees another company's trigger for this team's message, and the drop is noted once an hour", () => {
+    const { store, svc, tA, tP, seen, dispatch } = world()
+    store.updateSettings({ experimental: { companies: true } })
+    dispatch(message())
+    dispatch(message({ ts: '1760605201.000100' }))
+    expect(seen).toEqual([[tA.id], [tA.id]])
+    const notes = svc.triggers.events(tP.id)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatchObject({ kind: 'error', channelId: 'C1', runId: null })
+    expect(notes[0].message).toMatch(/^Dropped: This Slack workspace belongs to Acme, but the workflow belongs to Personal/)
+    expect(svc.triggers.events(tA.id)).toHaveLength(0)
+  })
+
+  it('off: logged only, every trigger still matches (stamp-and-warn during development)', () => {
+    const { svc, tA, tP, seen, dispatch } = world()
+    dispatch(message())
+    expect(seen).toHaveLength(1)
+    expect(new Set(seen[0])).toEqual(new Set([tA.id, tP.id]))
+    expect(svc.triggers.events(tP.id)).toHaveLength(0)
+  })
+
+  it("the default responder is created in the workspace's company, so its trigger can fire there while enforced", () => {
+    const { store, svc, acme } = world()
+    store.updateSettings({ experimental: { companies: true } })
+    ensureDefaultProfile(store, 'claude')
+    connected(svc)
+    svc.ensureDefaultResponder()
+    const responder = svc.triggers.list().find((t) => t.name === 'Reply when tagged')
+    expect(responder).toBeTruthy()
+    expect(store.getWorkflow(responder!.workflowId)?.companyId).toBe(acme.id)
+  })
+
+  it("Ask an agent: a chat runs in the team's company; enforced, another company's repo is refused by the session guard", () => {
+    const { store, svc, acme, company, hive } = world()
+    const profile = ensureDefaultProfile(store, 'claude')
+    connected(svc)
+    const repoDir = fs.mkdtempSync(path.join(tmp, 'beta-repo-'))
+    const repo = store.addRepo(repoDir)[0]
+    company.create({ name: 'Beta', repoIds: [repo.id] })
+    const calls: Record<string, unknown>[] = []
+    Object.assign(hive, { paths: { scratchDir: tmp }, sessions: { create: (req: Record<string, unknown>) => (calls.push(req), { id: `session_${calls.length}` }) } })
+    const ask = (repoId: string | null) => svc.askAgent({ channelId: 'C1', threadTs: '1760605200.000100', profileId: profile.id, repoId, cols: 80, rows: 24 })
+    ask(null)
+    expect(calls[0].companyId).toBe(acme.id)
+    // off: the repo decides its own company (stamp-and-warn happens in sessions.create)
+    ask(repo.id)
+    expect(calls[1].companyId).toBeUndefined()
+    // enforced: the team's company is explicit, so sessions.create refuses Beta's repo (the thread never leaves Acme)
+    store.updateSettings({ experimental: { companies: true } })
+    ask(repo.id)
+    expect(calls[2]).toMatchObject({ repoId: repo.id, companyId: acme.id })
+  })
+
+  it('an unknown team reads as Personal: only Personal workflows may fire', () => {
+    const { store, tP, seen, dispatch } = world()
+    store.updateSettings({ experimental: { companies: true } })
+    dispatch(message({ teamId: 'T_OTHER' }))
+    expect(seen).toEqual([[tP.id]])
+  })
+})
+
+describe('hive MCP server: HIVE_COMPANY_ID (COMPANY.md §6)', () => {
+  it('every author_call line carries the session company; the agent is told its scope', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hive-author-co-'))
+    try {
+      const handlers = buildAuthorHandlers({ HIVE_LIVE_DIR: dir, HIVE_COMPANY_ID: 'co_acme' })
+      expect(handlers.instructions()).toContain(AUTHOR_COMPANY_NOTE)
+      expect(buildAuthorHandlers({ HIVE_LIVE_DIR: dir }).instructions()).not.toContain(AUTHOR_COMPANY_NOTE)
+      await callHive(dir, 'hive_workflow_list', {}, {}, async () => ({ ok: true, result: { workflows: [] } }), 'co_acme')
+      await callHive(dir, 'hive_workflow_list', {}, {}, async () => ({ ok: true, result: { workflows: [] } }))
+      const lines = fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+      expect(lines[0]).toMatchObject({ hive: 'author_call', tool: 'hive_workflow_list', company_id: 'co_acme' })
+      expect(lines[1]).not.toHaveProperty('company_id')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

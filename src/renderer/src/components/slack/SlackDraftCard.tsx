@@ -7,15 +7,12 @@ import type { SlackDraft, SlackDraftDetail } from '@shared/slack'
 import { Button, RelativeTime } from '../ui'
 import { Icon } from '../Icon'
 import { SLACK_TEXT_MAX, draftEditState, draftReasonText, draftTitle, userName } from '../../lib/slack'
+import { hotkeyBlocked } from '../../lib/hotkeys'
 import { slackCall } from '../../lib/slackApi'
 import { decideSlackDraft, useNoteSlackUsers, useSlack } from '../../state/slack'
 import { navigate } from '../../state/store'
 import { Mrkdwn } from './Mrkdwn'
 import { useResolve } from './bits'
-
-function inTerminal(t: EventTarget | null): boolean {
-  return !!(t as HTMLElement | null)?.closest?.('.xterm')
-}
 
 export function SlackDraftCard({ draft: d, hotkeys = false, compact = false, inThread = false }: { draft: SlackDraft; hotkeys?: boolean; compact?: boolean; inThread?: boolean }): React.JSX.Element {
   const users = useSlack((s) => s.users)
@@ -70,7 +67,7 @@ export function SlackDraftCard({ draft: d, hotkeys = false, compact = false, inT
   useEffect(() => {
     if (!hotkeys || !open) return
     const onKey = (e: KeyboardEvent): void => {
-      if (!e.metaKey || e.altKey || e.ctrlKey || inTerminal(e.target)) return
+      if (!e.metaKey || e.altKey || e.ctrlKey || hotkeyBlocked(e.target, ref.current)) return
       if (document.querySelector('.sheet-layer')) return
       if (e.key === 'Enter') {
         e.preventDefault()

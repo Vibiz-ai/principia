@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
-import type { WorkflowDraft, WorkflowFile } from '../../shared/types'
+import type { Id, WorkflowDraft, WorkflowFile } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { checkAfterProblems } from '../../shared/authoring'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { workflowFile, zodErrors } from '../ipcSchemas'
 import { migrateNotifyNode } from '../db/slackMigration'
+import { guardWorkflowTargets, requireCompany } from './companyScope'
 
 /** SPEC A4: a check's `after` defaults to [target]; it may also name nodes downstream of the target (loop body). */
 export function normalizeDraft(d: WorkflowDraft): WorkflowDraft {
@@ -17,7 +18,7 @@ export function normalizeDraft(d: WorkflowDraft): WorkflowDraft {
     inputs: d.inputs ?? [],
     // SLACK.md §10.4: a legacy notify `imessage` (imports, older editors) becomes `slack`
     nodes: d.nodes.map((n) => migrateNotifyNode(n.type === 'check' && !(n.after ?? []).length ? { ...n, after: n.target ? [n.target] : [] } : n)),
-    ...(d.slackTools ? { slackTools: true } : {}),
+    ...(d.slackTools ? { slackTools: true, ...(d.slackAgentPermissions === 'profile' ? { slackAgentPermissions: 'profile' as const } : {}) } : {}),
     // AUTHORING.md §6: the workflow-level worktree block survives save/import
     ...(d.worktree?.repo
       ? { worktree: { repo: d.worktree.repo, base: d.worktree.base ?? null, ...(d.worktree.pushBranches?.length ? { pushBranches: d.worktree.pushBranches } : {}) } }
@@ -53,7 +54,7 @@ export function remapProfiles(h: Hive, d: WorkflowDraft): WorkflowDraft {
   }
 }
 
-export async function importWorkflowFromDialog(h: Hive, win: BrowserWindow | null) {
+export async function importWorkflowFromDialog(h: Hive, win: BrowserWindow | null, companyId?: Id) {
   const opts: Electron.OpenDialogOptions = {
     title: 'Import Workflow',
     properties: ['openFile'],
@@ -69,7 +70,7 @@ export async function importWorkflowFromDialog(h: Hive, win: BrowserWindow | nul
   } catch (e) {
     throw new HiveError('bad_request', `Not a Hive workflow file: ${e instanceof Error ? e.message : String(e)}`)
   }
-  return importWorkflowFile(h, raw)
+  return importWorkflowFile(h, raw, companyId)
 }
 
 /** A parsed .hive.json -> its draft (profiles remapped to this Mac), unsaved. */
@@ -79,17 +80,19 @@ export function parseWorkflowFile(h: Hive, raw: unknown): WorkflowDraft {
   return normalizeDraft(remapProfiles(h, parsed.data.workflow as WorkflowDraft))
 }
 
-/** Workflows › Import and the marketplace: validate and save a parsed .hive.json. */
-export function importWorkflowFile(h: Hive, raw: unknown) {
+/** Workflows › Import and the marketplace: validate and save a parsed .hive.json into companyId (else Personal). */
+export function importWorkflowFile(h: Hive, raw: unknown, companyId?: Id) {
   const draft = parseWorkflowFile(h, raw)
   validateDraft(h, draft)
-  const wf = h.store.createWorkflow(draft)
+  const target = requireCompany(h, companyId)
+  guardWorkflowTargets(h, target, draft)
+  const wf = h.store.createWorkflow(draft, null, null, target)
   emit('data:changed', { domain: 'workflows' })
   return wf
 }
 
 export function registerWorkflowHandlers(h: Hive): void {
-  handle('workflows:list', () => h.store.listWorkflows())
+  handle('workflows:list', (q) => h.store.listWorkflows(q?.companyId))
   handle('workflows:get', ({ id }) => {
     const wf = h.store.getWorkflow(id)
     if (!wf) throw new HiveError('not_found', 'Workflow not found')
@@ -98,28 +101,39 @@ export function registerWorkflowHandlers(h: Hive): void {
   handle('workflows:create', (raw) => {
     const draft = normalizeDraft(raw as WorkflowDraft)
     validateDraft(h, draft)
-    const wf = h.store.createWorkflow(draft)
+    // COMPANY.md §3: the company it is created from; its repo targets must belong to it (guarded, §6)
+    const companyId = requireCompany(h, raw.companyId)
+    guardWorkflowTargets(h, companyId, draft)
+    const wf = h.store.createWorkflow(draft, null, null, companyId)
     emit('data:changed', { domain: 'workflows' })
     return wf
   })
   handle('workflows:update', ({ id, draft: raw }) => {
-    if (!h.store.getWorkflow(id)) throw new HiveError('not_found', 'Workflow not found')
+    const existing = h.store.getWorkflow(id)
+    if (!existing) throw new HiveError('not_found', 'Workflow not found')
     const draft = normalizeDraft(raw as WorkflowDraft)
     validateDraft(h, draft, id)
+    guardWorkflowTargets(h, existing.companyId ?? requireCompany(h, null), draft)
     const wf = h.store.updateWorkflow(id, draft)
     emit('data:changed', { domain: 'workflows' })
     return wf
   })
   handle('workflows:remove', ({ id }) => {
+    // DEPARTMENTS.md §1.1: an agent seat never points at a deleted workflow
+    h.company.departments.assertNotBacking('workflow', id)
     h.store.removeWorkflow(id)
     h.author?.onWorkflowRemoved(id) // AUTHORING.md §2.4: deleting a workflow deletes its run permissions
     emit('data:changed', { domain: 'workflows' })
   })
-  handle('workflows:duplicate', ({ id }) => {
+  handle('workflows:duplicate', ({ id, companyId }) => {
     const wf = h.store.getWorkflow(id)
     if (!wf) throw new HiveError('not_found', 'Workflow not found')
+    // "Duplicate to company…" (COMPANY.md §3): a new row in the target company, seed_key NULL
+    const target = companyId ? requireCompany(h, companyId) : (wf.companyId ?? requireCompany(h, null))
+    const draft: WorkflowDraft = { name: `${wf.name} copy`, description: wf.description, inputs: wf.inputs, nodes: wf.nodes, ...(wf.worktree ? { worktree: wf.worktree } : {}) }
+    guardWorkflowTargets(h, target, draft)
     // a copy is the user's own: no agent provenance (origin) carried over
-    const copy = h.store.createWorkflow({ name: `${wf.name} copy`, description: wf.description, inputs: wf.inputs, nodes: wf.nodes, ...(wf.worktree ? { worktree: wf.worktree } : {}) })
+    const copy = h.store.createWorkflow(draft, null, null, target)
     emit('data:changed', { domain: 'workflows' })
     return copy
   })
@@ -150,5 +164,5 @@ export function registerWorkflowHandlers(h: Hive): void {
     fs.writeFileSync(r.filePath, `${JSON.stringify(file, null, 2)}\n`)
     return { path: r.filePath }
   })
-  handle('workflows:import', (_req, sender) => importWorkflowFromDialog(h, BrowserWindow.fromWebContents(sender)))
+  handle('workflows:import', (q, sender) => importWorkflowFromDialog(h, BrowserWindow.fromWebContents(sender), q?.companyId))
 }

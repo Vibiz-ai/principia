@@ -4,7 +4,7 @@ import { resolve, sep } from 'node:path'
 import { openDatabase } from '../main/db'
 import { Store } from '../main/db/store'
 import { createEngineStore } from '../main/db/engineStore'
-import { claudeAdapter } from '../main/engine/adapters'
+import { cloudClaudeAdapter } from './agent/adapters'
 import { createEngineWith } from '../main/engine'
 import { createCloudGateway } from './gateway'
 import { workflowFile } from '../main/ipcSchemas'
@@ -21,14 +21,7 @@ export async function createCloudWorkflows({ dataDir, workspace, redact }: { dat
   const db = openDatabase(resolve(dataDir, 'workflows.db')); const store = new Store(db)
   const engineStore = createEngineStore(db, { describe: () => () => '', redact: scrub })
   for (const adapter of ['claude', 'codex'] as const) if (!store.listProfiles().some(p => p.adapter === adapter)) store.createProfile({ name: adapter, adapter, secretNames: [], permissionMode: 'default', useApiKeyAuth: adapter === 'codex' ? !!process.env.OPENAI_API_KEY : !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) })
-  const engine = createEngineWith({ paths, store: engineStore, baseEnv, gateway, secrets: { resolve: () => ({}), redact: scrub }, getSettings: () => store.getSettings(), getProfile: id => store.getProfile(id), getRepo: id => store.getRepo(id), getWorkflow: id => store.getWorkflow(id), emit: () => {}, log: { info: () => {}, warn: msg => console.warn(redact(msg)), error: msg => console.error(redact(msg)) } }, { adapters: { claude: { ...claudeAdapter, headless: request => {
-    const invocation = claudeAdapter.headless(request)
-    const permission = invocation.args.indexOf('--permission-prompt-tool')
-    if (permission >= 0) invocation.args.splice(permission, 2)
-    const mode = invocation.args.indexOf('--permission-mode')
-    if (mode >= 0 && invocation.args[mode + 1] === 'default') invocation.args[mode + 1] = 'dontAsk'
-    return invocation
-  } } } })
+  const engine = createEngineWith({ paths, store: engineStore, baseEnv, gateway, secrets: { resolve: () => ({}), redact: scrub }, getSettings: () => store.getSettings(), getProfile: id => store.getProfile(id), getRepo: id => store.getRepo(id), getWorkflow: id => store.getWorkflow(id), emit: () => {}, log: { info: () => {}, warn: msg => console.warn(redact(msg)), error: msg => console.error(redact(msg)) } }, { adapters: { claude: cloudClaudeAdapter() } })
   await engine.init()
   function importWorkflow(raw: unknown) {
     const parsed = workflowFile.parse(raw)

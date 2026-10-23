@@ -9,7 +9,14 @@ import { absolute, absoluteWithDay, duration } from '../lib/time'
 import { useCoalesced } from '../lib/useThrottled'
 import { firstLine } from '../lib/format'
 import { SlackTriggersTab } from '../components/slack/TriggerEditor'
-import { attempt, lastInputs, navigate, pauseAll, providerLabel, toast, updateSettings, useStore, type ScheduleSeed } from '../state/store'
+import { attempt, companyName, enterCompany, lastInputs, navigate, pauseAll, providerLabel, toast, updateSettings, useStore, type ScheduleSeed } from '../state/store'
+import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
+import { companyOf, reposOf } from '../lib/companyModel'
+import { inScope } from '../lib/scope'
+import { CloudPlacedMark } from '../components/cloud/bits'
+import { useCloudPlacement } from '../state/cloud'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
+import type { Id } from '@shared/types'
 
 export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }): React.JSX.Element {
   const [cur, setCur] = useState<'schedules' | 'slack'>(tab ?? 'schedules')
@@ -18,10 +25,33 @@ export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: s
     return (
       <div className="view">
         <Toolbar title="Schedules" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
-        <SlackTriggersTab seedWorkflowId={tab === 'slack' ? seed?.workflowId : undefined} nonce={nonce} />
+        <ScopedSlackTriggers seedWorkflowId={tab === 'slack' ? seed?.workflowId : undefined} nonce={nonce} />
       </div>
     )
   return <SchedulesList selectedId={selectedId} seed={tab === 'slack' ? undefined : seed} nonce={nonce} tabs={<ScheduleTabs value={cur} onChange={setCur} />} />
+}
+
+/**
+ * COMPANY.md §3: Slack triggers belong to the company that owns the workspace (main refuses a trigger whose workflow
+ * is elsewhere). A focused company that doesn't own it is pointed there instead of seeing another company's triggers.
+ */
+function ScopedSlackTriggers({ seedWorkflowId, nonce }: { seedWorkflowId?: string; nonce?: number }): React.JSX.Element {
+  const { scope, multi } = useScope()
+  // undefined = loading; null = no workspace, or a main without slack:company (nothing to gate on)
+  const [owner, setOwner] = useState<Id | null | undefined>(undefined)
+  const load = (): void => void hive.slack.company().then((h) => setOwner(h?.companyId ?? null), () => setOwner(null))
+  useEffect(load, [])
+  useHiveEvent('data:changed', ({ domain }) => domain === 'company' && load())
+  if (multi && scope && owner === undefined) return <Loading />
+  if (multi && scope && owner && owner !== scope)
+    return (
+      <EmptyState icon="slack" text={`The connected Slack workspace belongs to ${companyName(owner)}, so its triggers live there.`}>
+        <Button variant="primary" onClick={() => void enterCompany(owner, { view: { name: 'schedules', tab: 'slack' } })}>
+          Open in {companyName(owner)}
+        </Button>
+      </EmptyState>
+    )
+  return <SlackTriggersTab seedWorkflowId={seedWorkflowId} nonce={nonce} />
 }
 
 /** SLACK.md §12.5: Schedules | Slack triggers. */
@@ -40,7 +70,9 @@ function ScheduleTabs({ value, onChange }: { value: 'schedules' | 'slack'; onCha
   )
 }
 
+/** COMPANY.md §3, §8.3-8.4: the focused company's schedules, or every company's with a chip in All mode. */
 function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tabs: React.ReactNode }): React.JSX.Element {
+  const { scope, chips, nonce: scopeNonce } = useScope()
   const status = useStore((s) => s.status)
   const repos = useStore((s) => s.repos)
   const profiles = useStore((s) => s.profiles)
@@ -53,19 +85,21 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
   useEffect(() => setSel(selectedId ?? null), [selectedId])
   useEffect(() => setSheet(seed ?? null), [seed, nonce])
 
+  const filter = scope ? { companyId: scope } : undefined
   const load = (): void => {
-    hive.schedules.list().then(
+    hive.schedules.list(filter).then(
       (l) => {
         setList(l)
         setError(null)
       },
       (e) => setError(errorMessage(e))
     )
-    hive.workflows.list().then(setWorkflows, () => undefined)
+    hive.workflows.list(filter).then(setWorkflows, () => undefined)
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [scopeNonce])
   const refetch = useCoalesced(load, 300)
-  useHiveEvent('schedule:updated', (s) => setList((l) => (l ? (l.some((x) => x.id === s.id) ? l.map((x) => (x.id === s.id ? s : x)) : [...l, s]) : l)))
+  useHiveEvent('schedule:updated', (s) => inScope(s, scope) && setList((l) => (l ? (l.some((x) => x.id === s.id) ? l.map((x) => (x.id === s.id ? s : x)) : [...l, s]) : l)))
   useHiveEvent('data:changed', ({ domain }) => (domain === 'schedules' || domain === 'workflows') && refetch())
 
   const paused = !!status?.schedulesPaused
@@ -76,9 +110,13 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
     return `◆ ${p?.adapter ?? 'agent'} · ${r?.name ?? 'Chat'}`
   }
 
+  // CLOUD.md §8: a schedule placed in the cloud starts there (main answers null: no local run)
+  const cloudSchedules = useCloudPlacement().schedules
   const runNow = async (s: Schedule): Promise<void> => {
+    const inCloud = cloudSchedules.includes(s.id)
     const r = await attempt(() => hive.schedules.runNow({ id: s.id }), 'Run Now')
     if (r) toast(`Started ${s.name}`)
+    else if (r === null && inCloud) toast(`Started ${s.name} in the cloud`)
   }
   const setEnabled = async (s: Schedule, enabled: boolean): Promise<void> => {
     setList((l) => l?.map((x) => (x.id === s.id ? { ...x, enabled } : x)) ?? l)
@@ -126,7 +164,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
       ) : !list ? (
         <Loading />
       ) : list.length === 0 ? (
-        <EmptyState icon="schedules" text="Run a workflow or prompt on a timer. Schedules fire while Principia is running — turn on Launch at Login.">
+        <EmptyState icon="schedules" text={`${scope ? 'No schedules in this company yet. ' : ''}Run a workflow or prompt on a timer. Schedules fire while Principia is running — turn on Launch at Login.`}>
           <Button variant="primary" icon="plus" onClick={() => setSheet({})}>
             New Schedule
           </Button>
@@ -158,7 +196,11 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
                 <span className="td" onClick={(e) => e.stopPropagation()}>
                   <Switch checked={s.enabled} onChange={(v) => void setEnabled(s, v)} label={`Enable ${s.name}`} />
                 </span>
-                <span className="td td--main">{s.name}</span>
+                <span className="td td--main">
+                  {chips && <CompanyChip companyId={s.companyId} className="wf-company" />}
+                  {s.name}
+                  <CloudPlacedMark scheduleId={s.id} />
+                </span>
                 <span className="td text-secondary td--ellipsis">{targetLabel(s.target)}</span>
                 <span className="td text-secondary td--ellipsis" title={s.sentence}>
                   {s.sentence}
@@ -166,7 +208,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
                 <span className="td">{s.enabled && !paused && s.nextFireAt ? <RelativeTime iso={s.nextFireAt} /> : <span className="text-tertiary">—</span>}</span>
                 <span className="td">{s.lastRunStatus ? <StatusGlyph status={runVisual(s.lastRunStatus)} /> : <span className="text-tertiary">—</span>}</span>
                 <span className="td td--actions">
-                  <Button size="sm" onClick={(e) => (e.stopPropagation(), void runNow(s))}>
+                  <Button size="sm" title={cloudSchedules.includes(s.id) ? 'Runs in the cloud' : undefined} onClick={(e) => (e.stopPropagation(), void runNow(s))}>
                     Run Now
                   </Button>
                 </span>
@@ -275,7 +317,7 @@ function History({ schedule, onRunNow }: { schedule: Schedule; onRunNow: () => v
 function ScheduleSheet({
   seed,
   existing,
-  workflows,
+  workflows: allWorkflows,
   onClose,
   onSaved
 }: {
@@ -285,7 +327,17 @@ function ScheduleSheet({
   onClose: () => void
   onSaved: (s: Schedule) => void
 }): React.JSX.Element {
-  const repos = useStore((s) => s.repos)
+  // The schedule's company (§3: stamped from its workflow; the guard refuses cross-company targets): the existing
+  // schedule's, the seeded workflow's, else the focused company. All mode can change it; that re-filters the lists.
+  const { scope, multi, companies } = useScope()
+  const [companyId, setCompanyId] = useState<Id>(() => {
+    if (existing) return companyOf(existing)
+    const seeded = seed.workflowId ? allWorkflows.find((w) => w.id === seed.workflowId) : undefined
+    return seeded ? companyOf(seeded) : (scope ?? PERSONAL_COMPANY_ID)
+  })
+  const allRepos = useStore((s) => s.repos)
+  const repos = useMemo(() => (multi ? reposOf(allRepos, companyId) : allRepos), [allRepos, companyId, multi])
+  const workflows = useMemo(() => (multi ? allWorkflows.filter((w) => companyOf(w) === companyId) : allWorkflows), [allWorkflows, companyId, multi])
   const profiles = useStore((s) => s.profiles)
   const providers = useStore((s) => s.providers)
   const settings = useStore((s) => s.settings)
@@ -295,7 +347,7 @@ function ScheduleSheet({
   const [inputs, setInputs] = useState<Record<string, string>>(ex?.kind === 'workflow' ? ex.inputs : (seed.inputs ?? {}))
   const exProfile = ex?.kind === 'prompt' ? profiles.find((p) => p.id === ex.profileId) : undefined
   const [adapter, setAdapter] = useState<AdapterId>(exProfile?.adapter ?? settings?.defaultAdapter ?? 'claude')
-  const [repoId, setRepoId] = useState<string>(ex?.kind === 'prompt' ? (ex.repoId ?? '') : (settings?.lastRepoId ?? ''))
+  const [repoId, setRepoId] = useState<string>(ex?.kind === 'prompt' ? (ex.repoId ?? '') : repos.some((r) => r.id === settings?.lastRepoId) ? settings!.lastRepoId! : '')
   const [prompt, setPrompt] = useState(ex?.kind === 'prompt' ? ex.prompt : '')
   const [form, setForm] = useState<WhenForm>(existing ? whenToForm(existing.when, existing.preset) : defaultForm())
   const [name, setName] = useState(existing?.name ?? '')
@@ -308,7 +360,8 @@ function ScheduleSheet({
     if (!wf || ex?.kind === 'workflow') return
     const prev = lastInputs(wf.id)
     const v: Record<string, string> = {}
-    for (const i of wf.inputs) v[i.name] = seed.inputs?.[i.name] ?? prev[i.name] ?? i.default ?? (i.type === 'repo' ? (settings?.lastRepoId ?? repos[0]?.id ?? '') : '')
+    const lastRepo = repos.some((r) => r.id === settings?.lastRepoId) ? settings!.lastRepoId! : undefined
+    for (const i of wf.inputs) v[i.name] = seed.inputs?.[i.name] ?? prev[i.name] ?? i.default ?? (i.type === 'repo' ? (lastRepo ?? repos[0]?.id ?? '') : '')
     setInputs(v)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowId])
@@ -340,7 +393,7 @@ function ScheduleSheet({
     setBusy(true)
     try {
       const input = { name: name.trim(), target, when: parsed.when, preset: parsed.preset, enabled: existing?.enabled ?? true }
-      const s = existing ? await hive.schedules.update({ id: existing.id, input }) : await hive.schedules.create(input)
+      const s = existing ? await hive.schedules.update({ id: existing.id, input }) : await hive.schedules.create(multi ? { ...input, companyId } : input)
       toast(existing ? 'Schedule saved' : `Scheduled ${s.name}`)
       onSaved(s)
     } catch (e) {
@@ -371,6 +424,28 @@ function ScheduleSheet({
         ) : undefined
       }
     >
+      {multi && (
+        <Field label="Company">
+          <span className="inline-gap">
+            <CompanyChip companyId={companyId} always />
+            {!existing && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  const id = await pickCompany(companies, { exclude: companyId })
+                  if (!id) return
+                  setCompanyId(id)
+                  setWorkflowId(allWorkflows.find((w) => companyOf(w) === id)?.id ?? '')
+                  setRepoId('')
+                }}
+              >
+                Change…
+              </Button>
+            )}
+          </span>
+        </Field>
+      )}
       <Field label="Run">
         <Segmented
           size="sm"

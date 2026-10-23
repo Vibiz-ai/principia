@@ -1,6 +1,12 @@
 /**
  * Hive's own scheduler (SPEC 8, A13). 15 s tick against schedules.next_fire_at; croner for cron math;
  * catch-up on launch / wake; no overlapping runs per schedule; one-offs disable themselves after firing.
+ *
+ * DEPARTMENTS.md §8: a schedule with target.mode 'task' starts no run. It owns one standing board card
+ * "Recurring: <name>" (SchedulerDeps.board, implemented by main over the company board); each fire comments on it and
+ * wakes its agent, and a fire while the agent is busy coalesces into the card's pendingWake (never skipped_overlap,
+ * which stays for 'run' mode). Its catch-up is skip_missed: a slot that passed while Hive was quit or the Mac slept is
+ * logged 'missed', never fired late.
  */
 import { Cron } from 'croner'
 import type { EngineStore, StartRunOptions } from '../../shared/engine'
@@ -17,6 +23,38 @@ import type {
   ScheduleWhen
 } from '../../shared/types'
 
+/** What one task-mode fire did to the schedule's standing card. */
+export interface ScheduleCardResult {
+  taskId: Id
+  identifier: string
+  /** the card did not exist yet (first fire, or the card was deleted) */
+  created: boolean
+  /** the agent was busy on the card: the fire joined its pendingWake */
+  coalesced: boolean
+  /** the card waits for the human (in review, parked) or is closed: the wake is queued, nothing starts now */
+  waiting: string | null
+}
+/** DEPARTMENTS.md §8: the board side of task-mode schedules. Implemented by main (company/recurring.ts). */
+export interface ScheduleBoard {
+  /** experimental.companies + .departments; off, a task-mode fire is an 'error' event */
+  enabled(): boolean
+  /**
+   * Finds the schedule's standing card by its source key (creates it on the first fire, assigned to target.agentId in
+   * schedule.departmentId), adds one comment for this fire and wakes the agent once (the dispatcher coalesces it when
+   * the card is in flight). Throws when the card cannot be written.
+   */
+  fire(s: Schedule, f: { slotAt: string; trigger: 'schedule' | 'catchup' | 'manual'; label: string }): ScheduleCardResult
+}
+/** Scheduler.fireNow: a run ('run' mode) or the standing card it woke ('task' mode). */
+export type ScheduleFireResult = { run: Run; card: null } | { run: null; card: ScheduleCardResult }
+
+export const isTaskMode = (s: Pick<Schedule, 'target'>): boolean => s.target?.mode === 'task'
+/** The schedule event message of a task-mode fire. Pure. */
+export function cardMessage(r: ScheduleCardResult): string {
+  const verb = r.created ? `Created ${r.identifier}` : r.coalesced ? `Coalesced into ${r.identifier} (agent busy)` : `Commented on ${r.identifier}`
+  return `${verb}${r.waiting ? `; ${r.waiting}` : ''}`
+}
+
 export const TICK_MS = 15_000
 export const MIN_INTERVAL_MS = 5 * 60_000
 export const CATCHUP_MIN_INTERVAL_MS = 60 * 60_000
@@ -30,6 +68,8 @@ export interface SchedulerDeps {
   /** CONTRACT §13 "Retry at reset": rerun a run (trigger 'rerun', parentRunId = it). Absent = retries off. */
   rerun?(r: Run): Run
   isScheduleActive(scheduleId: Id): boolean
+  /** DEPARTMENTS.md §8: task-mode schedules. Absent = a task-mode fire is an 'error' event. */
+  board?: ScheduleBoard | null
   emit(e: EngineEvent): void
   log: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
   now(): Date
@@ -163,7 +203,10 @@ export interface Scheduler {
   fireRetries(): void
   upsert(id: Id): Schedule
   remove(id: Id): void
+  /** 'run' mode only; a task-mode schedule refuses (use fireNow). */
   runNow(id: Id): Run
+  /** "Run now" for either mode: starts the run, or comments on and wakes the standing card. */
+  fireNow(id: Id): ScheduleFireResult
   nextRuns(limit: number): NextFire[]
   setPaused(paused: boolean): void
   isPaused(): boolean
@@ -197,11 +240,33 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     d.emit({ type: 'schedule.event', event: e, scheduleName: s.name })
   }
 
+  /** The standing card of a task-mode schedule, through the board. Throws when the board is off or the write fails. */
+  const fireCard = (s: Schedule, slot: Date, trigger: 'schedule' | 'catchup' | 'manual'): ScheduleCardResult => {
+    const board = d.board
+    if (!board || !board.enabled())
+      throw new HiveError('conflict', `"${s.name}" posts to the company board: turn on Companies and Departments under Settings → Experimental`)
+    return board.fire(s, { slotAt: slot.toISOString(), trigger, label: slotLabel(slot, s.when, d.now()) })
+  }
+
   /** Starts a run for a slot unless the previous one is still active. Persists fire-state + event. */
   const fire = (s: Schedule, slot: Date, trigger: 'schedule' | 'catchup', kind: 'fired' | 'caught_up'): void => {
     const now = d.now()
     const oneOff = s.when.kind === 'at'
     const after = { nextFireAt: oneOff ? null : nextAllowed(s, now)?.toISOString() ?? null, ...(oneOff ? { enabled: false } : {}) }
+    if (isTaskMode(s)) {
+      // no overlap check: a busy agent coalesces the fire into its card (DEPARTMENTS.md §8)
+      try {
+        const r = fireCard(s, slot, trigger)
+        setState(s.id, { ...after, lastFireAt: slot.toISOString() })
+        event(s, kind, slot, null, cardMessage(r))
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        d.log.warn('scheduler: card fire failed', { scheduleId: s.id, error: msg })
+        event(s, 'error', slot, null, msg)
+        setState(s.id, { ...after, lastFireAt: slot.toISOString() })
+      }
+      return
+    }
     if (d.isScheduleActive(s.id)) {
       event(s, 'skipped_overlap', slot, null, 'Previous run still active')
       setState(s.id, after)
@@ -220,8 +285,27 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     }
   }
 
+  /** DEPARTMENTS.md §8: a task-mode schedule never fires a missed slot late (skip_missed): log it, move on. */
+  const skipMissed = (s: Schedule, now: Date): void => {
+    const first = new Date(s.nextFireAt!)
+    if (s.when.kind === 'at') {
+      event(s, 'missed', first, null, 'Missed while the Mac was asleep or Hive was not running; recurring tasks skip missed slots')
+      setState(s.id, { nextFireAt: null, enabled: false })
+      return
+    }
+    let newest = first
+    let count = 1
+    for (let cur = nextFire(s.when, first); cur && cur.getTime() <= now.getTime() && count < 100_000; cur = nextFire(s.when, cur)) {
+      newest = cur
+      count++
+    }
+    event(s, 'missed', newest, null, `${count === 1 ? 'Slot' : `${count} slots`} missed; recurring tasks skip missed slots`)
+    setState(s.id, { nextFireAt: nextAllowed(s, now)?.toISOString() ?? null })
+  }
+
   /** SPEC 8.2 / A13 for one schedule whose nextFireAt is in the past. */
   const handleMissed = (s: Schedule, now: Date): void => {
+    if (isTaskMode(s)) return skipMissed(s, now)
     const first = new Date(s.nextFireAt!)
     if (s.when.kind === 'at') {
       if (now.getTime() - first.getTime() < CATCHUP_MAX_AGE_MS) return fire(s, first, 'catchup', 'caught_up')
@@ -327,7 +411,7 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
       try {
         // Any slot already in the past at launch/resume passed while Hive was quit or the Mac slept: it is a
         // catch-up even when only seconds late, never a regular "fired".
-        if (now.getTime() - slot.getTime() <= LATE_MS) fire(s, slot, 'catchup', 'caught_up')
+        if (now.getTime() - slot.getTime() <= LATE_MS && !isTaskMode(s)) fire(s, slot, 'catchup', 'caught_up')
         else handleMissed(s, now)
       } catch (e) {
         d.log.warn('scheduler: catch-up error', { scheduleId: s.id, error: String(e) })
@@ -347,6 +431,18 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
         setState(s.id, { nextFireAt: null, enabled: false })
       } else if ((n?.toISOString() ?? null) !== s.nextFireAt) setState(s.id, { nextFireAt: n?.toISOString() ?? null })
     }
+  }
+
+  const runNow = (id: Id): Run => {
+    const s = d.store.getSchedule(id)
+    if (!s) throw new HiveError('not_found', `Schedule ${id} not found`)
+    if (isTaskMode(s)) throw new HiveError('conflict', `"${s.name}" posts to its board card instead of starting a run`)
+    if (d.isScheduleActive(id)) throw new HiveError('conflict', `"${s.name}" is still running`)
+    const now = d.now()
+    const run = d.startRun(s.target, { trigger: 'manual', scheduleId: id })
+    setState(id, { lastRunId: run.id })
+    event(s, 'fired', now, run.id, 'Run now')
+    return run
   }
 
   return {
@@ -374,15 +470,16 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     remove(id) {
       removed.add(id)
     },
-    runNow(id) {
+    runNow,
+    fireNow(id) {
       const s = d.store.getSchedule(id)
       if (!s) throw new HiveError('not_found', `Schedule ${id} not found`)
-      if (d.isScheduleActive(id)) throw new HiveError('conflict', `"${s.name}" is still running`)
+      if (!isTaskMode(s)) return { run: runNow(id), card: null }
       const now = d.now()
-      const run = d.startRun(s.target, { trigger: 'manual', scheduleId: id })
-      setState(id, { lastRunId: run.id })
-      event(s, 'fired', now, run.id, 'Run now')
-      return run
+      const card = fireCard(s, now, 'manual')
+      setState(id, { lastFireAt: now.toISOString() })
+      event(s, 'fired', now, null, `Run now: ${cardMessage(card)}`)
+      return { run: null, card }
     },
     nextRuns(limit) {
       if (paused) return []

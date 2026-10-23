@@ -1594,3 +1594,117 @@ export function inferEntityType(name: string): string {
     return 'component'
   return 'concept'
 }
+
+// ======================================================================================
+// Vault grants (PASSPORT.md §7.5). passport-index.db `mem_grant` rows: the v1 shape plus the company, the vault folder
+// and the per-grant spool. Main creates and closes them; the hivemem server only reads its own row (binding, §7.1).
+// ======================================================================================
+export interface VaultGrantRow extends GrantRow {
+  company_id: string
+  vault_path: string | null
+  spool_dir: string | null
+}
+export interface VaultGrantInput extends GrantInput {
+  companyId: Id
+  vaultPath: string | null
+  /** Builds the spool dir from the new grant id (`<userData>/mem-rpc/<grantId>`). */
+  spoolDir: ((grantId: Id) => string) | null
+}
+
+/** Minimal db surface (passport-index.db is opened by memory/vault/indexDb.ts; this file stays free of vault imports). */
+type GrantDb = MemDB
+
+export class VaultGrantStore {
+  constructor(
+    readonly db: GrantDb,
+    private now: () => Date = () => new Date()
+  ) {}
+
+  create(g: VaultGrantInput): VaultGrantRow {
+    const id = newId('memGrant')
+    const row: VaultGrantRow = {
+      id,
+      company_id: g.companyId,
+      vault_path: g.vaultPath,
+      spool_dir: g.spoolDir ? g.spoolDir(id) : null,
+      mode: g.mode,
+      adapter: g.adapter,
+      transport: g.transport,
+      profile_id: g.profileId ?? null,
+      profile_name: g.profileName ?? null,
+      model: g.model ?? null,
+      repo_id: g.repoId ?? null,
+      repo_name: g.repoName ?? null,
+      run_id: g.runId ?? null,
+      run_title: g.runTitle ?? null,
+      workflow_id: g.workflowId ?? null,
+      step_id: g.stepId ?? null,
+      node_id: g.nodeId ?? null,
+      node_label: g.nodeLabel ?? null,
+      session_id: g.sessionId ?? null,
+      writes: 0,
+      created_at: this.now().toISOString(),
+      closed_at: null
+    }
+    this.db
+      .prepare(
+        `INSERT INTO mem_grant (id, company_id, vault_path, spool_dir, mode, adapter, transport, profile_id, profile_name, model, repo_id,
+           repo_name, run_id, run_title, workflow_id, step_id, node_id, node_label, session_id, writes, created_at, closed_at)
+         VALUES (@id, @company_id, @vault_path, @spool_dir, @mode, @adapter, @transport, @profile_id, @profile_name, @model, @repo_id,
+           @repo_name, @run_id, @run_title, @workflow_id, @step_id, @node_id, @node_label, @session_id, @writes, @created_at, @closed_at)`
+      )
+      .run(row)
+    return row
+  }
+  get(id: string): VaultGrantRow | null {
+    return (this.db.prepare('SELECT * FROM mem_grant WHERE id = ?').get(id) as VaultGrantRow | undefined) ?? null
+  }
+  close(id: string): VaultGrantRow | null {
+    this.db.prepare('UPDATE mem_grant SET closed_at = ? WHERE id = ? AND closed_at IS NULL').run(this.now().toISOString(), id)
+    return this.get(id)
+  }
+  /** Boot recovery: the grants a previous process left open, now closed (their spool dirs are swept by the caller). */
+  closeAllOpen(): VaultGrantRow[] {
+    const open = this.db.prepare('SELECT * FROM mem_grant WHERE closed_at IS NULL').all() as VaultGrantRow[]
+    if (open.length) this.db.prepare('UPDATE mem_grant SET closed_at = ? WHERE closed_at IS NULL').run(this.now().toISOString())
+    return open
+  }
+  open(): VaultGrantRow[] {
+    return this.db.prepare('SELECT * FROM mem_grant WHERE closed_at IS NULL').all() as VaultGrantRow[]
+  }
+  /** Weighted budget (§7.3): facts 1, links 0.25. Returns what is left after taking `n`; refuses when over. */
+  takeWrites(g: VaultGrantRow, n: number): number {
+    if (n <= 0) return LIMITS.writesPerGrant - g.writes
+    if (g.writes + n > LIMITS.writesPerGrant + 1e-9) {
+      throw new MemoryRefusal(`Refused: write limit reached (${LIMITS.writesPerGrant} per step; ${Math.max(0, Math.floor(LIMITS.writesPerGrant - g.writes))} left)`)
+    }
+    this.db.prepare('UPDATE mem_grant SET writes = writes + ? WHERE id = ?').run(n, g.id)
+    g.writes += n
+    return writesLeft(g)
+  }
+  /** Grants with what they wrote (mem_event rows by grant), oldest first. Company-scoped when `companyId` is given. */
+  list(q: { runId?: Id; sessionId?: Id; companyId?: Id }): MemoryGrantInfo[] {
+    const where: string[] = []
+    const params: unknown[] = []
+    if (q.runId) where.push('g.run_id = ?'), params.push(q.runId)
+    if (q.sessionId) where.push('g.session_id = ?'), params.push(q.sessionId)
+    if (q.companyId) where.push('g.company_id = ?'), params.push(q.companyId)
+    const rows = this.db
+      .prepare(
+        `SELECT g.*,
+           (SELECT count(*) FROM mem_event e WHERE e.grant_id = g.id AND e.target_kind = 'fact' AND e.op IN ('create','supersede')) AS n_facts,
+           (SELECT count(*) FROM mem_event e WHERE e.grant_id = g.id AND e.target_kind = 'relation' AND e.op = 'create') AS n_rel,
+           (SELECT count(*) FROM mem_event e WHERE e.grant_id = g.id AND e.op = 'invalidate') AS n_inv
+         FROM mem_grant g ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY g.created_at`
+      )
+      .all(...params) as (VaultGrantRow & { n_facts: number; n_rel: number; n_inv: number })[]
+    return rows.map((g) => ({
+      ...grantProvenance(g),
+      mode: g.mode as Exclude<MemoryMode, 'off'>,
+      closedAt: g.closed_at,
+      wrote: { facts: g.n_facts, relations: g.n_rel, invalidated: g.n_inv }
+    }))
+  }
+}
+
+export const writesLeft = (g: Pick<GrantRow, 'writes'>): number => Math.max(0, Math.floor((LIMITS.writesPerGrant - g.writes) * 100) / 100)

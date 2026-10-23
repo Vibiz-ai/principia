@@ -25,7 +25,11 @@ export default defineConfig({
           'hive-hook': resolve(__dirname, 'src/main/live/hookMain.ts'),
           // fourth entry: the `hive` authoring stdio MCP server (docs/AUTHORING.md §1.1), interactive claude panes only
           'mcp-hive': resolve(__dirname, 'src/main/author/server/main.ts'),
-          'mcp-gateway': resolve(__dirname, 'src/main/gateway/main.ts')
+          'mcp-gateway': resolve(__dirname, 'src/main/gateway/main.ts'),
+          // FORUM.md §4.1: the `forum` CLI + principia-forum stdio MCP server, run by agent steps via ELECTRON_RUN_AS_NODE
+          'forum-cli': resolve(__dirname, 'src/main/forum/cli/main.ts'),
+          // open-passport docs/connect.md: the Open Passport stdio MCP server other apps run on the live vault
+          'mcp-passport': resolve(__dirname, 'src/main/memory/passportMcpMain.ts')
         },
         // native modules stay external and are asar-unpacked by electron-builder
         external: ['better-sqlite3', 'node-pty']

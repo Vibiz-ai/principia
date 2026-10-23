@@ -37,6 +37,31 @@ describe('Principia MCP gateway', () => {
       expect(service.attachment(root)).toBeNull()
     } finally { service.close(); fs.rmSync(dir, { recursive: true, force: true }) }
   })
+  it('adds the default Vibiz connection once, keeps a removal, and grants it only after sign-in', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'principia-defaults-'))
+    const key = crypto.randomBytes(32)
+    const cipher = { available: () => true, encrypt: (s: string) => { const nonce = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', key, nonce); return Buffer.concat([nonce, c.update(s), c.final(), c.getAuthTag()]) }, decrypt: (b: Buffer) => { const c = crypto.createDecipheriv('aes-256-gcm', key, b.subarray(0,12)); c.setAuthTag(b.subarray(-16)); return Buffer.concat([c.update(b.subarray(12,-16)), c.final()]).toString() } }
+    const make = (seedDefaults = true): GatewayService => new GatewayService({ userData: dir, mainDir: dir, cipher, vault: { addRedactions() {} } as unknown as Vault, baseEnv: () => ({}), seedDefaults })
+    const services: GatewayService[] = []
+    try {
+      const plain = make(false); services.push(plain)
+      expect(plain.list()).toEqual([])
+      const first = make(); services.push(first)
+      expect(first.list()).toEqual([expect.objectContaining({ id: 'vibiz', name: 'Vibiz', url: 'https://www.vibiz.ai/api/mcp', authentication: 'oauth', scope: 'global', enabled: true, hasCredentials: false, authStatus: 'disconnected' })])
+      expect(first.attachment(dir)).toBeNull()
+      const again = make(); services.push(again)
+      expect(again.list().filter(c => c.id === 'vibiz')).toHaveLength(1)
+      again.remove('vibiz')
+      const afterRemove = make(); services.push(afterRemove)
+      expect(afterRemove.list()).toEqual([])
+      const other = fs.mkdtempSync(path.join(os.tmpdir(), 'principia-defaults-own-'))
+      try {
+        fs.writeFileSync(path.join(other, 'mcp-connections.json'), JSON.stringify([{ config: { id: 'mine', name: 'My Vibiz', transport: 'http', url: 'https://vibiz.ai/api/mcp/', enabled: true, roots: [], authentication: 'oauth', hasCredentials: false }, cipher: cipher.encrypt('{}').toString('base64') }]))
+        const own = new GatewayService({ userData: other, mainDir: other, cipher, vault: { addRedactions() {} } as unknown as Vault, baseEnv: () => ({}), seedDefaults: true }); services.push(own)
+        expect(own.list().map(c => c.id)).toEqual(['mine'])
+      } finally { fs.rmSync(other, { recursive: true, force: true }) }
+    } finally { for (const s of services) s.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
   it('initializes and invokes a real stdio MCP server', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'principia-upstream-'))
     const script = path.join(dir, 'server.cjs')

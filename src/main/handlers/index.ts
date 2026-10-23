@@ -1,3 +1,6 @@
+import { registerCompanyHandlers } from './company'
+import { registerBoardHandlers } from './board'
+import { registerOpenPassportHandlers } from './openPassport'
 import { registerGatewayHandlers } from './gateway'
 import type { Hive } from '../hive'
 import { registerMissingAsNotImplemented } from '../ipc'
@@ -16,8 +19,15 @@ import { registerAgentHandlers } from './agents'
 import { registerAuthorHandlers } from './author'
 import { registerSlackHandlers } from './slack'
 import { registerMarketplaceHandlers } from './marketplace'
+import { registerOnboardingHandlers } from './onboarding'
+import { registerForumHandlers } from './forum'
+import { registerCloudHandlers } from './cloud'
+import { registerDashboardHandlers } from './dashboards'
 
 export function registerAllHandlers(h: Hive): void {
+  registerCompanyHandlers(h)
+  registerBoardHandlers(h)
+  registerOpenPassportHandlers(h)
   registerGatewayHandlers(h)
   registerAppHandlers(h)
   registerRepoHandlers(h)
@@ -33,6 +43,10 @@ export function registerAllHandlers(h: Hive): void {
   registerAuthorHandlers(h)
   registerSlackHandlers(h)
   registerMarketplaceHandlers(h)
+  registerOnboardingHandlers(h)
+  registerForumHandlers(h)
+  registerCloudHandlers(h)
+  registerDashboardHandlers(h)
   const missing = registerMissingAsNotImplemented()
   if (missing.length) log.warn('IPC channels without a handler', { missing })
 }

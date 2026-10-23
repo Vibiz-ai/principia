@@ -1,6 +1,7 @@
 /**
- * Memory page (MEMORY.md §10, PO8/PO9): what agents know about a repo, as a graph you can click,
- * a newest-first table, and a review queue. Every row shows who wrote it, from which run, and when.
+ * The `memory` route redirects to the Passport (PASSPORT.md §10). What remains here is the v1 Memory page
+ * (MEMORY.md §10, PO8/PO9), which the Passport shows while the vault is off: what agents know about a repo, as a
+ * graph you can click, a newest-first table, and a review queue. Every row shows who wrote it, from which run, and when.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AdapterId, Id } from '@shared/types'
@@ -41,7 +42,37 @@ function scopeKey(s: MemoryPageScope | null): string {
   return !s ? '' : typeof s === 'string' ? s : s.repoId
 }
 
-export function MemoryView({ view }: { view: Extract<ViewState, { name: 'memory' }> }): React.JSX.Element {
+type MemoryViewState = Extract<ViewState, { name: 'memory' }>
+
+/**
+ * PASSPORT.md §10: the `memory` route is a redirect to the Passport. Deep links keep working: run, session and search
+ * map onto the passport ViewState; the v1-only parts (repo scope, entity) ride along in `takeMemoryHandoff` for the
+ * Passport (entity -> note id) or for the legacy page it shows while the vault is off.
+ */
+export function MemoryView({ view }: { view: MemoryViewState }): React.JSX.Element {
+  useEffect(() => {
+    const nonce = view.nonce ?? Date.now()
+    handoff = { nonce, scope: view.scope, entityId: view.entityId }
+    // replace, not navigate: Back skips the redirect
+    setState({ view: { name: 'passport', runId: view.runId, sessionId: view.sessionId, search: view.search ? '' : undefined, nonce } })
+  }, [view])
+  return (
+    <div className="view">
+      <Toolbar title="Passport" />
+      <Loading />
+    </div>
+  )
+}
+
+let handoff: { nonce: number; scope?: MemoryPageScope; entityId?: Id } | null = null
+/** The v1 deep-link fields of the redirect that produced this passport view (matched by nonce; render-safe, no side effects). */
+export function takeMemoryHandoff(nonce: number | undefined): { scope?: MemoryPageScope; entityId?: Id } | null {
+  if (!handoff || nonce === undefined || handoff.nonce !== nonce) return null
+  return { scope: handoff.scope, entityId: handoff.entityId }
+}
+
+/** The v1 Memory page (memory.db), shown by the Passport while `experimental.vault` is off. */
+export function LegacyMemoryPage({ view }: { view: MemoryViewState }): React.JSX.Element {
   return (
     <AskProvider>
       <MemoryPage view={view} />
@@ -394,6 +425,8 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
         <IconButton icon="more" label="More" onClick={() => void moreMenu()} />
       </Toolbar>
 
+      <MemoryConnectionStatus />
+
       {nothingAtAll ? (
         <EmptyState
           icon="memory"
@@ -597,6 +630,18 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
       )}
     </div>
   )
+}
+
+/** Capability is for new sessions; existing processes retain their original grants. */
+function MemoryConnectionStatus(): React.JSX.Element {
+  const providers = useStore(s => s.providers)
+  const mode = useStore(s => s.settings?.sessionMemory ?? 'read-write')
+  const available = providers.filter(p => p.available && p.id !== 'shell')
+  return <div className="mview__connections" aria-label="Memory connections">
+    <div><strong>Shared project memory</strong><span>Saved facts and decisions appear here. Full conversations stay in session history.</span></div>
+    <div className="mview__connection-badges">{available.map(p => <span key={p.id} className={p.memory === 'inject' ? 'text-warning' : ''} title="Applies to new sessions in an assigned project; existing sessions keep their original connection.">{p.label}: {mode === 'off' ? 'off for new sessions' : p.memory === 'mcp' ? mode === 'read-write' ? 'read & write tools' : 'read tools' : 'brief only · cannot save'}</span>)}</div>
+    <div className="mview__connection-actions"><Button size="sm" variant="ghost" icon="passport" onClick={() => void navigate({ name: 'passport' })}>Company Passport</Button><Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>Memory settings</Button></div>
+  </div>
 }
 
 async function entityContextMenu(id: Id, g: Graph, select: (id: Id | null, o?: { focus?: boolean }) => void, setCenter: (c: { id: Id; name: string; hops: 1 | 2 } | null) => void): Promise<void> {

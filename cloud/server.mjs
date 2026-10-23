@@ -1,3 +1,9 @@
+// Legacy Principia runner (kept so existing installs keep working; Principia Cloud replaces it, see cloud/README.md).
+//   PRINCIPIA_API_TOKEN=$(openssl rand -hex 32) ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron cloud/server.mjs
+// Variables: PRINCIPIA_API_TOKEN (required, 32+ chars; every route needs it as a bearer), PRINCIPIA_CONCURRENCY (1),
+// PRINCIPIA_TIMEOUT_MS (1800000), TELEGRAM_BOT_TOKEN with TELEGRAM_ALLOWED_USER_IDS and TELEGRAM_ALLOWED_CHAT_IDS (both
+// allowlists must match), PRINCIPIA_MCP_MASTER_KEY and PRINCIPIA_MCP_CONFIG (an optional shared MCP gateway). Keep it
+// behind a tunnel or VPN: the token authorizes code execution as the container user.
 import { createServer } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { pathToFileURL } from 'node:url'

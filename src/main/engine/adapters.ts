@@ -4,7 +4,7 @@
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { MemoryGrant } from '../../shared/engine'
 import type { AdapterId, AgentProfile } from '../../shared/types'
 import { AUTHOR_HINT } from './authoring'
@@ -69,6 +69,11 @@ export interface HeadlessRequest {
    * files or reach the web, and with only Hive's own MCP servers; the profile's permission flags are dropped.
    */
   restricted?: boolean
+  /**
+   * SLACK.md §9.6: local image files from the triggering Slack thread (run artifacts). claude: `--add-dir` of their
+   * folder so even a restricted step can Read them; codex: one `-i <file>` each. The prompt lists the paths.
+   */
+  images?: string[]
 }
 export interface HeadlessInvocation {
   args: string[]
@@ -92,7 +97,7 @@ export interface InteractiveRequest {
   bypass?: boolean
   /** Memory MCP args from `mcpAttach`. claude puts them first. */
   mcpArgs?: string[]
-  /** Memory brief for the session (claude: appended to --append-system-prompt). */
+  /** Scoped memory + company Passport context. Does not initiate a user turn. */
   memoryBrief?: string
   /** Per-spawn hook args from `hooksAttach` (claude: --settings <file>; cursor: --plugin-dir). */
   hookArgs?: string[]
@@ -100,6 +105,8 @@ export interface InteractiveRequest {
   authorHint?: boolean
   /** SLACK.md §12.3: first user message (claude: positional prompt, the session starts working on it). */
   initialPrompt?: string
+  /** DEPARTMENTS.md §9: more folders the pane may read and edit (claude and codex `--add-dir`). Absolute paths only. */
+  addDirs?: string[]
 }
 
 export interface Adapter {
@@ -216,6 +223,19 @@ const claudeInteractiveMode = (req: InteractiveRequest): string[] => {
 }
 const model = (p: AgentProfile | null, flag: string): string[] => (p?.model ? [flag, p.model] : [])
 const extra = (p: AgentProfile | null): string[] => p?.extraArgs ?? []
+/** claude `--add-dir <dir>…` for the folders holding the Slack thread images (absolute paths only). */
+const imageDirArgs = (images: string[] | undefined): string[] => {
+  const dirs = [...new Set((images ?? []).filter((f) => isAbsolute(f)).map((f) => dirname(f)))]
+  return dirs.length ? ['--add-dir', ...dirs] : []
+}
+
+/** `--add-dir` for a chat's extra folders: claude takes them variadic ('many'), codex one per flag ('each'). Absolute, de-duplicated. */
+export const addDirArgs = (dirs: string[] | undefined, form: 'many' | 'each'): string[] => {
+  const list = [...new Set((dirs ?? []).filter((d) => isAbsolute(d) && !d.startsWith('-')))]
+  if (!list.length) return []
+  return form === 'many' ? ['--add-dir', ...list] : list.flatMap((d) => ['--add-dir', d])
+}
+
 /** Positional prompt that starts with '-' would be read as a flag. */
 const positional = (s: string): string => (s.startsWith('-') ? ` ${s}` : s)
 /**
@@ -253,6 +273,8 @@ export const claudeAdapter: Adapter = {
         // variadic --mcp-config/--allowedTools: always followed by --resume/--session-id, never the prompt
         ...(req.mcpArgs ?? []),
         ...(req.restricted ? restrictedClaudeArgs() : []),
+        // variadic --add-dir too: the thread images' folder (§9.6), still before --resume/--session-id
+        ...imageDirArgs(req.images),
         ...(req.resumeId ? ['--resume', id] : ['--session-id', id]),
         ...model(req.profile, '--model'),
         ...(req.restricted
@@ -278,6 +300,8 @@ export const claudeAdapter: Adapter = {
       args: [
         ...(req.hookArgs ?? []),
         ...(req.mcpArgs ?? []),
+        // variadic, like --mcp-config: always followed by --resume / --session-id
+        ...addDirArgs(req.addDirs, 'many'),
         ...(req.resumeId ? ['--resume', id] : ['--session-id', id]),
         // the positional first message sits right after a single-value flag, never after a variadic one
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : []),
@@ -309,6 +333,8 @@ export const codexAdapter: Adapter = {
       agentSessionId: null,
       args: [
         'exec',
+        // -i is variadic: each image sits before --json, never right before the positional prompt
+        ...(req.images ?? []).flatMap((f) => ['-i', f]),
         '--json',
         '--skip-git-repo-check',
         ...(req.mcpArgs ?? []),
@@ -325,8 +351,12 @@ export const codexAdapter: Adapter = {
       args: [
         // Keep Codex output in xterm's normal buffer so Hive retains scrollback.
         '--no-alt-screen',
+        // Per-process context only: never modify the user's global Codex configuration.
+        // A profile's explicit extraArgs overrides remain authoritative below.
+        ...(req.memoryBrief?.trim() && !req.resumeId ? ['-c', `developer_instructions=${JSON.stringify(req.memoryBrief)}`] : []),
         ...(req.mcpArgs ?? []),
         ...(ibypass(req) ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+        ...addDirArgs(req.addDirs, 'each'),
         ...model(req.profile, '-m'),
         ...extra(req.profile),
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : [])

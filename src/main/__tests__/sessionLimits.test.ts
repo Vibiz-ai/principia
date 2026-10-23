@@ -48,7 +48,9 @@ d('session usage limits + Stalled?', () => {
     onStalled: (_r, since) => stalls.push(since),
     // quiet-tail timers and the resume's submit run when the test says so
     setTimer: (fn) => (timers.push(fn), timers.length),
-    clearTimer: () => {}
+    clearTimer: () => {},
+    // the test's clock: a reset time like "7am" resolves against it, not the day the suite happens to run
+    now: () => new Date(clock)
   })
   const runTimers = (): void => {
     const t = timers.splice(0)

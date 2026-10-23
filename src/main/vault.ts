@@ -63,6 +63,10 @@ export class Vault {
   removeRedactions(name: string): void {
     if (this.extraRedactions.delete(name)) this.rebuild()
   }
+  /** Re-reads every shared and company value into the redact table (call after company_secrets changed). */
+  refreshRedactions(): void {
+    this.rebuild()
+  }
 
   /** Vault values for memory's secret fingerprints (main only, never persisted in plaintext). Does not mark lastUsedAt. */
   secretValues(): { name: string; value: string }[] {
@@ -90,12 +94,29 @@ export class Vault {
     return rows.map(toMeta)
   }
 
-  /** Names a selection covers (['*'] = all), without decrypting anything. */
-  names(selection: string[]): string[] {
+  /**
+   * Names a selection covers (['*'] = all), without decrypting anything. COMPANY.md §4: with `companyId`, that
+   * company's keys join the shared ones ('*' never reaches another company's keys).
+   */
+  names(selection: string[], companyId?: string | null): string[] {
     const all = selection.includes('*')
-    return this.list()
-      .map((m) => m.name)
+    const own = companyId ? this.companyRows(companyId).map((r) => r.name) : []
+    return [...new Set([...this.list().map((m) => m.name), ...own])]
       .filter((n) => all || selection.includes(n))
+      .sort()
+  }
+
+  /** company_secrets rows of one company, or of every company (redaction). [] when the table does not exist yet. */
+  private companyRows(companyId?: string): { company_id: string; name: string; cipher: Buffer }[] {
+    try {
+      return (
+        companyId
+          ? this.db.prepare('SELECT company_id, name, cipher FROM company_secrets WHERE company_id = ?').all(companyId)
+          : this.db.prepare('SELECT company_id, name, cipher FROM company_secrets').all()
+      ) as { company_id: string; name: string; cipher: Buffer }[]
+    } catch {
+      return []
+    }
   }
 
   get(name: string): SecretMeta | null {
@@ -151,8 +172,12 @@ export class Vault {
     return this.cipher.decrypt(r.cipher)
   }
 
-  /** Decrypted { NAME: value } for spawn env. ['*'] = all. Unknown names skipped. Marks lastUsedAt. */
-  resolve(names: string[]): Record<string, string> {
+  /**
+   * Decrypted { NAME: value } for spawn env. ['*'] = all. Unknown names skipped. Marks lastUsedAt (shared keys).
+   * COMPANY.md §4: `companyId` overlays that company's keys: a company value overrides a shared one of the same name,
+   * and '*' means every shared key plus this company's, never another company's. Absent = shared keys only.
+   */
+  resolve(names: string[], companyId?: string | null): Record<string, string> {
     if (!names.length || !this.available()) return {}
     const all = names.includes('*')
     const rows = this.db.prepare('SELECT name, cipher FROM secrets').all() as Pick<SecretRow, 'name' | 'cipher'>[]
@@ -167,10 +192,36 @@ export class Vault {
         /* undecryptable (Keychain item reset) -> skip */
       }
     }
+    for (const r of companyId ? this.companyRows(companyId) : []) {
+      if (!all && !names.includes(r.name)) continue
+      try {
+        out[r.name] = this.cipher.decrypt(r.cipher)
+      } catch {
+        /* undecryptable: the shared value (if any) stays */
+      }
+    }
     if (used.length) {
       const ts = this.now().toISOString()
       const stmt = this.db.prepare('UPDATE secrets SET last_used_at = ? WHERE name = ?')
       this.db.transaction(() => used.forEach((n) => stmt.run(ts, n)))()
+    }
+    return out
+  }
+
+  /**
+   * Only this company's own values for `names` (no shared fallback). PASSPORT.md §12: the AI suggestion call bills the
+   * company's own provider key, never a shared one.
+   */
+  resolveCompanyOnly(names: string[], companyId: string): Record<string, string> {
+    if (!names.length || !this.available()) return {}
+    const out: Record<string, string> = {}
+    for (const r of this.companyRows(companyId)) {
+      if (!names.includes(r.name)) continue
+      try {
+        out[r.name] = this.cipher.decrypt(r.cipher)
+      } catch {
+        /* undecryptable: skipped */
+      }
     }
     return out
   }
@@ -190,7 +241,8 @@ export class Vault {
       this.redactTable = [...this.extraRedactions].map(([name, value]) => [value, name] as [string, string]).sort((a, b) => b[0].length - a[0].length)
       return
     }
-    const rows = this.db.prepare('SELECT name, cipher FROM secrets').all() as Pick<SecretRow, 'name' | 'cipher'>[]
+    // COMPANY.md §4: redaction stays global, so a key of company A is masked in company B's output too
+    const rows = [...(this.db.prepare('SELECT name, cipher FROM secrets').all() as Pick<SecretRow, 'name' | 'cipher'>[]), ...this.companyRows()]
     const table: [string, string][] = []
     for (const r of rows) {
       try {

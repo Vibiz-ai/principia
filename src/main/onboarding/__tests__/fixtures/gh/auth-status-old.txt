@@ -1,0 +1,2 @@
+github.com
+  ✓ Logged in to github.com as monalisa (/Users/m/.config/gh/hosts.yml)

@@ -56,6 +56,18 @@ export type StopReason = (typeof STOP_REASONS)[number]
 export const ARTIFACT_KINDS = ['image', 'video', 'audio', 'html', 'markdown', 'pdf', 'code', 'other'] as const
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number]
 
+/**
+ * COMPANY.md §1.4, §3: every row read from hive.db carries the company it belongs to, with NULL and dangling stamps
+ * read as Personal (`co_personal`, see shared/company.ts). Optional on the types only so literal fixtures compile.
+ */
+export interface CompanyStamped {
+  companyId?: Id
+}
+/** COMPANY.md §7: the optional list filter. Absent = all companies (exactly the pre-company behaviour). */
+export interface CompanyFilter {
+  companyId?: Id
+}
+
 // ---------- providers ----------
 export interface ProviderInfo {
   id: AdapterId
@@ -75,7 +87,7 @@ export interface ProviderInfo {
 }
 
 // ---------- repos ----------
-export interface Repo {
+export interface Repo extends CompanyStamped {
   id: Id
   name: string // basename by default
   path: string // absolute
@@ -83,6 +95,8 @@ export interface Repo {
   exists: boolean // false -> greyed "folder not found"
   isGit: boolean
   liveSessions: number // running sessions with this repoId
+  /** COMPANY.md §2.3: position in its company's `repo_order:<companyId>` (the sidebar group order); 0-based. */
+  companyOrder?: number
 }
 
 // ---------- agent profiles ----------
@@ -109,7 +123,7 @@ export type AgentProfileInput = Pick<AgentProfile, 'name' | 'adapter'> &
 
 // ---------- sessions (interactive PTY) ----------
 export type SessionStatus = 'running' | 'exited'
-export interface Session {
+export interface Session extends CompanyStamped {
   id: Id
   title: string // "<repo name> · Claude" or "Chat · Claude"
   profileId: Id
@@ -128,6 +142,11 @@ export interface Session {
   fromRunId: Id | null
   /** Agent-side conversation id (claude: the uuid Hive passed via --session-id). Restart resumes it. null = not resumable. */
   agentSessionId: string | null
+  /**
+   * DEPARTMENTS.md §9: a chat opened inside a department ("New Chat in Marketing"). It lists under that department in
+   * the sidebar, and its context carries the department's charter, agents and open tasks. Absent / null = not one.
+   */
+  departmentId?: Id | null
 }
 
 // ---------- workflows ----------
@@ -239,6 +258,8 @@ export interface WorkflowDraft {
   worktree?: WorkflowWorktree | null
   /** SLACK.md §9.4: headless claude steps get the `hive` server's slack toolset (when Slack is connected). */
   slackTools?: boolean
+  /** Explicit opt-in to profile permissions for Slack-reading coding workflows. Slack send policy still applies. */
+  slackAgentPermissions?: 'restricted' | 'profile'
 }
 /** AUTHORING.md §2.5: who authored a workflow through the `hive` tools. Not exported in WorkflowFile. */
 export interface WorkflowOrigin {
@@ -254,11 +275,13 @@ export interface WorkflowOrigin {
   edited: boolean // the user changed it before approving
   updatedBy?: { draftId: Id; ownerLabel: string; at: ISODate }[]
 }
-export interface Workflow extends WorkflowDraft {
+export interface Workflow extends WorkflowDraft, CompanyStamped {
   id: Id
   createdAt: ISODate
   updatedAt: ISODate
   origin?: WorkflowOrigin | null
+  /** DEPARTMENTS.md §8: the department it shows under as a recurring agent (workflows.department_id). Absent = none. */
+  departmentId?: Id | null
 }
 /** `.hive.json` export format. */
 export interface WorkflowFile {
@@ -276,7 +299,7 @@ export interface ValidationError {
 // ---------- runs ----------
 export type RunKind = 'prompt' | 'workflow'
 export type RunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'canceled'
-export type RunTrigger = 'manual' | 'schedule' | 'catchup' | 'rerun' | 'agent' | 'slack'
+export type RunTrigger = 'manual' | 'schedule' | 'catchup' | 'rerun' | 'agent' | 'slack' | 'task'
 
 export interface PromptTarget {
   kind: 'prompt'
@@ -294,7 +317,7 @@ export interface WorkflowTarget {
 }
 export type RunTarget = PromptTarget | WorkflowTarget
 
-export interface Run {
+export interface Run extends CompanyStamped {
   id: Id
   kind: RunKind
   title: string // workflow name or first 60 chars of prompt
@@ -324,6 +347,9 @@ export interface Run {
   startedBy?: { ownerLabel: string; ownerKey: string; draftId: Id | null } | null
   /** SLACK.md §9.4: the Slack message(s) that started this run (trigger 'slack'). */
   slack?: SlackRunContext | null
+  /** DEPARTMENTS.md §1.2: the board task (and agent seat) this run works, from runs.task_id / agent_id. */
+  taskId?: Id | null
+  agentId?: Id | null
 }
 
 /** AUTHORING.md §6. */
@@ -407,10 +433,18 @@ export type SchedulePreset =
   | { kind: 'once'; at: ISODate }
   | { kind: 'cron' }
 
-export interface Schedule {
+/**
+ * DEPARTMENTS.md §8: 'run' (default, today's behaviour) starts the target on every fire; 'task' keeps one standing card
+ * "Recurring: <name>" on the board, assigned to `agentId`, and each fire comments on it and wakes the agent.
+ */
+export type ScheduleMode = 'run' | 'task'
+export type ScheduleTarget = RunTarget & { mode?: ScheduleMode; agentId?: Id | null }
+export interface Schedule extends CompanyStamped {
   id: Id
   name: string
-  target: RunTarget
+  target: ScheduleTarget
+  /** DEPARTMENTS.md §8: schedules.department_id. Absent = none. */
+  departmentId?: Id | null
   when: ScheduleWhen
   preset: SchedulePreset | null
   enabled: boolean
@@ -426,7 +460,8 @@ export interface Schedule {
 }
 export interface ScheduleInput {
   name: string
-  target: RunTarget
+  target: ScheduleTarget
+  departmentId?: Id | null
   when: ScheduleWhen
   preset?: SchedulePreset | null
   enabled?: boolean
@@ -456,6 +491,8 @@ export interface NextFire {
 // ---------- secrets ----------
 export interface SecretMeta {
   name: string // ^[A-Z_][A-Z0-9_]*$
+  /** COMPANY.md §4: null = Shared (the `secrets` table); else the company_secrets owner. Absent on older callers = Shared. */
+  companyId?: Id | null
   label: string
   masked: string // "sk-…a1b2"
   createdAt: ISODate
@@ -485,7 +522,7 @@ export interface EnvImportEntry {
 }
 
 // ---------- artifacts ----------
-export interface Artifact {
+export interface Artifact extends CompanyStamped {
   id: Id
   runId: Id | null
   sessionId: Id | null
@@ -535,6 +572,29 @@ export interface Settings {
   slackAutoPaused?: boolean
   /** Marketplace: https link to a remote index.json, listed next to the built-in catalog. Default null. */
   marketplaceUrl?: string | null
+  /** COMPANY.md §1.3, §8.6: the renderer's active company (UI state only; main never reads it). Default 'all'. */
+  activeCompanyId?: Id | 'all'
+  /** COMPANY.md §8.3: All-mode sidebar groups, companyId -> expanded. Missing = default (expanded). */
+  expandedCompanies?: Record<Id, boolean>
+  /**
+   * COMPANY.md §6, PASSPORT.md §9/§12: development flags, removed at GA. settings:update merges a partial value into
+   * the stored one; settings:get always returns all three. Absent = off.
+   */
+  experimental?: ExperimentalFlags
+  /** VOICE.md §0: Settings → General → Tone. 'plain' drops the wit, Latin and ceremony (materials stay). Absent = 'playful'. */
+  tone?: 'playful' | 'plain'
+  /** VOICE.md §0: "Agent names and busts". Off shows the role label and the department-colour initial. Absent = true. */
+  personas?: boolean
+}
+export interface ExperimentalFlags {
+  /** company guards throw (on) or warn and still stamp (off) */
+  companies?: boolean
+  /** the Passport vault replaces the v1 memory.db path */
+  vault?: boolean
+  /** stage-2 LLM suggestions (also opt-in per company) */
+  vaultAI?: boolean
+  /** DEPARTMENTS.md §0.8: departments, agents and the company board. Only takes effect with `companies` on. */
+  departments?: boolean
 }
 
 /**
@@ -624,8 +684,105 @@ export type HiveErrorCode =
   | 'forbidden'
   | 'canceled'
   | 'internal'
+  /** a declared channel whose implementation has not shipped yet (PASSPORT.md §11 stubs) */
+  | 'not_implemented'
 export interface HiveErrorShape {
   code: HiveErrorCode
   message: string
   errors?: ValidationError[]
 }
+
+// ---------- Principia Cloud: the desktop link (docs/CLOUD.md §8, §13.1; package FE) ----------
+// The HTTP types are in ./cloud. These are what main tells the renderer about its link. Never a token or key value.
+
+/** What the Cloud pane, the sidebar badge and Home's Needs you read. */
+export interface CloudLinkState {
+  linked: boolean
+  /** control plane base URL, e.g. https://cloud.example.com */
+  url: string | null
+  workspace: { id: Id; name: string } | null
+  deviceId: Id | null
+  /** safeStorage is available: without it the device token is never stored */
+  encryption: boolean
+  /** the last request to the cloud succeeded */
+  online: boolean
+  offlineSince: ISODate | null
+  lastSyncAt: ISODate | null
+  /** plain sentence, e.g. "This Mac was disconnected from the cloud." */
+  error: string | null
+  /** companies run in the cloud from this Mac */
+  cloudCompanyIds: Id[]
+  /** schedules placed in the cloud: the local scheduler never fires these */
+  cloudScheduleIds: Id[]
+  /** open cloud asks (the Needs-you count), from the last sync */
+  openAsks: number
+  /** the account linking in progress on this Mac (CLOUD.md §7.2), or its last outcome */
+  login: CloudLoginStatus | null
+}
+
+export type CloudLoginAdapter = 'claude' | 'codex'
+export interface CloudLoginStatus {
+  adapter: CloudLoginAdapter
+  phase: 'starting' | 'waiting' | 'uploading' | 'testing' | 'done' | 'failed' | 'canceled'
+  /** plain copy for the row; never contains a token */
+  message: string | null
+  reason: 'missing_cli' | 'port_busy' | 'timeout' | 'no_token' | 'cli_failed' | 'upload_failed' | null
+  /** shown when the CLI is missing ("npm install -g @anthropic-ai/claude-code") */
+  installHint: string | null
+  /** the sign-in page the CLI opened, for "Open the page again" (an OAuth URL, not a credential) */
+  browserUrl: string | null
+}
+
+/** cloud:movePlan: what "Run in the cloud…" can send, with plain reasons for what it cannot (CLOUD.md §3 step 5). */
+export interface CloudMovePlan {
+  companyId: Id
+  companyName: string
+  inCloud: boolean
+  workflows: { id: Id; name: string; ok: boolean; reason: string | null; adapters: AdapterId[] }[]
+  /** workflow-target schedules only; `placement` is where it fires today */
+  schedules: { id: Id; name: string; sentence: string; workflowId: Id | null; ok: boolean; reason: string | null; placement: 'local' | 'cloud' }[]
+  repos: { id: Id; name: string; url: string | null; ownerRepo: string | null; ok: boolean; reason: string | null; tokenUrl: string }[]
+  /** only what the selected workflows use: keys by name, header connections; never a value */
+  needs: {
+    keys: { name: string; usedBy: Id[] }[]
+    connections: { id: string; name: string; hasCredentials: boolean; usedBy: Id[] }[]
+  }
+  /** OAuth connections: each authorizes in the cloud with its own sign-in */
+  oauth: { id: string; name: string; usedBy: Id[] }[]
+  /**
+   * CLOUD.md §7.1 (additive): the passport is created from this Mac's Passport vault on a first move. `ready: false`
+   * (the vault is off) shows a "Turn on Passport" fix in the checklist before Run in the cloud can be pressed.
+   */
+  passport?: { ready: boolean; reason: string | null }
+}
+
+/** cloud:move. Everything absent is never sent: unticked keys, connections and repos stay on this Mac. */
+export interface CloudMoveChoices {
+  companyId: Id
+  workflows: Id[]
+  schedules: Id[]
+  /** token: a fine-grained GitHub token typed in the checklist (write-only); null = a public repo */
+  repos: { id: Id; token: string | null }[]
+  keys: string[]
+  connections: string[]
+  /** workflows whose "changed in the cloud" conflict the user chose to overwrite */
+  overwrite?: Id[]
+}
+export interface CloudMoveItem {
+  kind: 'passport' | 'company' | 'workflow' | 'schedule' | 'repo' | 'key' | 'connection'
+  id: string
+  name: string
+  status: 'done' | 'skipped' | 'conflict' | 'failed'
+  message: string | null
+}
+export interface CloudMoveResult {
+  items: CloudMoveItem[]
+  /** the company as the cloud sees it now (readiness included), null when the create failed */
+  company: import('./cloud').CloudCompany | null
+}
+
+/** evt:cloud. `changes`: runs, asks or passports moved on the server (refetch); `event`: one SSE event, as is. */
+export type CloudDesktopEvent =
+  | { kind: 'state'; state: CloudLinkState }
+  | { kind: 'changes'; runs: number; asks: number }
+  | { kind: 'event'; event: import('./cloud').CloudEvent }

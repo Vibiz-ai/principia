@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasSnapshot, RunDetail, RunStep } from '@shared/types'
 import { GraphView, PillContext } from '../components/GraphView'
 import type { Id } from '@shared/types'
@@ -7,7 +7,10 @@ import { AgentTree } from '../components/agents/AgentTree'
 import { AskCard } from '../components/agents/AskCard'
 import { ReplyBox } from '../components/agents/ReplyBox'
 import { agentLabel, attributionNote, descendants, isIdleWaiting, type AgentIndex } from '../lib/live'
-import { mergeAgents, useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
+import { mergeAgents, useOpenAsks, useSeenSet } from '../state/live'
+import { CompanyChip, useScope, useScopedLive } from '../components/CompanyChip'
+import { inScope, labelGraphCompanies, scopeRows } from '../lib/scope'
+import { reposOf } from '../lib/companyModel'
 import { StepLog } from '../components/StepLog'
 import { TerminalPane } from '../components/TerminalPane'
 import { Button, EmptyState, ErrorState, IconButton, Loading, Pill, RelativeTime, StatusGlyph, Toolbar, useTick } from '../components/ui'
@@ -31,17 +34,23 @@ import { errorMessage, hive, useHiveEvent } from '../lib/hive'
 import { cancelRun, openAsSession, rerun, runContextMenu } from '../lib/runActions'
 import { duration } from '../lib/time'
 import { runTitle, sessionEndLabel, sessionPlace } from '../lib/format'
-import { attempt, closeSession, focusSession, loadJson, navigate, openPalette, providerLabel, restartSession, saveJson, sessionContextMenu, toast, useStore } from '../state/store'
+import { TaskRunChip } from '../components/board/TaskRunChip'
+import { attempt, closeSession, companyName, focusSession, loadJson, navigate, openPalette, providerLabel, restartSession, saveJson, sessionContextMenu, toast, useStore } from '../state/store'
 
 export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.Element {
   const tick = useTick()
   const [snap, setSnap] = useState<CanvasSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sel, setSel] = useState<{ ref: NodeRef; id: string; agentId?: Id | null } | null>(null)
-  const idx = useAgentIndex()
-  const openAsks = useOpenAsks()
+  // COMPANY.md §8.3-8.4: focused mode draws the active company's work only; All mode labels cards with their company
+  const { scope, chips, nonce } = useScope()
+  const { idx, asks: openAsks } = useScopedLive(scope)
   const seen = useSeenSet()
   const [fitKey, setFitKey] = useState('init')
+  useEffect(() => {
+    setSel(null)
+    setFitKey(`scope:${nonce}`)
+  }, [nonce])
   const [canvasMode, setCanvasMode] = useState<'agents' | 'workflows'>(() => focusRunId ? 'workflows' : loadJson('principia.canvasMode', 'agents'))
   const [collapsedAgents, setCollapsedAgents] = useState<ReadonlySet<string>>(() => new Set())
   const toggleBranch = (agentId: string): void => {
@@ -79,16 +88,23 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
     }
   }
 
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
   const load = (): void => {
-    hive.app.canvas().then(
+    // COMPANY.md §8.3: focused mode asks for that company's snapshot (the run cap applies per company); read through
+    // the ref so the focus/visibility listener (bound once) loads the current scope
+    const forScope = scopeRef.current
+    hive.app.canvas(forScope ? { companyId: forScope } : undefined).then(
       (s) => {
+        if (forScope !== scopeRef.current) return
         setSnap(s)
         setError(null)
       },
       (e) => setError(errorMessage(e))
     )
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [nonce])
   useEffect(() => mergeAgents(snap?.agents), [snap?.agents])
   // Coming back from the tray / from behind another app: resync from main instead of trusting the event stream.
   useEffect(() => {
@@ -149,25 +165,35 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   }, [focusRunId, !!snap, snap?.runs.some((r) => r.run.id === focusRunId)])
 
   // sessions come from the app store: it already tracks restarts/removals, which the canvas snapshot never hears about
-  const storeSessions = useStore((st) => st.sessions)
-  const repos = useStore((st) => st.repos)
+  const allSessions = useStore((st) => st.sessions)
+  const allRepos = useStore((st) => st.repos)
+  const storeSessions = useMemo(() => scopeRows(allSessions, scope), [allSessions, scope])
+  const repos = useMemo(() => (scope ? reposOf(allRepos, scope) : allRepos), [allRepos, scope])
+  const scopedSnap = useMemo(
+    () => (snap && scope ? { ...snap, runs: snap.runs.filter((rd) => inScope(rd.run, scope)), schedules: scopeRows(snap.schedules, scope), sessions: scopeRows(snap.sessions, scope) } : snap),
+    [snap, scope]
+  )
   const lanes = useMemo(() => {
     if (!showHistory || !historyOn || !hist.items.length) return []
     const now = Date.now()
-    return historyGroups(hist.items, repos).map((g) => {
+    // focused: only conversations in this company's repositories (history outside a repo has no company)
+    const items = scope ? hist.items.filter((h) => repos.some((r) => r.id === h.repoId || (!!h.cwd && (h.cwd === r.path || h.cwd.startsWith(`${r.path}/`))))) : hist.items
+    return historyGroups(items, repos).map((g) => {
       const { shown, older } = splitRecent(g.items, now)
       return { key: g.key, label: g.label, older, cards: shown.map((h) => ({ id: h.id, title: h.title || 'Untitled', sub: [historyMeta(h), relativeShort(h.endedAt ?? h.startedAt)].filter(Boolean).join(' · ') })) }
     })
-  }, [showHistory, historyOn, hist.items, repos, tick])
+  }, [showHistory, historyOn, hist.items, repos, scope, tick])
   const graph = useMemo(() => {
-    if (!snap) return null
+    if (!scopedSnap) return null
     const live = { idx, asks: openAsks, seen }
-    const workflowGraph = canvasGraph({ ...snap, sessions: storeSessions }, Date.now(), live)
-    if (canvasMode === 'workflows') return appendHistory(workflowGraph, lanes)
+    const workflowGraph = canvasGraph({ ...scopedSnap, sessions: storeSessions }, Date.now(), live)
+    const lookups = { sessions: storeSessions, runs: scopedSnap.runs.map((rd) => rd.run), schedules: scopedSnap.schedules }
+    const label = (g: ReturnType<typeof canvasGraph>): ReturnType<typeof canvasGraph> => (chips ? labelGraphCompanies(g, lookups, (id) => companyName(id)) : g)
+    if (canvasMode === 'workflows') return appendHistory(label(workflowGraph), lanes)
     const refs = new Map<string, NodeRef>()
     for (const node of workflowGraph.nodes) if (node.type === 'card' && node.data.agentId) refs.set(node.data.agentId, node.data.ref)
-    return agentHierarchyGraph(live, collapsedAgents, Date.now(), refs)
-  }, [snap, storeSessions, tick, idx, openAsks, seen, lanes, canvasMode, collapsedAgents])
+    return label(agentHierarchyGraph(live, collapsedAgents, Date.now(), refs))
+  }, [scopedSnap, storeSessions, tick, idx, openAsks, seen, lanes, canvasMode, collapsedAgents, chips])
   const agentCounts = useMemo(() => {
     const agents = [...idx.byId.values()]
     return { total: agents.length, working: agents.filter(a => a.status === 'working' || a.status === 'starting').length, failed: agents.filter(a => a.status === 'failed').length }
@@ -236,7 +262,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
         ) : !snap || !graph ? (
           <Loading />
         ) : empty ? (
-          <EmptyState icon="canvas" text={canvasMode === 'agents' ? 'Your agent team will appear here when a session or workflow starts.' : 'Nothing running or scheduled.'}>
+          <EmptyState icon="canvas" text={canvasMode === 'agents' ? `Your agent team will appear here when a session or workflow starts${scope ? ' in this company' : ''}.` : scope ? 'Nothing running or scheduled in this company.' : 'Nothing running or scheduled.'}>
             <Button variant="primary" onClick={() => openPalette('runWorkflow')}>
               Run a Workflow
             </Button>
@@ -325,6 +351,8 @@ function Drawer({ sel, snap, idx, agentId, onAgent, onClose }: { sel: NodeRef; s
         <div className="drawer__head">
           <StatusGlyph status={s.status === 'running' ? 'running' : 'exited'} />
           <div className="drawer__title">{s.title}</div>
+          <CompanyChip companyId={s.companyId} always className="drawer__company" />
+          <TaskRunChip sessionId={s.id} />
           <div className="drawer__sub mono">
             {s.adapter === 'shell' ? 'Terminal' : providerLabel(s.adapter)} · {sessionPlace(s)}
             {s.status !== 'running' && ` · ${sessionEndLabel(s)}`}
@@ -369,6 +397,7 @@ function Drawer({ sel, snap, idx, agentId, onAgent, onClose }: { sel: NodeRef; s
         <div className="drawer__head">
           <StatusGlyph status="scheduled" />
           <div className="drawer__title">{sch.name}</div>
+          <CompanyChip companyId={sch.companyId} always className="drawer__company" />
           <div className="drawer__sub">{sch.sentence}</div>
         </div>
         <div className="drawer__body drawer__body--pad">
@@ -454,6 +483,8 @@ function StepDrawer({ rd, nodeId, selectedStepId, idx, agentId, onAgent }: { rd:
       <div className="drawer__head">
         <StatusGlyph status={step ? stepVisual(step.status) : runVisual(run.status)} />
         <div className="drawer__title">{nodeId && nodeId !== 'prompt' ? (node?.label ?? nodeId) : runTitle(run)}</div>
+        <CompanyChip companyId={run.companyId} always className="drawer__company" />
+        <TaskRunChip runId={run.id} taskId={(run as { taskId?: Id | null }).taskId} />
         <div className="drawer__sub">
           {step ? (
             <>

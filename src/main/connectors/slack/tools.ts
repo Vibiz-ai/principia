@@ -8,16 +8,19 @@
  */
 import { HiveError } from '../../../shared/errors'
 import type { LiveOwner } from '../../../shared/engine'
-import type { SlackChannel, SlackMessage, SlackRunContext, SlackTool } from '../../../shared/slack'
+import { SLACK_WORK_TOOLS, type SlackChannel, type SlackMessage, type SlackRunContext, type SlackTool, type SlackWorkTool } from '../../../shared/slack'
 import type { SlackConnector } from './core/connector'
 import { fallbackPermalink, parsePermalink, tsToIso } from './core/format'
 import { userLabel } from './core/ingest'
-import { REASON_TEXT, runReadScope, scopeAllowsRead, type ReplyCaller, type ReplyTriggerView, type RunReadScope } from './core/policy'
+import { REASON_TEXT, REFUSED_NONE, runReadScope, scopeAllowsRead, type ReplyCaller, type ReplyTriggerView, type RunReadScope } from './core/policy'
 import type { SlackSqlite } from './store/sqlite'
+import type { SlackWork } from './work'
 
 export const MAX_RESULT_CHARS = 12_000
 export const READS_PER_MIN = 20
-const READ_TOOLS = new Set<SlackTool>(['slack_list_channels', 'slack_read_thread', 'slack_search'])
+const READ_TOOLS = new Set<SlackTool | SlackWorkTool>(['slack_list_channels', 'slack_read_thread', 'slack_search', 'principia_repos'])
+/** principia_start_session: new sessions one run may start (a loop guard; follow-ups count too). */
+export const STARTS_PER_RUN = 2
 const FRESH_MS = 60_000
 const FETCH_WAIT_MS = 3000
 
@@ -32,6 +35,8 @@ export interface SlackToolDeps {
   step(owner: { stepId: string; runId: string }): { ctx: SlackRunContext | null; slackTools: boolean; label: string; agentId: string | null } | null
   /** Re-read at decision time (PO: switching to draft or pausing takes effect mid-run). */
   trigger(id: string): ReplyTriggerView | null
+  /** SLACK.md §11.4: principia_repos / principia_start_session. Absent = those tools are unknown. */
+  work?: SlackWork | null
 }
 
 type Args = Record<string, unknown>
@@ -43,6 +48,7 @@ const isDmKind = (k: SlackChannel['kind']) => k === 'dm' || k === 'group_dm'
 
 export class SlackTools {
   private reads = new Map<string, number[]>()
+  private starts = new Map<string, number>()
   constructor(private d: SlackToolDeps) {}
 
   /** May this owner use the slack toolset at all? (SA2: a step needs a Slack run or workflow.slackTools.) */
@@ -90,8 +96,11 @@ export class SlackTools {
   }
 
   /** One slack_* call. Throws Error with a readable message (the broker turns it into a tool error). */
-  async call(owner: LiveOwner, tool: SlackTool, args: Args): Promise<Record<string, unknown>> {
+  async call(owner: LiveOwner, tool: SlackTool | SlackWorkTool, args: Args): Promise<Record<string, unknown>> {
     if (!this.allowed(owner)) throw new Error(`Unknown tool: ${tool}`)
+    const isWork = (SLACK_WORK_TOOLS as readonly string[]).includes(tool)
+    // SLACK.md §11.4: only agent steps of a Slack-triggered run (never sessions or slackTools-only runs) start work
+    if (isWork && (!this.d.work || 'sessionId' in owner || !this.d.step(owner)?.ctx)) throw new Error(`Unknown tool: ${tool}`)
     if (!this.d.connector.workspace()) throw new Error('Slack is not connected. Ask the user to connect it in Hive › Settings › Connections.')
     if (READ_TOOLS.has(tool)) {
       const k = this.ownerKey(owner)
@@ -119,6 +128,10 @@ export class SlackTools {
         case 'slack_post':
           out = await this.post(owner, args)
           break
+        case 'principia_repos':
+        case 'principia_start_session':
+          out = this.work(owner as { stepId: string; runId: string }, tool, args)
+          break
         default:
           throw new Error(`Unknown tool: ${tool}`)
       }
@@ -128,10 +141,27 @@ export class SlackTools {
     return this.finish(out)
   }
 
+  /**
+   * principia_*: the trigger is re-read now and must be enabled with replies on (the same gate as slack_post; the
+   * trigger's who-can-trigger rules already decided this run may exist). Starting is capped per run.
+   */
+  private work(owner: { stepId: string; runId: string }, tool: SlackWorkTool, a: Args): Record<string, unknown> {
+    const ctx = this.d.step(owner)!.ctx!
+    const trig = this.d.trigger(ctx.triggerId)
+    if (!trig || !trig.enabled) throw new Error('This Slack trigger is disabled; Principia cannot start work from it.')
+    if (trig.reply.mode === 'none') throw new Error(`${REFUSED_NONE} Principia cannot start work from it.`)
+    if (tool === 'principia_repos') return this.d.work!.repos(ctx, a)
+    const n = this.starts.get(owner.runId) ?? 0
+    if (n >= STARTS_PER_RUN) throw new Error(`This run already started ${STARTS_PER_RUN} sessions; do not start more.`)
+    const out = this.d.work!.start(ctx, owner.runId, a)
+    this.starts.set(owner.runId, n + 1)
+    return out
+  }
+
   /** Redact, then trim list fields until the JSON fits 12,000 chars. */
   private finish(o: Record<string, unknown>): Record<string, unknown> {
     let out = JSON.parse(this.d.redact(JSON.stringify(o))) as Record<string, unknown>
-    const listKey = ['channels', 'messages', 'hits'].find((k) => Array.isArray(out[k]))
+    const listKey = ['channels', 'messages', 'hits', 'repos'].find((k) => Array.isArray(out[k]))
     if (!listKey) return out
     let list = out[listKey] as unknown[]
     let truncated = !!out.truncated
@@ -193,7 +223,8 @@ export class SlackTools {
       text: m.deleted ? '(deleted)' : m.plain,
       reply_count: m.replyCount,
       reactions: m.reactions,
-      files: m.files.map((f) => ({ name: f.name, mimetype: f.mimetype })),
+      // ids and an image flag only: never url_private or anything token-gated (SLACK.md §9.6)
+      files: m.files.map((f) => ({ name: f.name, mimetype: f.mimetype, ...(f.id ? { id: f.id } : {}), ...((f.mimetype ?? '').startsWith('image/') ? { image: true } : {}) })),
       edited: !!m.editedTs,
       from_hive: m.fromHive,
       permalink: fallbackPermalink(ws?.domain ?? null, ch.id, m.ts, m.threadTs)

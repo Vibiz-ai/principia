@@ -1,0 +1,5 @@
+Cloning into 'acme-web'...
+remote: Enumerating objects: 120, done.
+remote: Counting objects:  50% (60/120)remote: Counting objects: 100% (120/120), done.
+Receiving objects:  12% (15/120)Receiving objects:  45% (54/120)Receiving objects: 100% (120/120), 1.2 MiB | 3 MiB/s, done.
+Resolving deltas: 100% (40/40), done.

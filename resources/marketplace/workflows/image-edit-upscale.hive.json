@@ -1,0 +1,60 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Edit and upscale an image",
+    "description": "Applies a plain-language edit to an image with fal.ai FLUX Kontext, then upscales the result with ESRGAN. Before, edited and upscaled PNGs land in Artifacts.",
+    "inputs": [
+      {
+        "name": "image_url",
+        "label": "Public URL of the image to edit (https://...)"
+      },
+      {
+        "name": "instruction",
+        "label": "What should change? (e.g. replace the sky with a sunset, remove the person on the left)",
+        "type": "multiline"
+      },
+      {
+        "name": "scale",
+        "label": "Upscale factor (2 or 4)",
+        "default": "2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "edit",
+        "type": "agent",
+        "label": "Apply the edit (FLUX Kontext)",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Edit one image with the fal.ai REST API and save before/after. This makes exactly 1 paid edit call.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive › Keys.\n\n1. Download the original image from {{inputs.image_url}} with curl into \"$ARTIFACTS_DIR/before.<ext>\", using the real image extension (png, jpg or webp; check with `file`). If the download fails or the file is not an image, stop and say so.\n2. Rewrite the edit instruction below as one clear, concrete edit prompt (max 60 words). Describe only what should change and say that everything else (subject identity, composition, framing) must stay the same.\n3. POST https://fal.run/fal-ai/flux-pro/kontext with header `Authorization: Key $FAL_KEY` and JSON body {\"prompt\": <your edit prompt>, \"image_url\": \"{{inputs.image_url}}\", \"num_images\": 1, \"output_format\": \"png\"}. Model: FLUX.1 Kontext [pro], an instruction-based image editing model. Use curl; read the key from the FAL_KEY environment variable, never print it or echo the command with the key expanded.\n4. Download images[0].url into \"$ARTIFACTS_DIR/edited.png\".\n5. Reply with exactly these lines:\nEDITED_URL: <images[0].url>\nEDIT_PROMPT: <the edit prompt you sent>\nFILES: <before file name>, edited.png\n\nEdit instruction:\n{{inputs.instruction}}"
+      },
+      {
+        "id": "upscale",
+        "type": "agent",
+        "label": "Upscale the result (ESRGAN)",
+        "after": [
+          "edit"
+        ],
+        "cwd": null,
+        "timeoutMin": 15,
+        "profileId": "prof_claude",
+        "prompt": "Upscale the edited image with the fal.ai REST API. This makes exactly 1 paid upscale call.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive › Keys. If the previous step did not produce an EDITED_URL, stop and say the edit failed.\n\n1. Take the EDITED_URL from the previous step output below.\n2. Use scale {{inputs.scale}}; if it is not 2 or 4, use 2.\n3. POST https://fal.run/fal-ai/esrgan with header `Authorization: Key $FAL_KEY` and JSON body {\"image_url\": <EDITED_URL>, \"scale\": <scale>, \"model\": \"RealESRGAN_x4plus\", \"output_format\": \"png\"}. Model: Real-ESRGAN (fal-ai/esrgan). Use curl; read the key from the FAL_KEY environment variable, never print it.\n4. Download image.url into \"$ARTIFACTS_DIR/edited-upscaled.png\".\n5. Report the pixel dimensions of \"$ARTIFACTS_DIR/edited.png\" and \"$ARTIFACTS_DIR/edited-upscaled.png\" (use `sips -g pixelWidth -g pixelHeight` on macOS or `file`).\n6. Reply with the saved path, the scale used and both sizes.\n\nPrevious step output:\n{{edit.output}}"
+      },
+      {
+        "id": "readme",
+        "type": "agent",
+        "label": "Write the README",
+        "after": [
+          "upscale"
+        ],
+        "cwd": null,
+        "timeoutMin": 5,
+        "profileId": "prof_claude",
+        "prompt": "List the files in \"$ARTIFACTS_DIR\" and write a short \"$ARTIFACTS_DIR/README.md\" with:\n- Title: Edit and upscale\n- Source image URL: {{inputs.image_url}}\n- Original instruction: {{inputs.instruction}}\n- Edit prompt sent and model used (fal-ai/flux-pro/kontext)\n- Upscale model (fal-ai/esrgan), scale and before/after sizes\n- A table of files (the before.* original, edited.png, edited-upscaled.png) with one line each on what it is; mark any that are missing.\nNever include API keys. Reply with the README contents.\n\nEdit step:\n{{edit.output}}\n\nUpscale step:\n{{upscale.output}}"
+      }
+    ]
+  }
+}

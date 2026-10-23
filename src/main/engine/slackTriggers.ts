@@ -5,6 +5,12 @@
  * `ctx.slack.onMessage`, matches enabled triggers, debounces per (trigger, channel, thread key), enforces the loop
  * guards and run limits, starts the workflow run with a SlackRunContext, and binds the reply when the run ends.
  * No electron or connector imports: everything goes through EngineContext.slack (SlackBridge) and the EngineStore.
+ *
+ * DEPARTMENTS.md §8: a trigger with action 'task' starts no run. Each debounced batch goes to the company board
+ * (SlackTriggersDeps.board): the first one creates a task (source 'slack', externalId = team:channel:thread_ts, routed
+ * with the trigger's department), later batches in the same thread find it again through its source key and become
+ * comments plus one coalesced wake. The rolling-hour limits (per thread, per trigger) count these batches like runs.
+ * Slack text reaches the board only wrapped as untrusted data (wrapSlackText).
  */
 import type { EngineLogger, EngineStore, SlackBridge, SlackTriggerState, StartRunOptions } from '../../shared/engine'
 import type {
@@ -228,8 +234,8 @@ export function channelLabel(kind: SlackChannelKind, name: string, userName: str
   return `#${n}`
 }
 
-/** The `{{trigger.*}}` values of a run. `thread` is the transcript at run start. */
-export function triggerVars(c: SlackRunContext, thread: string): TriggerVars {
+/** The `{{trigger.*}}` values of a run. `thread` is the transcript at run start; `images` the downloaded paths (§9.6). */
+export function triggerVars(c: SlackRunContext, thread: string, images: readonly string[] = []): TriggerVars {
   return {
     text: c.text,
     thread,
@@ -239,7 +245,8 @@ export function triggerVars(c: SlackRunContext, thread: string): TriggerVars {
     thread_ts: c.threadTs,
     user: c.userName,
     user_id: c.userId,
-    permalink: c.permalink
+    permalink: c.permalink,
+    images: images.join('\n')
   }
 }
 
@@ -266,6 +273,65 @@ export function replyText(output: string | null | undefined): string {
 
 const capTail = (s: string, max: number): string => (s.length <= max ? s : `…${s.slice(s.length - max + 1)}`)
 
+// ---------- task action (DEPARTMENTS.md §8) ----------
+
+/** The board task of a Slack thread: one per team, channel and thread. */
+export const slackTaskExternalId = (teamId: string, channelId: string, threadTs: string): string => `${teamId}:${channelId}:${threadTs}`
+
+const SLACK_TAG = /<(\/?)slack-message/gi
+const slackAttr = (s: string): string => s.replace(SLACK_TAG, '<$1slack‐message').replace(/["<>\n\r]/g, ' ').slice(0, 200)
+/**
+ * One Slack message as untrusted data for a task description, comment or wake: a closing tag inside the text cannot end
+ * the block, and the untrusted note travels with it. Pure.
+ */
+export function wrapSlackText(m: { user: string; channel: string; ts: string; permalink?: string | null }, text: string): string {
+  const attrs = [`from="${slackAttr(m.user)}"`, `channel="${slackAttr(m.channel)}"`, `ts="${slackAttr(m.ts)}"`, ...(m.permalink ? [`permalink="${slackAttr(m.permalink)}"`] : [])]
+  const body = capTail(text.trim(), TRIGGER_TEXT_MAX).replace(SLACK_TAG, '<$1slack‐message')
+  return `<slack-message untrusted="true" ${attrs.join(' ')}>\n${body || '(no text)'}\n</slack-message>\n${UNTRUSTED_SLACK_NOTE}`
+}
+/** "Slack #support: <first line>" (at most 120 chars). Pure. */
+export function slackTaskTitle(channel: string, text: string): string {
+  const first = text.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? 'New message'
+  const t = `Slack ${channel}: ${first.replace(/\s+/g, ' ')}`
+  return t.length > 120 ? `${t.slice(0, 119)}…` : t
+}
+
+/** What one task-mode batch did on the board. */
+export interface SlackTaskResult {
+  taskId: Id
+  identifier: string
+  /** a new thread: the task was created (and routed) */
+  created: boolean
+  /** the agent was busy on the task: the batch joined its pendingWake */
+  coalesced: boolean
+  /** the task waits for the human (in review, parked) or is closed: the wake is queued, nothing starts now */
+  waiting: string | null
+  /** the thread's task is done or canceled: the batch is only a comment there (the source key keeps one task per thread) */
+  closed?: boolean
+}
+export interface SlackTaskMessage {
+  trigger: Pick<SlackTrigger, 'id' | 'name' | 'workflowId' | 'departmentId'>
+  /** the trigger workflow's company; the trigger's department, when set, must belong to it */
+  companyId: Id | null
+  /** slackTaskExternalId(team, channel, thread_ts): the task's source key */
+  externalId: string
+  ctx: SlackRunContext
+  /** a new task's title (slackTaskTitle) */
+  title: string
+  /** the batch, oldest first, one entry per message, each already wrapped by wrapSlackText */
+  messages: string[]
+}
+/** DEPARTMENTS.md §8: the board side of task-mode Slack triggers. Implemented by main (company/recurring.ts). */
+export interface SlackTaskBoard {
+  /** experimental.companies + .departments; off, a task-mode batch is an 'error' event */
+  enabled(): boolean
+  /**
+   * New thread: creates the task (source 'slack', externalId, routed with the trigger's department and channel). Known
+   * thread: one comment per message plus one wake (coalesced while the agent works on it). Throws on a failed write.
+   */
+  message(e: SlackTaskMessage): SlackTaskResult
+}
+
 // ---------- runtime ----------
 
 export interface SlackTriggersDeps {
@@ -279,6 +345,8 @@ export interface SlackTriggersDeps {
   emit(e: EngineEvent): void
   log: EngineLogger
   now(): Date
+  /** DEPARTMENTS.md §8: task-mode triggers. Absent = a task-mode batch is an 'error' event. */
+  board?: SlackTaskBoard | null
 }
 
 interface MsgInfo {
@@ -378,7 +446,7 @@ export function createSlackTriggers(d: SlackTriggersDeps): SlackTriggers {
   }
 
   /** One Mac notification per trigger per hour per kind (SLACK.md §9.3 step 6). */
-  const alert = (t: SlackTrigger, kind: 'limit' | 'error', title: string, message: string): void => {
+  const alert = (t: SlackTrigger, kind: 'limit' | 'error' | 'closed', title: string, message: string): void => {
     const k = `${t.id}:${kind}`
     const last = alerted.get(k)
     if (last !== undefined && now() - last < HOUR_MS) return
@@ -529,7 +597,7 @@ export function createSlackTriggers(d: SlackTriggersDeps): SlackTriggers {
       // at most one active run per trigger and thread: messages typed meanwhile get one follow-up run
       l.s.pending.push(m.ts)
       persist(l)
-      logEvent(t.id, 'coalesced', { ...where, runId: l.s.activeRunId, message: 'Answered in a follow-up run' })
+      logEvent(t.id, 'coalesced', { ...where, runId: l.s.activeRunId, message: t.action === 'task' ? "Added to the thread's task next" : 'Answered in a follow-up run' })
       return
     }
     const deb = Math.max(0, t.limits.debounceSec)
@@ -602,13 +670,15 @@ export function createSlackTriggers(d: SlackTriggersDeps): SlackTriggers {
     } catch {
       activeSlack = 0
     }
-    if (activeSlack + inflight >= MAX_ACTIVE_SLACK_RUNS) {
+    // a task-mode batch starts no run (the dispatcher's caps govern the task's runs)
+    if (t.action !== 'task' && activeSlack + inflight >= MAX_ACTIVE_SLACK_RUNS) {
       l.s.windowEndsAt = iso(now() + REARM_MS)
       persist(l)
       schedule(l)
       return
     }
 
+    let reopen = false
     l.firing = true
     try {
       const infos = batch.map((ts) => ({ ts, i: info(l.s.channelId, ts) }))
@@ -662,6 +732,10 @@ export function createSlackTriggers(d: SlackTriggersDeps): SlackTriggers {
         persist(l)
         return
       }
+      if (fresh.action === 'task') {
+        reopen = toBoard(l, fresh, ctx, infos, where)
+        return
+      }
       let thread = ''
       try {
         thread = d.slack.threadTranscript({ channelId: ctx.channelId, threadTs: ctx.threadTs })
@@ -692,6 +766,70 @@ export function createSlackTriggers(d: SlackTriggersDeps): SlackTriggers {
     } finally {
       l.firing = false
     }
+    // messages that arrived while a task-mode batch was posting: no run end will pick them up, so open the next window
+    const t2 = reopen ? trigger(l.s.triggerId) : null
+    if (t2?.enabled && l.s.pending.length && !l.s.windowEndsAt && running) openWindow(l, Math.max(0, t2.limits.debounceSec))
+  }
+
+  /**
+   * A task-mode batch (DEPARTMENTS.md §8): to the thread's board task, each message wrapped as untrusted data. Counts
+   * toward the rolling-hour limits like a run. Returns whether messages are left for another window.
+   */
+  const toBoard = (
+    l: Live,
+    t: SlackTrigger,
+    ctx: SlackRunContext,
+    infos: { ts: string; i: MsgInfo | null }[],
+    where: { channelId: string; threadTs: string; ts: string }
+  ): boolean => {
+    const failed = (msg: string): false => {
+      logEvent(t.id, 'error', { ...where, message: msg.slice(0, 500) })
+      alert(t, 'error', 'Slack trigger failed', `Slack trigger '${t.name}' could not add to the board: ${msg.slice(0, 200)}`)
+      resetWindow(l)
+      persist(l)
+      return false
+    }
+    const board = d.board
+    if (!board || !board.enabled()) return failed('Turn on Companies and Departments under Settings → Experimental to send Slack messages to the board')
+    const channel = channelLabel(ctx.channelKind, ctx.channelName, ctx.userName)
+    const messages = infos
+      .filter((x) => x.i?.plain.trim())
+      .map((x) => wrapSlackText({ user: x.i!.userName || x.i!.userId || ctx.userName, channel, ts: x.ts, permalink: x.ts === ctx.messageTs[ctx.messageTs.length - 1] ? ctx.permalink : null }, x.i!.plain))
+    if (!messages.length) messages.push(wrapSlackText({ user: ctx.userName, channel, ts: where.ts, permalink: ctx.permalink }, ctx.text))
+    // the workflow's company owns the board; a trigger whose workflow is gone has no company, so it files nothing
+    // (falling back to the personal board would move another company's Slack thread there)
+    let wf: Workflow | null = null
+    try {
+      wf = d.getWorkflow(t.workflowId)
+    } catch {
+      wf = null
+    }
+    if (!wf) return failed('The workflow of this trigger no longer exists, so its company board is unknown')
+    const companyId: Id | null = wf.companyId ?? null
+    let r: SlackTaskResult
+    try {
+      r = board.message({
+        trigger: { id: t.id, name: t.name, workflowId: t.workflowId, departmentId: t.departmentId ?? null },
+        companyId,
+        externalId: slackTaskExternalId(ctx.teamId, ctx.channelId, ctx.threadTs),
+        ctx,
+        title: slackTaskTitle(channel, ctx.text),
+        messages
+      })
+    } catch (e) {
+      return failed(e instanceof Error ? e.message : String(e))
+    }
+    const extra = l.s.pending.slice(infos.length)
+    resetWindow(l)
+    l.s.pending = extra
+    l.s.firedAt.push(iso())
+    persist(l)
+    const verb = r.created ? `Created ${r.identifier}` : r.coalesced ? `Coalesced into ${r.identifier} (agent busy)` : `Commented on ${r.identifier}`
+    logEvent(t.id, 'fired', { ...where, message: `${verb}${infos.length > 1 ? ` · ${infos.length} messages` : ''}${r.waiting ? `; ${r.waiting}` : ''}` })
+    // nobody works a closed task: say so, or the follow-up would sit unseen on a done card
+    if (r.closed) alert(t, 'closed', 'Slack follow-up on a closed task', `A new message in ${channel} was added to ${r.identifier}, which is closed. Reopen it to answer.`)
+    d.emit({ type: 'slackTrigger.updated', trigger: { ...t, lastFiredAt: iso(), lastRunId: null, lastRunStatus: null } })
+    return extra.length > 0
   }
 
   const bindReply = async (run: Run, c: SlackRunContext): Promise<void> => {

@@ -59,7 +59,14 @@ export function userFromWire(u: WireUser): SlackUser {
 export const userLabel = (u: SlackUser | null | undefined, fallback: string): string => u?.displayName || u?.realName || u?.name || fallback
 
 const files = (m: WireMessage): SlackFile[] =>
-  (m.files ?? []).map((f) => ({ name: f.name || f.title || 'file', mimetype: f.mimetype ?? null, size: f.size ?? null, permalink: f.permalink ?? null }))
+  (m.files ?? []).map((f) => ({
+    name: f.name || f.title || 'file',
+    mimetype: f.mimetype ?? null,
+    size: f.size ?? null,
+    permalink: f.permalink ?? null,
+    id: f.id ?? null,
+    urlPrivate: f.url_private_download || f.url_private || null
+  }))
 
 export const hiveRefOf = (m: Pick<WireMessage, 'metadata'>): string | null => {
   if (m.metadata?.event_type !== 'hive_post') return null

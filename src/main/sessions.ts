@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentProfile, Id, Session } from '../shared/types'
 import type { SessionCreateRequest } from '../shared/ipc'
-import type { InteractiveSpawnOptions, LiveChannel, McpServerSpec, MemoryGrant, MemoryGrantRequest, ProcessReaper, ReaperRow, SpawnSpec } from '../shared/engine'
+import type { CompanyBridge, InteractiveSpawnOptions, LiveChannel, McpServerSpec, MemoryGrant, MemoryGrantRequest, ProcessReaper, ReaperRow, SpawnSpec } from '../shared/engine'
 import type { MemoryMode, MemoryTransport } from '../shared/memory'
 import { HiveError } from '../shared/errors'
 import { newId } from '../shared/ids'
@@ -13,6 +13,8 @@ import { ensureDefaultProfile } from './db/seed'
 import { ADAPTER_AUTH_VARS, buildChildEnv } from './childEnv'
 import { TailBuffer, trimToLineStart } from './tailBuffer'
 import { stripAnsi } from './engine/live/pty'
+import { log } from './log'
+import type { ChatPlacement } from './company/chatContext'
 
 export const SESSION_TAIL_CHARS = 1024 * 1024 // in-memory replay tail
 /** What a pane replays on attach: enough for the visible screen + recent history, without parsing 1 MB on every remount. */
@@ -44,7 +46,13 @@ export interface SessionDeps {
   spawnPty: PtySpawn
   interactiveSpawn(profile: AgentProfile, opts: InteractiveSpawnOptions): SpawnSpec
   baseEnv(): Record<string, string>
-  secrets: { resolve(names: string[]): Record<string, string>; redact(text: string): string; names?(names: string[]): string[] }
+  /** COMPANY.md §4: `companyId` overlays the session's company keys on the shared ones; redaction is global. */
+  secrets: { resolve(names: string[], companyId?: Id | null): Record<string, string>; redact(text: string): string; names?(names: string[], companyId?: Id | null): string[] }
+  /**
+   * COMPANY.md §6: the session's company decides its cwd boundary, keys, Passport, memory and gateway connections.
+   * Absent = no companies (tests, older main): sessions are not stamped and repo-less chats use the scratch dir.
+   */
+  company?: CompanyBridge
   emitData(sessionId: Id, data: string): void
   emitExit(sessionId: Id, exitCode: number | null, signal: number | null): void
   emitUpdated(s: Session): void
@@ -74,8 +82,15 @@ export interface SessionDeps {
    * AUTHORING.md §1.1 (PO1, PO7): the `hive` authoring MCP server for interactive claude sessions. Absent = no authoring.
    * `server` returns the spec for one session's live dir (HIVE_LIVE_DIR is the only route back to Hive).
    */
+  /**
+   * DEPARTMENTS.md §9: where a chat (repo-less, or "New Chat in <Department>") runs, the company folders it may reach
+   * and its brief. null = the department is not one of this company's (refused). Absent = chats run in the company
+   * workspace with the Passport block only.
+   */
+  chat?(req: { companyId: Id; departmentId: Id | null; adapter: AgentProfile['adapter'] }): ChatPlacement | null
   author?: {
-    server(sessionId: Id, liveDir: string): McpServerSpec | null
+    /** `chat`: a chat (no task, no repo): the company tools are listed (DEPARTMENTS.md §9) */
+    server(sessionId: Id, liveDir: string, companyId?: Id | null, opts?: { chat?: boolean }): McpServerSpec | null
     tools: string[]
     /** Unused for the config file (it goes in the session's own live dir); kept for diagnostics. */
     spawnDir: string
@@ -120,6 +135,19 @@ export interface CreateOptions extends SessionCreateRequest {
   priorScrollback?: string | null
   /** SLACK.md §12.3 "Ask an agent about this thread": claude's first user message. */
   initialPrompt?: string | null
+  /**
+   * SLACK.md §11.4 (Slack-started sessions): builds the initialPrompt once this session's id and artifacts dir exist
+   * (it writes the context file there first). Main-only: never part of an IPC request. Wins over initialPrompt.
+   */
+  initialPromptFor?: (s: { id: Id; artifactsDir: string }) => string
+  /** Restart / handoff of a chat: placed again like a new chat (its cwd is not taken as a picked folder). Main-only. */
+  chat?: boolean
+  /**
+   * DEPARTMENTS.md §4.4, §7: an interactive task session ("Open as session"): never placed or briefed as a chat, and
+   * `taskDepartmentId` (its task's department) adds the Passport slot only. Main-only.
+   */
+  task?: boolean
+  taskDepartmentId?: Id | null
 }
 
 /**
@@ -142,13 +170,21 @@ const defaultKillGroup = (pid: number, signal: NodeJS.Signals): boolean => {
   }
 }
 
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 export class SessionManager {
   private live = new Map<Id, Live>()
   /** sessionId -> open memory grant (released on exit). */
   private memoryGrants = new Map<Id, Id>()
 
   /** Session memory (MEMORY.md §3.3): req.memory ?? Settings.sessionMemory ?? 'off'. Null = no memory. */
-  private memoryGrant(req: CreateOptions, profile: AgentProfile, cwd: string, sessionId: Id): MemoryGrant | null {
+  private memoryGrant(req: CreateOptions, profile: AgentProfile, cwd: string, sessionId: Id, companyId: Id | null): MemoryGrant | null {
     const m = this.d.memory
     if (!m || profile.adapter === 'shell') return null
     const mode = req.memory ?? this.d.store.getSettings().sessionMemory ?? 'off'
@@ -156,7 +192,7 @@ export class SessionManager {
     try {
       const transport = m.transportFor(profile.adapter)
       if (!transport) return null
-      return m.grant({ mode, adapter: profile.adapter, transport, profile, cwd, sessionId, briefQuery: '' })
+      return m.grant({ mode, adapter: profile.adapter, transport, profile, cwd, sessionId, ...(companyId ? { companyId } : {}), briefQuery: '' })
     } catch {
       return null
     }
@@ -185,6 +221,58 @@ export class SessionManager {
     return ensureDefaultProfile(this.d.store, adapter)
   }
 
+  /**
+   * COMPANY.md §6: the explicit launcher company first, then the repo's, then the cwd's; Personal otherwise. A repo or
+   * cwd of another company is refused with experimental.companies on (logged and still stamped with it off). Repo-less
+   * chats run in the company's workspace dir, never in the scratch dir shared by every company.
+   */
+  private resolveCompany(req: CreateOptions, adapter: AgentProfile['adapter']): { cwd: string; repoId: Id | null; repoName: string | null; companyId: Id | null; workspace: boolean; chat: ChatPlacement | null } {
+    const co = this.d.company
+    // DEPARTMENTS.md §9: a department chat, and the restart of a chat, are placed like a new chat
+    const repoLess = (!req.repoId && !req.cwd) || !!req.departmentId || req.chat === true
+    if (!co) return { ...this.resolveCwd(req), companyId: null, workspace: false, chat: null }
+    if (repoLess) {
+      const companyId = co.resolve({ companyId: req.companyId ?? null })
+      const placed = req.task ? null : this.placeChat(req, companyId, adapter)
+      // a restarted chat keeps its folder (its conversation lives there); a new one goes where its company says
+      const keep = req.chat && req.cwd && isDir(req.cwd) ? path.resolve(req.cwd) : null
+      const chat = placed && keep ? { ...placed, addDirs: placed.addDirs.filter((d) => path.resolve(d) !== keep) } : placed
+      const at = keep ?? chat?.cwd ?? null
+      // the chat's repo (picked by its company, never by the renderer); it stays a chat: no repoId on the row
+      if (at) return { cwd: at, repoId: null, repoName: null, companyId, workspace: true, chat }
+      const dir = co.workspaceDir(companyId)
+      if (dir) return { cwd: dir, repoId: null, repoName: null, companyId, workspace: true, chat }
+      return { ...this.resolveCwd({ ...req, repoId: null, cwd: undefined }), companyId, workspace: false, chat }
+    }
+    const at = this.resolveCwd(req)
+    const companyId = co.resolve({ companyId: req.companyId ?? null, repoId: at.repoId, cwd: at.cwd })
+    const problem = req.companyId ? co.crossCompany(companyId, { repoId: at.repoId, cwd: at.cwd }) : null
+    if (problem) {
+      if (co.enforced()) throw new HiveError('bad_request', problem)
+      log.warn('sessions: company guard (not enforced)', { companyId, problem })
+    }
+    // Restart / handoff of a chat: its folder is still the company workspace (trusted, titled "Chat")
+    let workspace = false
+    try {
+      const dir = !at.repoId ? co.workspaceDir(companyId) : null
+      workspace = !!dir && path.resolve(dir) === path.resolve(at.cwd)
+    } catch {
+      workspace = false
+    }
+    return { ...at, companyId, workspace, chat: null }
+  }
+
+  /** The chat's placement; a department of another company (or none at all) is refused. */
+  private placeChat(req: CreateOptions, companyId: Id, adapter: AgentProfile['adapter']): ChatPlacement | null {
+    if (!this.d.chat || adapter === 'shell') {
+      if (req.departmentId && !this.d.chat) throw new HiveError('bad_request', 'Department chats are not available')
+      return null
+    }
+    const placed = this.d.chat({ companyId, departmentId: req.departmentId ?? null, adapter })
+    if (req.departmentId && !placed?.department) throw new HiveError('not_found', 'That department is not one of this company’s')
+    return placed
+  }
+
   private resolveCwd(req: CreateOptions): { cwd: string; repoId: Id | null; repoName: string | null } {
     if (req.repoId) {
       const repo = this.d.store.getRepo(req.repoId)
@@ -210,11 +298,13 @@ export class SessionManager {
 
   create(req: CreateOptions): Session {
     const profile = this.resolveProfile(req)
-    const { cwd, repoId, repoName } = this.resolveCwd(req)
+    const { cwd, repoId, repoName, companyId, workspace, chat } = this.resolveCompany(req, profile.adapter)
+    const department = chat?.department ?? null
     const id = newId('session')
     const artifactsDir = path.join(this.d.paths.artifactsRoot, id) + path.sep
     fs.mkdirSync(artifactsDir, { recursive: true, mode: 0o700 })
-    const memory = this.memoryGrant(req, profile, cwd, id)
+    const initialPrompt = typeof req.initialPromptFor === 'function' ? req.initialPromptFor({ id, artifactsDir }) : req.initialPrompt
+    const memory = this.memoryGrant(req, profile, cwd, id, companyId)
     let channel: LiveChannel | null = null
     try {
       channel = this.d.live?.open(id, profile.adapter) ?? null
@@ -225,7 +315,7 @@ export class SessionManager {
     let author: McpServerSpec | null = null
     if (profile.adapter === 'claude' && channel && this.d.author) {
       try {
-        author = this.d.author.server(id, channel.dir)
+        author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId) })
       } catch {
         author = null // authoring never blocks a session
       }
@@ -233,7 +323,7 @@ export class SessionManager {
     let spec: SpawnSpec
     try {
       const authVars = profile.useApiKeyAuth ? [] : (ADAPTER_AUTH_VARS[profile.adapter] ?? [])
-      const keyNames = (this.d.secrets.names?.(profile.secretNames) ?? []).filter((n) => !authVars.includes(n))
+      const keyNames = ((companyId ? this.d.secrets.names?.(profile.secretNames, companyId) : this.d.secrets.names?.(profile.secretNames)) ?? []).filter((n) => !authVars.includes(n))
       spec = this.d.interactiveSpawn(profile, {
         artifactsDir,
         ...(keyNames.length ? { keyNames } : {}),
@@ -243,9 +333,14 @@ export class SessionManager {
         ...(memory ? { memory } : {}),
         // A2: interactive sessions never get ask_user, so no HIVE_LIVE_DIR for hivemem here
         cwd,
+        ...(companyId ? { companyId } : {}),
         ...(channel ? { live: { dir: channel.dir, hookCommand: channel.hookCommand, mcpEnv: {} } } : {}),
         ...(this.d.reaper ? { spawnTag: this.d.reaper.tag(id) } : {}),
-        ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
+        ...(initialPrompt ? { initialPrompt } : {}),
+        // DEPARTMENTS.md §7, §9: the department slot (department chats, task sessions) and the chat's brief and folders
+        ...(department || req.taskDepartmentId ? { departmentId: department?.id ?? req.taskDepartmentId ?? null } : {}),
+        ...(chat?.brief ? { chatBrief: chat.brief } : {}),
+        ...(chat?.addDirs.length ? { addDirs: chat.addDirs } : {}),
         // per-session dir: the config names this session's live dir, so it must never be shared between panes
         ...(author && this.d.author && channel ? { author, authorTools: this.d.author.tools, authorSpawnDir: channel.dir } : {})
       })
@@ -257,16 +352,18 @@ export class SessionManager {
     const env = buildChildEnv({
       base: this.d.baseEnv(),
       specEnv: spec.env,
-      secrets: this.d.secrets.resolve(profile.secretNames),
+      secrets: companyId ? this.d.secrets.resolve(profile.secretNames, companyId) : this.d.secrets.resolve(profile.secretNames),
       stripEnv: spec.stripEnv,
       profile,
       hive: { ARTIFACTS_DIR: artifactsDir, HIVE_SESSION_ID: id, HIVE_USER_DATA: this.d.paths.userData, ...(this.d.reaper?.tag(id) ?? {}) }
     })
-    // Picking a folder in Hive is the trust decision; Hive's scratch dir is Hive's own. Without this Claude opens
-    // on "Quick safety check" with "No, exit" preselected and the first Return kills the session.
-    if (profile.adapter === 'claude' && (repoId || cwd === this.d.paths.scratchDir)) {
+    // Picking a folder in Hive is the trust decision; Hive's scratch dir and company workspaces are Hive's own. Without
+    // this Claude opens on "Quick safety check" with "No, exit" preselected and the first Return kills the session.
+    if (profile.adapter === 'claude' && (repoId || workspace || cwd === this.d.paths.scratchDir)) {
       try {
         this.d.trustFolder?.(cwd, env)
+        // the company's other repo folders a chat may reach are trusted the same way (the company owns them)
+        for (const dir of chat?.addDirs ?? []) this.d.trustFolder?.(dir, env)
       } catch {
         /* never block a session on this */
       }
@@ -290,7 +387,7 @@ export class SessionManager {
     const label = profile.name && profile.name !== short && !profile.name.startsWith(short) ? profile.name : short
     const title =
       req.title?.trim() ||
-      (repoName ? `${repoName} · ${label}` : cwd === this.d.paths.scratchDir ? `Chat · ${label}` : `${path.basename(cwd)} · ${label}`)
+      (department ? `${department.name} · ${label}` : repoName ? `${repoName} · ${label}` : workspace || cwd === this.d.paths.scratchDir ? `Chat · ${label}` : `${path.basename(cwd)} · ${label}`)
     const logPath = path.join(this.d.paths.sessionLogsDir, `${id}.log`)
     const session: Session = {
       id,
@@ -308,7 +405,9 @@ export class SessionManager {
       endedAt: null,
       artifactsDir,
       fromRunId: req.fromRunId ?? null,
-      agentSessionId: spec.agentSessionId ?? req.resumeAgentSessionId ?? null
+      agentSessionId: spec.agentSessionId ?? req.resumeAgentSessionId ?? null,
+      ...(companyId ? { companyId } : {}),
+      ...(department ? { departmentId: department.id } : {})
     }
     this.d.store.insertSession({ ...session, logPath })
     if (repoId) this.d.store.updateSettings({ lastRepoId: repoId })
@@ -608,10 +707,31 @@ export class SessionManager {
     fs.writeFileSync(file, context, { mode: 0o600 })
     return this.create({
       adapter, cwd: s.cwd, cols: s.cols, rows: s.rows, title: s.title,
+      // COMPANY.md §6: same company (a repo decides its own: it may have moved to another company since)
+      ...(s.companyId && !s.repoId ? { companyId: s.companyId } : {}),
+      ...this.chatOf(s),
       fromRunId: s.fromRunId,
       memory: this.d.memory?.lastMode(id) ?? 'off',
       initialPrompt: `Continue the work from my previous ${s.adapter} session in this folder. First read the handoff note at ${JSON.stringify(file)}. It contains the available conversation and recent output. Inspect the current files, preserve my constraints, and continue the unfinished task.`,
     })
+  }
+
+  /**
+   * A restarted or handed-off chat stays a chat (DEPARTMENTS.md §9): its department, and a repo-less session whose
+   * folder is its company's workspace or one of its repos (a chat placed there) is placed again rather than read as a
+   * repo session. Anything else ({}) keeps today's cwd behaviour.
+   */
+  private chatOf(s: Session): { chat?: boolean; departmentId?: Id } {
+    if (s.repoId || !s.companyId || !this.d.chat) return {}
+    if (s.departmentId) return { chat: true, departmentId: s.departmentId }
+    let dir: string | null = null
+    try {
+      dir = this.d.company?.workspaceDir(s.companyId) ?? null
+    } catch {
+      dir = null
+    }
+    const inWorkspace = !!dir && path.resolve(dir) === path.resolve(s.cwd)
+    return inWorkspace || this.d.store.getRepoByPath(s.cwd) ? { chat: true } : {}
   }
 
   /** Exited -> new running session, same profile + cwd, resuming the agent conversation (SPEC A3). */
@@ -629,6 +749,8 @@ export class SessionManager {
       adapter: profile ? undefined : s.adapter,
       repoId: s.repoId && this.d.store.getRepo(s.repoId) ? s.repoId : undefined,
       cwd: s.repoId && this.d.store.getRepo(s.repoId) ? undefined : s.cwd,
+      ...(s.companyId && !s.repoId ? { companyId: s.companyId } : {}),
+      ...this.chatOf(s),
       cols: s.cols,
       rows: s.rows,
       title: s.title,

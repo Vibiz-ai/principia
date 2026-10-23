@@ -1,0 +1,66 @@
+{
+  "hive": "workflow",
+  "version": 1,
+  "workflow": {
+    "name": "Local business photo pack",
+    "description": "Generates an on-brand photo pack for a local business (cafe, gym, salon, studio): interior, service in action, team-style shot and a seasonal promo, for Google Business Profile and social. Uses fal.ai FLUX; PNGs and a README land in Artifacts.",
+    "inputs": [
+      {
+        "name": "business",
+        "label": "Business type and name (e.g. \"Juniper, a neighbourhood specialty coffee cafe\")"
+      },
+      {
+        "name": "brand",
+        "label": "Brand look: colours, materials, mood, location vibe",
+        "type": "multiline",
+        "default": "warm, natural light, wood and plants, friendly and modern"
+      },
+      {
+        "name": "season",
+        "label": "Seasonal promo theme (e.g. autumn menu, New Year membership deal)",
+        "default": "current season"
+      },
+      {
+        "name": "perShot",
+        "label": "Images per shot type (1 or 2; 4 shot types, so 4 or 8 images total)",
+        "default": "1"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "brief",
+        "type": "agent",
+        "label": "Write the shot list",
+        "after": [],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "You are art-directing a photo pack for a local business. Write exactly 4 image-generation prompts (max 80 words each), one per shot type, all sharing the same brand look so the set feels consistent.\n\nBusiness: {{inputs.business}}\nBrand look: {{inputs.brand}}\nSeasonal promo theme: {{inputs.season}}\n\nShot types and sizes:\n1. interior - the space, inviting and tidy, wide angle, no people or only distant out-of-focus figures. Size: landscape_4_3.\n2. service - the core product or service in action (e.g. latte art being poured, a blow-dry, a kettlebell class), close-up on hands, tools and product. Size: square_hd.\n3. team - a team-style shot of staff at work, seen from behind, in soft focus or partially framed. They must be generic, fictional people: no real person, celebrity or recognisable likeness, no faces in sharp detail. Size: portrait_4_3.\n4. promo - a seasonal promo visual for the theme, styled product or scene with clean empty space for overlay text. Do not render any words, prices or logos in the image. Size: portrait_16_9.\n\nEvery prompt must be photorealistic, concrete about subject, composition, lighting and lens, and must not include text, logos, trademarks or real people.\n\nOutput only a JSON array, nothing else: [{\"slug\":\"interior\",\"size\":\"landscape_4_3\",\"prompt\":\"...\"}, ...] with slugs interior, service, team, promo."
+      },
+      {
+        "id": "render",
+        "type": "agent",
+        "label": "Render with fal FLUX",
+        "after": [
+          "brief"
+        ],
+        "cwd": null,
+        "timeoutMin": 25,
+        "profileId": "prof_claude",
+        "prompt": "Render the shot list below with the fal.ai REST API using the model fal-ai/flux/dev and save every image.\n\nIf FAL_KEY is not set, stop and say: add FAL_KEY in Hive › Keys.\n\nImages per shot: {{inputs.perShot}}. Treat anything other than 2 as 1. Never generate more than 8 images in total, and make only one request per shot.\n\nFor each item in the JSON array:\n1. POST https://fal.run/fal-ai/flux/dev with header `Authorization: Key $FAL_KEY` and JSON body {\"prompt\": <item.prompt>, \"image_size\": <item.size>, \"num_images\": <images per shot>, \"output_format\": \"png\"}. Use curl; read the key from the FAL_KEY environment variable, never print, echo or log it.\n2. Download each images[i].url into \"$ARTIFACTS_DIR/<slug>-<i+1>.png\" (e.g. \"$ARTIFACTS_DIR/interior-1.png\").\n3. If one request fails, retry it once, then continue with the rest and note the failure.\n\nReply with a list of saved file paths, each followed by its shot type, size and the exact prompt used, plus any failures.\n\nShot list:\n{{brief.output}}"
+      },
+      {
+        "id": "readme",
+        "type": "agent",
+        "label": "Write the README",
+        "after": [
+          "render"
+        ],
+        "cwd": null,
+        "timeoutMin": 10,
+        "profileId": "prof_claude",
+        "prompt": "Write a short \"$ARTIFACTS_DIR/README.md\" for this photo pack.\n\nInclude: a title with the business ({{inputs.business}}), the model used (fal.ai fal-ai/flux/dev), a table of files (file name, shot type, size, suggested use: Google Business Profile cover/interior/products/team, Instagram post or story) and the exact prompt used for each file. Add a short note that these are AI-generated images with fictional people, they should not be presented as real staff or customers, and the promo image is left without text so a caption or offer can be added in a design tool. Only list files that exist in \"$ARTIFACTS_DIR\"; never include API keys.\n\nReply with the README path and the list of images.\n\nRender report:\n{{render.output}}"
+      }
+    ]
+  }
+}

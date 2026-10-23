@@ -5,13 +5,16 @@ import { HiveError } from '../../shared/errors'
 import type { Hive } from '../hive'
 import { handle, onSend } from '../ipc'
 import { readTranscript } from '../history/transcript'
+import { requireCompany } from './companyScope'
 
 export function registerSessionHandlers(h: Hive): void {
   handle('sessions:list', (req) => {
     const since = new Date(Date.now() - 7 * 86400_000).toISOString()
-    return h.store.listSessions(req?.status ?? 'all', since)
+    return h.store.listSessions(req?.status ?? 'all', since, req?.companyId)
   })
   handle('sessions:create', (req) => {
+    // an unknown company would stamp a row no company lists (COMPANY.md §1.4: nothing disappears)
+    if (req.companyId) requireCompany(h, req.companyId)
     const s = h.sessions.create(req)
     h.statusChanged()
     return s
@@ -78,6 +81,8 @@ export function registerSessionHandlers(h: Hive): void {
       cols: 120,
       rows: 32,
       title: `${d.run.title} · ${step.nodeId}`,
+      // the run's company, so the pane gets the same keys and Passport the run had (COMPANY.md §6)
+      companyId: d.run.companyId,
       fromRunId: runId,
       resumeAgentSessionId: step.agentSessionId
     })

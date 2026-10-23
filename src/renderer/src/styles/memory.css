@@ -1,6 +1,13 @@
 /* Memory page + memory chips (MEMORY.md §10). Tokens only (docs/tokens.css); desktop sizes; default cursor. */
 
 /* ---------- page shell ---------- */
+.mview__connections { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface-1); flex: none; font-size: var(--text-sm); }
+.mview__connections > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.mview__connections strong { font-weight: var(--weight-medium); }
+.mview__connections span { color: var(--text-secondary); }
+.mview__connection-badges { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.mview__connection-badges .text-warning { color: var(--status-warning); }
+.mview__connection-actions { display: flex; margin-left: auto; gap: 6px; }
 .mview__pickers { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mview__select { width: auto; max-width: 220px; -webkit-app-region: no-drag; }
 .mview__select--run { max-width: 200px; }

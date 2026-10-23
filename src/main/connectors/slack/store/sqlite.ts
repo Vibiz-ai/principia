@@ -30,6 +30,62 @@ const j = <T>(s: string | null | undefined, fb: T): T => {
   }
 }
 
+/** A session started from a Slack thread (principia_start_session). */
+export interface SlackWorkSession {
+  sessionId: string
+  teamId: string
+  channelId: string
+  threadTs: string | null
+  runId: string | null
+  triggerId: string | null
+  userId: string | null
+  userName: string | null
+  permalink: string | null
+  repoId: string | null
+  adapter: string
+  title: string
+  reportArmed: boolean
+  reports: number
+  lastReportAt: string | null
+  createdAt: string
+}
+interface WorkRowDb {
+  session_id: string
+  team_id: string
+  channel_id: string
+  thread_ts: string | null
+  run_id: string | null
+  trigger_id: string | null
+  user_id: string | null
+  user_name: string | null
+  permalink: string | null
+  repo_id: string | null
+  adapter: string
+  title: string
+  report_armed: number
+  reports: number
+  last_report_at: string | null
+  created_at: string
+}
+const workFromRow = (r: WorkRowDb): SlackWorkSession => ({
+  sessionId: r.session_id,
+  teamId: r.team_id,
+  channelId: r.channel_id,
+  threadTs: r.thread_ts,
+  runId: r.run_id,
+  triggerId: r.trigger_id,
+  userId: r.user_id,
+  userName: r.user_name,
+  permalink: r.permalink,
+  repoId: r.repo_id,
+  adapter: r.adapter,
+  title: r.title,
+  reportArmed: !!r.report_armed,
+  reports: r.reports,
+  lastReportAt: r.last_report_at,
+  createdAt: r.created_at
+})
+
 interface MsgRow {
   team_id: string
   channel_id: string
@@ -223,7 +279,65 @@ export class SlackSqlite {
   constructor(
     readonly db: DB,
     private now: () => Date = () => new Date()
-  ) {}
+  ) {
+    this.healWork()
+  }
+
+  /**
+   * Slack-started work (SLACK.md §11.4): the repo last chosen per channel, and the sessions a Slack thread started.
+   * Healed on open like the other additive Slack tables (CREATE IF NOT EXISTS; older builds ignore them).
+   */
+  private healWork(): void {
+    this.db.exec(`
+CREATE TABLE IF NOT EXISTS slack_channel_repos (
+  team_id TEXT NOT NULL, channel_id TEXT NOT NULL, repo_id TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (team_id, channel_id)
+);
+CREATE TABLE IF NOT EXISTS slack_work_sessions (
+  session_id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL, channel_id TEXT NOT NULL, thread_ts TEXT,
+  run_id TEXT, trigger_id TEXT, user_id TEXT, user_name TEXT, permalink TEXT,
+  repo_id TEXT, adapter TEXT NOT NULL, title TEXT NOT NULL,
+  report_armed INTEGER NOT NULL DEFAULT 1, reports INTEGER NOT NULL DEFAULT 0, last_report_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS slack_work_sessions_thread ON slack_work_sessions(team_id, channel_id, thread_ts);
+`)
+  }
+
+  // ---------- Slack-started work ----------
+  channelRepo(teamId: string, channelId: string): string | null {
+    const r = this.db.prepare('SELECT repo_id FROM slack_channel_repos WHERE team_id = ? AND channel_id = ?').get(teamId, channelId) as { repo_id: string } | undefined
+    return r?.repo_id ?? null
+  }
+  setChannelRepo(teamId: string, channelId: string, repoId: string): void {
+    this.db
+      .prepare('INSERT INTO slack_channel_repos(team_id, channel_id, repo_id, updated_at) VALUES (?,?,?,?) ON CONFLICT(team_id, channel_id) DO UPDATE SET repo_id = excluded.repo_id, updated_at = excluded.updated_at')
+      .run(teamId, channelId, repoId, this.iso())
+  }
+  insertWorkSession(w: Omit<SlackWorkSession, 'reportArmed' | 'reports' | 'lastReportAt' | 'createdAt'>): void {
+    this.db
+      .prepare(
+        'INSERT INTO slack_work_sessions(session_id, team_id, channel_id, thread_ts, run_id, trigger_id, user_id, user_name, permalink, repo_id, adapter, title, report_armed, reports, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,0,?)'
+      )
+      .run(w.sessionId, w.teamId, w.channelId, w.threadTs, w.runId, w.triggerId, w.userId, w.userName, w.permalink, w.repoId, w.adapter, w.title, this.iso())
+  }
+  workSession(sessionId: string): SlackWorkSession | null {
+    const r = this.db.prepare('SELECT * FROM slack_work_sessions WHERE session_id = ?').get(sessionId) as WorkRowDb | undefined
+    return r ? workFromRow(r) : null
+  }
+  workSessionsForThread(teamId: string, channelId: string, threadTs: string | null): SlackWorkSession[] {
+    return (this.db.prepare('SELECT * FROM slack_work_sessions WHERE team_id = ? AND channel_id = ? AND thread_ts IS ? ORDER BY created_at').all(teamId, channelId, threadTs) as WorkRowDb[]).map(workFromRow)
+  }
+  /** Arms (resumed from Slack) the next turn's report. */
+  armWorkReport(sessionId: string, runId: string | null): void {
+    this.db.prepare('UPDATE slack_work_sessions SET report_armed = 1, run_id = COALESCE(?, run_id) WHERE session_id = ?').run(runId, sessionId)
+  }
+  /** Takes the armed report (true once per arming): the caller posts it. */
+  takeWorkReport(sessionId: string): boolean {
+    const r = this.db.prepare('UPDATE slack_work_sessions SET report_armed = 0, reports = reports + 1, last_report_at = ? WHERE session_id = ? AND report_armed = 1').run(this.iso(), sessionId)
+    return r.changes > 0
+  }
 
   private iso(): string {
     return this.now().toISOString()
@@ -273,7 +387,7 @@ export class SlackSqlite {
   clearAll(keepMessages: boolean): void {
     if (keepMessages) return
     this.db.transaction(() => {
-      for (const t of ['slack_messages', 'slack_users', 'slack_channels', 'slack_sync_state', 'slack_thread_sync', 'slack_event_log', 'slack_inbound_log', 'slack_drafts', 'slack_outbox', 'slack_workspaces']) {
+      for (const t of ['slack_messages', 'slack_users', 'slack_channels', 'slack_sync_state', 'slack_thread_sync', 'slack_event_log', 'slack_inbound_log', 'slack_drafts', 'slack_outbox', 'slack_workspaces', 'slack_channel_repos', 'slack_work_sessions']) {
         this.db.prepare(`DELETE FROM ${t}`).run()
       }
       this.db.prepare("INSERT INTO slack_messages_fts(slack_messages_fts) VALUES ('rebuild')").run()

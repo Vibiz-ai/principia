@@ -16,3 +16,6 @@ cloud/workspace
 .codex
 .agents
 .DS_Store
+website
+docs/qa
+docs/research

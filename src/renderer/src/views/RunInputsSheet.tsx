@@ -4,6 +4,8 @@ import { AutoTextarea, Field, Loading, Sheet } from '../components/ui'
 import { errorMessage, hive } from '../lib/hive'
 import { initialInputValue, runInputProblems } from '../lib/workflow'
 import { attempt, lastInputs, navigate, rememberInputs, setState, useStore } from '../state/store'
+import { CompanyChip } from '../components/CompanyChip'
+import { companyOf, reposOf } from '../lib/companyModel'
 
 /** "Run…" sheet: fills workflow inputs (repo inputs = repo picker, last-used values pre-filled). */
 export function RunInputsSheet(): React.JSX.Element | null {
@@ -13,13 +15,15 @@ export function RunInputsSheet(): React.JSX.Element | null {
 }
 
 function Inner({ workflowId }: { workflowId: string }): React.JSX.Element {
-  const repos = useStore((s) => s.repos)
+  const allRepos = useStore((s) => s.repos)
   const lastRepoId = useStore((s) => s.settings?.lastRepoId ?? null)
   const [wf, setWf] = useState<Workflow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [values, setValues] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const close = (): void => setState({ runInputs: null })
+  // COMPANY.md §3, §8.6: a workflow runs in its own company, so its repo inputs offer only that company's repos
+  const repos = wf ? reposOf(allRepos, companyOf(wf)) : allRepos
 
   useEffect(() => {
     hive.workflows.get({ id: workflowId }).then(
@@ -27,7 +31,13 @@ function Inner({ workflowId }: { workflowId: string }): React.JSX.Element {
         setWf(w)
         const prev = lastInputs(workflowId)
         const v: Record<string, string> = {}
-        for (const i of w.inputs) v[i.name] = initialInputValue(i, prev[i.name], lastRepoId ?? repos[0]?.id ?? '')
+        const own = reposOf(allRepos, companyOf(w))
+        const fallback = own.some((r) => r.id === lastRepoId) ? lastRepoId! : (own[0]?.id ?? '')
+        for (const i of w.inputs) {
+          const value = initialInputValue(i, prev[i.name], fallback)
+          // a remembered repo of another company (the workflow moved) is not offered: fall back to one of its own
+          v[i.name] = i.type === 'repo' && value && !own.some((r) => r.id === value) ? fallback : value
+        }
         setValues(v)
         if (w.inputs.length === 0) void start(w, v)
       },
@@ -65,6 +75,7 @@ function Inner({ workflowId }: { workflowId: string }): React.JSX.Element {
       ) : (
         <>
           {wf.description && <p className="text-secondary sheet__desc">{wf.description}</p>}
+          <CompanyChip companyId={wf.companyId} always className="sheet__company" />
           {wf.inputs.map((i) => (
             <Field key={i.name} label={i.label || i.name} align={i.type === 'multiline' ? 'start' : 'center'}>
               {i.type === 'boolean' ? (

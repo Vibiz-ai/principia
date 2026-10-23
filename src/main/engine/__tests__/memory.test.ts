@@ -6,6 +6,7 @@ import type { CheckNode, WorkflowDraft, WorkflowNode } from '../../../shared/typ
 import { claudeAdapter, codexAdapter, readableLog } from '../adapters'
 import { createEngineWith } from '../index'
 import {
+  LEGACY_MEMORY_WRITE_RULES,
   MCP_VERIFIED,
   MEMORY_WRITE_RULES,
   agentBrief,
@@ -162,6 +163,9 @@ describe('memory: adapter rendering', () => {
     const att = codexMcpAttach(grantOf(1))
     expect(att.args).toContain('mcp_servers.hivemem.command="/bin/hive"')
     expect(att.args).toContain('mcp_servers.hivemem.args=["/x/mcp-memory.js"]')
+    expect(att.args).toContain('mcp_servers.hivemem.default_tools_approval_mode="approve"')
+    expect(att.env).toEqual({}) // Electron Node mode belongs only to the MCP child, never the Codex CLI
+    expect(att.files).toEqual([])
     expect(att.args).toContain('mcp_servers.hivemem.env.HIVE_MEM_GRANT="mgr_0000000001"')
     expect(att.args).toContain('mcp_servers.hivemem.enabled_tools=["memory_search","memory_get","memory_write","memory_invalidate"]')
     const inv = codexAdapter.headless({ profile: null, prompt: 'go', artifactsDir: '/a/', resumeId: null, shell: '/bin/sh', mcpArgs: att.args })
@@ -179,9 +183,11 @@ describe('memory: adapter rendering', () => {
     expect(s.mcpServers.hivemem.includeTools).toEqual([...READ, ...WRITE])
   })
 
-  it('transports: claude mcp; codex/gemini/cursor inject until verified; shell none', () => {
+  // PASSPORT.md §7.2: Claude stays on MCP; Codex, Gemini and Cursor stay inject-only and get the harvest path (§7.6)
+  it('transports: Claude MCP; Codex/Gemini/Cursor inject; shell none', () => {
     expect(MCP_VERIFIED.claude).toBe(true)
     expect(memoryTransport('claude')).toBe('mcp')
+    expect(MCP_VERIFIED.codex).toBe(false)
     expect(memoryTransport('codex')).toBe('inject')
     expect(memoryTransport('gemini')).toBe('inject')
     expect(memoryTransport('cursor')).toBe('inject')
@@ -294,9 +300,10 @@ describe('memory: executor wiring', () => {
     expect((await waitRun(ctx, run.id)).status).toBe('passed')
     expect(bridge.requests).toHaveLength(1)
     expect(bridge.requests[0]).toMatchObject({ mode: 'read-write', nodeId: 'prompt' })
-    expect(calls[0].prompt).toContain(MEMORY_WRITE_RULES)
-    expect(MEMORY_WRITE_RULES).toMatch(/memory_write/)
-    expect(MEMORY_WRITE_RULES).toMatch(/~\/\.claude\/projects/)
+    // the fake grant is a legacy one (HIVE_MEM_DB): it keeps the v1 rules text (PASSPORT.md §7.4)
+    expect(calls[0].prompt).toContain(LEGACY_MEMORY_WRITE_RULES)
+    expect(LEGACY_MEMORY_WRITE_RULES).toMatch(/memory_write/)
+    expect(LEGACY_MEMORY_WRITE_RULES).toMatch(/~\/\.claude\/projects/)
   })
 
   it('read-write claude agent: grant with provenance, brief prefixed once, config file live only during the step', async () => {
@@ -340,8 +347,8 @@ describe('memory: executor wiring', () => {
     expect(call.prompt.endsWith('\n\nFix the build')).toBe(true)
     expect(call.prompt.match(/<hive-memory/g)).toHaveLength(1)
     expect(step.prompt).toContain('<hive-memory') // user sees exactly what the agent got
-    expect(call.prompt).toContain(MEMORY_WRITE_RULES)
-    expect(call.prompt.indexOf(MEMORY_WRITE_RULES)).toBeLessThan(call.prompt.indexOf('Fix the build'))
+    expect(call.prompt).toContain(LEGACY_MEMORY_WRITE_RULES)
+    expect(call.prompt.indexOf(LEGACY_MEMORY_WRITE_RULES)).toBeLessThan(call.prompt.indexOf('Fix the build'))
     expect(call.mcpArgs![0]).toBe('--mcp-config')
     expect(call.mcpArgs![3]).toBe('mcp__hivemem__memory_search,mcp__hivemem__memory_get,mcp__hivemem__memory_write,mcp__hivemem__memory_invalidate')
     expect(fileDuringStep).toMatchObject({ exists: true, mode: 0o600 })
@@ -362,17 +369,84 @@ describe('memory: executor wiring', () => {
     expect(calls[0].prompt).not.toContain('<memory-write-rules>')
   })
 
-  it('codex (unverified MCP): read grant over inject, brief only, no mcp args', async () => {
+  // PASSPORT.md §7.2/§7.6: Codex is inject-only; the asked mode reaches main (a read-write vault grant carries the harvest rules)
+  it.each(['read', 'read-write'] as const)('Codex keeps %s memory mode over inject, brief only, and releases its grant', async (mode) => {
     const { ctx, bridge } = setup()
     const calls: FakeCall[] = []
     const engine = await makeEngine(ctx, { adapters: { codex: fakeAdapter('codex', calls, () => ({ output: 'ok' })) } })
-    const run = engine.runs.start({ kind: 'prompt', profileId: 'p_codex', repoId: null, prompt: 'go', memory: 'read-write' }, { trigger: 'manual' })
-    expect((await waitRun(ctx, run.id)).status).toBe('passed')
-    expect(bridge.requests[0]).toMatchObject({ mode: 'read', transport: 'inject', adapter: 'codex', nodeLabel: 'Prompt' })
-    expect(calls[0].mcpArgs).toBeUndefined()
-    expect(calls[0].prompt.startsWith('<hive-memory')).toBe(true)
-    expect(calls[0].prompt).not.toContain('<memory-write-rules>')
-    expect(bridge.released).toHaveLength(1)
+    try {
+      const run = engine.runs.start({ kind: 'prompt', profileId: 'p_codex', repoId: null, prompt: 'go', memory: mode }, { trigger: 'manual' })
+      expect((await waitRun(ctx, run.id)).status).toBe('passed')
+      expect(bridge.requests[0]).toMatchObject({ mode, transport: 'inject', adapter: 'codex', nodeLabel: 'Prompt' })
+      expect((calls[0].mcpArgs ?? []).join(' ')).not.toContain('mcp_servers.hivemem')
+      expect(calls[0].prompt.startsWith('<hive-memory')).toBe(true)
+      expect(calls[0].prompt).not.toContain('<memory-write-rules>')
+      expect(bridge.released).toEqual(['mgr_0000000001'])
+      expect(bridge.open.size).toBe(0)
+    } finally { await engine.shutdown() }
+  })
+
+  it('a read-write vault grant over inject carries the harvest rules, never the MCP write rules', () => {
+    const g = { ...grantOf(3), server: { ...grantOf(3).server, env: { HIVE_MEM_INDEX: '/x/passport-index.db' } }, toolNames: [...READ, 'memory_write'] }
+    const brief = agentBrief(g, false)
+    expect(brief).toContain('<passport-notes>')
+    expect(brief).not.toContain(MEMORY_WRITE_RULES)
+    expect(agentBrief(g, false, { harvest: false })).not.toContain('<passport-notes>')
+  })
+
+  it('Codex memory off never attaches a grant or advertises writes', async () => {
+    const { ctx, bridge } = setup()
+    const calls: FakeCall[] = []
+    const engine = await makeEngine(ctx, { adapters: { codex: fakeAdapter('codex', calls, () => ({ output: 'ok' })) } })
+    try {
+      const run = engine.runs.start({ kind: 'prompt', profileId: 'p_codex', repoId: null, prompt: 'go', memory: 'off' }, { trigger: 'manual' })
+      expect((await waitRun(ctx, run.id)).status).toBe('passed')
+      expect(bridge.requests).toEqual([])
+      expect(calls[0].mcpArgs).toBeUndefined()
+      expect(calls[0].prompt).not.toContain('<memory-write-rules>')
+    } finally { await engine.shutdown() }
+  })
+
+  it('Claude quota fallback obtains a new Codex MCP grant with the original scope and keeps the company gateway', async () => {
+    const { ctx, bridge } = setup()
+    ctx.gateway = { attachment: () => ({ name: 'principia', command: '/fake/gateway', args: [], env: { PRINCIPIA_GATEWAY_DIR: ctx.root } }) }
+    const calls: FakeCall[] = []
+    const engine = await makeEngine(ctx, { available: ['claude', 'codex', 'shell'], adapters: {
+      claude: fakeAdapter('claude', calls, () => ({ output: 'Usage limit reached', isError: true, exitCode: 1 })),
+      codex: fakeAdapter('codex', calls, () => ({ output: 'ok' }))
+    } })
+    try {
+      const run = engine.runs.start({ kind: 'prompt', profileId: 'p_claude', repoId: null, prompt: 'Remember the verified project decision', memory: 'read-write' }, { trigger: 'manual' })
+      expect((await waitRun(ctx, run.id)).status).toBe('passed')
+      expect(bridge.requests.map(r => [r.adapter, r.transport, r.mode])).toEqual([
+        ['claude', 'mcp', 'read-write'], ['codex', 'inject', 'read-write']
+      ])
+      expect(bridge.requests[1].cwd).toBe(bridge.requests[0].cwd)
+      expect(bridge.requests[1].runId).toBe(run.id)
+      expect(bridge.requests[1].stepId).not.toBe(bridge.requests[0].stepId)
+      // Codex is inject-only (PASSPORT.md §7.2): the new grant's brief, no hivemem server, the gateway kept
+      expect(calls[1].mcpArgs!.join(' ')).not.toContain('HIVE_MEM_GRANT')
+      expect(calls[1].mcpArgs!.join(' ')).toContain('mcp_servers.principia.command=')
+      expect(calls[1].prompt).toContain('mgr_0000000002')
+      expect(calls[1].prompt).not.toContain('mgr_0000000001')
+      expect(bridge.open.size).toBe(0)
+      expect(bridge.released).toEqual(['mgr_0000000001', 'mgr_0000000002'])
+    } finally { await engine.shutdown() }
+  })
+
+  it('Codex attachment failure falls back to brief only without advertising writable memory', async () => {
+    const { ctx, bridge } = setup()
+    const calls: FakeCall[] = []
+    const codex = { ...fakeAdapter('codex', calls, () => ({ output: 'ok' })), mcpAttach: () => { throw new Error('attachment unavailable') } }
+    const engine = await makeEngine(ctx, { adapters: { codex } })
+    try {
+      const run = engine.runs.start({ kind: 'prompt', profileId: 'p_codex', repoId: null, prompt: 'go', memory: 'read-write' }, { trigger: 'manual' })
+      expect((await waitRun(ctx, run.id)).status).toBe('passed')
+      expect(calls[0].mcpArgs).toBeUndefined()
+      expect(calls[0].prompt).toContain('<hive-memory')
+      expect(calls[0].prompt).not.toContain('<memory-write-rules>')
+      expect(bridge.open.size).toBe(0)
+    } finally { await engine.shutdown() }
   })
 
   it('check retry that resumes gets no second brief but still a grant', async () => {
@@ -519,12 +593,26 @@ describe('memory: interactiveSpawn', () => {
     expect(spec.env).toBeUndefined()
   })
 
+  it.each([[READ], [[...READ, ...WRITE]]])('Codex interactive grants stay brief-only (inject) whatever their tools', async (toolNames) => {
+    const { ctx } = setup()
+    const engine = createEngineWith(ctx, { detect: fakeProviders() })
+    await engine.init()
+    try {
+      const grant = { ...grantOf(1), toolNames }
+      const spawn = engine.providers.interactiveSpawn(profile('p', 'codex'), { artifactsDir: '/a/', memory: grant })
+      expect(spawn.args.join(' ')).not.toContain('mcp_servers.hivemem')
+      expect(spawn.args.join(' ')).not.toContain('<memory-write-rules>')
+      expect(spawn.args.join(' ')).not.toContain('<passport-notes>')
+      expect(spawn.env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    } finally { await engine.shutdown() }
+  })
+
   it('no grant or non-mcp adapter: argv unchanged', async () => {
     const { ctx } = setup()
     const engine = createEngineWith(ctx, { detect: fakeProviders() })
     await engine.init()
     expect(engine.providers.interactiveSpawn(profile('p', 'claude'), { artifactsDir: '/a/' }).args).not.toContain('--mcp-config')
-    const codex = engine.providers.interactiveSpawn(profile('p', 'codex'), { artifactsDir: '/a/', memory: grantOf(1) })
-    expect(codex.args.join(' ')).not.toContain('mcp_servers')
+    const cursor = engine.providers.interactiveSpawn(profile('p', 'cursor'), { artifactsDir: '/a/', memory: grantOf(1) })
+    expect(cursor.args.join(' ')).not.toContain('mcp_servers')
   })
 })

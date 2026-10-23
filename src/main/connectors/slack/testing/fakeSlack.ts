@@ -26,7 +26,8 @@ export const FAKE_SCOPES = [
   'mpim:read',
   'chat:write',
   'users:read',
-  'reactions:read'
+  'reactions:read',
+  'files:read'
 ]
 
 export interface FakeUser {
@@ -68,7 +69,12 @@ export interface FakeMessage {
   reply_count?: number
   latest_reply?: string
   reply_users?: string[]
-  files?: { name: string; mimetype?: string; size?: number; permalink?: string }[]
+  files?: { id?: string; name: string; mimetype?: string; size?: number; permalink?: string; url_private?: string; url_private_download?: string }[]
+}
+/** A file the fake serves at its url_private[_download] (download()). */
+export interface FakeFile {
+  contentType: string
+  bytes: Uint8Array
 }
 
 export interface FakeSlackOptions {
@@ -283,8 +289,22 @@ export class FakeSlack {
     return this.calls.filter((c) => c.method === method)
   }
 
+  /** url -> bytes served by http.download (bot token + files:read required, like Slack). */
+  readonly files = new Map<string, FakeFile>()
+  readonly downloads: { url: string; at: number }[] = []
+
   // ---------- HttpPort ----------
   readonly http: HttpPort = {
+    download: async (req) => {
+      this.downloads.push({ url: req.url, at: this.now() })
+      if (req.token !== this.tokens.bot || this.revoked.bot) throw new Error('fake download: invalid_auth')
+      // Slack answers a missing files:read with its HTML login page
+      if (!this.hasScope('files:read')) throw new Error('Slack returned a login page instead of the file: reinstall the Slack app with the files:read scope')
+      const f = this.files.get(req.url)
+      if (!f) throw new Error('fake download: HTTP 404')
+      if (f.bytes.byteLength > req.maxBytes) throw new Error('fake download: image too large')
+      return { contentType: f.contentType, bytes: f.bytes }
+    },
     call: async (req) => {
       const at = this.now()
       const record = (r: HttpResponse): HttpResponse => {

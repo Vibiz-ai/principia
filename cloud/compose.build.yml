@@ -1,0 +1,24 @@
+# Build both images from source instead of pulling them from ghcr.io (contributors, air-gapped hosts):
+#   docker compose -f cloud/compose.yml -f cloud/compose.build.yml up --build -d
+# The principia image embeds the Open Passport host sources (PRINCIPIA_PASSPORT=embedded) and the passport image is
+# built from that repository's root. Point OPEN_PASSPORT_SRC at a local checkout to build from it instead:
+#   OPEN_PASSPORT_SRC=../../open-passport docker compose -f cloud/compose.yml -f cloud/compose.build.yml up --build -d
+x-principia-build: &principia-build
+  context: ..
+  dockerfile: cloud/Dockerfile
+  additional_contexts:
+    open-passport: ${OPEN_PASSPORT_SRC:-https://github.com/Vibiz-ai/open-passport.git#main}
+
+services:
+  init:
+    image: principia-cloud:local
+    build: *principia-build
+  principia:
+    image: principia-cloud:local
+    build: *principia-build
+  passport:
+    image: open-passport-host:local
+    build:
+      # the Open Passport repository root (its Dockerfile copies packages/js and packages/server)
+      context: ${OPEN_PASSPORT_SRC:-https://github.com/Vibiz-ai/open-passport.git#main}
+      dockerfile: packages/server/Dockerfile

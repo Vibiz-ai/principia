@@ -90,6 +90,22 @@ export function scopeAllowsRead(scope: RunReadScope, channel: { id: string; kind
   return scope.extra.includes(channel.id)
 }
 
+// ---------- companies (COMPANY.md §3, §6) ----------
+
+/** A company as the Slack rules see it. */
+export interface SlackCompanyRef {
+  id: string
+  name: string
+}
+/**
+ * The one company rule for Slack: a workspace (team) belongs to one company, and its messages may only start that
+ * company's workflows. null = same company; else the reason the event is dropped (and the trigger refused at save).
+ */
+export function slackCompanyMismatch(team: SlackCompanyRef, workflow: SlackCompanyRef): string | null {
+  if (team.id === workflow.id) return null
+  return `This Slack workspace belongs to ${team.name}, but the workflow belongs to ${workflow.name}. Move the workspace or the workflow to the same company.`
+}
+
 /** SLACK.md §8.2, in order. */
 export function decideReply(caller: ReplyCaller, target: ReplyTarget, text: string, env: PolicyEnv, c: PolicyCounters): ReplyDecision {
   if (caller.kind === 'session') return { action: 'draft', reason: 'interactive' }

@@ -14,6 +14,10 @@ describe('format', () => {
     expect(promptTitle('npm test > out.log')).toBe('npm test')
     expect(promptTitle('## Fix the login bug; then run tests')).toBe('Fix the login bug; then run tests')
     expect(promptTitle('Summarize the repo')).toBe('Summarize the repo')
+    // board task turns: the task title, never the raw role frame
+    const turn = '<principia-role department="Marketing" agent="Copywriter">\nWrite posts.\n</principia-role>\n\n<principia-task id="ACM-1" company="co_1">\nTitle: Draft 3 launch posts\nSource: manual\n</principia-task>'
+    expect(promptTitle(turn)).toBe('Draft 3 launch posts')
+    expect(promptTitle('<principia-wake>\nYou were answered.\n</principia-wake>\n\nRules: …')).toBe('Task follow-up')
   })
   it('natural-language prompt titles keep the first sentence, drop "Step 1:" and cut at a word', () => {
     expect(promptTitle('Step 1: use the Agent tool to map src. Then report back.', 60)).toBe('Use the Agent tool to map src')
@@ -26,6 +30,9 @@ describe('format', () => {
     expect(tildify('/Users/me/code/x')).toBe('~/code/x')
     expect(sessionPlace({ repoId: null, cwd: '/private/tmp/x/userData/scratch' })).toBe('Chat')
     expect(sessionPlace({ repoId: 'r', cwd: '/Users/me/code/x' })).toBe('~/code/x')
+    // DEPARTMENTS.md §9: a department chat names its department (even when it runs in a repo folder)
+    expect(sessionPlace({ repoId: null, cwd: '/Users/me/code/x', departmentId: 'dep_m' }, 'Marketing')).toBe('Marketing')
+    expect(sessionPlace({ repoId: null, cwd: '/Users/me/code/x', departmentId: 'dep_m' }, null)).toBe('Chat')
   })
   it('killed sessions read stopped, not an exit code', () => {
     expect(sessionEndLabel({ status: 'exited', exitCode: 129 })).toBe('stopped')
