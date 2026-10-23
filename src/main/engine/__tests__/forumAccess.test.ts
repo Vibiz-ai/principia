@@ -64,4 +64,17 @@ describe('engine: Forum access (FORUM.md §3)', () => {
     expect(calls[1].prompt).toContain('<principia-forum')
     expect((calls[1].mcpArgs ?? []).join(' ')).not.toContain('principia-forum')
   })
+
+  it('a seat run with no board task (a Forum reply) still gets that seat\'s Forum', async () => {
+    const { ctx, opened } = setup()
+    const calls: FakeCall[] = []
+    const engine = createEngineWith(ctx, { adapters: { claude: fakeAdapter('claude', calls, () => ({ output: 'Ciao!' })) }, detect: fakeProviders() })
+    await engine.init()
+    const run = await waitRun(ctx, engine.runs.start({ kind: 'prompt', profileId: 'p_claude', repoId: null, prompt: 'Forum reply in #marketing' }, { trigger: 'manual', companyId: 'co_acme', agentId: 'agt_marcus' }).id)
+    expect(run.status).toBe('passed')
+    expect(opened[0]).toMatchObject({ taskId: null, agentId: 'agt_marcus', adapter: 'claude' })
+    expect(calls[0].prompt.startsWith('<principia-forum you="@marcus" v="1">')).toBe(true)
+    const args = calls[0].mcpArgs ?? []
+    expect(args[args.indexOf('--allowedTools') + 1]).toContain('mcp__principia-forum__forum_post')
+  })
 })

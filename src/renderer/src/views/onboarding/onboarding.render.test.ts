@@ -108,6 +108,30 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     expect(html).toContain('aria-live="polite"')
   })
 
+  it('S0 new company: Guided / From a prompt / From a repo first; the code question only under Guided', async () => {
+    const t = text(await render(await draft()))
+    expect(t).toContain('How do you want to start?')
+    expect(t).toContain('Guided')
+    expect(t).toContain('From a prompt')
+    expect(t).toContain('Paste a description or brief')
+    expect(t).toContain('From a repo')
+    expect(t).toContain('Quick create (just a name)')
+    expect(t).not.toContain('Yes, connect it')
+    expect(text(await render(await draft({ start: 'guided' })))).toContain('Yes, connect it')
+    expect(text(await render(await draft({ start: 'prompt' })))).not.toContain('Yes, connect it')
+  })
+
+  it('S0b Brief: the textarea, Build my plan (⌘↵) and the way back to the questions', async () => {
+    const html = await render(await draft({ start: 'prompt', step: 'brief', history: ['start'], hasCode: false, brief: 'Sunday Bakery' }))
+    const t = text(html)
+    expect(t).toContain('Describe your business')
+    expect(html).toContain('ob-brief')
+    expect(t).toContain('Build my plan')
+    expect(t).toContain('⌘↵')
+    expect(t).toContain('Answer questions instead')
+    expect(t).toContain('Sunday Bakery')
+  })
+
   it('S0 new company with a saved draft: resume banner, Quick create, ✕', async () => {
     const d = await draft({ step: 'voice', hasCode: false, history: ['start', 'name', 'about'], answers: { name: 'Sunday Bakery' } as never })
     const t = text(await render(d, { resumable: true }))

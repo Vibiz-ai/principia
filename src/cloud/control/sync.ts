@@ -126,10 +126,15 @@ export function createSync(ctx: Ctx) {
     claimSlot(scheduleId: string, slot: string): boolean {
       return ctx.db.run('INSERT INTO schedule_fires (schedule_id, slot, run_id, at) VALUES (?, ?, NULL, ?) ON CONFLICT (schedule_id, slot) DO NOTHING', scheduleId, slot, ctx.now().toISOString()) > 0
     },
-    changedSchedules: (sinceSeq: number): CloudSchedule[] => ctx.db.all<ScheduleDbRow>('SELECT * FROM schedules WHERE seq > ? ORDER BY seq LIMIT 500', sinceSeq).map(schView)
+    /** schedules changed in (sinceSeq, uptoSeq], oldest first, at most `limit` (GET /v1/sync/changes pages them) */
+    changedSchedules: (sinceSeq: number, uptoSeq: number, limit = SYNC_PAGE): { seq: number; schedule: CloudSchedule }[] =>
+      ctx.db.all<ScheduleDbRow>('SELECT * FROM schedules WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?', sinceSeq, uptoSeq, limit).map(r => ({ seq: r.seq, schedule: schView(r) }))
   }
 }
 export type Sync = ReturnType<typeof createSync>
+
+/** rows per collection in one GET /v1/sync/changes; a fuller collection sets `more` and the cursor stops at its last row */
+export const SYNC_PAGE = 500
 
 export const encodeCursor = (seq: number): string => Buffer.from(JSON.stringify({ v: 1, s: seq })).toString('base64url')
 export function decodeCursor(c: string | null): number {

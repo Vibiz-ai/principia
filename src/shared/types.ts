@@ -142,6 +142,11 @@ export interface Session extends CompanyStamped {
   fromRunId: Id | null
   /** Agent-side conversation id (claude: the uuid Hive passed via --session-id). Restart resumes it. null = not resumable. */
   agentSessionId: string | null
+  /**
+   * DEPARTMENTS.md §9: a chat opened inside a department ("New Chat in Marketing"). It lists under that department in
+   * the sidebar, and its context carries the department's charter, agents and open tasks. Absent / null = not one.
+   */
+  departmentId?: Id | null
 }
 
 // ---------- workflows ----------

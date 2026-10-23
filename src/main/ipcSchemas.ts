@@ -8,9 +8,10 @@ import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
+import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
 import { AGENT_STATUSES } from '../shared/live'
 import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
-import { GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
+import { BRIEF_MAX, GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
 const none = z.unknown().transform(() => undefined)
@@ -205,6 +206,9 @@ const menuItem: z.ZodType<unknown> = z.lazy(() =>
   })
 )
 const secretName = z.string().min(1).max(128)
+const dashboardKind = z.enum(DASHBOARD_KINDS as unknown as [DashboardKind, ...DashboardKind[]])
+const dashboardConfig = z.record(z.string().regex(/^[a-zA-Z]{1,40}$/), z.union([z.string().max(2000), z.array(z.string().max(500)).max(20)]))
+const dashboardKeys = z.record(secretName.regex(/^[A-Z][A-Z0-9_]*$/), z.string().max(64 * 1024))
 
 // ---------- Passport vault (PASSPORT.md §11; implemented by P3) ----------
 /** frontmatter id, or `h:<vault-relative path>` for a note without one (§3.1) */
@@ -439,7 +443,8 @@ export const REQUEST_SCHEMAS = {
     cols: z.number().int().min(1).max(1000),
     rows: z.number().int().min(1).max(1000),
     title: z.string().max(200).optional(),
-    memory: memoryMode.optional()
+    memory: memoryMode.optional(),
+    departmentId: id.optional()
   }),
   'sessions:attach': z.object({ id }),
   'sessions:kill': z.object({ id }),
@@ -563,6 +568,14 @@ export const REQUEST_SCHEMAS = {
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
   'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional(), companyId }),
+  // DASHBOARDS.md §8 (the service re-checks config fields and key names against the catalog)
+  'dashboards:list': z.object({ companyId: id, departmentId: id.nullish() }).strict(),
+  'dashboards:keys': z.object({ companyId: id, kind: dashboardKind }).strict(),
+  'dashboards:install': z.object({ companyId: id, departmentId: id.nullable(), kind: dashboardKind, config: dashboardConfig, keys: dashboardKeys }).strict(),
+  'dashboards:update': z.object({ id, config: dashboardConfig.optional(), keys: dashboardKeys.optional() }).strict(),
+  'dashboards:refresh': z.object({ id }).strict(),
+  'dashboards:remove': z.object({ id }).strict(),
+  'dashboards:sample': z.object({ kind: dashboardKind }).strict(),
   'runs:start': z.object({ target: runTarget, companyId }),
   'runs:list': optObj({
     companyId,
@@ -844,6 +857,9 @@ export const REQUEST_SCHEMAS = {
   ]),
   'onboarding:plan': z.object({ requestId: obHandle, input: PlanInputSchema, useAgent: z.boolean() }).strict(),
   'onboarding:cancelPlan': z.object({ requestId: obHandle }).strict(),
+  // "From a prompt": the brief itself is untrusted free text, capped (main redacts and frames it before the model sees it)
+  'onboarding:brief': z.object({ requestId: obHandle, brief: z.string().max(BRIEF_MAX) }).strict(),
+  'onboarding:cancelBrief': z.object({ requestId: obHandle }).strict(),
   'onboarding:launch': z.object({ journalId: obHandle.optional(), draftId: obHandle, input: LaunchInputSchema }).strict(),
   'onboarding:skipStep': z.object({ journalId: obHandle, step: z.enum(SOFT_LAUNCH_STEPS) }).strict(),
   'onboarding:discard': z.object({ journalId: obHandle }).strict(),

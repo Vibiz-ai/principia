@@ -39,6 +39,7 @@ import { clone, ghStatus, listRepos } from '../onboarding/github'
 import { JournalStore, journalMeta } from '../onboarding/journal'
 import { checkAndStash, keyStash, type KeyStash } from '../onboarding/keys'
 import { LaunchService, type LaunchDeps } from '../onboarding/launch'
+import { BriefService } from '../onboarding/brief'
 import { PlanService } from '../onboarding/plan'
 import { inspectFolders, runScan, type FolderStore } from '../onboarding/scan'
 import { fetchSite } from '../onboarding/site'
@@ -220,6 +221,11 @@ export function registerOnboardingHandlers(h: Hive): void {
     redact: (t) => h.vault.redact(t)
   })
 
+  const briefs = new BriefService({
+    providers: () => providers,
+    redact: (t) => h.vault.redact(t)
+  })
+
   const launch = new LaunchService(onboardingLaunchDeps(h, { journal, keys, providers: () => providers }))
 
   const folderStore: FolderStore = {
@@ -287,6 +293,11 @@ export function registerOnboardingHandlers(h: Hive): void {
     return plans.generate({ requestId, input: checked, available, useAgent })
   })
   handle('onboarding:cancelPlan', ({ requestId }) => plans.cancel(requestId))
+  handle('onboarding:brief', async ({ requestId, brief }) => {
+    await loadProviders()
+    return briefs.extract({ requestId, brief })
+  })
+  handle('onboarding:cancelBrief', ({ requestId }) => briefs.cancel(requestId))
   handle('onboarding:launch', async (req) => {
     await loadProviders()
     return launch.launch(req)
@@ -303,6 +314,7 @@ export function registerOnboardingHandlers(h: Hive): void {
     keyStash.clear()
     issued.clear()
     for (const id of plans.live()) void plans.cancel(id)
+    for (const id of briefs.live()) void briefs.cancel(id)
   }
   const watch = (win: BrowserWindow) => win.on('close', wipe)
   try {
@@ -312,6 +324,7 @@ export function registerOnboardingHandlers(h: Hive): void {
       keyStash.clear()
       issued.clear()
       void plans.shutdown()
+      void briefs.shutdown()
       void launch.shutdown()
     })
   } catch (e) {

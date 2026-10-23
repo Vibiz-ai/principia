@@ -450,6 +450,8 @@ export interface SyncChanges {
   passports: { companyId: Id; revision: number }[]
   /** schedules whose rev changed on the server (fired, edited in the console later) */
   schedules: CloudSchedule[]
+  /** a collection had more changes than one answer carries: ask again at once from `cursor` */
+  more?: boolean
 }
 
 // ---------- runs, asks, events (CLOUD.md §9) ----------

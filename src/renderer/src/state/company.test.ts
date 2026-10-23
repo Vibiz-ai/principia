@@ -131,6 +131,15 @@ describe('spawning from a company', () => {
     expect(m.newestRunning(null, 'co_b')).toBeUndefined()
     expect(m.newestRunning(null, 'co_personal')?.id).toBe('s_pa')
   })
+
+  it('DEPARTMENTS.md §9: "New Chat in Marketing" sends the department; a department chat is never the Chat row\'s', async () => {
+    await m.openDepartmentChat({ id: 'dep_m', companyId: 'co_a' }, 'claude')
+    expect(created.at(-1)).toMatchObject({ companyId: 'co_a', departmentId: 'dep_m', adapter: 'claude', repoId: null })
+    const t = new Date().toISOString()
+    m.setState({ sessions: [{ id: 's_dep', repoId: null, companyId: 'co_a', departmentId: 'dep_m', status: 'running', startedAt: t } as Session] })
+    expect(m.newestRunning(null, 'co_a')).toBeUndefined()
+    expect(m.newestRunning(null, 'co_a', 'dep_m')?.id).toBe('s_dep')
+  })
 })
 
 describe('cross-company open', () => {

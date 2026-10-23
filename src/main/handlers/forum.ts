@@ -50,17 +50,21 @@ export function registerForumHandlers(h: Hive): void {
       ...(ask ? { kind: 'ask' as const, ask: { status: 'open' as const, to: ask.to.filter((id) => id !== me), ...(ask.options ? { options: ask.options } : {}) } } : {}),
       ...(proposal ? { kind: 'proposal' as const, proposal: { ...proposal, status: 'open' as const } } : {})
     })
-    // a reply in an open ask's thread answers it (§6)
+    // a reply in an open ask's thread answers it (§6): the asking agent gets the answer, no extra reply run
+    let answered = false
     if (msg.threadId) {
       const root = s.store.message(msg.threadId)
       if (root.kind === 'ask' && root.ask?.status === 'open') {
         try {
           s.answer(root.id, me, text, msg.id)
+          answered = true
         } catch {
           /* not the asked person: it stays a reply */
         }
       }
     }
+    // §6.4: everything else a person writes wakes the agents it is for
+    if (!answered && !proposal) s.humanPosted(msg)
     return msg
   })
   handle('forum:edit', ({ messageId, text }) => svc().store.edit(meOf(messageCompany(messageId)), messageId, text))

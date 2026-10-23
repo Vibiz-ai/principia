@@ -97,6 +97,7 @@ import type {
 } from './authoring'
 import type { RunBranch, RunWorktree } from './types'
 import type { MarketInstallResult, MarketList, MarketPreview, MarketRef } from './marketplace'
+import type { DashboardConfig, DashboardInstallInput, DashboardKeyLookup, DashboardKind, DashboardSnapshot, InstalledDashboard } from './dashboards'
 import type {
   SlackChannel,
   SlackDraft,
@@ -117,6 +118,7 @@ import type {
 } from './slack'
 import type {
   CloneProgressEvent,
+  BriefResult,
   FolderCandidate,
   GithubRepo,
   KeyCheckResult,
@@ -297,6 +299,20 @@ export interface InvokeMap {
   'marketplace:list': [{ refresh?: boolean } | V, MarketList]
   'marketplace:preview': [MarketRef, MarketPreview]
   'marketplace:install': [MarketRef & { overwrite?: boolean; companyId?: Id }, MarketInstallResult] // workflows go to companyId (else Personal)
+  // DASHBOARDS.md §8: department dashboards. Refused (forbidden) unless experimental.companies and .departments are on.
+  /** departmentId absent = every dashboard of the company; null = company-level ones only. */
+  'dashboards:list': [{ companyId: Id; departmentId?: Id | null }, InstalledDashboard[]]
+  /** Which of a kind's keys this company already has, and where (masked). Never a value. */
+  'dashboards:keys': [{ companyId: Id; kind: DashboardKind }, DashboardKeyLookup[]]
+  /** Checks the keys with a real read-only call first; nothing is saved when that fails. Keys never come back. */
+  'dashboards:install': [DashboardInstallInput, InstalledDashboard]
+  'dashboards:update': [{ id: Id; config?: DashboardConfig; keys?: Record<string, string> }, InstalledDashboard]
+  /** Fetches now and resolves with the result (a failure is in `status`, not thrown). */
+  'dashboards:refresh': [{ id: Id }, InstalledDashboard]
+  /** The keys stay in the company's keys. */
+  'dashboards:remove': [{ id: Id }, V]
+  /** The marketplace preview: the dashboard on sample data. */
+  'dashboards:sample': [{ kind: DashboardKind }, DashboardSnapshot]
   // runs
   /** companyId: the explicit stamp, last in the inheritance chain (workflow, then target repo, then this, §3). */
   'runs:start': [{ target: RunTarget; companyId?: Id }, Run]
@@ -459,6 +475,9 @@ export interface InvokeMap {
   /** Main recomputes what is available; the renderer cannot claim workflows or adapters. */
   'onboarding:plan': [{ requestId: string; input: PlanInput; useAgent: boolean }, PlanResult]
   'onboarding:cancelPlan': [{ requestId: string }, V]
+  /** "From a prompt": About answers read from the brief (Claude when installed, else the deterministic fallback). */
+  'onboarding:brief': [{ requestId: string; brief: string }, BriefResult]
+  'onboarding:cancelBrief': [{ requestId: string }, V]
   /** A given journalId resumes. Emits onboarding:progress. One launch at a time per draft. */
   'onboarding:launch': [{ journalId?: string; draftId: string; input: LaunchInput }, LaunchResult]
   'onboarding:skipStep': [{ journalId: string; step: SoftLaunchStep }, LaunchResult]
@@ -551,7 +570,7 @@ export interface EventMap {
   /** Window focus / fullscreen, drives .is-inactive / .is-fullscreen on <html>. */
   'window:state': { focused: boolean; fullscreen: boolean }
   /** Coarse invalidation for lists without dedicated events. */
-  'data:changed': { domain: 'company' | 'tasks' | 'departments' | 'repos' | 'profiles' | 'workflows' | 'secrets' | 'schedules' }
+  'data:changed': { domain: 'company' | 'tasks' | 'departments' | 'repos' | 'profiles' | 'workflows' | 'secrets' | 'schedules' | 'dashboards' }
   /** Navigation/commands from app menu, tray, notifications, dock. */
   'ui:command': UiCommand
   /** New mem_event rows (any process) or a page write committed. Refetch visible data, debounced. */
@@ -616,6 +635,11 @@ export interface SessionCreateRequest {
   title?: string
   /** Overrides Settings.sessionMemory for this session (CONTRACT §11.3). */
   memory?: MemoryMode
+  /**
+   * DEPARTMENTS.md §9: "New Chat in <Department>". A chat (repoId and cwd are ignored) of the department's company, with
+   * the department's context; its cwd is the department's repo, else the company's single repo, else the workspace.
+   */
+  departmentId?: Id
 }
 export interface RunListQuery {
   status?: RunStatus[]
@@ -714,6 +738,7 @@ export const INVOKE_CHANNELS = [
   'workflows:list', 'workflows:get', 'workflows:create', 'workflows:update', 'workflows:remove',
   'workflows:duplicate', 'workflows:validate', 'workflows:export', 'workflows:import',
   'marketplace:list', 'marketplace:preview', 'marketplace:install',
+  'dashboards:list', 'dashboards:keys', 'dashboards:install', 'dashboards:update', 'dashboards:refresh', 'dashboards:remove', 'dashboards:sample',
   'runs:start', 'runs:list', 'runs:get', 'runs:cancel', 'runs:rerun', 'runs:stepLog', 'runs:openAsSession',
   'schedules:list', 'schedules:create', 'schedules:update', 'schedules:remove', 'schedules:setEnabled',
   'schedules:runNow', 'schedules:preview', 'schedules:events', 'schedules:pauseAll',
@@ -737,7 +762,7 @@ export const INVOKE_CHANNELS = [
   'slackTriggers:setEnabled', 'slackTriggers:test', 'slackTriggers:events',
   'onboarding:status', 'onboarding:pickFolders', 'onboarding:inspectFolders', 'onboarding:scan', 'onboarding:fetchSite',
   'onboarding:github', 'onboarding:pickCloneDir', 'onboarding:key', 'onboarding:plan', 'onboarding:cancelPlan',
-  'onboarding:launch', 'onboarding:skipStep', 'onboarding:discard', 'onboarding:start',
+  'onboarding:brief', 'onboarding:cancelBrief', 'onboarding:launch', 'onboarding:skipStep', 'onboarding:discard', 'onboarding:start',
   'cloud:state', 'cloud:pair', 'cloud:unlink', 'cloud:summary', 'cloud:providers', 'cloud:providerPut', 'cloud:providerDelete',
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',

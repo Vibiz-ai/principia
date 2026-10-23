@@ -861,3 +861,66 @@ describe('withoutUserinfo', () => {
     expect(withoutUserinfo('https://github.com/a/b')).toBe('https://github.com/a/b')
   })
 })
+
+describe('§2 S0: three ways to start a new company', () => {
+  const BRIEF = 'Sunday Bakery\nSourdough for offices in Lisbon.'
+  it('From a prompt: Start → Brief → (read by Claude) Plan, the brief in the plan and launch inputs', () => {
+    let d = run(fresh(), { type: 'chooseStart', start: 'prompt' })
+    expect(d).toMatchObject({ start: 'prompt', hasCode: false })
+    expect(canContinue(d)).toBe(true)
+    d = r(d, { type: 'next' })
+    expect(d.step).toBe('brief')
+    expect(canContinue(d)).toBe(false)
+    d = r(d, { type: 'setBrief', brief: BRIEF })
+    expect(canContinue(d)).toBe(true)
+    expect(hasProgress(d)).toBe(true)
+    d = r(d, { type: 'briefRead', source: 'agent', answers: { name: 'Sunday Bakery', oneLiner: 'Sourdough for offices', goals: ['customers'] } })
+    expect(d.step).toBe('plan')
+    expect(d.history).toEqual(['start', 'brief'])
+    expect(d.answers).toMatchObject({ name: 'Sunday Bakery', oneLiner: 'Sourdough for offices', goals: ['customers'] })
+    expect(planInput(d, CTX).brief).toBe(BRIEF)
+    d = r(d, { type: 'templatePlan', plan: planFor(d), inputsHash: draftInputsHash(d, CTX) })
+    expect(launchInput(d, CTX)?.brief).toBe(BRIEF)
+    // the brief is part of what the plan was made for
+    expect(draftInputsHash(r(r(d, { type: 'back' }), { type: 'setBrief', brief: `${BRIEF} More.` }), CTX)).not.toBe(draftInputsHash(d, CTX))
+    expect(parseDraft(JSON.parse(serializeDraft(d)!), NOW)).toMatchObject({ start: 'prompt', brief: BRIEF })
+  })
+
+  it('From a prompt, not read by Claude (or no name): Name with what could be read, then the guided questions', () => {
+    let d = run(fresh(), { type: 'chooseStart', start: 'prompt' }, { type: 'next' }, { type: 'setBrief', brief: BRIEF })
+    d = r(d, { type: 'briefRead', source: 'template', answers: { name: 'Sunday Bakery' } })
+    expect(d.step).toBe('name')
+    expect(d.answers.name).toBe('Sunday Bakery')
+    expect(d.brief).toBe(BRIEF)
+    expect(r(d, { type: 'next' }).step).toBe('about')
+    expect(r(d, { type: 'back' }).step).toBe('brief')
+    const noName = run(fresh(), { type: 'chooseStart', start: 'prompt' }, { type: 'next' }, { type: 'setBrief', brief: 'x' }, { type: 'briefRead', source: 'agent', answers: {} })
+    expect(noName.step).toBe('name')
+  })
+
+  it('From a repo: Start → Connect → Plan when the scan found a name, else Name → Plan', () => {
+    let d = run(fresh(), { type: 'chooseStart', start: 'repo' })
+    expect(d).toMatchObject({ start: 'repo', hasCode: true })
+    d = run(d, { type: 'next' }, { type: 'setRepos', repos: [{ kind: 'local', path: '/Users/me/acme' }] })
+    expect(d.step).toBe('connect')
+    const named = run(d, { type: 'setAnswers', patch: { name: 'Acme' } }, { type: 'next' })
+    expect(named.step).toBe('plan')
+    const unnamed = r(d, { type: 'next' })
+    expect(unnamed.step).toBe('name')
+    expect(run(unnamed, { type: 'setAnswers', patch: { name: 'Acme' } }, { type: 'next' }).step).toBe('plan')
+    // "No code after all" hands over to the guided questions
+    const skipped = r(d, { type: 'skipConnect' })
+    expect(skipped).toMatchObject({ step: 'name', start: 'guided', hasCode: false })
+    expect(run(skipped, { type: 'setAnswers', patch: { name: 'Acme' } }, { type: 'next' }).step).toBe('about')
+  })
+
+  it('Guided is the old flow; choosing a way again from Start drops what From a repo picked', () => {
+    const g = run(fresh(), { type: 'chooseStart', start: 'guided' })
+    expect(canContinue(g)).toBe(false)
+    expect(run(g, { type: 'chooseCode', hasCode: false }, { type: 'next' }).step).toBe('name')
+    const repo = run(fresh(), { type: 'chooseStart', start: 'repo' }, { type: 'setRepos', repos: [{ kind: 'local', path: '/Users/me/acme' }] })
+    expect(r(repo, { type: 'chooseStart', start: 'prompt' })).toMatchObject({ hasCode: false, repos: [] })
+    // a briefRead off the Brief step is ignored
+    expect(r(g, { type: 'briefRead', source: 'agent', answers: { name: 'X' } })).toBe(g)
+  })
+})

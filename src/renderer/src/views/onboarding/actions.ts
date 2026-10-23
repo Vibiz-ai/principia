@@ -4,8 +4,9 @@
  * itself lives in the store (state/store.ts) and the pure reducer (state/onboarding.ts); this module only sequences
  * IPC calls around them. Keys never pass through here: KeyField sends its value straight to `onboarding:key`.
  */
-import type { LaunchResult, LaunchStepName, OnboardingDraft, OnboardingStatus, ProgressEvent, SoftLaunchStep } from '@shared/onboarding'
+import type { BriefResult, LaunchResult, LaunchStepName, OnboardingDraft, OnboardingStatus, ProgressEvent, SoftLaunchStep } from '@shared/onboarding'
 import { LAUNCH_STEP_LABELS, SOFT_LAUNCH_STEPS } from '@shared/onboarding'
+import { briefFallback } from '@shared/onboardingBrief'
 import { inputsHash } from '@shared/onboardingPlan'
 import { confirmNative, errorMessage, hive } from '../../lib/hive'
 import { draftInputsHash, launchInput, planInput, reconcileLaunchDraft } from '../../state/onboarding'
@@ -37,8 +38,10 @@ export interface FlowLocal {
    * calls finishCeremony(), the existing close + enterCompany path.
    */
   ceremony: { companyId: string } | null
+  /** "From a prompt": onboarding:brief is reading the brief (the Brief step shows it and holds its button). */
+  briefReading: boolean
 }
-let local: FlowLocal = { siteReading: false, launchError: null, result: null, ceremony: null }
+let local: FlowLocal = { siteReading: false, launchError: null, result: null, ceremony: null, briefReading: false }
 const listeners = new Set<() => void>()
 export function setLocal(patch: Partial<FlowLocal>): void {
   local = { ...local, ...patch }
@@ -111,12 +114,12 @@ export function resetTailorMemory(): void {
 
 /** The site read behind the Name step's Continue (§5.3); failures are quiet (the field is still saved). */
 let siteSeq = 0
-function readSite(raw: string): void {
+function readSite(raw: string): Promise<void> {
   const url = siteFetchUrl(raw)
-  if (!url) return
+  if (!url) return Promise.resolve()
   const seq = ++siteSeq
   setLocal({ siteReading: true })
-  hive.onboarding
+  return hive.onboarding
     .fetchSite({ url })
     .then((site) => {
       if (seq !== siteSeq) return
@@ -137,17 +140,77 @@ export function next(): void {
   const d = getState().onboardingDraft
   if (!d) return
   if (d.step === 'plan') return void launch()
+  if (d.step === 'brief') return void readBrief()
+  // From a repo: the scan's answers first, so a found name skips the Name step
+  if (d.step === 'connect' && d.start === 'repo') onboardingDispatch({ type: 'applyPrefill' })
   if (d.step === 'name') {
     const handle = instagramHandle(d.answers.siteUrl)
     if (handle) onboardingDispatch({ type: 'setAnswers', patch: { instagram: handle, siteUrl: '' } })
-    else if (d.answers.siteUrl.trim()) readSite(d.answers.siteUrl)
+    else if (d.answers.siteUrl.trim()) void readSite(d.answers.siteUrl)
   }
   onboardingDispatch({ type: 'next' })
   const after = getState().onboardingDraft
   if (d.step === 'goals' && after && after.step !== 'goals') tailorPlan()
+  // From a repo goes straight to Plan: tailor it from the scan right away
+  else if (d.start === 'repo' && after?.step === 'plan') tailorPlan()
+}
+
+// ---------- From a prompt (§2 S0b) ----------
+
+let briefSeq = 0
+
+/**
+ * The Brief step's primary: main reads the answers out of the brief (Claude when installed, else the deterministic
+ * fallback). Read by Claude with a name → Plan, tailored with the brief; otherwise → Name with what could be read, the
+ * brief kept, so nothing is lost.
+ */
+export async function readBrief(): Promise<void> {
+  const d = getState().onboardingDraft
+  if (!d || d.step !== 'brief' || !d.brief?.trim() || local.briefReading) return
+  const seq = ++briefSeq
+  const requestId = `${d.id}-b${seq}`
+  setLocal({ briefReading: true })
+  let res: BriefResult
+  try {
+    res = await hive.onboarding.brief({ requestId, brief: d.brief })
+  } catch {
+    res = { answers: briefFallback(d.brief), source: 'template', fallbackReason: 'exit' }
+  }
+  if (seq !== briefSeq) return
+  setLocal({ briefReading: false })
+  const cur = getState().onboardingDraft
+  // closed meanwhile (Esc saves the draft): the answer waits for nothing; Build my plan asks again on return
+  if (!cur || cur.step !== 'brief' || !getState().onboarding?.open) return
+  onboardingDispatch({ type: 'briefRead', answers: res.answers, source: res.source })
+  const after = getState().onboardingDraft
+  if (!after) return
+  // the site read changes the plan's inputs: on the way to Plan it lands first, so the tailored plan is not made stale
+  const site = after.answers.siteUrl.trim() && !instagramHandle(after.answers.siteUrl) ? readSite(after.answers.siteUrl) : null
+  if (after.step === 'plan') {
+    if (site) await site
+    if (getState().onboardingDraft?.step === 'plan') tailorPlan()
+  } else toast(res.fallbackReason === 'no-cli' ? 'Install Claude Code to read a brief for you. We filled in what we could; check the name.' : 'We filled in what we could from your brief. Check the name and carry on.')
+}
+
+/** Brief step "Answer questions instead": the no-model read, then the guided questions (the brief stays in the draft). */
+export function skipBrief(): void {
+  const d = getState().onboardingDraft
+  if (!d || d.step !== 'brief') return
+  cancelBriefRead()
+  onboardingDispatch({ type: 'briefRead', answers: briefFallback(d.brief ?? ''), source: 'template' })
+}
+
+/** Back or close while the brief is being read: the call is killed and its answer ignored. */
+export function cancelBriefRead(): void {
+  const d = getState().onboardingDraft
+  const seq = briefSeq++
+  if (!local.briefReading) return
+  setLocal({ briefReading: false })
+  if (d) void hive.onboarding?.cancelBrief?.({ requestId: `${d.id}-b${seq}` })?.catch?.(() => undefined)
 }
 
 export function back(): void {
+  if (getState().onboardingDraft?.step === 'brief') cancelBriefRead()
   onboardingDispatch({ type: 'back' })
 }
 

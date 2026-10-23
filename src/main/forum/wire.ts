@@ -14,6 +14,7 @@ import { log } from '../log'
 import { boardActions } from '../handlers/board'
 import { createTaskGuarded, departmentActions } from '../handlers/company'
 import { ForumService, type ForumTaskView } from './service'
+import { ForumResponder } from './responder'
 
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 
@@ -148,6 +149,47 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         log.warn('forum: ask reconcile failed', { runId: run.id, error: String(e) })
       }
     })
+  })
+  // §6.4: a human's post wakes the agents it is for (one short seat run each, no board task)
+  const responder = new ForumResponder({
+    store: () => service.store,
+    enabled: () => service.enabled(),
+    seat: (agentId) => {
+      const a = c().departments.getAgent(agentId)
+      if (!a) return null
+      const profile = a.kind === 'profile' ? h.store.getProfile(a.refId) : null
+      return {
+        id: a.id,
+        companyId: a.companyId,
+        departmentId: a.departmentId,
+        name: a.name,
+        instructions: a.data.instructions ?? '',
+        profileId: profile && profile.adapter !== 'shell' ? profile.id : null,
+        repoId: a.data.defaultRepoId ?? null,
+        active: !a.archivedAt && !a.pausedAt
+      }
+    },
+    departmentName: (id) => c().departments.get(id)?.name ?? null,
+    seats: (companyId, departmentId) =>
+      c()
+        .departments.listAgents({ companyId, ...(departmentId ? { departmentId } : {}) })
+        .filter((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile')
+        .map((a) => a.id),
+    start: ({ companyId, agentId, profileId, repoId, prompt, reply }) => {
+      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId })
+      // the seat on the run row: the step-end harvest posts for it when it does not reply itself
+      h.db.prepare('UPDATE runs SET agent_id=?, company_id=? WHERE id=?').run(agentId, companyId, run.id)
+      service.noteReplyRun(run.id, reply)
+      return run.id
+    },
+    log
+  })
+  service.onHumanPost = (m) => void responder.onHumanPost(m)
+  h.runHooks.push((run) => {
+    if (!TERMINAL.has(run.status)) return
+    responder.onRunEnded(run.id)
+    // after the step-end harvest (it reads the reply target first)
+    setTimeout(() => service.forgetRun(run.id), 60_000).unref?.()
   })
   void service.start().then((url) => url && log.info('forum endpoint ready', { url }))
   return service

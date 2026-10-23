@@ -35,6 +35,7 @@ import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridg
 import { SessionLiveHub } from './live/sessionLive'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
+import { wireDashboards } from './dashboards/wire'
 import { SlackService } from './connectors/slack/service'
 
 applyUserDataOverride()
@@ -166,7 +167,7 @@ if (!app.requestSingleInstanceLock()) {
     const h = new Hive(db, store, vault, paths)
     hive = h
     // COMPANY.md §6: a connection limited to some companies reaches only their spawns
-    h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(),
+    h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(), seedDefaults: true,
       companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) } })
     app.on('will-quit', () => h.gateway?.close())
 
@@ -253,6 +254,12 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('forum unavailable', { e: String(e) })
     }
+    // DASHBOARDS.md: department dashboards (fetch and refresh in main); failure = no dashboards, Principia runs
+    try {
+      h.dashboards = wireDashboards(h, cipher)
+    } catch (e) {
+      log.error('dashboards unavailable', { e: String(e) })
+    }
     // SLACK.md §2.3: the Slack connector (no tokens = zero outbound requests). The dev-only fake transport exists only
     // in a build made with HIVE_BUILD_FAKE_SLACK=1 (the define removes this branch from every normal build).
     try {
@@ -300,7 +307,7 @@ if (!app.requestSingleInstanceLock()) {
       getProfile: (id) => store.getProfile(id),
       getRepo: (id) => store.getRepo(id, (rid) => h.sessions?.liveCountForRepo(rid) ?? 0),
       listRepos: () => store.listRepos(),
-      passportContext: (cwd, companyId) => h.passportContext(cwd, companyId),
+      passportContext: (cwd, companyId, departmentId) => h.passportContext(cwd, companyId, departmentId),
       company: h.companyBridge(),
       onStepOutput: (e) => h.onStepOutput(e),
       getWorkflow: (id) => store.getWorkflow(id),
@@ -325,6 +332,7 @@ if (!app.requestSingleInstanceLock()) {
       baseEnv: () => baseChildEnv(),
       secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
       company: h.companyBridge(),
+      chat: (req) => h.safe(() => h.chatContext(req), null),
       trustFolder: (cwd, env) => {
         if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
       },

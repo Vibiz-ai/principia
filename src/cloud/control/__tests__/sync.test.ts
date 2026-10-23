@@ -90,3 +90,41 @@ describe('schedules: placement and the 5-minute floor', () => {
     } finally { await h.close() }
   })
 })
+
+describe('GET /v1/sync/changes pages a large backlog', () => {
+  it('never skips a row past one page: the cursor stops at the shortest page and `more` asks again', async () => {
+    const h = await startHarness()
+    try {
+      const dev = await h.pair()
+      await h.call('PUT', '/v1/companies/co_a', { token: dev, body: { name: 'A', slug: 'a' } })
+      const cursor0 = (await h.call('GET', '/v1/sync/changes', { token: dev })).json.cursor
+      const db = h.app.ctx.db
+      const spec = JSON.stringify({ name: 'S', when: { kind: 'cron', cron: '0 9 * * *', tz: 'UTC' }, target: { kind: 'workflow', workflowId: 'w1', inputs: {} }, enabled: true })
+      const at = '2026-10-21T08:00:00.000Z'
+      // 700 schedules and 700 runs, interleaved on the one shared seq (more than one page of each)
+      const N = 700
+      for (let i = 0; i < N; i++) {
+        db.run('INSERT INTO schedules (company_id, id, spec, placement, rev, seq, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)', 'co_a', `s${i}`, spec, i % 2 ? 'cloud' : 'local', db.nextSeq(), at)
+        db.run("INSERT INTO cloud_runs (id, workspace_id, company_id, kind, title, status, trigger, adapters, target, untrusted, created_at, seq) VALUES (?, 'ws', 'co_a', 'workflow', 'R', 'passed', 'manual', '[]', '{}', '[]', ?, ?)", `crun_${i}`, at, db.nextSeq())
+      }
+      const schedules = new Set<string>(), runs = new Set<string>()
+      let cursor = cursor0, pages = 0, more = true
+      while (more) {
+        const ch = (await h.call('GET', `/v1/sync/changes?since=${cursor}`, { token: dev })).json
+        expect(ch.schedules.length).toBeLessThanOrEqual(500)
+        expect(ch.runs.length).toBeLessThanOrEqual(500)
+        for (const x of ch.schedules) schedules.add(x.id)
+        for (const r of ch.runs) runs.add(r.id)
+        if (pages === 0) expect(ch.more).toBe(true)
+        more = ch.more
+        cursor = ch.cursor
+        if (++pages > 10) throw new Error('did not drain')
+      }
+      expect(pages).toBeGreaterThan(1)
+      expect(schedules.size).toBe(N)
+      expect(runs.size).toBe(N)
+      const after = (await h.call('GET', `/v1/sync/changes?since=${cursor}`, { token: dev })).json
+      expect(after).toMatchObject({ runs: [], asks: [], schedules: [], passports: [], more: false })
+    } finally { await h.close() }
+  })
+})

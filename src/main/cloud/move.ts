@@ -14,6 +14,7 @@ import type {
   CloudCompany,
   CloudWorkflow,
   CloudSchedule,
+  PatchCompanyRequest,
   PutCompanyResponse,
   PutConnectionRequest,
   PutRepoRequest,
@@ -370,10 +371,14 @@ export async function runScheduleInCloud(d: Pick<MoveDeps, 'link'>, s: Pick<Sche
 }
 
 /**
- * "Bring back to this Mac": its schedules fire here again (placement local), then the company is deleted from the
- * cloud. The desktop's PassportSync config for the cloud's passport is removed (the host revokes the grants).
+ * "Bring back to this Mac": the company is paused in the cloud first (its runs are canceled and its triggers parked,
+ * so nothing writes the passport any more), its schedules fire here again (placement local), PassportSync pulls the
+ * final passport revision while the desktop grant still works, and only then is the company deleted from the cloud
+ * (the host revokes the grants) and the desktop's PassportSync config for the cloud's passport removed. When that last
+ * sync fails nothing is deleted: the company stays paused in the cloud and bringing it back again retries.
  */
 export async function bringBack(d: Pick<MoveDeps, 'link' | 'schedules' | 'passport'>, companyId: Id): Promise<void> {
+  await d.link.call((c) => c.call('companyPatch', { params: { cid: companyId }, body: { paused: true } satisfies PatchCompanyRequest }))
   const owned = d.schedules(companyId).filter((s) => d.link.ownsSchedule(s.id))
   for (const s of owned) {
     if (!workflowSchedule(s)) continue
@@ -388,8 +393,15 @@ export async function bringBack(d: Pick<MoveDeps, 'link' | 'schedules' | 'passpo
       /* the delete below removes it anyway */
     }
   }
-  await d.link.call((c) => c.call('companyDelete', { params: { cid: companyId } }))
   const passport = d.link.cloudCompany(companyId)
+  if (passport?.passportId && d.passport?.configured(companyId)) {
+    try {
+      await d.passport.sync(companyId)
+    } catch (e) {
+      throw new HiveError('conflict', `Could not bring the latest Passport back from the cloud (${errText(e)}). The company is paused in the cloud and nothing was deleted; try again.`)
+    }
+  }
+  await d.link.call((c) => c.call('companyDelete', { params: { cid: companyId } }))
   d.link.unmarkCompany(companyId, owned.map((s) => s.id))
   if (passport?.passportId && d.passport?.clear) await Promise.resolve(d.passport.clear(companyId, passport.passportId)).catch(() => undefined)
 }

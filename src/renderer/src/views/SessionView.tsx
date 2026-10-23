@@ -244,6 +244,8 @@ function SessionPane({
 }): React.JSX.Element {
   const profiles = useStore((st) => st.profiles)
   const interactiveBypass = useStore((st) => st.settings?.interactiveBypass ?? false)
+  // DEPARTMENTS.md §9: a department chat's header reads "<Company> · <Department> · Claude"
+  const departmentName = useStore((st) => (s.departmentId ? (st.departments.find((d) => d.id === s.departmentId)?.name ?? null) : null))
   const [artifactCount, setArtifactCount] = useState<number | null>(null)
   const termRef = useRef<TerminalHandle | null>(null)
   const profile = profiles.find((p) => p.id === s.profileId)
@@ -324,8 +326,12 @@ function SessionPane({
       <div className="pane__header mono">
         {/* §8.6: a pane may belong to any company, whatever the focus */}
         <CompanyChip companyId={s.companyId} always className="pane__company" />
-        <span className="pane__cwd selectable" title={s.repoId ? tildify(s.cwd) : `${tildify(s.cwd)}\nThis company’s chat folder, not tied to a repository`}>
-          {sessionPlace(s)}
+        <span
+          className="pane__cwd selectable"
+          title={s.repoId ? tildify(s.cwd) : departmentName ? `${tildify(s.cwd)}\nA chat in the ${departmentName} department: it knows its charter, agents and open tasks` : `${tildify(s.cwd)}\nThis company’s chat folder, not tied to a repository`}
+        >
+          {departmentName && <span className="text-tertiary" aria-hidden>· </span>}
+          {sessionPlace(s, departmentName)}
         </span>
         {s.adapter !== 'shell' && <span className="text-tertiary">· {providerLabel(s.adapter)}</span>}
         {profile && profile.adapter !== 'shell' && interactiveBypass && <span className="text-tertiary" title="The agent edits files and runs commands without asking first. Change it in Settings.">· runs without asking</span>}

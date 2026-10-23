@@ -39,7 +39,7 @@ import {
   type ViewState
 } from '../state/store'
 import { CompanyGroup, REPO_DRAG_TYPE } from './CompanyGroup'
-import { DepartmentGroup, NeedsYouTasksSlot, useBoardCounts, useNeedsYouTaskCount } from './DepartmentGroup'
+import { DepartmentChatRows, DepartmentGroup, NeedsYouTasksSlot, useBoardCounts, useNeedsYouTaskCount } from './DepartmentGroup'
 import { CompanyAvatar } from './CompanyRail'
 import { CompanySwitcher, OtherCompanies } from './OtherCompanies'
 import { ForumSidebarSection, useForumBadge } from '../components/forum/SidebarSection'
@@ -211,13 +211,15 @@ export function Sidebar(): React.JSX.Element {
   const byRepo = useMemo(() => {
     const m = new Map<string, Session[]>()
     for (const s of sessions) {
+      // DEPARTMENTS.md §9: a department chat lists under its department (with the flag on), not in Chat or a repo
+      if (s.departmentId && departments) continue
       const k = s.repoId ?? '__chat'
       if (!m.has(k)) m.set(k, [])
       m.get(k)!.push(s)
     }
     for (const l of m.values()) l.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
     return m
-  }, [sessions])
+  }, [sessions, departments])
   /** Sessions whose row label would repeat a sibling's ("Claude", "Claude"): those also show their start time. */
   const dupLabel = useMemo(() => {
     const count = new Map<string, number>()
@@ -444,6 +446,7 @@ export function Sidebar(): React.JSX.Element {
   }
 
   return (
+    <DepartmentChatRows.Provider value={sessionRow}>
     <aside
       className={`sidebar ${drop ? 'is-drop' : ''}`}
       style={{ width }}
@@ -579,7 +582,12 @@ export function Sidebar(): React.JSX.Element {
           )}
         </div>
       ) : (
-        <>
+        <div className="sidebar__body" onDragOverCapture={e => {
+          if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
+          const bounds = e.currentTarget.getBoundingClientRect()
+          if (e.clientY < bounds.top + 40) e.currentTarget.scrollTop -= 16
+          if (e.clientY > bounds.bottom - 40) e.currentTarget.scrollTop += 16
+        }}>
         <div className="sidebar__section">
           <span>Chat</span>
           <IconButton icon="plus" label="New Chat — a session with no repository (⌥⌘N)" onClick={() => void openChat(true)} />
@@ -613,12 +621,7 @@ export function Sidebar(): React.JSX.Element {
             <input ref={filterRef} className="input input--sm" placeholder="Filter  ⌘⌥F" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} />
           </div>
         )}
-        <div className="sidebar__repos" onDragOverCapture={e => {
-          if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
-          const bounds = e.currentTarget.getBoundingClientRect()
-          if (e.clientY < bounds.top + 40) e.currentTarget.scrollTop -= 16
-          if (e.clientY > bounds.bottom - 40) e.currentTarget.scrollTop += 16
-        }}>
+        <div className="sidebar__repos">
           {repos.length === 0 ? (
             <div className="sidebar__empty">
               <div>Add the folders you work in.</div>
@@ -631,16 +634,34 @@ export function Sidebar(): React.JSX.Element {
             shownRepos.map(repoRow)
           )}
         </div>
-        </>
+        </div>
       )}
-      {focusedCompany && <OtherCompanies activeId={focusedCompany.id} />}
-      <div className={`side-row side-row--nav sidebar__settings ${view.name === 'settings' ? 'is-selected' : ''}`} onClick={() => void navigate({ name: 'settings' })}>
-        <Icon name="settings" />
-        <span className="side-row__label">Settings</span>
-        <Kbd>⌘,</Kbd>
+      {/* Pinned footer: the lists above scroll, so Other companies and Settings never get pushed off the window. */}
+      <div className="sidebar__foot">
+        {focusedCompany && <OtherCompanies activeId={focusedCompany.id} />}
+        <div
+          className={`side-row side-row--nav sidebar__settings ${view.name === 'settings' ? 'is-selected' : ''}`}
+          role="link"
+          tabIndex={0}
+          aria-current={view.name === 'settings' ? 'page' : undefined}
+          aria-keyshortcuts="Meta+,"
+          title="Settings (⌘,)"
+          onClick={() => void navigate({ name: 'settings' })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              void navigate({ name: 'settings' })
+            }
+          }}
+        >
+          <Icon name="settings" />
+          <span className="side-row__label">Settings</span>
+          <Kbd>⌘,</Kbd>
+        </div>
       </div>
       <div className="sidebar__resizer" onMouseDown={startResize} />
     </aside>
+    </DepartmentChatRows.Provider>
   )
 }
 

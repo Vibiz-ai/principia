@@ -30,6 +30,9 @@ describe('format', () => {
     expect(tildify('/Users/me/code/x')).toBe('~/code/x')
     expect(sessionPlace({ repoId: null, cwd: '/private/tmp/x/userData/scratch' })).toBe('Chat')
     expect(sessionPlace({ repoId: 'r', cwd: '/Users/me/code/x' })).toBe('~/code/x')
+    // DEPARTMENTS.md §9: a department chat names its department (even when it runs in a repo folder)
+    expect(sessionPlace({ repoId: null, cwd: '/Users/me/code/x', departmentId: 'dep_m' }, 'Marketing')).toBe('Marketing')
+    expect(sessionPlace({ repoId: null, cwd: '/Users/me/code/x', departmentId: 'dep_m' }, null)).toBe('Chat')
   })
   it('killed sessions read stopped, not an exit code', () => {
     expect(sessionEndLabel({ status: 'exited', exitCode: 129 })).toBe('stopped')

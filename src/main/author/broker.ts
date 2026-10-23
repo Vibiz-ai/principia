@@ -44,7 +44,7 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
-import { isTaskTool, TASK_MUTATIONS, type TaskTool } from '../company/taskToolDefs'
+import { isBoardTool, isCompanyTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
 
@@ -107,7 +107,7 @@ export interface BrokerDeps {
   tasks?: {
     /** The caller of an owner (its company, its task, whether its run or session still holds it). Throws the refusal. */
     resolve(owner: LiveOwner): TaskCallerRef
-    call(caller: TaskCallerRef, tool: TaskTool, args: Record<string, unknown>, hints: { companyId: string | null; taskId: string | null; callId: string | null }): Record<string, unknown> | Promise<Record<string, unknown>>
+    call(caller: TaskCallerRef, tool: BoardTool, args: Record<string, unknown>, hints: { companyId: string | null; taskId: string | null; callId: string | null }): Record<string, unknown> | Promise<Record<string, unknown>>
   }
   /** SLACK.md §9.5: `slack_trigger` on create/update/validate. Absent = the argument is refused. */
   slackTriggers?: {
@@ -185,8 +185,9 @@ export class AuthorBroker {
       }
     }
     const tool = typeof line.tool === 'string' ? line.tool : ''
-    // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike); identity is the owner, checked in taskCall
-    if (isTaskTool(tool)) {
+    // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike), §9 company tools (chat sessions); identity is
+    // the owner, checked in taskCall
+    if (isBoardTool(tool)) {
       if (!this.d.tasks) return answer({ ok: false, error: `Unknown tool: ${tool}` })
       if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
       const args = isObj(line.args) ? line.args : {}
@@ -233,7 +234,7 @@ export class AuthorBroker {
    * HIVE_TASK_COMPANY_ID / HIVE_COMPANY_ID) and task_id (HIVE_TASK_ID) must be the caller's own; a write needs the
    * caller's run or session to still hold its task (task_create from a session holding no task files a top-level one).
    */
-  async taskCall(owner: LiveOwner, tool: TaskTool, args: Record<string, unknown>, line: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async taskCall(owner: LiveOwner, tool: BoardTool, args: Record<string, unknown>, line: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tasks = this.d.tasks
     if (!tasks) throw new Error(`Unknown tool: ${tool}`)
     const caller = tasks.resolve(owner)
@@ -241,7 +242,11 @@ export class AuthorBroker {
     const taskId = str(line.task_id, 64)
     if (companyId && companyId !== caller.companyId) throw new Error('This task tool server belongs to another company. Restart the session.')
     if (taskId && taskId !== caller.taskId) throw new Error('This task tool server was started for another task')
-    if (TASK_MUTATIONS.has(tool) && !(tool === 'task_create' && caller.kind === 'session' && !caller.taskId)) {
+    // §9: the company tools belong to chats: a session that holds no task
+    if (isCompanyTool(tool)) {
+      if (caller.kind !== 'session') throw new Error(`Unknown tool: ${tool}`)
+      if (tool === 'company_file_task' && caller.taskId) throw new Error('You are working on a task: use task_create or task_handoff instead')
+    } else if (TASK_MUTATIONS.has(tool as TaskTool) && !(tool === 'task_create' && caller.kind === 'session' && !caller.taskId)) {
       if (!caller.taskId) throw new Error('You are not working on a task')
       if (!caller.holdsTask) throw new Error('This task is no longer yours to change (its run or session ended)')
     }

@@ -5,6 +5,10 @@
 .dep-sub { padding: 6px 8px 2px 12px; font-size: var(--text-xs); color: var(--text-tertiary); }
 .dep-icon { display: inline-grid; place-items: center; flex: none; }
 .dep-row { cursor: default; }
+/* §9: "New Chat in <Department>" on hover, like the company group's "+" */
+.dep-row__actions { display: none; align-items: center; margin-left: auto; margin-right: -4px; }
+.dep-row:hover .dep-row__actions, .dep-row:focus-within .dep-row__actions { display: inline-flex; }
+.co-group__body .dep-chat--group .side-row--indent { padding-left: 46px; }
 .dep-row .side-row__twisty { margin-left: -4px; }
 .co-group__body .dep-row--group.dep-row { padding-left: 18px; }
 .co-group__body .dep-row--group.side-row--indent { padding-left: 46px; }

@@ -222,6 +222,11 @@
 
 /* ---------- choice cards (Start) ---------- */
 .ob-choices { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.ob-choices--3 { grid-template-columns: repeat(3, 1fr); }
+.ob-choices + .ob-q { margin-top: var(--space-5); }
+/* From a prompt: the brief textarea (white hairline focus like the inputs) */
+.ob-brief { width: 100%; min-height: 260px; max-height: 52vh; resize: vertical; font-family: inherit; line-height: 1.5; padding: var(--space-3); }
+.ob-brief__meta { display: flex; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-2); }
 .ob-choice, .ob-vibe {
   position: relative;
   display: flex;
@@ -560,5 +565,5 @@
 }
 
 @media (max-width: 720px) {
-  .ob-two, .ob-keys, .ob-choices { grid-template-columns: 1fr; }
+  .ob-two, .ob-keys, .ob-choices, .ob-choices--3 { grid-template-columns: 1fr; }
 }

@@ -248,8 +248,8 @@ export function createCompanies(ctx: Ctx, deps: CompanyDeps) {
       if (!deps.host || !r?.passport_id || !r.runtime_grant_id || !r.runtime_grant_ct) return null
       return { internalUrl: deps.host.internalUrl, publicUrl: deps.host.publicUrl, passportId: r.passport_id, token: ctx.vault.decrypt('passport-grant', r.runtime_grant_id, r.runtime_grant_ct) }
     },
-    passportChanges(sinceSeq: number): { companyId: string; revision: number }[] {
-      return ctx.db.all<{ id: string; passport_revision: number }>('SELECT id, passport_revision FROM companies WHERE passport_seq > ? AND passport_revision IS NOT NULL ORDER BY id', sinceSeq).map(r => ({ companyId: r.id, revision: r.passport_revision }))
+    passportChanges(sinceSeq: number, uptoSeq: number): { companyId: string; revision: number }[] {
+      return ctx.db.all<{ id: string; passport_revision: number }>('SELECT id, passport_revision FROM companies WHERE passport_seq > ? AND passport_seq <= ? AND passport_revision IS NOT NULL ORDER BY id', sinceSeq, uptoSeq).map(r => ({ companyId: r.id, revision: r.passport_revision }))
     },
 
     // ---------- company keys ----------

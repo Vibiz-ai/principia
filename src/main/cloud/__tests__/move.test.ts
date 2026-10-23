@@ -299,4 +299,30 @@ describe('runOnce and bringBack', () => {
     expect(link.ownsSchedule('s_brief')).toBe(false)
     expect(passport.clear).toHaveBeenCalledWith(CO, `pp_${CO}`)
   })
+  it('Bring back stops cloud work and pulls the final Passport revision before the delete revokes the grant', async () => {
+    await moveCompany(deps, choices())
+    passport.sync.mockClear()
+    const order: string[] = []
+    passport.sync.mockImplementation(async () => {
+      order.push(`sync paused=${cloud.companies.get(CO)?.paused} exists=${cloud.companies.has(CO)}`)
+      return { sync: { revision: 5 } }
+    })
+    await bringBack(deps, CO)
+    expect(order).toEqual(['sync paused=true exists=true'])
+    const writes = sent().map((r) => `${r.method} ${r.path}`)
+    expect(writes.indexOf(`PATCH /v1/companies/${CO}`)).toBeLessThan(writes.indexOf(`DELETE /v1/companies/${CO}`))
+    expect(sent().find((r) => r.method === 'PATCH' && r.path === `/v1/companies/${CO}`)?.body).toEqual({ paused: true })
+    expect(cloud.companies.has(CO)).toBe(false)
+  })
+  it('Bring back keeps the cloud company (paused) when the final Passport sync fails, and a retry finishes it', async () => {
+    await moveCompany(deps, choices())
+    passport.sync.mockRejectedValueOnce(new Error('host unreachable'))
+    await expect(bringBack(deps, CO)).rejects.toThrow(/latest Passport.*host unreachable.*nothing was deleted/)
+    expect(cloud.companies.get(CO)?.paused).toBe(true)
+    expect(link.isCloudCompany(CO)).toBe(true)
+    expect(passport.clear).not.toHaveBeenCalled()
+    await bringBack(deps, CO)
+    expect(cloud.companies.has(CO)).toBe(false)
+    expect(passport.clear).toHaveBeenCalledWith(CO, `pp_${CO}`)
+  })
 })

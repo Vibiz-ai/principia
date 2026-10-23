@@ -23,7 +23,7 @@ import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/e
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
 import { CompanyStore, type TaskRunLink } from './index'
-import { queueCountsFrom, route, routedActivity, routingInUse, shouldReroute, type RouteContext } from './router'
+import { needsSuggestion, queueCountsFrom, route, routedActivity, routingInUse, shouldReroute, suggestRoute, type ModelCall, type RouteContext } from './router'
 
 export const DISPATCH_TICK_MS = 60_000
 const HOUR_MS = 3_600_000
@@ -34,7 +34,8 @@ const clip = (s: string, n = 200) => s.length > n ? `${s.slice(0, n - 1)}…` : 
 type PtySize = { cols: number; rows: number }
 /** What the dispatcher needs from the session manager (h.sessions) for "Open as session" and "Take over" (§4.4). */
 export interface DispatcherSessions {
-  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null }): Session
+  /** `taskDepartmentId`: the task's department, so the pane's Passport block carries its slot (DEPARTMENTS.md §7) */
+  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null; task?: boolean; taskDepartmentId?: string | null }): Session
   isLive(id: string): boolean
   kill(id: string): Promise<unknown>
 }
@@ -52,6 +53,13 @@ export interface DispatcherDeps {
   onChange?(companyId: string): void
   log?: DispatcherLog
   now?(): Date
+  /**
+   * §2 step 4: the model call that suggests a department for a new task rules 1-3 left in triage (routeCall.ts). null
+   * (no Claude CLI) or absent = no suggestions. Never awaited by a write: the suggestion lands later, or not at all.
+   */
+  modelCall?(): ModelCall | null
+  /** h.vault.redact, for the task text the model sees */
+  redact?(text: string): string
 }
 /** The CompanyStore writes the dispatcher listens to (HookedCompanyStore fires them after the write). */
 export interface BoardHooks {
@@ -82,6 +90,8 @@ export class Dispatcher {
   /** quit: nothing starts any more (the engine is canceling its runs, and each run end would otherwise pump) */
   private disposed = false
   private readonly sessionTaskCol: boolean
+  /** tasks with a model suggestion in flight (one call per task) */
+  private readonly suggesting = new Map<string, Promise<void>>()
 
   constructor(private readonly d: DispatcherDeps) {
     const cols = new Set((this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]).map(c => c.name))
@@ -394,7 +404,8 @@ export class Dispatcher {
         if (target.kind !== 'prompt') fail('Only an agent profile can open as a session')
         const p = target as Extract<RunTarget, { kind: 'prompt' }>
         session = sessions.create({ companyId, profileId: p.profileId, repoId: p.repoId ?? null, cols: size.cols, rows: size.rows,
-          title: clip(`${t.identifier} · ${t.title}`, 80), initialPrompt: p.prompt, resumeAgentSessionId: link.resumeSessionId })
+          title: clip(`${t.identifier} · ${t.title}`, 80), initialPrompt: p.prompt, resumeAgentSessionId: link.resumeSessionId,
+          task: true, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
         return leaseRun(session.id, 'queued', target, companyId)
       }, { actor: 'human' })
     } catch (err) {
@@ -495,6 +506,8 @@ export class Dispatcher {
       if (d.departmentId || d.agentId) {
         if (d.departmentId !== t.departmentId || d.agentId !== t.agentId || !t.routing) this.c.assign(taskId, { departmentId: d.departmentId, agentId: d.agentId }, 'system', { by: d.by, reason: d.reason, ...(d.confidence !== undefined ? { confidence: d.confidence } : {}) })
       }
+      // a new task the rules left in triage: ask the model for a suggestion, in the background (§2 step 4)
+      if (!prev && t.status === 'triage' && needsSuggestion(d)) void this.suggest(taskId)
       // an unrouted triage task edited again: one 'Not routed' line per reason, not one per edit
       if (!d.departmentId && !d.agentId) {
         const last = this.db.prepare('SELECT kind, message FROM company_task_activity WHERE task_id=? AND kind=? ORDER BY seq DESC LIMIT 1').get(taskId, a.kind) as { kind: string; message: string } | undefined
@@ -504,6 +517,36 @@ export class Dispatcher {
     } catch (err) {
       this.warn('routing failed', { taskId, error: String(err) })
     }
+  }
+  /**
+   * §2 step 4: one model suggestion for an unrouted triage task, stored as `routing.by:'model'` (CompanyStore
+   * suggestRouting, which skips a task that moved on meanwhile) with a `routed` activity; the founder accepts it on the
+   * task (tasks:acceptRoute). Off without a model call; never throws; resolves when done (tests await it).
+   */
+  suggest(taskId: string): Promise<void> {
+    const call = this.d.modelCall?.() ?? null
+    if (!call || this.disposed || !this.d.enabled()) return Promise.resolve()
+    const live = this.suggesting.get(taskId)
+    if (live) return live
+    const run = (async () => {
+      try {
+        const t = this.c.task(taskId)
+        const ctx = this.routeContext(t.companyId)
+        const r = await suggestRoute(t, ctx, { call, ...(this.d.redact ? { redact: this.d.redact } : {}) })
+        if (!r || this.disposed) return
+        const stored = this.c.suggestRouting(taskId, r.routing)
+        if (!stored) return
+        const a = routedActivity(r.routing, ctx)
+        this.c.activity(taskId, a.kind, a.message, a.by)
+        this.d.onChange?.(stored.companyId)
+      } catch (err) {
+        this.warn('routing suggestion failed', { taskId, error: String(err) })
+      } finally {
+        this.suggesting.delete(taskId)
+      }
+    })()
+    this.suggesting.set(taskId, run)
+    return run
   }
   private routeContext(companyId: string): RouteContext {
     const departments = this.c.departments.list(companyId, { includeArchived: true })

@@ -3,6 +3,8 @@
  *
  * - `reduceOnboarding` is the §3 state machine over `OnboardingDraft` (history stack, connect → name skip, Content
  *   skipped without a content goal, no Back once launching). Pure: no store, no IPC, no timers.
+ * - §2 S0 for a new company: Guided (the questions), From a prompt (Start → Brief → Plan, or Name when the brief could
+ *   not be read) and From a repo (Start → Connect → Plan, asking the name only when the scan found none).
  * - `loadDraft` / `createDraftSaver` persist the draft under `principia.onboarding.v1`, zod-validated, discarded after
  *   14 days. Storage is injected (store.ts passes `loadJson` / `saveJson`), so this module never imports the store.
  * - Selectors, `planInput(draft)`, stale-plan detection (`inputsHash`) and the §2 S4 goal defaults.
@@ -10,6 +12,7 @@
  * Keys never enter the draft: the key actions take the check result and keep only `stashId` and `last4` (§3.1).
  */
 import {
+  BRIEF_MAX,
   CLONE_URL,
   DRAFT_MAX_AGE_MS,
   DRAFT_STORAGE_KEY,
@@ -40,11 +43,13 @@ import {
   type PlanInput,
   type ScanSummary,
   type SiteSummary,
+  type StartMode,
   type StepKey,
   type WorkflowKeyName
 } from '@shared/onboarding'
 import { applyAgentPlan, defaultGoals, effectiveGoals, inputsHash, needsContentStep, siteHost } from '@shared/onboardingPlan'
 import { prefill } from '@shared/onboardingPrefill'
+import { briefForPlan } from '@shared/onboardingBrief'
 
 export type OnboardingMode = OnboardingDraft['mode']
 
@@ -78,7 +83,7 @@ export function newDraft(mode: OnboardingMode, opts: { id?: string; now?: Date }
 /** True when the draft holds something worth resuming ("Pick up where you left off?"). */
 export function hasProgress(d: OnboardingDraft | null | undefined): boolean {
   if (!d) return false
-  return d.step !== 'start' || d.hasCode !== null || d.answers.name.trim().length > 0 || !!d.journalId
+  return d.step !== 'start' || d.hasCode !== null || d.answers.name.trim().length > 0 || !!d.journalId || !!d.brief?.trim()
 }
 
 // ---------- persistence (§3.1) ----------
@@ -219,6 +224,7 @@ export function stepIndex(d: OnboardingDraft): { index: number; total: number } 
   const at = (s: StepKey): number | null => {
     switch (s) {
       case 'start':
+      case 'brief':
       case 'connect':
       case 'name':
         return 1
@@ -244,7 +250,9 @@ export function stepIndex(d: OnboardingDraft): { index: number; total: number } 
 export function canContinue(d: OnboardingDraft): boolean {
   switch (d.step) {
     case 'start':
-      return d.hasCode !== null
+      return d.start === 'prompt' || d.start === 'repo' || d.hasCode !== null
+    case 'brief':
+      return !!d.brief?.trim()
     case 'connect':
       return d.repos.length > 0 || githubReady(d.github)
     case 'name':
@@ -275,10 +283,18 @@ export function nextStep(d: OnboardingDraft): StepKey | null {
   if (!canContinue(d)) return null
   switch (d.step) {
     case 'start':
+      if (d.start === 'prompt') return 'brief'
+      if (d.start === 'repo') return 'connect'
       return d.hasCode ? 'connect' : 'name'
+    // the brief's own primary reads it first (briefRead); a plain next is the no-model path: the questions, prefilled
+    case 'brief':
+      return 'name'
+    // From a repo: the scan answers the questions; only a missing name is asked
     case 'connect':
-    case 'name':
+      if (d.start === 'repo') return d.answers.name.trim() ? 'plan' : 'name'
       return 'about'
+    case 'name':
+      return d.start === 'repo' ? 'plan' : 'about'
     case 'about':
       return 'voice'
     case 'voice':
@@ -317,6 +333,8 @@ export function planInput(d: OnboardingDraft, ctx: PlanInputContext = {}): PlanI
   }
   if (d.hasCode && d.scan) input.scan = d.scan
   if (d.site) input.site = d.site
+  const brief = briefForPlan(d.brief)
+  if (brief) input.brief = brief
   return input
 }
 
@@ -377,6 +395,7 @@ export function launchInput(d: OnboardingDraft, ctx: PlanInputContext = {}): Lau
   if (d.hasCode && d.github && githubReady(d.github)) input.github = { ...d.github }
   if (p.scan) input.scan = p.scan
   if (p.site) input.site = p.site
+  if (d.brief?.trim()) input.brief = d.brief.trim().slice(0, BRIEF_MAX)
   const parsed = LaunchInputSchema.safeParse(input)
   return parsed.success ? parsed.data : null
 }
@@ -407,8 +426,17 @@ export function reconcileLaunchDraft(d: OnboardingDraft, journal: JournalMeta | 
 // ---------- actions ----------
 
 export type OnboardingAction =
+  /** Start (new company): Guided / From a prompt / From a repo. */
+  | { type: 'chooseStart'; start: StartMode }
   /** Start: "Yes, connect it" / "Not yet, it's an idea". */
   | { type: 'chooseCode'; hasCode: boolean }
+  /** Brief: the textarea. */
+  | { type: 'setBrief'; brief: string }
+  /**
+   * Brief: what onboarding:brief read from it. The answers it gave replace the draft's; read by Claude with a name →
+   * Plan, else (fallback, no name) → Name with the rest prefilled, so the guided questions fill the gaps.
+   */
+  | { type: 'briefRead'; answers: Partial<OnboardingAnswers>; source: 'agent' | 'template' }
   | { type: 'next' }
   | { type: 'back' }
   /** Connect: "No code after all" → Name, keeping nothing from Connect. */
@@ -510,6 +538,25 @@ function withPlan(d: OnboardingDraft, plan: OnboardingPlan, source: 'agent' | 't
 export function reduceOnboarding(d: OnboardingDraft, a: OnboardingAction): OnboardingDraft {
   const launching = isLaunchStep(d.step)
   switch (a.type) {
+    case 'chooseStart': {
+      if (d.step !== 'start' || d.start === a.start) return d
+      if (a.start === 'repo') return { ...d, start: 'repo', hasCode: true }
+      if (a.start === 'guided') return { ...d, start: 'guided' }
+      // From a prompt: no code picked in this flow (Connect is not on its path), nothing from Connect rides along
+      const { github: _g, scan: _s, ...rest } = d
+      void _g
+      void _s
+      return { ...rest, start: 'prompt', hasCode: false, repos: [], answers: { ...d.answers, goals: cleanGoals(d.answers.goals, false) } }
+    }
+    case 'setBrief':
+      if (launching) return d
+      return { ...d, brief: a.brief.slice(0, BRIEF_MAX) }
+    case 'briefRead': {
+      if (d.step !== 'brief') return d
+      const answers = mergeAnswers(d.answers, a.answers, !!d.hasCode)
+      const next = { ...d, answers }
+      return forward(next, a.source === 'agent' && answers.name.trim() ? 'plan' : 'name')
+    }
     case 'chooseCode': {
       if (d.step !== 'start') return d
       if (a.hasCode) return d.hasCode === true ? d : { ...d, hasCode: true }
@@ -539,6 +586,8 @@ export function reduceOnboarding(d: OnboardingDraft, a: OnboardingAction): Onboa
         hasCode: false,
         repos: [],
         step: 'name',
+        // "No code after all" on the repo path: the guided questions take over
+        ...(d.start === 'repo' ? { start: 'guided' as const } : {}),
         history: d.history.filter((s) => s !== 'connect'),
         answers: { ...d.answers, goals: cleanGoals(d.answers.goals, false) }
       }

@@ -76,9 +76,13 @@ export function tildify(p: string): string {
   return p.replace(/^\/Users\/[^/]+(?=\/|$)/, '~')
 }
 
-/** Folder shown for a session: "Chat" for the scratch folder, else ~/path. */
-export function sessionPlace(s: Pick<Session, 'repoId' | 'cwd'>): string {
-  return s.repoId ? tildify(s.cwd) : 'Chat'
+/**
+ * Folder shown for a session: ~/path for a repo session, the department's name for a department chat (DEPARTMENTS.md
+ * §9; `departmentName` when known), else "Chat".
+ */
+export function sessionPlace(s: Pick<Session, 'repoId' | 'cwd' | 'departmentId'>, departmentName?: string | null): string {
+  if (s.repoId) return tildify(s.cwd)
+  return s.departmentId && departmentName ? departmentName : 'Chat'
 }
 
 /** Signals Principia sends on Kill (HUP/TERM/KILL, as 128+n or the bare signal number), or no code at all. */

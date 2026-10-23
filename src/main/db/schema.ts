@@ -653,6 +653,8 @@ export const COMPANY_ADDED_COLUMNS: [table: string, column: string, ddl: string]
   ['runs', 'task_id', 'TEXT'],
   ['runs', 'agent_id', 'TEXT'],
   ['sessions', 'task_id', 'TEXT'],
+  // §9: the department of a department chat (NULL = not one)
+  ['sessions', 'department_id', 'TEXT'],
   ['workflows', 'department_id', 'TEXT'],
   ['schedules', 'department_id', 'TEXT'],
   ['slack_triggers', 'department_id', 'TEXT'],

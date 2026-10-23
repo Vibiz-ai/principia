@@ -17,7 +17,7 @@ import { newId } from './db'
 import { ADAPTER_ACTION, ADAPTER_LABEL, type WorkflowDeps } from './deps'
 import { ApiError, badRequest, notFound } from './http'
 import { credentialRow, credentialStatus, type Providers } from './providers'
-import { encodeCursor, type Sync } from './sync'
+import { SYNC_PAGE, encodeCursor, type Sync } from './sync'
 
 const DAY_MS = 86_400_000
 /** log lines kept per run in control.db (the run sheet shows a tail of 200) */
@@ -364,13 +364,40 @@ export function createQueue(ctx: Ctx, deps: QueueDeps) {
       if (companyId) { where.push('company_id = ?'); params.push(companyId) }
       return ctx.db.all<AskRow>(`SELECT * FROM asks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT 200`, ...params).map(askView)
     },
-    /** GET /v1/sync/changes */
+    /**
+     * GET /v1/sync/changes. Every collection is read up to one shared seq, and each returns at most SYNC_PAGE rows:
+     * when one is cut short, the cursor stops at its last row (rows past it in the others come again next time) and
+     * `more` says to ask again at once, so no change is ever skipped. A first sync (no cursor) is a snapshot: the
+     * latest 100 runs and the open asks, never paged.
+     */
     async changes(since: number) {
       await deps.companies.refreshAll()
-      const cursor = encodeCursor(ctx.db.currentSeq())
-      const runs = ctx.db.all<RunRow>(since ? 'SELECT * FROM cloud_runs WHERE seq > ? ORDER BY seq LIMIT 500' : 'SELECT * FROM cloud_runs WHERE seq > ? ORDER BY seq DESC LIMIT 100', since).map(runView)
-      const asks = ctx.db.all<AskRow>(since ? 'SELECT * FROM asks WHERE seq > ? ORDER BY seq LIMIT 500' : "SELECT * FROM asks WHERE seq > ? AND status = 'open' ORDER BY seq", since).map(askView)
-      return { cursor, runs, asks, passports: deps.companies.passportChanges(since), schedules: deps.sync.changedSchedules(since) }
+      let upto = ctx.db.currentSeq()
+      let more = false
+      const paged = <T>(rows: T[], seq: (r: T) => number): T[] => {
+        if (rows.length >= SYNC_PAGE) {
+          upto = Math.min(upto, seq(rows[rows.length - 1]))
+          more = true
+        }
+        return rows
+      }
+      const head = upto
+      const runRows = since
+        ? paged(ctx.db.all<RunRow>('SELECT * FROM cloud_runs WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?', since, head, SYNC_PAGE), r => r.seq)
+        : ctx.db.all<RunRow>('SELECT * FROM cloud_runs WHERE seq <= ? ORDER BY seq DESC LIMIT 100', head)
+      const askRows = since
+        ? paged(ctx.db.all<AskRow>('SELECT * FROM asks WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?', since, head, SYNC_PAGE), r => r.seq)
+        : ctx.db.all<AskRow>("SELECT * FROM asks WHERE seq <= ? AND status = 'open' ORDER BY seq", head)
+      const schedules = paged(deps.sync.changedSchedules(since, head, SYNC_PAGE), r => r.seq)
+      const upTo = <T extends { seq: number }>(rows: T[]): T[] => (since ? rows.filter(r => r.seq <= upto) : rows)
+      return {
+        cursor: encodeCursor(upto),
+        runs: upTo(runRows).map(runView),
+        asks: upTo(askRows).map(askView),
+        passports: deps.companies.passportChanges(since, upto),
+        schedules: schedules.filter(r => r.seq <= upto).map(r => r.schedule),
+        more
+      }
     },
     /** at boot: runs the previous process left running cannot be resumed */
     recover(): void {

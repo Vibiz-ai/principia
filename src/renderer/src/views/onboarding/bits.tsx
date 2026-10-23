@@ -46,7 +46,7 @@ export interface Choice<T extends string> {
 }
 
 /** ←/→ or 1/2 move the choice, the card's letter picks it; ↵ is left to the flow (continue). */
-export function ChoiceGroup<T extends string>({ choices, value, onChange, label }: { choices: Choice<T>[]; value: T | null; onChange: (v: T) => void; label: string }): React.JSX.Element {
+export function ChoiceGroup<T extends string>({ choices, value, onChange, label, className }: { choices: Choice<T>[]; value: T | null; onChange: (v: T) => void; label: string; className?: string }): React.JSX.Element {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
   const at = Math.max(
     0,
@@ -65,7 +65,7 @@ export function ChoiceGroup<T extends string>({ choices, value, onChange, label 
     refs.current[to]?.focus()
   }
   return (
-    <div className="ob-choices" role="radiogroup" aria-label={label}>
+    <div className={`ob-choices ${className ?? ''}`} role="radiogroup" aria-label={label}>
       {choices.map((c, i) => {
         const sel = c.value === value
         return (

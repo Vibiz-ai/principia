@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import type { Cipher, Vault } from '../vault'
-import type { GatewayConnection, GatewayConnectionInput } from '../../shared/gateway'
+import { VIBIZ_CONNECTION_ID, VIBIZ_DEFAULT_CONNECTION, type GatewayConnection, type GatewayConnectionInput } from '../../shared/gateway'
 import type { McpServerSpec } from '../../shared/engine'
 import { OAuthConnection, type OAuthSaved } from './oauth'
 import { Upstream } from './client'
@@ -25,10 +25,28 @@ export class GatewayService {
   private oauthRedacted = new Set<string>()
   private authState = new Map<string, { authStatus: import('../../shared/gateway').GatewayAuthStatus; authError?: string }>()
   /** `fileOwner` (Principia Cloud, CLOUD.md §7.8): grant folders and answers belong to the agent user, whose bridge reads them; the saved connections stay the service's own. */
-  constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string>; companies?: GatewayCompanies; fileOwner?: { uid: number; gid: number } | null }) {
+  constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string>; companies?: GatewayCompanies; fileOwner?: { uid: number; gid: number } | null; /** Add the default connections (Vibiz) once per install; the desktop app only. */ seedDefaults?: boolean }) {
     this.file = path.join(opts.userData, 'mcp-connections.json')
     try { this.saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (!Array.isArray(this.saved)) this.saved = [] } catch {}
+    if (opts.seedDefaults) this.seedDefaults()
     this.timer = setInterval(() => this.poll(), 100); this.timer.unref()
+  }
+  /**
+   * Vibiz is a default company connection: added once (enabled for every project and company, not signed in), recorded
+   * in mcp-defaults.json so a user who removes it does not get it back. Skipped if the endpoint is already saved.
+   */
+  private seedDefaults(): void {
+    const marker = path.join(this.opts.userData, 'mcp-defaults.json')
+    let seeded: string[] = []
+    try { const value = JSON.parse(fs.readFileSync(marker, 'utf8')) as { seeded?: unknown }; if (Array.isArray(value.seeded)) seeded = value.seeded.filter((id): id is string => typeof id === 'string') } catch {}
+    if (seeded.includes(VIBIZ_CONNECTION_ID)) return
+    try {
+      if (!this.opts.cipher.available()) return
+      const endpoint = (url?: string): string => { try { const u = new URL(url ?? ''); return u.host.replace(/^www\./, '') + u.pathname.replace(/\/$/, '') } catch { return '' } }
+      const present = this.saved.some(s => s.config.id === VIBIZ_CONNECTION_ID || (s.config.transport === 'http' && endpoint(s.config.url) === endpoint(VIBIZ_DEFAULT_CONNECTION.url)))
+      if (!present) { this.saved = [{ config: { ...VIBIZ_DEFAULT_CONNECTION, roots: [], hasCredentials: false }, cipher: this.opts.cipher.encrypt('{}').toString('base64') }, ...this.saved]; this.persist() }
+      writePrivateJson(marker, { seeded: [...seeded, VIBIZ_CONNECTION_ID] })
+    } catch {}
   }
   list(): GatewayConnection[] { return this.saved.map(s => {
     if (s.config.authentication !== 'oauth') return { ...s.config }
@@ -74,7 +92,8 @@ export class GatewayService {
   private reset(id: string): void { this.clients.get(id)?.close(); this.clients.delete(id); /* Keep previous credential redactions for historical logs until app exit. */ }
   private allowed(cwd: string, companyId: string | null = null): Saved[] {
     let real: string; try { real = fs.realpathSync(cwd) } catch { return [] }
-    return this.saved.filter(s => s.config.enabled && (s.config.scope === 'global' || s.config.roots.some(root => real === root || real.startsWith(root + path.sep))) && this.companyAllowed(s, real, companyId))
+    // an OAuth connection nobody signed in to has no tools to offer (e.g. the default Vibiz): not granted until sign-in
+    return this.saved.filter(s => s.config.enabled && (s.config.authentication !== 'oauth' || !!s.oauthCipher) && (s.config.scope === 'global' || s.config.roots.some(root => real === root || real.startsWith(root + path.sep))) && this.companyAllowed(s, real, companyId))
   }
   /** COMPANY.md §6: a connection limited to some companies reaches only their spawns (the spawn's company, else its folder's). */
   private companyAllowed(s: Saved, cwd: string, companyId: string | null): boolean {

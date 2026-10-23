@@ -20,6 +20,8 @@ import { CloudClient, CloudRequestError } from './client'
 
 export const LINK_FILE = 'cloud-link.json'
 export const POLL_MS = 30_000
+/** pages of a large backlog one poll drains before waiting for the next */
+const MAX_PAGES_PER_POLL = 50
 
 interface LinkFile {
   v: 1
@@ -37,6 +39,11 @@ interface LinkFile {
   cursor: string | null
   /** the host passport revision PassportSync last caught up with, per company */
   passportRevs: Record<Id, number>
+  /**
+   * newer host revisions the cloud reported that PassportSync has not caught up with yet, per company. The sync cursor
+   * acks a report as soon as it arrives, so a sync that fails stays here and is retried on every poll until it lands.
+   */
+  passportPending: Record<Id, number>
 }
 
 /** The PassportSync calls the link needs (handlers/openPassport.ts `sync`, with the existing config file). */
@@ -115,7 +122,7 @@ export class CloudLink {
     try {
       const raw = JSON.parse(fs.readFileSync(this.path, 'utf8')) as LinkFile
       if (raw?.v !== 1 || !raw.url || !raw.token) return
-      this.file = { ...raw, revs: raw.revs ?? { workflows: {}, schedules: {} }, schedules: raw.schedules ?? [], companies: raw.companies ?? {}, passportRevs: raw.passportRevs ?? {}, cursor: raw.cursor ?? null }
+      this.file = { ...raw, revs: raw.revs ?? { workflows: {}, schedules: {} }, schedules: raw.schedules ?? [], companies: raw.companies ?? {}, passportRevs: raw.passportRevs ?? {}, passportPending: raw.passportPending ?? {}, cursor: raw.cursor ?? null }
     } catch {
       this.file = null
     }
@@ -265,7 +272,8 @@ export class CloudLink {
       schedules: [],
       companies: {},
       cursor: null,
-      passportRevs: {}
+      passportRevs: {},
+      passportPending: {}
     }
     this.tokenPlain = res.deviceToken
     this.asks.clear()
@@ -354,18 +362,28 @@ export class CloudLink {
   /** One GET /v1/sync/changes. Concurrent callers share the request in flight. */
   pollNow(): Promise<void> {
     if (this.polling) return this.polling
-    this.polling = this.poll().finally(() => (this.polling = null))
+    this.polling = (async () => {
+      // the server pages a large backlog (`more`): keep asking from the new cursor until it is drained
+      for (let page = 0; page < MAX_PAGES_PER_POLL && (await this.poll()); page++);
+    })().finally(() => (this.polling = null))
     return this.polling
   }
 
-  private async poll(): Promise<void> {
+  /** One page of changes; true when the server has more right away. */
+  private async poll(): Promise<boolean> {
     const f = this.file
-    if (!f) return
+    if (!f) return false
     const ch = await this.call((c) => c.call<SyncChanges>('syncChanges', { query: { since: f.cursor } }))
-    if (this.file !== f) return
+    if (this.file !== f) return false
     this.lastSyncAt = this.now().toISOString()
     f.cursor = ch.cursor ?? f.cursor
     for (const a of ch.asks ?? []) this.asks.set(a.id, a.status)
+    // newer passport revisions: remembered before the cursor is saved, so a failed sync is retried, never dropped
+    for (const p of ch.passports ?? []) {
+      const known = f.passportRevs[p.companyId]
+      if (!f.companies[p.companyId] || (known !== undefined && p.revision <= known)) continue
+      f.passportPending[p.companyId] = Math.max(p.revision, f.passportPending[p.companyId] ?? 0)
+    }
     // schedules the server changed: keep our rev and placement in step with the cloud's
     const released: Id[] = []
     for (const s of ch.schedules ?? []) {
@@ -383,22 +401,29 @@ export class CloudLink {
     const asks = ch.asks?.length ?? 0
     if (runs + asks > 0) this.d.emit({ kind: 'changes', runs, asks })
     this.changed()
-    for (const p of ch.passports ?? []) await this.passportCaughtUp(p.companyId, p.revision)
+    for (const [companyId, revision] of Object.entries(f.passportPending)) await this.passportCaughtUp(companyId, revision)
+    return ch.more === true && !!ch.cursor && this.file === f
   }
 
   /** A newer passport revision on the host for a cloud company: pull it into the vault with PassportSync. */
   private async passportCaughtUp(companyId: Id, revision: number): Promise<void> {
     const f = this.file
     const port = this.d.passport
-    if (!f || !port || !f.companies[companyId]) return
+    if (!f || !port) return
     const known = f.passportRevs[companyId]
-    if (known !== undefined && revision <= known) return
+    if (!f.companies[companyId] || (known !== undefined && revision <= known)) {
+      delete f.passportPending[companyId]
+      this.save()
+      return
+    }
+    // no PassportSync host yet, or a sync in flight: it stays pending for the next poll
     if (!port.configured(companyId) || this.syncing.has(companyId)) return
     this.syncing.add(companyId)
     try {
       const r = (await port.sync(companyId)) as { revision?: number; sync?: { revision?: number } } | undefined
       const after = r?.sync?.revision ?? r?.revision ?? revision
       f.passportRevs[companyId] = Math.max(revision, after)
+      if ((f.passportPending[companyId] ?? 0) <= f.passportRevs[companyId]) delete f.passportPending[companyId]
       this.save()
     } catch (e) {
       this.d.log?.warn('cloud: passport sync failed', { companyId, error: e instanceof Error ? e.message : String(e) })
@@ -455,6 +480,7 @@ export class CloudLink {
     if (!f) return
     delete f.companies[id]
     delete f.passportRevs[id]
+    delete f.passportPending[id]
     const released = f.schedules.filter((s) => scheduleIds.includes(s))
     f.schedules = f.schedules.filter((s) => !scheduleIds.includes(s))
     for (const s of scheduleIds) delete f.revs.schedules[s]

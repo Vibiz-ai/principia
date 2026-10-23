@@ -130,7 +130,7 @@ export async function startFakeCloud(opts: { passportHost?: string } = {}): Prom
       }
       if (m === 'GET' && p === '/v1/sync/changes') {
         const next = state.changes.length > 1 ? state.changes.shift()! : (state.changes[0] ?? {})
-        const out: SyncChanges = { cursor: next.cursor ?? `c${requests.length}`, runs: next.runs ?? [], asks: next.asks ?? [], passports: next.passports ?? [], schedules: next.schedules ?? [] }
+        const out: SyncChanges = { cursor: next.cursor ?? `c${requests.length}`, runs: next.runs ?? [], asks: next.asks ?? [], passports: next.passports ?? [], schedules: next.schedules ?? [], ...(next.more ? { more: true } : {}) }
         return json(200, out)
       }
       if (m === 'GET' && p === '/v1/devices') return json(200, [{ id: 'dev_mac', name: 'Mac', platform: 'darwin-arm64', createdAt: now(), lastSeenAt: now(), current: true }, { id: 'dev_phone', name: 'Phone', platform: 'web', createdAt: now(), lastSeenAt: null }])

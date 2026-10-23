@@ -3,13 +3,16 @@
  * (icon, name, amber needs-you count, blue working dot), expanding to its agent seats and, muted, its recurring
  * workflows, schedules and triggers. All mode: per company a Board row, then department rows folded until something
  * needs you. Every count is `laneOf` through lib/departments. Nothing here renders unless experimental.departments.
+ * §9 department chats: a "+" on the row's hover ("New Chat in Marketing", ⌥-click picks the agent CLI) and the
+ * department's chats under it (running ones always, the newest ended one while open), drawn by the sidebar's own
+ * session row (DepartmentChatRows).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { DEPARTMENT_PRESETS, type CompanyAgent, type Department, type DepartmentPresetKey } from '@shared/company'
-import type { Id, Schedule, Workflow } from '@shared/types'
+import type { Id, Schedule, Session, Workflow } from '@shared/types'
 import type { SlackTrigger } from '@shared/slack'
 import { Icon } from '../components/Icon'
-import { IconButton } from '../components/ui'
+import { IconButton, StatusGlyph } from '../components/ui'
 import { Bust } from '../components/roman'
 import { displayName, personasOf, resolvePersonas, storedPersona, type DisplayName } from '../lib/personaView'
 import { personasOn, usePersonasOn } from '../lib/voice'
@@ -34,21 +37,34 @@ import {
   archiveCompanyAgent,
   attempt,
   createDepartmentPresets,
+  departmentChatMenu,
   departmentContextMenu,
   departmentsOn,
+  focusSession,
   getState,
   loadJson,
   navigate,
   openAgentSeat,
   openBoard,
   openDepartment,
+  openDepartmentChat,
   refreshDepartments,
   saveJson,
   setAgentPaused,
   toast,
   useStore
 } from '../state/store'
+import { collapseExited } from '../lib/format'
 import '../styles/departments.css'
+
+/** The sidebar's session row (Sidebar.tsx provides it), so a department chat looks and behaves like any chat row. */
+export const DepartmentChatRows = createContext<((s: Session, indent?: boolean) => React.JSX.Element) | null>(null)
+
+/** A department's chats, newest first. */
+export function useDepartmentChats(departmentId: Id): Session[] {
+  const sessions = useStore((s) => s.sessions)
+  return useMemo(() => sessions.filter((s) => s.departmentId === departmentId).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)), [sessions, departmentId])
+}
 
 /**
  * D10's Needs-you task items (reviews, asks answerable inline, parked with reason, unassigned), picked up when the
@@ -314,7 +330,11 @@ function DepartmentRow({
   /** inside an All-mode company group (deeper indent) */
   inGroup?: boolean
 }): React.JSX.Element {
-  const hasChildren = seats.length > 0 || recurring.length > 0
+  const chats = useDepartmentChats(d.id)
+  const renderChat = useContext(DepartmentChatRows)
+  // running chats always show (like a working seat); the newest ended one only while the department is open
+  const shownChats = open ? collapseExited(chats).shown : chats.filter((s) => s.status === 'running')
+  const hasChildren = seats.length > 0 || recurring.length > 0 || chats.length > 0
   return (
     <div className="dep-row-wrap">
       <div
@@ -352,9 +372,21 @@ function DepartmentRow({
         <DepartmentIcon department={d} />
         <span className="side-row__label">{d.name}</span>
         <LaneBadge counts={counts} />
+        <span className="dep-row__actions">
+          <IconButton
+            icon="plus"
+            label={`New Chat in ${d.name} (⌥-click: choose the agent)`}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (e.altKey) void departmentChatMenu(d)
+              else void openDepartmentChat(d)
+            }}
+          />
+        </span>
       </div>
       {open &&
         seats.map((a) => <SeatRow key={a.id} agent={a} color={d.color} indent selected={selectedSeat === a.id} inGroup={inGroup} />)}
+      {shownChats.map((s) => (renderChat ? <div key={s.id} className={`dep-chat ${inGroup ? 'dep-chat--group' : ''}`}>{renderChat(s, true)}</div> : <DepartmentChatRow key={s.id} session={s} inGroup={inGroup} />))}
       {open &&
         recurring.map((r) => (
           <div
@@ -370,6 +402,16 @@ function DepartmentRow({
             <span className="side-row__label">{r.name}</span>
           </div>
         ))}
+    </div>
+  )
+}
+
+/** Outside the sidebar's provider (tests, other hosts): a plain chat row. */
+function DepartmentChatRow({ session: s, inGroup }: { session: Session; inGroup: boolean }): React.JSX.Element {
+  return (
+    <div className={`side-row side-row--session side-row--indent ${inGroup ? 'dep-row--group' : ''} ${s.status === 'exited' ? 'is-dim' : ''}`} role="button" tabIndex={0} title={s.title} onClick={() => focusSession(s.id)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), focusSession(s.id))}>
+      <StatusGlyph status={s.status === 'running' ? 'running' : 'exited'} />
+      <span className="side-row__label">{s.title}</span>
     </div>
   )
 }

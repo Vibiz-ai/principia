@@ -46,6 +46,7 @@ import {
   type SoftLaunchStep,
   type WorkflowKeyName
 } from '../../shared/onboarding'
+import { briefForPlan } from '../../shared/onboardingBrief'
 import { finalizePlan, scheduleCostly, validatePlan, type ScreenFn } from '../../shared/onboardingPlan'
 import { pickPersona, type AgentPersona } from '../../shared/personas'
 import type { AgentProfile, ExperimentalFlags, Repo, Schedule, ScheduleInput, Settings } from '../../shared/types'
@@ -157,7 +158,10 @@ export function nextCompanyColor(companies: Pick<CompanyPassport, 'color' | 'sys
   return COMPANY_PALETTE.find((c) => !used.includes(c)) ?? COMPANY_PALETTE[used.length % COMPANY_PALETTE.length]
 }
 
-/** The company profile fields from the answers, scan and site (§7.2 step 2). */
+/** How much of a founder brief the company profile's context keeps (it rides in every spawn's Passport block). */
+export const BRIEF_CONTEXT_CHARS = 1500
+
+/** The company profile fields from the answers, scan, site and brief (§7.2 step 2). */
 export function companyProfile(input: LaunchInput): Omit<CompanyCreateInput, 'name' | 'color' | 'repoIds'> {
   const a = input.answers
   const voice = [a.voiceVibe ? `Sounds ${VIBE_INFO[a.voiceVibe].voice}.` : '', a.voiceText.trim(), a.avoid.trim() ? `Avoid: ${a.avoid.trim()}` : ''].filter(Boolean).join('\n')
@@ -168,7 +172,9 @@ export function companyProfile(input: LaunchInput): Omit<CompanyCreateInput, 'na
     a.siteUrl.trim() || input.site?.url ? `Website: ${a.siteUrl.trim() || input.site?.url}` : '',
     input.site?.title || input.site?.ogTitle ? `Website title: ${input.site.ogTitle || input.site.title}` : '',
     input.site?.description || input.site?.ogDescription ? `Website says: ${input.site.ogDescription || input.site.description}` : '',
-    a.instagram.trim() ? `Instagram: ${a.instagram.trim()}` : ''
+    a.instagram.trim() ? `Instagram: ${a.instagram.trim()}` : '',
+    // "From a prompt": the start of the founder's brief (the Passport keeps all of it, as a note)
+    input.brief?.trim() ? `Founder brief: ${clipText(input.brief.trim().replace(/\s+/g, ' '), BRIEF_CONTEXT_CHARS)}` : ''
   ].filter(Boolean).join('\n')
   return {
     mission: a.oneLiner.trim(),
@@ -302,7 +308,8 @@ export class LaunchService {
       ...(input.site ? { site: input.site } : {}),
       keys: { fal: !!present.FAL_KEY, openai: !!present.OPENAI_API_KEY },
       departmentsOn: available.departmentsOn,
-      tz: input.tz
+      tz: input.tz,
+      ...(briefForPlan(input.brief) ? { brief: briefForPlan(input.brief) } : {})
     }
     const siteUrl = input.answers.siteUrl || input.site?.url || null
     const checked = validatePlan(input.plan, { available, siteUrl, screen: this.d.screen, input: planInput })
@@ -617,6 +624,7 @@ export class LaunchService {
       answers: prep.input.answers,
       ...(prep.input.scan ? { scan: prep.input.scan } : {}),
       ...(prep.input.site ? { site: prep.input.site } : {}),
+      ...(prep.input.brief?.trim() ? { brief: prep.input.brief } : {}),
       repoNames
     })
     const step = stepOf(j, 'passport')

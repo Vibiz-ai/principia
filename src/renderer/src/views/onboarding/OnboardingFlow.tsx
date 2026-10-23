@@ -21,7 +21,8 @@ import BeamBorder from '../../components/ui/border-beam'
 import { canContinue, canGoBack, draftGoals, hasProgress, isLaunchStep, stepIndex } from '../../state/onboarding'
 import { closeOnboarding, continueOnboarding, getState, onboardingDispatch, useStore } from '../../state/store'
 import { AboutStep } from './AboutStep'
-import { back, finishCeremony, getLocal, next, setLocal, start, useFlowLocal } from './actions'
+import { back, finishCeremony, getLocal, next, setLocal, skipBrief, start, useFlowLocal } from './actions'
+import { BriefStep } from './BriefStep'
 import { Ceremony } from './Ceremony'
 import { ConnectStep, connectKeys } from './ConnectStep'
 import { ContentStep } from './ContentStep'
@@ -49,11 +50,18 @@ interface FooterSpec {
 }
 
 /** The footer for a step (§2 shared chrome). null: no footer (Launching, Ready keep their actions in the body). */
-export function footerFor(step: StepKey, d: OnboardingDraft, banner: boolean): FooterSpec | null {
+export function footerFor(step: StepKey, d: OnboardingDraft, banner: boolean, reading = false): FooterSpec | null {
   const cont = { label: 'Continue', kbd: '↵', disabled: !canContinue(d), run: next }
   switch (step) {
     case 'start':
       return { left: <AgentsFound />, back: false, primary: banner ? undefined : cont }
+    // ⌘↵ only: ↵ is a new line in the brief
+    case 'brief':
+      return {
+        back: canGoBack(d),
+        skip: { label: 'Answer questions instead', run: skipBrief },
+        primary: { label: reading ? 'Reading…' : 'Build my plan', kbd: '⌘↵', disabled: reading || !canContinue(d), run: next }
+      }
     case 'connect':
       return { back: canGoBack(d), skip: { label: 'No code after all', run: () => onboardingDispatch({ type: 'skipConnect' }) }, primary: cont }
     case 'name':
@@ -95,6 +103,8 @@ export function stepTitle(step: StepKey, d: OnboardingDraft, mode: 'first' | 'ne
   switch (step) {
     case 'start':
       return t.sr(mode === 'first' ? 'ob.start.title.first' : 'ob.start.title.new')
+    case 'brief':
+      return t.sr('ob.brief.title')
     case 'connect':
       return t.sr('ob.connect.title')
     case 'name':
@@ -121,6 +131,8 @@ function StepBody({ step, banner, color }: { step: StepKey; banner: boolean; col
   switch (step) {
     case 'start':
       return <StartStep showBanner={banner} />
+    case 'brief':
+      return <BriefStep />
     case 'connect':
       return <ConnectStep />
     case 'name':
@@ -154,7 +166,8 @@ function Flow({ mode, resumable }: { mode: 'first' | 'new'; resumable: boolean }
   const ref = useRef<HTMLDivElement>(null)
   const banner = !!d && resumable && hasProgress(d)
   const step: StepKey = banner ? 'start' : (d?.step ?? 'start')
-  const footer = d ? footerFor(step, d, banner) : null
+  const reading = useFlowLocal((l) => l.briefReading)
+  const footer = d ? footerFor(step, d, banner, reading) : null
   /**
    * Esc / ✕. On Ready (new company) the company exists: closing is "I'll review first" (nothing turned on), so it still
    * lands in the new company instead of leaving it unseen behind the overlay. Elsewhere: save and close.
@@ -221,8 +234,8 @@ function Flow({ mode, resumable }: { mode: 'first' | 'new'; resumable: boolean }
           e.preventDefault()
           readyKeys.start?.()
         } else if (f?.primary && !f.primary.disabled) {
-          // ⌘↵ only on Plan: a stray ↵ must never create the company
-          if (s === 'plan' && !e.metaKey) return
+          // ⌘↵ only on Plan (a stray ↵ must never create the company) and Brief (↵ is a new line there)
+          if ((s === 'plan' || s === 'brief') && !e.metaKey) return
           e.preventDefault()
           f.primary.run()
         }

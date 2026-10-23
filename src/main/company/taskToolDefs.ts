@@ -115,6 +115,68 @@ export const TASK_TOOL_DEFS: Record<TaskTool, ToolDef> = {
   }
 }
 
+// ---------- the company toolset of chats (DEPARTMENTS.md §9) ----------
+
+/**
+ * Listed by the `hive` server of a chat (a session that holds no task) while the board is on: read the departments, and
+ * file work into one. Served by the same broker path and TaskTools as the task tools; the caller is the chat session.
+ */
+export const COMPANY_TOOLS = ['company_departments', 'company_file_task', 'company_create_department'] as const
+export type CompanyTool = (typeof COMPANY_TOOLS)[number]
+export const isCompanyTool = (name: string): name is CompanyTool => (COMPANY_TOOLS as readonly string[]).includes(name)
+/** Every tool the broker serves through TaskTools. */
+export type BoardTool = TaskTool | CompanyTool
+export const isBoardTool = (name: string): name is BoardTool => isTaskTool(name) || isCompanyTool(name)
+export const COMPANY_LIMITS = { reason: 500 } as const
+
+export const COMPANY_SERVER_INSTRUCTIONS =
+  "Principia company tools: company_departments lists this company's departments (charter, agents, open work). company_file_task files a task into one department. company_create_department adds a department (only when the user asks for it or agrees). " +
+  "Answer and do the work in the chat by default. Only when a request clearly belongs to a department's charter and is work for later or for that department's agents, propose filing it, and call company_file_task only after the user agrees or explicitly asks you to send it there. Never route work on your own."
+
+export const COMPANY_TOOL_DEFS: Record<CompanyTool, ToolDef> = {
+  company_create_department: {
+    name: 'company_create_department',
+    description:
+      "Adds a department to this company (its Board column and Forum room appear at once). Only when the user asked for it or agreed to your proposal. A department that already exists (same key or name) is returned as is. Hire its agents in Principia afterwards.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 60, description: 'e.g. Support' },
+        key: { type: 'string', maxLength: 40, description: 'Optional slug (lowercase, e.g. support); derived from the name when omitted.' },
+        does: { type: 'string', minLength: 1, maxLength: 300, description: 'Its charter: what it owns.' },
+        doesNot: { type: 'string', maxLength: 300, description: 'What it does not own.' },
+        reason: { type: 'string', minLength: 1, maxLength: COMPANY_LIMITS.reason, description: 'Why the user wants it (from this chat).' }
+      },
+      required: ['name', 'does', 'reason'],
+      additionalProperties: false
+    }
+  },
+  company_departments: {
+    name: 'company_departments',
+    description: "This company's departments: key, name, charter (does / does not), agents (id, name, role) and how many open tasks each has.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: ro
+  },
+  company_file_task: {
+    name: 'company_file_task',
+    description:
+      "Files a task into one department of this company, routed by the board's rules (its eligible agent, or the one you name). Only after the user agreed to send it there, or asked you to. Returns the new task's identifier.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title },
+        description: { type: 'string', maxLength: TASK_LIMITS.description, description: 'What to do and what done looks like, with the context from this chat.' },
+        departmentKey: { type: 'string', maxLength: 80, description: 'Department key from company_departments (e.g. marketing).' },
+        departmentId: { type: 'string', maxLength: 64, description: 'Or the department id.' },
+        agent: { type: 'string', maxLength: 80, description: 'Optional: an agent of that department (id or name). Omit to let the board pick.' },
+        reason: { type: 'string', minLength: 1, maxLength: COMPANY_LIMITS.reason, description: 'Why it belongs to this department (shown on the task).' }
+      },
+      required: ['title', 'reason'],
+      additionalProperties: false
+    }
+  }
+}
+
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz'
 /** The broker's call id shape (hac_ + 10). */
 function newCallId(): string {
@@ -151,7 +213,7 @@ export interface TaskCallScope {
 /** One hivetask tools/call through the live-dir mailbox. */
 export async function callTaskTool(
   liveDir: string,
-  tool: TaskTool,
+  tool: BoardTool,
   rawArgs: unknown,
   ctx: Partial<CallContext> = {},
   scope: TaskCallScope = {},

@@ -6,6 +6,8 @@
  *
  * - notes: Business, Products, Audience, Brand voice, Goals (first 30 days), and one `type: repo` note per repo;
  * - observe bullets from the answers, the scan (stack, README line) and the site read (title, description);
+ * - "From a prompt": a Founder brief note whose bullets are the brief's own lines and sentences (its facts, kept as
+ *   context), linked from Business;
  * - relate: Business → Products / Audience / Brand voice / Goals / each repo, the company hub note → Business; the
  *   website as a Business property.
  *
@@ -20,8 +22,11 @@ export const PASSPORT_NOTES = {
   products: 'Products',
   audience: 'Audience',
   voice: 'Brand voice',
-  goals: 'Goals (first 30 days)'
+  goals: 'Goals (first 30 days)',
+  brief: 'Founder brief'
 } as const
+/** The Founder brief note's caps: bullets, and characters of brief read. */
+export const BRIEF_SEED_CAPS = { bullets: 40, chars: 12_000 } as const
 
 const GOAL_TEXT: Record<string, string> = {
   customers: 'Get first customers',
@@ -41,7 +46,9 @@ export interface PassportSeedInput {
   site?: SiteSummary
   /** Names of the repos attached to the company (their notes go under Repos/). */
   repoNames: string[]
-  /** false on the retry after a secret-screen hit: no scan or site excerpts. */
+  /** "From a prompt": the founder's pasted brief. Treated like an excerpt (dropped on the secret-screen retry). */
+  brief?: string
+  /** false on the retry after a secret-screen hit: no scan, site or brief excerpts. */
   excerpts: boolean
 }
 
@@ -55,6 +62,31 @@ export function oneLine(s: string | undefined | null, max = 400): string {
 export function noteTitle(s: string, fallback: string): string {
   const t = oneLine(s, 120).replace(/[\\/[\]|#^:*?"<>]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
   return t || fallback
+}
+
+/**
+ * The brief as observation bullets: one per line, long lines split on sentence ends, each ≤ 500 chars, at most
+ * BRIEF_SEED_CAPS.bullets. Markdown list and heading marks are dropped; the words are the founder's.
+ */
+export function briefBullets(brief: string): string[] {
+  const out: string[] = []
+  const text = brief.slice(0, BRIEF_SEED_CAPS.chars).replace(/\r\n?/g, '\n')
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/^\s*(#+|[-*•]|\d+[.)])\s*/, '').trim()
+    if (!line) continue
+    const parts = line.length <= 500 ? [line] : (line.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) ?? [line])
+    let cur = ''
+    for (const p of parts) {
+      const next = cur ? `${cur} ${p.trim()}` : p.trim()
+      if (next.length > 500 && cur) {
+        out.push(oneLine(cur, 500))
+        cur = p.trim()
+      } else cur = next
+    }
+    if (cur) out.push(oneLine(cur, 500))
+    if (out.length >= BRIEF_SEED_CAPS.bullets) break
+  }
+  return out.slice(0, BRIEF_SEED_CAPS.bullets).filter(Boolean)
 }
 
 function voiceLine(a: OnboardingAnswers): string {
@@ -81,6 +113,8 @@ export function buildPassportOps(input: PassportSeedInput): VaultOp[] {
   ops.push({ op: 'createNote', title: N.voice, type: 'brand', ...(voiceLine(a) ? { summary: oneLine(voiceLine(a), 280) } : {}) })
   ops.push({ op: 'createNote', title: N.goals, type: 'concept', summary: 'What should happen in the first 30 days.' })
   for (const r of repos) ops.push({ op: 'createNote', title: r, type: 'repo' })
+  const brief = input.excerpts ? briefBullets(input.brief ?? '') : []
+  if (brief.length) ops.push({ op: 'createNote', title: N.brief, type: 'concept', summary: oneLine(brief[0], 280) })
 
   // the founder's answers
   observe(N.business, 'fact', a.oneLiner)
@@ -107,6 +141,7 @@ export function buildPassportOps(input: PassportSeedInput): VaultOp[] {
     }
     if (input.site?.title || input.site?.ogTitle) observe(N.business, 'fact', `Website title: ${input.site.ogTitle || input.site.title}`)
     if (input.site?.description || input.site?.ogDescription) observe(N.business, 'fact', `Website says: ${input.site.ogDescription || input.site.description}`)
+    for (const b of brief) observe(N.brief, 'fact', b)
   }
 
   // the graph
@@ -115,6 +150,7 @@ export function buildPassportOps(input: PassportSeedInput): VaultOp[] {
   ops.push({ op: 'relate', from: N.business, rel: 'speaks in', to: N.voice })
   ops.push({ op: 'relate', from: N.business, rel: 'aims for', to: N.goals })
   for (const r of repos) ops.push({ op: 'relate', from: N.business, rel: 'built in', to: r })
+  if (brief.length) ops.push({ op: 'relate', from: N.business, rel: 'described in', to: N.brief })
   const hub = oneLine(input.hubTitle, 160)
   if (hub && hub.toLowerCase() !== N.business.toLowerCase()) ops.push({ op: 'relate', from: hub, rel: 'described in', to: N.business })
   const site = oneLine(a.siteUrl || input.site?.url || '', 300)

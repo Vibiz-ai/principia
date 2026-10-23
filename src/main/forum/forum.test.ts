@@ -10,6 +10,7 @@ import { ForumService, type ForumServiceDeps, type ForumTaskView } from './servi
 import { attachForum } from './attach'
 import { forumMcpHandlers, parseCli } from './cli/main'
 import { formatBrief, messageLine } from './format'
+import { ForumResponder, pickResponders, RESPONDER_LIMITS, type ResponderDeps } from './responder'
 
 const CO = 'co_acme'
 const CO2 = 'co_other'
@@ -559,7 +560,7 @@ describe('engine bridge, HTTP, CLI and MCP (§3, §4.1)', () => {
 })
 
 describe('format (§4.3, §5)', () => {
-  it('message lines mark kinds and the MCP brief stays under 600 chars', () => {
+  it('message lines mark kinds and the MCP brief stays under its cap', () => {
     const s = store()
     s.sync(CO)
     const owner = s.owner(CO)
@@ -572,5 +573,154 @@ describe('format (§4.3, §5)', () => {
     const brief = formatBrief(l, { me: marcus, mentions: many, answered: [], openAsks: [ask], transport: 'mcp' })
     expect(brief.length).toBeLessThanOrEqual(FORUM_LIMITS.briefMax)
     expect(brief).toMatch(/<\/principia-forum>$/)
+    // the habit line survives clipping: agents are told to keep the team posted in their room
+    const homed = formatBrief(l, { me: marcus, mentions: many, answered: [], openAsks: [], transport: 'mcp', home: 'marketing' })
+    expect(homed).toMatch(/reply in the thread to unread mentions, and before you end post one short update in #marketing/)
+    expect(homed.length).toBeLessThanOrEqual(FORUM_LIMITS.briefMax)
+    // a Forum reply run (no task) answers its thread only: no extra room update
+    const reply = formatBrief(l, { me: marcus, mentions: [], answered: [], openAsks: [], transport: 'mcp', home: 'marketing', update: false })
+    expect(reply).toContain('Answer in the thread you were asked in; do not post anywhere else in this run.')
+    expect(reply).not.toContain('post one short update')
+  })
+})
+
+describe('agents answer people and post their work (§6.4)', () => {
+  const seats = (companyId: string, departmentId: string | null) => deps.agents.filter((a) => a.companyId === companyId && !a.archivedAt && (!departmentId || a.departmentId === departmentId)).map((a) => a.id)
+
+  function setup() {
+    const s = service()
+    s.store.sync(CO)
+    const owner = s.store.owner(CO)
+    const ch = (n: string) => s.store.channelByName(CO, n)!
+    const post = (by: string, channel: string, text: string, threadId?: string) => s.store.post(by, { channelId: ch(channel).id, text, threadId: threadId ?? null })
+    return { s, owner, ch, post, marcus: s.store.memberForAgent('agt_marcus')!, livia: s.store.memberForAgent('agt_livia')! }
+  }
+
+  it('picks who a message is for: mentions, one agent per department, the thread, the room', () => {
+    const { s, owner, post, marcus, livia } = setup()
+    const pick = (m: Parameters<typeof pickResponders>[1]) => pickResponders(s.store, m, { seats }).map((x) => x.handle)
+    expect(pick(post(owner.id, 'marketing', 'ciao'))).toEqual(['marcus'])
+    expect(pick(post(owner.id, 'development', 'heyyy'))).toEqual(['livia'])
+    expect(pick(post(owner.id, 'general', 'hello @livia'))).toEqual(['livia'])
+    expect(pick(post(owner.id, 'general', 'anyone?'))).toEqual(['marcus'])
+    expect(pick(post(owner.id, 'general', '@development status?'))).toEqual(['livia'])
+    // a thread goes to the last agent that wrote in it, even in another department's room
+    const root = post(owner.id, 'general', 'launch plan')
+    post(livia.id, 'general', 'I can take the deploy', root.id)
+    expect(pick(post(owner.id, 'general', 'great, when?', root.id))).toEqual(['livia'])
+    // agents never wake agents (no loops); system lines never wake anyone
+    expect(pick(post(marcus.id, 'general', '@livia ping'))).toEqual([])
+    expect(pick(s.store.systemPost(s.store.channelByName(CO, 'general')!.id, 'Marcus joined')!)).toEqual([])
+  })
+
+  function responder(s: ForumService, starts: { agentId: string; prompt: string; reply: { messageId: string } }[], over: Partial<ResponderDeps> = {}) {
+    let n = 0
+    return new ForumResponder({
+      store: () => s.store,
+      enabled: () => true,
+      seat: (agentId) => {
+        const a = deps.agents.find((x) => x.id === agentId)
+        return a ? { id: a.id, companyId: a.companyId, departmentId: a.departmentId, name: a.name, instructions: 'Write copy.', profileId: 'prof_claude', repoId: null, active: !a.archivedAt } : null
+      },
+      departmentName: (id) => deps.departments.find((d) => d.id === id)?.name ?? null,
+      seats,
+      start: (input) => {
+        starts.push(input)
+        return `r_reply${++n}`
+      },
+      now: () => clock,
+      ...over
+    })
+  }
+
+  it('a post in a department room starts a reply run for its agent; more posts queue until it ends', () => {
+    const { s, owner, post } = setup()
+    const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
+    const r = responder(s, starts)
+    const first = post(owner.id, 'marketing', 'ciao')
+    expect(r.onHumanPost(first)).toEqual(['r_reply1'])
+    expect(starts[0]).toMatchObject({ agentId: 'agt_marcus', reply: { messageId: first.id } })
+    expect(starts[0].prompt).toMatch(/^Forum reply in #marketing/)
+    expect(starts[0].prompt).toContain('<principia-role department="Marketing" agent="Copywriter">')
+    expect(starts[0].prompt).toContain(`- ${first.ref} @lautaro: ciao`)
+    expect(starts[0].prompt).toContain(`forum_reply {"to":"${first.ref}"`)
+    const second = post(owner.id, 'marketing', 'are you there?')
+    const third = post(owner.id, 'marketing', 'hello??')
+    expect(r.onHumanPost(second)).toEqual([])
+    expect(r.onHumanPost(third)).toEqual([])
+    expect(r.isAnswering('agt_marcus')).toBe(true)
+    r.onRunEnded('r_reply1')
+    expect(starts).toHaveLength(2)
+    expect(starts[1].prompt).toContain(`- ${second.ref} @lautaro: are you there?`)
+    expect(starts[1].prompt).toContain(`- ${third.ref} @lautaro: hello??`)
+    expect(starts[1].reply.messageId).toBe(third.id)
+  })
+
+  it('caps reply runs per agent per hour and skips inactive seats', () => {
+    const { s, owner, post } = setup()
+    const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
+    const r = responder(s, starts)
+    for (let i = 0; i < RESPONDER_LIMITS.perHour + 2; i++) {
+      r.onHumanPost(post(owner.id, 'marketing', `msg ${i}`))
+      r.onRunEnded(`r_reply${starts.length}`)
+    }
+    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour)
+    clock = new Date(clock.getTime() + 3601_000)
+    r.onHumanPost(post(owner.id, 'marketing', 'next hour'))
+    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour + 1)
+    const off = responder(s, [], { seat: () => null })
+    expect(off.onHumanPost(post(owner.id, 'development', 'hi'))).toEqual([])
+  })
+
+  it('a reply run that does not post has its answer posted in the thread; a fenced post counts as posting', async () => {
+    const { s, owner, post, marcus } = setup()
+    db.exec('CREATE TABLE runs (id TEXT PRIMARY KEY, agent_id TEXT, task_id TEXT, company_id TEXT)')
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run('r_reply1', 'agt_marcus', null, CO)
+    const msg = post(owner.id, 'marketing', 'ciao')
+    s.noteReplyRun('r_reply1', { memberId: marcus.id, channelId: msg.channelId, messageId: msg.id })
+    await s.harvest({ runId: 'r_reply1', stepId: 'st_r1', adapter: 'claude', status: 'passed', output: 'Ciao! I write the launch copy. What do you need?', companyId: CO })
+    expect(s.store.thread(msg.id).replies.map((m) => [m.authorId, m.text])).toEqual([[marcus.id, 'Ciao! I write the launch copy. What do you need?']])
+    // the same step again: idempotent
+    await s.harvest({ runId: 'r_reply1', stepId: 'st_r1', adapter: 'claude', status: 'passed', output: 'Ciao! I write the launch copy. What do you need?', companyId: CO })
+    expect(s.store.thread(msg.id).replies).toHaveLength(1)
+    // a failed step posts nothing
+    await s.harvest({ runId: 'r_reply1', stepId: 'st_r2', adapter: 'claude', status: 'failed', output: 'boom', companyId: CO })
+    expect(s.store.thread(msg.id).replies).toHaveLength(1)
+    // a step that wrote with a fenced block gets no extra post
+    const out = `Done.\n\`\`\`forum\n{"ops":[{"op":"reply","to":"${msg.ref}","text":"replied myself"}]}\n\`\`\`\n`
+    await s.harvest({ runId: 'r_reply1', stepId: 'st_r3', adapter: 'gemini', status: 'passed', output: out, companyId: CO })
+    expect(s.store.thread(msg.id).replies.map((m) => m.text)).toEqual(['Ciao! I write the launch copy. What do you need?', 'replied myself'])
+  })
+
+  it('a task run that never posted leaves its update in the seat room; one that posted through the endpoint does not', async () => {
+    const { s } = setup()
+    db.exec('CREATE TABLE runs (id TEXT PRIMARY KEY, agent_id TEXT, task_id TEXT, company_id TEXT)')
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run('r_task', 'agt_marcus', 'task_9', CO)
+    tasks.set('task_9', { id: 'task_9', companyId: CO, identifier: 'PRN-9', status: 'in_progress', blockReason: null, runId: 'r_task', ask: null, report: null })
+    const mkt = s.store.channelByName(CO, 'marketing')!
+    await s.harvest({ runId: 'r_task', stepId: 'st_t1', adapter: 'claude', status: 'passed', output: 'Landing page drafted and moved to review.\n```principia-report\n{"outcome":"review"}\n```', companyId: CO })
+    expect(s.store.messages(mkt.id).map((m) => m.text)).toEqual(['PRN-9: Landing page drafted and moved to review.'])
+    // a step that posted itself (forum_post through the HTTP endpoint) is not posted for again
+    await s.start()
+    const spawn = s.open({ runId: 'r_task', stepId: 'st_t2', taskId: 'task_9', agentId: 'agt_marcus', adapter: 'gemini', companyId: CO })!
+    expect(spawn.prompt).toContain('post one short update in #marketing')
+    const res = await fetch(`${s.http.url}/v1/forum_post`, { method: 'POST', headers: { authorization: `Bearer ${spawn.env.PRINCIPIA_FORUM_TOKEN}` }, body: JSON.stringify({ channel: '#marketing', text: 'Started the email sequence' }) })
+    expect(res.status).toBe(200)
+    await s.harvest({ runId: 'r_task', stepId: 'st_t2', adapter: 'gemini', status: 'passed', output: 'All done', companyId: CO })
+    expect(s.store.messages(mkt.id).map((m) => m.text)).toEqual(['PRN-9: Landing page drafted and moved to review.', 'Started the email sequence'])
+    s.close('st_t2')
+    await s.stop()
+  })
+
+  it('humanPosted hands the message to the responder and never throws', () => {
+    const { s, owner, post } = setup()
+    const seen: string[] = []
+    s.onHumanPost = (m) => seen.push(m.text)
+    s.humanPosted(post(owner.id, 'general', 'hi all'))
+    s.onHumanPost = () => {
+      throw new Error('boom')
+    }
+    expect(() => s.humanPosted(post(owner.id, 'general', 'again'))).not.toThrow()
+    expect(seen).toEqual(['hi all'])
   })
 })

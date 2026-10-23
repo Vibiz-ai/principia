@@ -1,5 +1,5 @@
 /**
- * DEPARTMENTS.md §9 department page: charter (does / does not), passport section (open the vault note, or edit the
+ * DEPARTMENTS.md §9 department page: dashboards (DASHBOARDS.md §9), charter (does / does not), passport section (open the vault note, or edit the
  * fallback until the vault ships), agent seats with "Add agent", recurring agents (attach schedules and Slack
  * triggers), routing defaults (sources, Slack channels) and the board filtered to this department.
  */
@@ -24,6 +24,7 @@ import { agentsOf, charterLength, departmentNotePath, recurringOf, seatState, ta
 import { SOURCE_LABEL } from '../lib/company'
 import { AgentBust, DepartmentIcon, agentNameNow, useAgentName, useLaneContext, useRecurringSources } from '../shell/DepartmentGroup'
 import { MosaicEmpty } from '../components/roman'
+import { DepartmentDashboards } from '../components/dashboards/DepartmentDashboards'
 import { t, toneOf, useCopy, usePersonasOn } from '../lib/voice'
 import {
   attempt,
@@ -95,6 +96,8 @@ export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter'
         <IconButton icon="more" label="More" onClick={() => void departmentContextMenu(dep)} />
       </Toolbar>
       <div className="dep-page">
+        {/* DASHBOARDS.md §9: installed and recommended dashboards first, the numbers this department watches */}
+        <DepartmentDashboards key={`d:${dep.id}`} dep={dep} />
         {/* each editor resets only when its own saved fields change, so saving one card never drops edits in another */}
         <CharterCard key={`c:${dep.id}:${JSON.stringify([dep.name, dep.color, dep.data.charter])}`} dep={dep} />
         <PassportCard key={`p:${dep.id}:${dep.data.contextFallback}`} dep={dep} />

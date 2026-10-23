@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  BRIEF_MAX,
   BUNDLED_WORKFLOW_IDS,
   CADENCES,
   CADENCE_KEYS,
@@ -198,11 +199,17 @@ describe('plan and launch inputs', () => {
 
 describe('IPC schemas', () => {
   const channels = INVOKE_CHANNELS.filter((c) => c.startsWith('onboarding:'))
-  it('registers all 14 onboarding channels and both events', () => {
-    expect(channels).toHaveLength(14)
+  it('registers all 16 onboarding channels and both events', () => {
+    expect(channels).toHaveLength(16)
     for (const c of channels) expect(REQUEST_SCHEMAS[c], c).toBeDefined()
     expect(EVENT_NAMES).toContain('onboarding:progress')
     expect(EVENT_NAMES).toContain('onboarding:cloneProgress')
+  })
+  it('caps the brief and takes nothing else on onboarding:brief', () => {
+    const brief = REQUEST_SCHEMAS['onboarding:brief']
+    expect(brief.safeParse({ requestId: 'ob_1-b1', brief: 'Sunday Bakery' }).success).toBe(true)
+    expect(brief.safeParse({ requestId: 'ob_1-b1', brief: 'x'.repeat(BRIEF_MAX + 1) }).success).toBe(false)
+    expect(brief.safeParse({ requestId: 'ob_1-b1', brief: 'x', useAgent: true }).success).toBe(false)
   })
   it('allowlists key names and caps the key request', () => {
     const key = REQUEST_SCHEMAS['onboarding:key']

@@ -134,6 +134,15 @@ export const DRAFT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 /** §4: caps shared by the IPC schemas and the draft. */
 export const MAX_ONBOARDING_PATHS = 8
 export const MAX_URL_LENGTH = 2048
+/**
+ * "From a prompt" (§2 S0b): the founder's pasted brief. The draft keeps up to BRIEF_MAX chars; the plan prompt and the
+ * extraction call see the first PLAN_BRIEF_MAX (a long brief still fits one small call).
+ */
+export const BRIEF_MAX = 20_000
+export const PLAN_BRIEF_MAX = 8_000
+/** §2 S0 for a new company: the three ways to start. `guided` is today's question flow. */
+export const START_MODES = ['guided', 'prompt', 'repo'] as const
+export type StartMode = (typeof START_MODES)[number]
 
 // ---------- the plan (§6.1, .strict() throughout) ----------
 
@@ -266,8 +275,11 @@ export interface OnboardingAvailable {
 
 // ---------- steps ----------
 
-/** §3 state machine. `failed` is the Launch step after a failed launch (Retry / Continue / Discard). */
-export const STEP_KEYS = ['start', 'connect', 'name', 'about', 'voice', 'goals', 'content', 'plan', 'launching', 'failed', 'ready'] as const
+/**
+ * §3 state machine. `failed` is the Launch step after a failed launch (Retry / Continue / Discard). `brief` is the
+ * "From a prompt" textarea (a sub-step of Start).
+ */
+export const STEP_KEYS = ['start', 'brief', 'connect', 'name', 'about', 'voice', 'goals', 'content', 'plan', 'launching', 'failed', 'ready'] as const
 export type StepKey = (typeof STEP_KEYS)[number]
 
 // ---------- intake summaries (redacted, capped) ----------
@@ -383,7 +395,9 @@ export const PlanInputSchema = z
     site: SiteSummarySchema.optional(),
     keys: z.object({ fal: z.boolean(), openai: z.boolean() }).strict(),
     departmentsOn: z.boolean(),
-    tz
+    tz,
+    /** "From a prompt": the founder's brief (capped), so the plan is specific to it. Untrusted text, framed like the rest. */
+    brief: z.string().max(PLAN_BRIEF_MAX).optional()
   })
   .strict()
 export type PlanInput = z.infer<typeof PlanInputSchema>
@@ -448,7 +462,11 @@ export const DraftSchema = z
     plan: DraftPlanSchema.optional(),
     enableFlags: z.boolean(),
     journalId: handle.optional(),
-    updatedAt: short(40)
+    updatedAt: short(40),
+    /** §2 S0 (new company): how the founder chose to start; absent = guided (drafts from before the choice). */
+    start: z.enum(START_MODES).optional(),
+    /** "From a prompt": the pasted brief, kept until launch (it seeds the Passport). */
+    brief: z.string().max(BRIEF_MAX).optional()
   })
   .strict()
 export type OnboardingDraft = z.infer<typeof DraftSchema>
@@ -488,7 +506,9 @@ export const LaunchInputSchema = z
     plan: OnboardingPlan,
     /** §2 S6 consent: turn on companies + departments + vault. */
     enableFlags: z.boolean(),
-    tz
+    tz,
+    /** "From a prompt": the founder's brief; its facts are seeded into the Passport (§7.2 step 5). */
+    brief: z.string().max(BRIEF_MAX).optional()
   })
   .strict()
 export type LaunchInput = z.infer<typeof LaunchInputSchema>
@@ -592,6 +612,15 @@ export interface OnboardingStatus {
   ghLogin?: string
   defaultCloneDir: string
   waitlistUrl: string | null
+}
+
+/** onboarding:brief (§2 S0b): answers read from the founder's brief by one small Claude call. */
+export type BriefFallbackReason = PlanFallbackReason | 'empty'
+export interface BriefResult {
+  /** Only fields the brief gave; every string within the AnswersSchema limits. */
+  answers: Partial<OnboardingAnswers>
+  source: PlanSource
+  fallbackReason?: BriefFallbackReason
 }
 
 export interface ProgressEvent {

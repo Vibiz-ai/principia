@@ -10,12 +10,12 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AdapterId } from '../../shared/types'
 import type { ForumBridge, ForumSpawn, McpServerSpec } from '../../shared/engine'
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, type ForumAsk, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumStore, type ForumDirectory } from './store'
 import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
 import { ForumHttpServer } from './http'
-import { FORUM_SERVER_NAME, FORUM_TOOLS, parseForumBlocks, type ForumTool } from './protocol'
+import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type ForumTool } from './protocol'
 import { formatBrief } from './format'
 
 const fail = (m: string): never => {
@@ -63,6 +63,18 @@ export interface ForumServiceDeps {
 }
 
 interface TokenEntry { caller: ForumCaller; adapter: AdapterId; hits: number[] }
+/** A run started to answer a Forum message (responder.ts): where its fallback reply goes. */
+export interface ForumReplyRun { memberId: string; channelId: string; messageId: string }
+
+/** Fenced blocks and tool chatter never go into an automatic post. */
+export function stepSummary(output: string, max: number): string {
+  const text = output
+    .replace(/```[a-z-]*\n[\s\S]*?```/gi, ' ')
+    .replace(/<\/?principia-[^>]*>/gi, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return clip(text, max)
+}
 interface Waiter { resolve: (m: ForumMessage | null) => void; timer: NodeJS.Timeout }
 
 export class ForumService implements ForumBridge {
@@ -74,6 +86,12 @@ export class ForumService implements ForumBridge {
   private readonly waiters = new Map<string, Set<Waiter>>()
   private readonly presence = new Map<string, ForumPresence>()
   private readonly presenceTimers = new Map<string, NodeJS.Timeout>()
+  /** steps that wrote to the Forum themselves (tool, CLI or fenced block): no automatic post for them */
+  private readonly stepWrites = new Set<string>()
+  /** runs answering a Forum message (the responder registers them) */
+  private readonly replyRuns = new Map<string, ForumReplyRun>()
+  /** responder.ts: a human posted (set by wire.ts; absent in tests that do not need it) */
+  onHumanPost: ((m: ForumMessage) => void) | null = null
 
   constructor(private readonly d: ForumServiceDeps) {
     this.store = new ForumStore(d.db, { directory: d.directory, now: d.now, redact: d.redact, onEvent: (e) => this.onStoreEvent(e) })
@@ -155,6 +173,8 @@ export class ForumService implements ForumBridge {
       const prompt = formatBrief(lookup, {
         me: member,
         ...state,
+        home: this.homeChannel(req.companyId, member.id)?.name ?? null,
+        update: !!req.taskId,
         transport: mcp ? 'mcp' : 'inject',
         ...(mcp ? {} : { digest: this.api.preview(caller, FORUM_LIMITS.injectBriefMax - 500) })
       })
@@ -163,6 +183,31 @@ export class ForumService implements ForumBridge {
     } catch (e) {
       this.d.log?.warn('forum: open failed; step runs without the Forum', { stepId: req.stepId, error: String(e) })
       return null
+    }
+  }
+
+  /** The seat's department channel (the first one it is in), else #general. */
+  homeChannel(companyId: string, memberId: string): ForumChannelView | null {
+    const all = this.store.channels(companyId, memberId).filter((c) => !c.archivedAt)
+    return all.find((c) => c.system === 'department' && c.memberIds.includes(memberId)) ?? all.find((c) => c.system === 'general') ?? null
+  }
+
+  /** responder.ts: this run answers `reply`; its final answer is posted there when it does not reply itself. */
+  noteReplyRun(runId: string, reply: ForumReplyRun): void {
+    this.replyRuns.set(runId, reply)
+  }
+  replyRunOf(runId: string): ForumReplyRun | null {
+    return this.replyRuns.get(runId) ?? null
+  }
+  forgetRun(runId: string): void {
+    this.replyRuns.delete(runId)
+  }
+  /** A human posted through the app (forum:post): wakes the agents it is for (responder.ts). Never throws. */
+  humanPosted(m: ForumMessage): void {
+    try {
+      this.onHumanPost?.(m)
+    } catch (e) {
+      this.d.log?.warn('forum: responder failed', { messageId: m.id, error: String(e) })
     }
   }
 
@@ -200,7 +245,10 @@ export class ForumService implements ForumBridge {
     if (!this.enabled()) return Promise.resolve({ status: 403, text: 'The Forum is off in this Principia' })
     return this.api
       .call(entry.caller, tool, args, { signal })
-      .then((text) => ({ status: 200, text }))
+      .then((text) => {
+        if (FORUM_WRITES.has(tool) && entry.caller.stepId) this.stepWrites.add(entry.caller.stepId)
+        return { status: 200, text }
+      })
       .catch((e: unknown) => (e instanceof ForumRefusal ? { status: 400, text: e.message } : { status: 500, text: `Forum error: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}` }))
   }
 
@@ -433,12 +481,16 @@ export class ForumService implements ForumBridge {
 
   // ---------- fenced harvest (§4.1.4) ----------
 
-  /** EngineContext.onStepOutput: apply the ```forum ops of a passed or failed agent step of a seat run. Never throws. */
+  /**
+   * EngineContext.onStepOutput: apply the ```forum ops of a passed or failed agent step of a seat run, then, when the
+   * step wrote nothing to the Forum, post for it (a reply run answers its message; a task run posts its update in the
+   * seat's channel). Never throws.
+   */
   async harvest(e: { runId: string; stepId: string; adapter: string; status: string; output: string; companyId: string | null }): Promise<number> {
     try {
-      if (!this.enabled() || e.adapter === 'shell' || e.status === 'canceled' || !e.output.includes('forum')) return 0
-      const { ops, errors } = parseForumBlocks(e.output)
-      if (!ops.length) return 0
+      if (!this.enabled() || e.adapter === 'shell' || e.status === 'canceled') return 0
+      // read now: the run may end (and be forgotten) while the fenced ops below are applied
+      const reply = this.replyRuns.get(e.runId) ?? null
       const row = this.d.db.prepare('SELECT agent_id, task_id, company_id FROM runs WHERE id=?').get(e.runId) as { agent_id: string | null; task_id: string | null; company_id: string | null } | undefined
       if (!row?.agent_id) return 0
       const companyId = row.company_id ?? e.companyId
@@ -448,20 +500,49 @@ export class ForumService implements ForumBridge {
       if (!member || member.companyId !== companyId || member.status !== 'active') return 0
       const caller: ForumCaller = { companyId, memberId: member.id, runId: e.runId, stepId: e.stepId, taskId: row.task_id }
       let applied = 0
-      for (const [i, op] of ops.entries()) {
-        const args = op.tool === 'forum_ask' ? { ...op.args, wait_s: 0 } : op.args
-        try {
-          await this.api.call(caller, op.tool, args, { origin: `agent:${e.stepId}`, opKey: `${e.stepId}:${i}` })
-          applied++
-        } catch (err) {
-          errors.push(`${op.tool}: ${err instanceof Error ? err.message : String(err)}`)
+      if (e.output.includes('forum')) {
+        const { ops, errors } = parseForumBlocks(e.output)
+        for (const [i, op] of ops.entries()) {
+          const args = op.tool === 'forum_ask' ? { ...op.args, wait_s: 0 } : op.args
+          try {
+            await this.api.call(caller, op.tool, args, { origin: `agent:${e.stepId}`, opKey: `${e.stepId}:${i}` })
+            applied++
+          } catch (err) {
+            errors.push(`${op.tool}: ${err instanceof Error ? err.message : String(err)}`)
+          }
         }
+        if (errors.length) this.d.log?.warn('forum: fenced ops refused', { runId: e.runId, stepId: e.stepId, errors: errors.slice(0, 5) })
       }
-      if (errors.length) this.d.log?.warn('forum: fenced ops refused', { runId: e.runId, stepId: e.stepId, errors: errors.slice(0, 5) })
+      const wrote = applied > 0 || this.stepWrites.has(e.stepId)
+      this.stepWrites.delete(e.stepId)
+      if (!wrote && e.status === 'passed') this.autoPost(e, member, row.task_id, reply)
       return applied
     } catch (err) {
       this.d.log?.warn('forum: harvest failed', { runId: e.runId, error: String(err) })
       return 0
+    }
+  }
+
+  /** The step's final answer, posted for an agent that did not post itself (the team sees every turn). */
+  private autoPost(e: { runId: string; stepId: string; output: string }, member: ForumMember, taskId: string | null, reply: ForumReplyRun | null): void {
+    const opKey = `${e.stepId}:auto`
+    try {
+      if (reply) {
+        const text = stepSummary(e.output, FORUM_LIMITS.agentText)
+        if (!text) return
+        this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
+        return
+      }
+      if (!taskId) return
+      const home = this.homeChannel(member.companyId, member.id)
+      if (!home) return
+      const t = this.d.tasks?.get(taskId)
+      const head = t ? `${t.identifier}: ` : ''
+      const text = stepSummary(e.output, FORUM_LIMITS.agentText - head.length - 1)
+      if (!text) return
+      this.store.post(member.id, { channelId: home.id, text: `${head}${text}`, origin: `agent:${e.stepId}`, opKey })
+    } catch (err) {
+      this.d.log?.warn('forum: automatic post failed', { runId: e.runId, stepId: e.stepId, error: String(err) })
     }
   }
 

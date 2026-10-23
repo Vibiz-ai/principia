@@ -16,6 +16,7 @@ import { newId } from '../../shared/ids'
 import type { Hive } from '../hive'
 import { emit } from '../ipc'
 import { log } from '../log'
+import { departmentActions } from '../handlers/company'
 import { notify } from '../notify'
 import { baseChildEnv } from '../loginEnv'
 import { normalizeDraft, validateDraft } from '../handlers/workflows'
@@ -171,6 +172,12 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // a handed-off task wakes its auto target now (null until startDispatcher; the tick covers it then)
     pump: (companyId) => void h.dispatcher?.pump(companyId),
+    // §9 company_create_department: the UI's departments:save path (department note), then the sidebar refreshes
+    createDepartment: (input) => {
+      const dep = departmentActions(h).save({ companyId: input.companyId, name: input.name, ...(input.key ? { key: input.key } : {}), data: { charter: { does: input.does, doesNot: input.doesNot } } })
+      emit('data:changed', { domain: 'departments' })
+      return { id: dep.id, key: dep.key, name: dep.name }
+    },
     log
   })
   // headless claude steps of a task run list the tools on their hivemem server (executor withTaskTools)
@@ -400,7 +407,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   }
   const script = resolveAuthorScript(opts.mainDir)
   h.authorAttach = {
-    server: (sessionId: Id, liveDir: string, companyId?: Id | null): McpServerSpec | null => {
+    server: (sessionId: Id, liveDir: string, companyId?: Id | null, o?: { chat?: boolean }): McpServerSpec | null => {
       if (!fs.existsSync(script)) return null
       // DEPARTMENTS.md §6: board sessions list task_*; a session opened for a task names it (cross-check only: the
       // broker resolves the task from the session at call time, so a lease stamped after spawn still works)
@@ -421,7 +428,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           ELECTRON_RUN_AS_NODE: '1',
           HIVE_LIVE_DIR: liveDir,
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}`,
+          // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
           // COMPANY.md §6: the session's company (main still scopes every call by the session itself)
           ...(companyId ? { HIVE_COMPANY_ID: companyId } : {}),
@@ -431,7 +439,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // pre-allowed mcp__hive__* names for the pane: the slack group joins once Slack is connected
     get tools() {
-      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? TASK_TOOLS : [])]
+      // company_departments reads; company_file_task is left to the pane's own permission prompt (a second yes)
+      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? [...TASK_TOOLS, 'company_departments'] : [])]
     },
     spawnDir
   }

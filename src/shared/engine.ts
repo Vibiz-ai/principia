@@ -111,7 +111,7 @@ export interface EngineContext {
    * Company context for one spawn; never global chat context. COMPANY.md §5: with `companyId` it is that company's
    * Passport (passportContextFor); without it, the company of the working directory (older callers).
    */
-  passportContext?(cwd: string, companyId?: Id | null): string | null
+  passportContext?(cwd: string, companyId?: Id | null, departmentId?: Id | null): string | null
   /** COMPANY.md §5, §6: company resolution and guards. Absent = no companies (tests, older main): nothing is stamped or checked. */
   company?: CompanyBridge
   /**
@@ -481,6 +481,15 @@ export interface InteractiveSpawnOptions {
   authorSpawnDir?: string
   /** SLACK.md §12.3 "Ask an agent about this thread": claude starts with this as its first user message (positional prompt). */
   initialPrompt?: string | null
+  /**
+   * DEPARTMENTS.md §7, §9: the department of a department chat or of the task an interactive task session works on.
+   * The Passport block gains that department's slot (charter, passport note), as for headless task runs.
+   */
+  departmentId?: Id | null
+  /** DEPARTMENTS.md §9: the chat brief (repos, departments or the department's agents and tasks, routing rules), appended to the Passport block. */
+  chatBrief?: string | null
+  /** DEPARTMENTS.md §9: the company's other repo folders the chat may read and edit (claude and codex `--add-dir`). Absolute paths. */
+  addDirs?: string[]
 }
 
 export interface StartRunOptions {
@@ -499,7 +508,7 @@ export interface StartRunOptions {
   companyId?: Id | null
   /** DEPARTMENTS.md §4.3: the board task this run works on (runs.task_id); its company is inherited first. */
   taskId?: Id | null
-  /** The task's agent seat (runs.agent_id). */
+  /** The task's agent seat (runs.agent_id). Without taskId: a seat run with no board task (a Forum reply, FORUM.md §3). */
   agentId?: Id | null
   /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
   resumeSessionId?: string | null

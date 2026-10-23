@@ -379,11 +379,11 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO sessions(id, title, profile_id, adapter, repo_id, cwd, status, pid, cols, rows, exit_code, started_at,
-          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id, company_id)
+          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id, company_id${s.departmentId ? ', department_id' : ''})
          VALUES (@id, @title, @profileId, @adapter, @repoId, @cwd, @status, @pid, @cols, @rows, @exitCode, @startedAt,
-          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')}))`
+          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')})${s.departmentId ? ', @departmentId' : ''})`
       )
-      .run({ ...s, companyId: s.companyId ?? null })
+      .run((({ departmentId, ...rest }) => ({ ...rest, companyId: s.companyId ?? null, ...(departmentId ? { departmentId } : {}) }))(s))
   }
   updateSession(id: Id, patch: Partial<Omit<Session, 'id'>>): Session {
     const { set, params } = buildPatch(patch as Record<string, unknown>, {

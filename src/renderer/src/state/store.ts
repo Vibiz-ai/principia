@@ -686,9 +686,10 @@ export function toggleRepoExpanded(id: string, open?: boolean): void {
 
 // ---------- sessions ----------
 /** companyId narrows to one company's sessions (a chat in Acme never focuses a Personal chat, nor a repo's pre-move one). */
-export function newestRunning(repoId: Id | null, companyId?: Id): Session | undefined {
+export function newestRunning(repoId: Id | null, companyId?: Id, departmentId?: Id): Session | undefined {
+  // a department chat is its department's: the company's Chat row never focuses one, and the other way round
   return state.sessions
-    .filter((s) => s.status === 'running' && s.repoId === repoId && (!companyId || companyOf(s) === companyId))
+    .filter((s) => s.status === 'running' && s.repoId === repoId && (!companyId || companyOf(s) === companyId) && (s.departmentId ?? undefined) === departmentId)
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0]
 }
 
@@ -723,6 +724,8 @@ export interface StartOpts {
    * company in main; a chat takes the focused company (Personal in All mode).
    */
   companyId?: Id
+  /** DEPARTMENTS.md §9: "New Chat in <Department>" (a chat; `repoId` must be null). */
+  departmentId?: Id
 }
 
 /** The company a new session is stamped with (sent to main, which validates it against the repo). */
@@ -749,7 +752,7 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
   if (!o.forceNew) {
     // a repo moved to another company may still have a session stamped with the old one: that one runs with the old
     // company's keys and Passport, so clicking the repo in its new company starts a fresh session instead (§8.3)
-    const live = newestRunning(o.repoId, companyId ?? PERSONAL_COMPANY_ID)
+    const live = newestRunning(o.repoId, companyId ?? PERSONAL_COMPANY_ID, o.departmentId)
     if (live) {
       focusSession(live.id, { add: o.addToGrid })
       return live
@@ -764,6 +767,7 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
   try {
     const sess = await hive.sessions.create({
       ...(companyId ? { companyId } : {}),
+      ...(o.departmentId ? { departmentId: o.departmentId } : {}),
       adapter,
       repoId: o.repoId,
       cols: state.lastTermSize.cols,
@@ -787,9 +791,33 @@ export function openChat(forceNew: boolean, companyId?: Id): Promise<Session | u
   return startSession({ repoId: null, forceNew, companyId })
 }
 
+/**
+ * DEPARTMENTS.md §9 "New Chat in Marketing": a new chat of the department's company, with the department's charter,
+ * agents and open tasks in its context. `adapter` absent = the default adapter (the row's "+" on click).
+ */
+export function openDepartmentChat(d: Pick<Department, 'id' | 'companyId'>, adapter?: AdapterId): Promise<Session | undefined> {
+  return startSession({ repoId: null, forceNew: true, companyId: d.companyId, departmentId: d.id, ...(adapter ? { adapter } : {}) })
+}
+
+/** The installed agent CLIs for a "New Chat with…" menu (the company "+" pattern), the default one first. */
+function chatProviderItems(idPrefix: string): NativeMenuItem[] {
+  const def = currentAdapter()
+  return state.providers
+    .filter((p) => p.id !== 'shell')
+    .sort((a, b) => Number(b.id === def) - Number(a.id === def))
+    .map<NativeMenuItem>((p) => ({ id: `${idPrefix}${p.id}`, label: p.available ? p.label : `${p.label} (not installed)`, enabled: p.available }))
+}
+
+/** ⌥-click on a department's "+": pick the agent CLI for its new chat. */
+export async function departmentChatMenu(d: Department): Promise<void> {
+  const id = await nativeMenu(chatProviderItems('chat|'))
+  if (id?.startsWith('chat|')) void openDepartmentChat(d, id.slice(5) as AdapterId)
+}
+
 export function sessionTitle(s: Session): string {
   const repo = s.repoId ? state.repos.find((r) => r.id === s.repoId) : null
-  return `${providerLabel(s.adapter)} in ${repo?.name ?? 'Chat'}`
+  const dep = s.departmentId ? state.departments.find((d) => d.id === s.departmentId) : null
+  return `${providerLabel(s.adapter)} in ${repo?.name ?? dep?.name ?? 'Chat'}`
 }
 
 export function providerLabel(a: AdapterId): string {
@@ -1091,7 +1119,11 @@ export function openBoard(companyId: Id, opts: { departmentId?: Id; taskId?: Id 
 export async function departmentContextMenu(d: Department): Promise<void> {
   const seats = state.companyAgents.filter((a) => a.departmentId === d.id && !a.archivedAt)
   const allPaused = seats.length > 0 && seats.every((a) => !!a.pausedAt)
+  const providers = chatProviderItems('chat|')
   const id = await nativeMenu([
+    { id: 'chat', label: `New Chat in ${d.name}` },
+    ...(providers.filter((p) => p.enabled !== false).length > 1 ? [{ label: 'New Chat with', submenu: providers }] : []),
+    { type: 'separator' },
     { id: 'open', label: `Open ${d.name}` },
     { id: 'board', label: 'Open Board' },
     { type: 'separator' },
@@ -1102,6 +1134,8 @@ export async function departmentContextMenu(d: Department): Promise<void> {
     { id: 'archive', label: 'Archive…' }
   ])
   if (!id) return
+  if (id === 'chat') return void openDepartmentChat(d)
+  if (id.startsWith('chat|')) return void openDepartmentChat(d, id.slice(5) as AdapterId)
   if (id === 'open') return openDepartment(d)
   if (id === 'board') return openBoard(d.companyId, { departmentId: d.id })
   if (id === 'pause' || id === 'resume') return setDepartmentPaused(d.id, id === 'pause')

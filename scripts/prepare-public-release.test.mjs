@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, copyFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, copyFile, access, rm, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -85,4 +85,15 @@ test('exempts only reviewed fixture values listed by hash', async () => fixture(
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /src\/b\.test\.ts: provider key/)
   assert.doesNotMatch(result.stderr, /src\/a\.test\.ts/)
+}))
+
+test('keeps the executable bit, so the fake CLIs the tests spawn still run from the snapshot', async () => fixture(async ({ root, dest, put, run }) => {
+  await put('LICENSE', 'MIT')
+  await put('src/cloud/agent/__tests__/bin/codex', '#!/usr/bin/env node\n')
+  await chmod(path.join(root, 'src/cloud/agent/__tests__/bin/codex'), 0o755)
+  await put('src/plain.ts', 'export {}')
+  await chmod(path.join(root, 'src/plain.ts'), 0o644)
+  assert.equal(run().status, 0)
+  assert.equal((await stat(path.join(dest, 'src/cloud/agent/__tests__/bin/codex'))).mode & 0o777, 0o755)
+  assert.equal((await stat(path.join(dest, 'src/plain.ts'))).mode & 0o777, 0o644)
 }))

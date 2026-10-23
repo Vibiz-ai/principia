@@ -235,7 +235,9 @@ export class Execution {
     private d: ExecDeps,
     public run: Run,
     private workflow: WorkflowDraft | null,
-    private task: TaskRun | null = null
+    private task: TaskRun | null = null,
+    /** FORUM.md §3: a seat run without a board task (a Forum reply): the step still gets that seat's Forum access */
+    private seatAgentId: string | null = null
   ) {
     this.done = new Promise((r) => (this.resolveDone = r))
     const t = run.target
@@ -553,7 +555,7 @@ export class Execution {
 
   /** FORUM.md §3: Forum access for a step of a run with an agent seat; none, or a failure, = no Forum. */
   private openForum(s: StepSpec, stepId: string): ForumSpawn | null {
-    const agentId = this.task?.agentId ?? null
+    const agentId = this.task?.agentId ?? this.seatAgentId
     if (!this.ctx.forum || !agentId) return null
     try {
       return this.ctx.forum.open({ runId: this.run.id, stepId, taskId: this.task?.taskId ?? null, agentId, adapter: s.adapterId, companyId: this.run.companyId ?? null })

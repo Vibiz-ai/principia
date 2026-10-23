@@ -1,5 +1,10 @@
-/** S0 Start (docs/ONBOARDING.md §2): code or idea, the resume banner, agent detection and the explore / quick links. */
+/**
+ * S0 Start (docs/ONBOARDING.md §2): code or idea, the resume banner, agent detection and the explore / quick links.
+ * A new company first picks how to start: Guided (the code question below, then today's questions), From a prompt
+ * (the Brief step) or From a repo (Connect, then straight to the plan).
+ */
 import { Fragment, useEffect } from 'react'
+import type { StartMode } from '@shared/onboarding'
 import type { AdapterId } from '@shared/types'
 import { Button } from '../../components/ui'
 import { attempt, continueOnboarding, onboardingDispatch, openQuickCompany, refreshOnboardingStatus, refreshProviders, skipOnboarding, startOverOnboarding, useStore } from '../../state/store'
@@ -14,9 +19,11 @@ export function StartStep({ showBanner }: { showBanner: boolean }): React.JSX.El
   const d = useStore((s) => s.onboardingDraft)
   const mode = useStore((s) => s.onboarding?.mode ?? 'new')
   const copy = useCopy()
+  const choosing = mode === 'new'
+  const guided = !choosing || d?.start === 'guided'
   // Y / N pick the answer (the cards show the letters); ↵ continues
   useEffect(() => {
-    if (showBanner) return
+    if (showBanner || !guided) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
       const t = e.target as HTMLElement | null
@@ -28,26 +35,49 @@ export function StartStep({ showBanner }: { showBanner: boolean }): React.JSX.El
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [showBanner])
+  }, [showBanner, guided])
   if (!d) return null
   const value = d.hasCode === null ? null : d.hasCode ? 'yes' : 'no'
+  const start: StartMode | null = d.start ?? null
   return (
     <>
       {showBanner && <ResumeBanner />}
       <StepTitle welcome={mode === 'first'}>{copy(mode === 'first' ? 'ob.start.title.first' : 'ob.start.title.new')}</StepTitle>
       <p className="ob-sub">{copy('ob.start.sub')}</p>
-      <div className="ob-q" id="ob-q-code">
-        <Voiced k="ob.start.q" />
-      </div>
-      <ChoiceGroup
-        label={t.sr('ob.start.q')}
-        value={value}
-        onChange={(v) => onboardingDispatch({ type: 'chooseCode', hasCode: v === 'yes' })}
-        choices={[
-          { value: 'yes', title: copy('ob.start.yes'), desc: copy('ob.start.yes.desc'), kbd: 'Y' },
-          { value: 'no', title: copy('ob.start.no'), desc: copy('ob.start.no.desc'), kbd: 'N' }
-        ]}
-      />
+      {choosing && (
+        <>
+          <div className="ob-q" id="ob-q-how">
+            {copy('ob.start.how')}
+          </div>
+          <ChoiceGroup<StartMode>
+            className="ob-choices--3"
+            label={t.sr('ob.start.how')}
+            value={start}
+            onChange={(v) => onboardingDispatch({ type: 'chooseStart', start: v })}
+            choices={[
+              { value: 'guided', title: copy('ob.start.guided'), desc: copy('ob.start.guided.desc'), kbd: '1' },
+              { value: 'prompt', title: copy('ob.start.prompt'), desc: copy('ob.start.prompt.desc'), kbd: '2' },
+              { value: 'repo', title: copy('ob.start.repo'), desc: copy('ob.start.repo.desc'), kbd: '3' }
+            ]}
+          />
+        </>
+      )}
+      {(!choosing || start === 'guided') && (
+        <>
+          <div className="ob-q" id="ob-q-code">
+            <Voiced k="ob.start.q" />
+          </div>
+          <ChoiceGroup
+            label={t.sr('ob.start.q')}
+            value={value}
+            onChange={(v) => onboardingDispatch({ type: 'chooseCode', hasCode: v === 'yes' })}
+            choices={[
+              { value: 'yes', title: copy('ob.start.yes'), desc: copy('ob.start.yes.desc'), kbd: 'Y' },
+              { value: 'no', title: copy('ob.start.no'), desc: copy('ob.start.no.desc'), kbd: 'N' }
+            ]}
+          />
+        </>
+      )}
       <div className="ob-links">
         {mode === 'first' ? (
           <button type="button" className="link-btn" onClick={() => void skipOnboarding()}>

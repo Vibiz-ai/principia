@@ -180,6 +180,10 @@ export interface BriefInput {
   transport: 'mcp' | 'inject'
   /** inject: the digest text to include */
   digest?: string
+  /** the seat's home channel (its department's, else general), named in the "keep the team posted" line */
+  home?: string | null
+  /** a board task turn: also post one update (a Forum reply run only answers its thread) */
+  update?: boolean
 }
 
 /** §5: the <principia-forum> block, ≤ briefMax (mcp) / injectBriefMax (inject) chars. */
@@ -199,11 +203,16 @@ export function formatBrief(l: FormatLookup, i: BriefInput): string {
   const answered = i.answered.filter((m) => m.ask?.status === 'answered').slice(0, 2)
   if (answered.length) parts.push(`Your asks: ${answered.map((m) => `${m.ref} answered${m.ask?.answeredBy ? ` by ${at(l, m.ask.answeredBy)}` : ''}: "${clip(flat(m.ask?.answer ?? ''), 80)}"`).join(' · ')}.`)
   if (i.openAsks.length) parts.push(`Still open: ${i.openAsks.slice(0, 3).map((m) => m.ref).join(', ')}.`)
-  const fixed = open.length + close.length + tools.length + 4
+  // the team only sees work that is posted: one short update per turn, and a reply to whoever mentioned you
+  const home = i.home ? `#${i.home}` : 'your department channel'
+  const habit = i.update === false
+    ? 'Answer in the thread you were asked in; do not post anywhere else in this run.'
+    : `Keep the team posted: reply in the thread to unread mentions, and before you end post one short update in ${home} (what you did, what is next, refs like PRN-12).`
+  const fixed = open.length + close.length + tools.length + habit.length + 5
   let body = parts.join('\n')
   if (i.transport === 'inject' && i.digest) body += `\n${i.digest}`
   if (fixed + body.length > max) body = clip(body, Math.max(40, max - fixed))
-  return [open, body, tools, close].join('\n')
+  return [open, body, habit, tools, close].join('\n')
 }
 
 export { messageRef }

@@ -196,6 +196,20 @@ describe('schedule ownership', () => {
     expect(link.scheduleRev('s_a')).toBe(2)
   })
 
+  it('one poll drains a paged backlog (`more`) from each new cursor', async () => {
+    const link = await paired(make())
+    link.setSchedulePlacement('s_a', 'cloud', 1)
+    link.setSchedulePlacement('s_b', 'cloud', 1)
+    const moved = (id: string) => ({ id, companyId: 'co', name: id, when: { kind: 'cron' as const, cron: '0 9 * * *', tz: 'UTC' }, target: { kind: 'workflow' as const, workflowId: 'wf', inputs: {} }, enabled: true, placement: 'local' as const, rev: 2, nextFireAt: null, lastFireAt: null, lastRunId: null })
+    cloud.changes = [{ cursor: 'p1', more: true, schedules: [moved('s_a')] }, { cursor: 'p2', schedules: [moved('s_b')] }, { cursor: 'p2' }]
+    const before = cloud.requests.filter((r) => r.path.startsWith('/v1/sync/changes')).length
+    await link.pollNow()
+    const polls = cloud.requests.filter((r) => r.path.startsWith('/v1/sync/changes')).slice(before)
+    expect(polls.map((r) => r.query.since)).toEqual([expect.any(String), 'p1'])
+    expect(link.ownsSchedule('s_a')).toBe(false)
+    expect(link.ownsSchedule('s_b')).toBe(false)
+  })
+
   it('unlinking hands every schedule back to this Mac', async () => {
     const link = make()
     await link.pair({ link: `${cloud.url}/pair#${PAIR_CODE}` })
@@ -308,6 +322,33 @@ describe('PassportSync on a newer revision', () => {
     expect(p.calls).toEqual(['co_v'])
     await link.pollNow()
     expect(p.calls).toEqual(['co_v', 'co_v'])
+  })
+
+  it('a failed sync is retried on later polls even though the cursor already moved past that revision', async () => {
+    const p = port()
+    let fail = 2
+    p.sync = vi.fn(async (cid: string) => {
+      p.calls.push(cid)
+      if (fail-- > 0) throw new Error('host unreachable')
+      return { config: null, sync: { revision: 5 } }
+    })
+    const link = await paired(make({ passport: p }))
+    link.markCompany('co_v', { passportId: 'pp_co_v', hostUrl: 'http://127.0.0.1:8788' })
+    // the server reports revision 5 once; later polls carry no passports (passportChanges only returns seq > cursor)
+    cloud.changes = [{ passports: [{ companyId: 'co_v', revision: 5 }] }, {}]
+    await link.pollNow()
+    expect(p.calls).toEqual(['co_v'])
+    // a restart keeps what is still pending
+    link.stop()
+    const again = make({ passport: p })
+    await again.pollNow()
+    expect(p.calls).toEqual(['co_v', 'co_v'])
+    await again.pollNow()
+    expect(p.calls).toEqual(['co_v', 'co_v', 'co_v'])
+    // caught up: nothing more to do
+    await again.pollNow()
+    expect(p.calls).toEqual(['co_v', 'co_v', 'co_v'])
+    again.stop()
   })
 
   it('ignores companies this Mac did not move and companies without a PassportSync host', async () => {

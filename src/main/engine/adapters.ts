@@ -105,6 +105,8 @@ export interface InteractiveRequest {
   authorHint?: boolean
   /** SLACK.md §12.3: first user message (claude: positional prompt, the session starts working on it). */
   initialPrompt?: string
+  /** DEPARTMENTS.md §9: more folders the pane may read and edit (claude and codex `--add-dir`). Absolute paths only. */
+  addDirs?: string[]
 }
 
 export interface Adapter {
@@ -227,6 +229,13 @@ const imageDirArgs = (images: string[] | undefined): string[] => {
   return dirs.length ? ['--add-dir', ...dirs] : []
 }
 
+/** `--add-dir` for a chat's extra folders: claude takes them variadic ('many'), codex one per flag ('each'). Absolute, de-duplicated. */
+export const addDirArgs = (dirs: string[] | undefined, form: 'many' | 'each'): string[] => {
+  const list = [...new Set((dirs ?? []).filter((d) => isAbsolute(d) && !d.startsWith('-')))]
+  if (!list.length) return []
+  return form === 'many' ? ['--add-dir', ...list] : list.flatMap((d) => ['--add-dir', d])
+}
+
 /** Positional prompt that starts with '-' would be read as a flag. */
 const positional = (s: string): string => (s.startsWith('-') ? ` ${s}` : s)
 /**
@@ -291,6 +300,8 @@ export const claudeAdapter: Adapter = {
       args: [
         ...(req.hookArgs ?? []),
         ...(req.mcpArgs ?? []),
+        // variadic, like --mcp-config: always followed by --resume / --session-id
+        ...addDirArgs(req.addDirs, 'many'),
         ...(req.resumeId ? ['--resume', id] : ['--session-id', id]),
         // the positional first message sits right after a single-value flag, never after a variadic one
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : []),
@@ -345,6 +356,7 @@ export const codexAdapter: Adapter = {
         ...(req.memoryBrief?.trim() && !req.resumeId ? ['-c', `developer_instructions=${JSON.stringify(req.memoryBrief)}`] : []),
         ...(req.mcpArgs ?? []),
         ...(ibypass(req) ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+        ...addDirArgs(req.addDirs, 'each'),
         ...model(req.profile, '-m'),
         ...extra(req.profile),
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : [])

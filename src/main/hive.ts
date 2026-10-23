@@ -8,9 +8,11 @@ import type { CompanyStore } from './company'
 import { createCompanyBridge } from './companyBridge'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge } from './company/dispatcher'
 import { recurringBoards } from './company/recurring'
-import { departmentsEnabled } from '../shared/company'
+import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../shared/company'
+import { chatPlacement, type ChatPlacement } from './company/chatContext'
+import { routeModelCall } from './company/routeCall'
 import type { CompanyBridge, Engine, ProcessReaper, StepOutputEvent, TaskRunBridge, TaskToolset } from '../shared/engine'
-import type { EngineEvent, Id, LeftoverProcess, NextFire, Run, Settings, StatusSnapshot } from '../shared/types'
+import type { AdapterId, EngineEvent, Id, LeftoverProcess, NextFire, Run, Settings, StatusSnapshot } from '../shared/types'
 import { HiveError } from '../shared/errors'
 import type { UiCommand } from '../shared/ipc'
 import type { DB } from './db'
@@ -40,6 +42,7 @@ import type { NotifyNode } from './notifyNode'
 import type { ClaudeHistory } from './history'
 import type { SlackService } from './connectors/slack/service'
 import type { ForumService } from './forum/service'
+import type { DashboardService } from './dashboards/service'
 import { createCloud, type CloudWiring } from './cloud/wire'
 
 /** "15:00" today, else "Tue 15:00" (notification copy). */
@@ -112,6 +115,8 @@ export class Hive {
   slack: SlackService | null = null
   /** FORUM.md: the company Forum (null until wired / on failure). */
   forum: ForumService | null = null
+  /** DASHBOARDS.md: department dashboards (null until wired / on failure). */
+  dashboards: DashboardService | null = null
   private cloudWiring: CloudWiring | null = null
   /** CLOUD.md §4.1: this Mac's link to a Principia Cloud workspace (built on first use; idle until paired). */
   get cloud(): CloudWiring {
@@ -197,6 +202,9 @@ export class Hive {
         emit('data:changed', { domain: 'tasks' })
         this.statusChanged()
       },
+      // §2 step 4: triage suggestions through the installed Claude CLI (off without one)
+      modelCall: () => this.safe(() => routeModelCall({ providers: () => this.engine.providers.cached() }), null),
+      redact: (t) => this.vault.redact(t),
       log
     })
     this.dispatcher = d
@@ -219,13 +227,52 @@ export class Hive {
    * DEPARTMENTS.md §7: a task run passes its task's department, which adds the department slot.
    */
   passportContext(cwd: string, companyId?: Id | null, departmentId?: Id | null): string | null {
-    const text = companyId
+    const passport = companyId
       ? this.company.passportContextFor(companyId, departmentId ? { departmentId } : undefined)
       : cwd
         ? this.company.contextForDirectory(cwd)
         : null
+    // DASHBOARDS.md §6: a department's runs and chats also read its dashboards' latest numbers (cached, read-only)
+    const metrics = companyId && departmentId ? this.safe(() => this.dashboards?.contextFor(companyId, departmentId) ?? null, null) : null
+    const text = [passport, metrics].filter(Boolean).join('\n\n')
     return text ? this.vault.redact(text) : null
   }
+  /**
+   * DEPARTMENTS.md §9 (SessionDeps.chat): where a company or department chat runs, the company repo folders it may
+   * reach and its brief. Personal keeps its chats in its workspace (its repos are every unowned folder on this Mac).
+   * null = the department is not this company's, or the board is off.
+   */
+  chatContext(req: { companyId: Id; departmentId: Id | null; adapter: AdapterId }): ChatPlacement | null {
+    const c = this.company
+    let company: ReturnType<CompanyStore['passport']>
+    try {
+      company = c.passport(req.companyId)
+    } catch {
+      return null
+    }
+    const boardOn = departmentsEnabled(this.settings().experimental)
+    if (req.departmentId && !boardOn) return null
+    const personal = company.id === PERSONAL_COMPANY_ID || company.system === 'personal'
+    const repos = personal
+      ? []
+      : company.repoIds.flatMap((id) => {
+          const r = this.store.getRepo(id)
+          return r ? [{ id: r.id, name: r.name, path: r.path, exists: r.exists }] : []
+        })
+    const placed = chatPlacement({
+      company: { id: company.id, name: company.name },
+      repos,
+      departments: boardOn ? c.departments.list(company.id) : [],
+      agents: boardOn ? c.departments.listAgents({ companyId: company.id }) : [],
+      tasks: boardOn && req.departmentId ? c.listTasks(company.id) : [],
+      departmentId: req.departmentId,
+      // the `hive` server (claude panes) lists company_file_task while the board is on
+      fileTool: boardOn && req.adapter === 'claude'
+    })
+    if (req.departmentId && !placed.department) return null
+    return placed
+  }
+
   /** EngineContext.onStepOutput: fans out to stepOutputHooks; one failing hook never affects the others or the run. */
   onStepOutput(e: StepOutputEvent): void {
     for (const fn of this.stepOutputHooks) {

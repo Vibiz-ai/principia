@@ -30,6 +30,28 @@ describe('company Passport in interactive sessions', () => {
   }
 })
 
+describe('department chats (DEPARTMENTS.md §9)', () => {
+  for (const adapter of ['claude', 'codex'] as const) {
+    it(`${adapter}: the department slot is asked for, the chat brief follows the Passport block, the folders are added`, async () => {
+      const ctx = fakeCtx()
+      const asked: (string | null | undefined)[] = []
+      ctx.passportContext = (_cwd, companyId, departmentId) => {
+        asked.push(departmentId)
+        return companyId === 'co_a' ? `Company Passport: A${departmentId ? '\n## [[Marketing]] (department)' : ''}` : null
+      }
+      const engine = createEngineWith(ctx, { detect: fakeProviders() })
+      await engine.init()
+      const spawn = engine.providers.interactiveSpawn(profile('p', adapter), { artifactsDir: '/a', cwd: '/w', companyId: 'co_a', departmentId: 'dep_m', chatBrief: '## This chat: the Marketing department of Acme', addDirs: ['/r/web'] })
+      expect(asked.at(-1)).toBe('dep_m')
+      const text = adapter === 'codex' ? spawn.args.find((a) => a.startsWith('developer_instructions='))! : spawn.args[spawn.args.indexOf('--append-system-prompt') + 1]!
+      expect(text.indexOf('(department)')).toBeGreaterThan(text.indexOf('Company Passport: A'))
+      expect(text.indexOf('## This chat')).toBeGreaterThan(text.indexOf('(department)'))
+      expect(spawn.args).toContain('--add-dir')
+      expect(spawn.args[spawn.args.indexOf('--add-dir') + 1]).toBe('/r/web')
+    })
+  }
+})
+
 describe('company Passport in workflow execution', () => {
   it.each([false, true])('preserves scope and redacts context through fallback (worktree=%s)', async (isolated) => {
     const ctx = fakeCtx()

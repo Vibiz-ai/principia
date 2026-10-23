@@ -1,5 +1,5 @@
 /** Test doubles for the agent runtime: a ControlPorts recorder, a fake Open Passport host, temp folders, fake CLIs. */
-import { mkdtempSync, realpathSync } from 'node:fs'
+import { chmodSync, mkdtempSync, realpathSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -8,6 +8,8 @@ import type { ControlPorts, ScheduleRow } from '../../contract'
 
 export const BIN = join(__dirname, 'bin')
 export const FAKE_BINS = { claude: join(BIN, 'claude'), codex: join(BIN, 'codex'), gemini: join(BIN, 'gemini') }
+// A checkout or copy can drop the executable bit (core.fileMode=false, a plain file copy); the fakes must still spawn.
+for (const bin of Object.values(FAKE_BINS)) chmodSync(bin, 0o755)
 
 export const tmp = (prefix = 'principia-agent-'): string => realpathSync(mkdtempSync(join(tmpdir(), prefix)))
 

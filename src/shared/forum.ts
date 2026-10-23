@@ -236,7 +236,7 @@ export const FORUM_LIMITS = {
   digestMax: 12000,
   digestLine: 400,
   threadLine: 2000,
-  briefMax: 600,
+  briefMax: 800,
   injectBriefMax: 1500,
   fencedOps: 5,
   reactionKinds: 12

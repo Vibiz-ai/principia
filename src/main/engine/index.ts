@@ -280,7 +280,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       { ctx, adapters, provider, semaphore, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, taskMinuteMs: overrides.taskMinuteMs, harnessFallback: overrides.harnessFallback },
       run,
       snapshot,
-      task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null, runMinutes: taskRunMinutes(opts) } : null
+      task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null, runMinutes: taskRunMinutes(opts) } : null,
+      task ? null : (opts.agentId ?? null)
     )
     stall.startTimer(overrides.stallSweepMs ?? 15_000)
     executions.set(id, exec)
@@ -421,8 +422,11 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         const memoryBrief = ctx.secrets.redact([
           // nobody harvests an interactive pane's output (PASSPORT.md §7.6 is headless steps only)
           grant ? agentBrief(grant, !!mcp && memOk, { harvest: false }) : '',
-          // COMPANY.md §5: the session's company decides the Passport (cwd only for older callers without one)
-          opts.companyId ? ctx.passportContext?.(opts.cwd ?? '', opts.companyId) ?? '' : opts.cwd ? ctx.passportContext?.(opts.cwd) ?? '' : ''
+          // COMPANY.md §5: the session's company decides the Passport (cwd only for older callers without one); a
+          // department chat or task session adds the department slot (DEPARTMENTS.md §7)
+          opts.companyId ? ctx.passportContext?.(opts.cwd ?? '', opts.companyId, opts.departmentId ?? null) ?? '' : opts.cwd ? ctx.passportContext?.(opts.cwd) ?? '' : '',
+          // DEPARTMENTS.md §9: what this chat is told about the company's repos, departments, agents and tasks
+          opts.chatBrief?.trim() ?? ''
         ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []
@@ -452,7 +456,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           ...(memoryBrief ? { memoryBrief } : {}),
           ...(hookArgs.length ? { hookArgs } : {}),
           ...(authored ? { authorHint: true } : {}),
-          ...(opts.initialPrompt?.trim() ? { initialPrompt: opts.initialPrompt } : {})
+          ...(opts.initialPrompt?.trim() ? { initialPrompt: opts.initialPrompt } : {}),
+          ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {})
         })
         return {
           file: info.binPath,

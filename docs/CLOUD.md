@@ -518,7 +518,7 @@ it. The console shows `ready` only. **Run once now** is `POST …/runs {workflow
 | Passport | merged (three-way) | Open Passport revisions: the desktop's existing `PassportSync` against the host with the `desktop` grant; cloud agents write proposals or deltas (§7.1). The desktop syncs when `SyncChanges.passports` shows a newer revision. |
 | Workflows | desktop | `PUT …/workflows/:wid {file, baseRev}`. The desktop rewrites the export for the cloud first (pure function `exportForCloud`): repo cwd paths become `<repo-name>` relative to the company folder, profile ids become `prof_<adapter>`, and worktree nodes are refused with a clear reason. Stale `baseRev` returns 409 with `rev`. The server answers with `problems[]` from `runtime.validateWorkflow`. |
 | Schedules | desktop | `PUT …/schedules/:sid {schedule, placement, baseRev}`. **Placement decides who fires.** `cloud`: the desktop's scheduler skips it (`isScheduleActive` returns false for schedules the link owns) and Schedules shows a cloud mark. `local`: the cloud stores it but never fires it. |
-| Runs, asks | cloud | the desktop polls `GET /v1/sync/changes?since=` every 30 s while linked, and immediately on `/v1/events`. |
+| Runs, asks | cloud | the desktop polls `GET /v1/sync/changes?since=` every 30 s while linked, and immediately on `/v1/events`. Each answer carries at most 500 rows per collection; `more: true` means ask again at once from the new cursor, which never moves past a row it did not return. |
 | Keys, connections | each side | explicit copy with ticks; never automatic. |
 | Forum | each side | separate in v1 (§7.6). |
 

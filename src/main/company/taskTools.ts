@@ -14,6 +14,9 @@
  *   dependencies, so the run end leaves the task blocked(deps) until it heals;
  * - task_handoff is applied at run end (beforeSyncRun): the task goes to `todo` with the target and a `handoff`
  *   activity; a task already handed off MAX_HANDOFFS times parks blocked(handoff_cap) instead.
+ * - §9 the company tools of a chat (a session holding no task): company_departments reads the departments;
+ *   company_file_task files a top-level task into one department (`source:'agent'`, the router's rules pick the agent
+ *   unless one is named), stamped `routing.by:'model'` with the chat's reason, under the same hourly cap.
  *
  * Every result is a JSON object marked as data (TASK_NOTE) and fitted under TASK_MAX_OUTPUT chars.
  */
@@ -26,7 +29,7 @@ import { HiveError } from '../../shared/errors'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
-import { TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type TaskTool } from './taskToolDefs'
+import { COMPANY_LIMITS, isCompanyTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
 export { callTaskTool, isTaskTool, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS, type TaskTool } from './taskToolDefs'
 
 /** §6 caps on agent-filed tasks. */
@@ -66,6 +69,8 @@ export interface TaskToolsDeps {
    * longer points at the ended run, so the dispatcher's run-end pump may not see it.
    */
   pump?: (companyId: string) => void
+  /** §9 company_create_department: departments:save as the UI does it (department note, data:changed). Absent = departments.save. */
+  createDepartment?: (input: { companyId: string; name: string; key?: string; does: string; doesNot: string }) => { id: string; key: string; name: string }
   now?: () => Date
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
 }
@@ -99,7 +104,23 @@ const ARGS = {
     departmentKey: z.string().trim().min(1).max(80).optional(),
     agentId: idArg.optional(),
     reason: z.string().trim().min(1).max(TASK_LIMITS.reason)
-  }).refine(a => !!a.departmentKey || !!a.agentId, { message: 'Name a departmentKey or an agentId' })
+  }).refine(a => !!a.departmentKey || !!a.agentId, { message: 'Name a departmentKey or an agentId' }),
+  company_departments: z.strictObject({}),
+  company_file_task: z.strictObject({
+    title: z.string().trim().min(1).max(TASK_LIMITS.title),
+    description: z.string().max(TASK_LIMITS.description).default(''),
+    departmentKey: z.string().trim().min(1).max(80).optional(),
+    departmentId: idArg.optional(),
+    agent: z.string().trim().min(1).max(80).optional(),
+    reason: z.string().trim().min(1).max(COMPANY_LIMITS.reason)
+  }).refine(a => !!a.departmentKey || !!a.departmentId, { message: 'Name a departmentKey (see company_departments)' }),
+  company_create_department: z.strictObject({
+    name: z.string().trim().min(1).max(60),
+    key: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, 'lowercase letters, digits and dashes').optional(),
+    does: z.string().trim().min(1).max(300),
+    doesNot: z.string().trim().max(300).default(''),
+    reason: z.string().trim().min(1).max(COMPANY_LIMITS.reason)
+  })
 }
 function parseArgs<T extends z.ZodType>(schema: T, raw: unknown): z.infer<T> {
   const r = schema.safeParse(raw ?? {})
@@ -210,9 +231,15 @@ export class TaskTools {
    * The broker's checks (§6) on top of resolveCaller: the line's company and task must be the caller's, and a write
    * needs the caller to hold its task. Throws the refusal.
    */
-  authorize(caller: TaskCaller, tool: TaskTool, hints: TaskLineHints = {}): void {
+  authorize(caller: TaskCaller, tool: BoardTool, hints: TaskLineHints = {}): void {
     if (hints.companyId && hints.companyId !== caller.companyId) fail('This task tool server belongs to another company. Restart the session.')
     if (hints.taskId && hints.taskId !== caller.taskId) fail('This task tool server was started for another task')
+    // §9: the company tools are a chat's (a session); filing from a task goes through task_create / task_handoff
+    if (isCompanyTool(tool)) {
+      if (caller.kind !== 'session') fail(`Unknown tool: ${tool}`)
+      if (tool === 'company_file_task' && caller.taskId) fail('You are working on a task: use task_create or task_handoff instead')
+      return
+    }
     if (!TASK_MUTATIONS.has(tool)) return
     // task_create from a session that holds no task files a top-level task of its company
     if (tool === 'task_create' && caller.kind === 'session' && !caller.taskId) return
@@ -223,7 +250,7 @@ export class TaskTools {
   // ---------- calls ----------
 
   /** One authorized call. Throws HiveError with the message the agent sees. */
-  call(caller: TaskCaller, tool: TaskTool, args: unknown, hints: TaskLineHints = {}): Record<string, unknown> {
+  call(caller: TaskCaller, tool: BoardTool, args: unknown, hints: TaskLineHints = {}): Record<string, unknown> {
     this.authorize(caller, tool, hints)
     let out: Record<string, unknown>
     switch (tool) {
@@ -234,6 +261,9 @@ export class TaskTools {
       case 'task_ask': out = this.ask(caller, parseArgs(ARGS.task_ask, args)); break
       case 'task_create': out = this.create(caller, parseArgs(ARGS.task_create, args), hints.callId ?? null); break
       case 'task_handoff': out = this.handoff(caller, parseArgs(ARGS.task_handoff, args)); break
+      case 'company_departments': parseArgs(ARGS.company_departments, args); out = this.departmentsOf(caller); break
+      case 'company_file_task': out = this.fileTask(caller, parseArgs(ARGS.company_file_task, args), hints.callId ?? null); break
+      case 'company_create_department': out = this.createDepartment(caller, parseArgs(ARGS.company_create_department, args)); break
       default: return fail(`Unknown tool: ${String(tool)}`)
     }
     return fitTaskOutput(redactDeep(out, s => this.redact(s)) as Record<string, unknown>)
@@ -374,6 +404,82 @@ export class TaskTools {
     return { ok: true, task: this.summary(t), parent: parent?.identifier ?? null, blocksCurrent: !!(a.blocksCurrent && parent),
       ...(a.blocksCurrent && parent ? { detail: `${parent.identifier} waits for ${t.identifier} after this turn and resumes once it is done.` } : {}) }
   }
+  // ---------- §9 the company tools of a chat ----------
+
+  private departmentsOf(caller: TaskCaller): Record<string, unknown> {
+    const open = this.c.listTasks(caller.companyId).filter(OPEN)
+    const agents = this.c.departments.listAgents({ companyId: caller.companyId })
+    return {
+      departments: this.c.departments.list(caller.companyId).map(d => ({
+        key: d.key, id: d.id, name: d.name,
+        does: clip(d.data.charter.does, 400), doesNot: clip(d.data.charter.doesNot, 400),
+        agents: agents.filter(a => a.departmentId === d.id).map(a => ({ id: a.id, name: a.data.persona?.name ?? a.name, role: a.name, auto: a.data.autonomy === 'auto', ...(a.pausedAt ? { paused: true } : {}) })),
+        openTasks: open.filter(t => t.departmentId === d.id).length
+      })),
+      unfiled: open.filter(t => !t.departmentId).length
+    }
+  }
+
+  /**
+   * §9 company_create_department: a new department of the chat's company, from a chat the user asked or agreed in (the
+   * pane's own permission prompt is the second yes). Same key or name = the existing one (replays, double asks).
+   */
+  private createDepartment(caller: TaskCaller, a: z.infer<typeof ARGS.company_create_department>): Record<string, unknown> {
+    const name = clip(this.redact(a.name), 60)
+    const all = this.c.departments.list(caller.companyId, { includeArchived: true })
+    const same = all.find(d => (a.key && d.key === a.key) || d.name.toLowerCase() === name.toLowerCase())
+    if (same) {
+      if (same.archivedAt) fail(`${same.name} exists but is archived. Ask the user to unarchive it in Principia.`)
+      return { ok: true, department: { key: same.key, id: same.id, name: same.name }, existed: true, detail: `${same.name} already exists.` }
+    }
+    const input = { companyId: caller.companyId, name, ...(a.key ? { key: a.key } : {}), does: clip(this.redact(a.does), 300), doesNot: clip(this.redact(a.doesNot), 300) }
+    const dep = this.d.createDepartment
+      ? this.d.createDepartment(input)
+      : this.c.departments.save({ companyId: input.companyId, name: input.name, ...(input.key ? { key: input.key } : {}), data: { charter: { does: input.does, doesNot: input.doesNot } } })
+    return { ok: true, department: { key: dep.key, id: dep.id, name: dep.name }, detail: `Created ${dep.name} (${dep.key}). It has no agents yet: the user hires them in Principia (Departments → ${dep.name} → Add agent). Tell the user.` }
+  }
+
+  /**
+   * §9 company_file_task: a top-level task of the chat's company in one department, routed by §2 rules 1-2 (the named
+   * agent, else the department's eligible one) and stamped `routing.by:'model'` with the chat's reason. Replays of the
+   * same tool call return the first task; the agent-filed hourly cap applies.
+   */
+  private fileTask(caller: TaskCaller, a: z.infer<typeof ARGS.company_file_task>, callId: string | null): Record<string, unknown> {
+    const db = this.db
+    const externalId = `${caller.holderId}:${callId ? clip(callId, 120) : randomBytes(8).toString('hex')}`
+    const replay = callId ? db.prepare('SELECT id FROM company_tasks WHERE company_id=? AND source_key=?').get(caller.companyId, `agent:external:${externalId}`) as { id: string } | undefined : undefined
+    if (replay) return { ok: true, task: this.summary(this.c.task(replay.id)), replayed: true }
+    const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
+    const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=?").get(caller.companyId, since) as { n: number }).n
+    if (hour >= TASK_CREATE_CAPS.perCompanyPerHour) fail(`Agents filed ${hour} tasks in this company in the last hour (limit ${TASK_CREATE_CAPS.perCompanyPerHour}). Ask the user to add it on the Board.`)
+    const departments = this.c.departments.list(caller.companyId)
+    const known = () => departments.map(d => d.key).join(', ') || 'none'
+    const dep = a.departmentId ? departments.find(d => d.id === a.departmentId) : departments.find(d => d.key === a.departmentKey!.toLowerCase())
+    if (!dep) fail(`No department "${a.departmentKey ?? a.departmentId}" in this company. Known: ${known()}`)
+    const agents = this.c.departments.listAgents({ companyId: caller.companyId })
+    let agentId: string | null = null
+    if (a.agent) {
+      const want = a.agent.toLowerCase()
+      const agent = agents.find(x => x.id === a.agent) ?? agents.find(x => x.departmentId === dep!.id && (x.name.toLowerCase() === want || x.data.persona?.name?.toLowerCase() === want))
+      if (!agent || agent.archivedAt) fail(`No agent "${a.agent}" in ${dep!.name}`)
+      if (agent!.departmentId !== dep!.id) fail(`${agent!.name} is not in ${dep!.name}`)
+      agentId = agent!.id
+    }
+    const reason = clip(this.redact(a.reason).replace(/\s+/g, ' ').trim(), 400)
+    const draft = { companyId: caller.companyId, title: clip(this.redact(a.title), TASK_LIMITS.title), description: this.redact(a.description), source: 'agent' as const, sourceUrl: null, status: 'todo' as const, departmentId: dep!.id, agentId }
+    // §2 rules 1-2, as the board would route it: the named agent, else the department's only or least-busy auto agent
+    const d = route(draft, { departments, agents, queueCounts: queueCountsFrom(this.c.listTasks(caller.companyId)), explicitBy: 'rule' })
+    const created = this.c.createTask({
+      ...draft, repoId: null, priority: 0, externalId, assigneeProfileId: null, parentId: null, dependencyIds: [],
+      departmentId: d.departmentId ?? dep!.id, agentId: d.agentId ?? null,
+      routing: { departmentId: d.departmentId ?? dep!.id, agentId: d.agentId ?? null, by: 'model', reason: clip(`Filed from chat: ${reason}`, 500) }
+    })
+    this.c.activity(created.id, 'routed', clip(`Filed from a chat into ${dep!.name}: ${reason}`, 1000), 'agent')
+    const t = this.c.task(created.id)
+    this.changed(caller.companyId)
+    return { ok: true, task: this.summary(t), detail: `Filed ${t.identifier} in ${dep!.name}${t.agentId ? ` for ${this.agentRow(t.agentId)?.name ?? 'its agent'}` : ' (waiting for you to assign an agent)'}. Tell the user.` }
+  }
+
   /** blocksCurrent: the in-flight task gains a dependency (no CompanyStore method writes a task in flight). */
   private addDependency(t: BoardTask, depId: string): void {
     if (t.dependencyIds.includes(depId)) return

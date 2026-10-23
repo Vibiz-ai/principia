@@ -10,6 +10,7 @@ import { DepartmentStore } from './departments'
 import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpdateSchema, passportExportSchema, passportInputSchema, taskInputSchema, taskPatchSchema } from './schemas'
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
 import { assertEditable, assertReassignable, assertTransition, runEndState } from './taskState'
+import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
 export { buildPassportContext, CompanyScope } from './scope'
 export type { CompanyRef, Located, PassportContextOptions, PassportRenderer, ResolveQuery, Resolved, SameCompanyRefs } from './scope'
@@ -474,6 +475,21 @@ export class CompanyStore {
       const tail=said&&reason.toLowerCase().startsWith(said.toLowerCase()) ? reason.slice(said.length) : `. ${reason}`
       this.activity(id,'assigned',`${agent ? `Assigned to ${agent.name}` : 'Unassigned'}${dep ? ` in ${dep.name}` : ''}${tail}`,by)
       if(locked) this.activity(id,'parked',locked)
+      return next
+    })()
+  }
+  /**
+   * §2 step 4: stores the model's suggestion (`routing.by:'model'`) on an unrouted triage task, without touching its
+   * department, agent or status. Null when the task moved on while the model ran (suggestionApplies): a late suggestion
+   * never overwrites a decision. The founder applies it with tasks:acceptRoute.
+   */
+  suggestRouting(id: string, routing: TaskRouting): BoardTask|null {
+    if(routing.by!=='model') fail('Only a model suggestion is stored this way')
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      if(!suggestionApplies(t)) return null
+      const next:BoardTask={...t,routing:{departmentId:routing.departmentId,agentId:routing.agentId,by:'model',reason:routing.reason.slice(0,500),...(routing.confidence!==undefined ? {confidence:routing.confidence} : {})},updatedAt:new Date().toISOString()}
+      this.writeTask(next)
       return next
     })()
   }

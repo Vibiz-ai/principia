@@ -67,6 +67,8 @@ for (const relative of candidates) {
     // the public repositories keep their real address (the README, compose and the Render button point at them)
     .replace(/https:\/\/(?:github\.com|raw\.githubusercontent\.com)\/example-org\/(?:principia|open-passport)(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
     .replaceAll(privateProject, 'example-project'))
+  // keep the permission bits: the fake CLIs the tests spawn (src/cloud/agent/__tests__/bin) must stay executable
+  await fs.chmod(path.join(target, relative), (await fs.stat(path.join(root, relative))).mode & 0o777)
 }
 console.log(`Exported ${candidates.length} screened files. Git history, screenshots, internal research, and runtime data excluded.`)
 console.log('Review the snapshot and license, then initialize a NEW Git repository. Pattern screening is not a guarantee that no sensitive content remains.')
