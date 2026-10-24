@@ -7,6 +7,7 @@ import { runTitle, sessionPlace, tildify } from '../lib/format'
 import { hive } from '../lib/hive'
 import { activityLine, agentLabel, isLive } from '../lib/live'
 import { goNextNeedsYou } from '../state/live'
+import { showChecklist } from '../state/checklist'
 import { openApproval } from '../state/authoring'
 import { kindVerb } from '../lib/authoring'
 import { agentCompanyResolver, companyLabel, companyOf, reposOf } from '../lib/company'
@@ -175,6 +176,9 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       { id: 'v:slack', group: 'Go to', label: 'Slack', icon: 'slack', kbd: '⇧⌘L', run: () => void navigate({ name: 'slack', nonce: Date.now() }) },
       { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Principia’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },
       { id: 'a:slackTriggers', group: 'Actions', label: 'Slack Triggers', hint: 'run a workflow when someone mentions @hive', icon: 'slack', run: () => void navigate({ name: 'schedules', tab: 'slack', nonce: Date.now() }) },
+      ...(scope && companies.some((c) => c.id === scope && !c.system)
+        ? [{ id: 'a:checklist', group: 'Actions', label: 'Show Setup Checklist', hint: 'get the most out of Principia: connections, dashboards, autopilots', icon: 'check', run: () => showChecklist(scope) }]
+        : []),
       { id: 'a:slackConnect', group: 'Actions', label: 'Slack Connection…', hint: 'Settings › Connections', icon: 'settings', run: () => void navigate({ name: 'settings', section: 'connections' }) },
       { id: 'v:settings', group: 'Go to', label: 'Settings', icon: 'settings', kbd: '⌘,', run: () => void navigate({ name: 'settings' }) }
     )

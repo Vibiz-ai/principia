@@ -218,15 +218,15 @@ describe('invites (§2.2)', () => {
 })
 
 describe('protocol (§4)', () => {
-  it('six tools, strict schemas, a compact schema document', () => {
-    expect(FORUM_TOOLS).toHaveLength(6)
+  it('ten tools (six Forum, forum_ask_agent, three team reads), strict schemas, a compact schema document', () => {
+    expect(FORUM_TOOLS).toHaveLength(10)
     for (const t of FORUM_TOOLS) expect(FORUM_TOOL_DEFS[t].inputSchema.additionalProperties).toBe(false)
     expect(() => parseForumArgs('forum_post', { channel: '#a', text: 'x', extra: 1 })).toThrow(/Invalid arguments/)
     expect(() => parseForumArgs('forum_create_channel', { name: 'Bad Name', purpose: 'long enough purpose' })).toThrow()
     expect(() => parseForumArgs('forum_ask', { question: 'ok?', wait_s: 601 })).toThrow()
     expect(FORUM_ARGS.forum_read.parse({})).toEqual({})
     // budget: the tool list an agent pays for stays small
-    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(5200)
+    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(8000)
   })
   it('parses fenced blocks: ops object, arrays, single ops, junk and caps', () => {
     const out = [
@@ -516,7 +516,7 @@ describe('engine bridge, HTTP, CLI and MCP (§3, §4.1)', () => {
     expect(schema.tools.map((t: { name: string }) => t.name)).toEqual([...FORUM_TOOLS])
     // the MCP server and the CLI speak the same endpoint
     const mcp = forumMcpHandlers({ PRINCIPIA_FORUM_URL: url!, PRINCIPIA_FORUM_TOKEN: token })
-    expect(mcp.listTools()).toHaveLength(6)
+    expect(mcp.listTools()).toHaveLength(10)
     const res = await mcp.callTool('forum_read', { channel: '#marketing' })
     expect(res.content[0].text).toMatch(/from http/)
     s.close('st_1')

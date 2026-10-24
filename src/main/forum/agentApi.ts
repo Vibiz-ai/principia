@@ -8,6 +8,9 @@ import { HiveError } from '../../shared/errors'
 import { ForumArgError, parseForumArgs, type ForumArgs, type ForumTool, type ProposalArg } from './protocol'
 import { flat, formatDigest, formatList, messageLine, type FormatLookup } from './format'
 import type { ForumStore } from './store'
+import type { AgentCollab, CollabOutcome } from './collab'
+import type { TeamTools } from './teamTools'
+import type { AgentCollabSettings } from '../../shared/collab'
 
 export class ForumRefusal extends Error {}
 const refuse = (m: string): never => {
@@ -44,6 +47,15 @@ export interface ForumAgentDeps {
   answerAsk?: (askId: string, byId: string, text: string, replyId: string) => void
   /** role label + department name of an agent member (header line) */
   seatLabel?: (memberId: string) => string | null
+  /** AGENT-COLLAB.md: agent-to-agent wakes (absent = agents never wake agents, the v1 rule) */
+  collab?: AgentCollab | null
+  collabSettings?: () => AgentCollabSettings
+  /** the lead agent (first active seat) of a department, for @department asks */
+  leadOf?: (companyId: string, departmentId: string) => string | null
+  /** an agent seat's department id */
+  departmentOf?: (agentId: string) => string | null
+  /** AGENT-COLLAB.md §3: team_activity, team_usage, team_board */
+  team?: TeamTools | null
   now?: () => Date
 }
 
@@ -82,6 +94,14 @@ export class ForumAgentApi {
           return this.createChannel(c, me, args as ForumArgs['forum_create_channel'], origin, opts.opKey)
         case 'forum_mention':
           return this.mention(c, me, args as ForumArgs['forum_mention'], origin, opts.opKey)
+        case 'forum_ask_agent':
+          return await this.askAgent(c, me, args as ForumArgs['forum_ask_agent'], origin, opts)
+        case 'team_activity':
+          return this.teamTool(() => this.d.team!.activity(c.companyId, args as ForumArgs['team_activity'], c.runId))
+        case 'team_usage':
+          return this.teamTool(() => this.d.team!.usage(c.companyId, args as ForumArgs['team_usage']))
+        case 'team_board':
+          return this.teamTool(() => this.d.team!.board(c.companyId, args as ForumArgs['team_board']))
       }
     } catch (e) {
       if (e instanceof HiveError) refuse(e.message)
@@ -235,7 +255,7 @@ export class ForumAgentApi {
     }
     const m = this.s.post(me.id, { channelId: ch.id, text: a.text, refs: a.refs, origin, opKey })
     this.d.presence?.(c, 'working', null)
-    return `ok ${m.ref} ${ch.name ? `#${ch.name}` : a.channel}`
+    return `ok ${m.ref} ${ch.name ? `#${ch.name}` : a.channel}${this.wakeMentions(c, me, m)}`
   }
 
   private reply(c: ForumCaller, me: ForumMember, a: ForumArgs['forum_reply'], origin: string, opKey?: string): string {
@@ -244,15 +264,22 @@ export class ForumAgentApi {
     const t = this.safeThread(c, me, seq!)
     const m = this.s.post(me.id, { channelId: t.root.channelId, threadId: t.root.id, text: a.text, refs: a.refs, origin, opKey })
     this.d.presence?.(c, 'working', null)
+    // a woken agent that writes in the thread it was woken for has answered (AGENT-COLLAB.md §2)
+    try {
+      this.d.collab?.noteReplied(me.id, t.root.seq)
+    } catch {
+      /* bookkeeping only */
+    }
+    const woke = this.wakeMentions(c, me, m)
     if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
       try {
         this.d.answerAsk(t.root.id, me.id, a.text, m.id)
-        return `ok ${m.ref} ↳${t.root.ref} · answered the ask`
+        return `ok ${m.ref} ↳${t.root.ref} · answered the ask${woke}`
       } catch {
         /* it stays a reply */
       }
     }
-    return `ok ${m.ref} ↳${t.root.ref}`
+    return `ok ${m.ref} ↳${t.root.ref}${woke}`
   }
 
   private async ask(c: ForumCaller, me: ForumMember, a: ForumArgs['forum_ask'], origin: string, opts: { signal?: AbortSignal; opKey?: string }): Promise<string> {
@@ -266,6 +293,11 @@ export class ForumAgentApi {
       return m!.id
     })
     if (!to.length) to.push(this.s.owner(c.companyId).id)
+    // AGENT-COLLAB.md: an ask to agents only wakes them (it never parks the task for a person)
+    const targets = to.map((id) => this.s.member(id)).filter((m): m is ForumMember => !!m && m.id !== me.id)
+    if (this.d.collab && targets.length && targets.every((m) => m.kind === 'agent')) {
+      return this.askAgents(c, me, targets, { question: a.question, channel: a.channel, wait_s: a.wait_s ?? 0, options: a.options }, origin, opts)
+    }
     const ch = a.channel ? this.resolveChannel(c, me, a.channel) : this.defaultChannel(c, me)
     const ask: ForumAsk = { status: 'open', to: [...new Set(to)].filter((id) => id !== me.id), ...(a.options ? { options: a.options } : {}), taskId: c.taskId, runId: c.runId }
     if (!ask.to.length) refuse('Ask someone other than yourself')
@@ -361,7 +393,143 @@ export class ForumAgentApi {
     const ch = department ?? (members.length ? this.s.openDm(me.id, members.map((m) => m.id)) : refuse('Mention someone other than yourself'))
     const prefix = handles.filter((h) => !a.text.toLowerCase().includes(`@${h}`)).map((h) => `@${h}`).join(' ')
     const m = this.s.post(me.id, { channelId: ch.id, text: prefix ? `${prefix} ${a.text}` : a.text, refs: a.ref ? [a.ref] : undefined, origin, opKey })
-    return `ok ${m.ref} ${ch.name ? `#${ch.name}` : handles.map((h) => `@${h}`).join(',')}`
+    return `ok ${m.ref} ${ch.name ? `#${ch.name}` : handles.map((h) => `@${h}`).join(',')}${this.wakeMentions(c, me, m, false)}`
+  }
+
+  // ---------- agents asking agents (AGENT-COLLAB.md §2) ----------
+
+  /**
+   * The agents an agent's message wakes (max 3): one lead per @department, plus every @agent named on its own.
+   * `addressed` (forum_post, forum_reply): only handles the message opens with ("@livia can you…", "@development
+   * @sergio …") count; a @handle inside a sentence ("based on @livia's answer") is a reference and wakes no one.
+   * A live haiku run showed agents credit each other by handle all the time, which would wake them for nothing.
+   */
+  private mentionTargets(me: ForumMember, m: ForumMessage, addressed: boolean): ForumMember[] {
+    const out: ForumMember[] = []
+    const add = (x: ForumMember | null) => {
+      if (x && x.kind === 'agent' && x.id !== me.id && !out.some((o) => o.id === x.id)) out.push(x)
+    }
+    const lead = addressed ? leadingHandles(m.text) : null
+    const depIds = new Set(m.mentionDepartments)
+    for (const depId of depIds) {
+      if (lead) {
+        const key = this.s.channels(m.companyId, this.s.owner(m.companyId).id).find((ch) => ch.departmentId === depId && ch.system === 'department')?.name
+        if (!key || !lead.has(key)) continue
+      }
+      const agentId = this.d.leadOf?.(m.companyId, depId)
+      add(agentId ? this.s.memberForAgent(agentId) : null)
+    }
+    for (const id of m.mentions) {
+      const x = this.s.member(id)
+      if (!x) continue
+      if (lead) {
+        if (lead.has(x.handle)) add(x)
+        continue
+      }
+      // an @department mention expands to all its agents in the store; only its lead wakes
+      if (x?.agentId && depIds.size && this.d.departmentOf && depIds.has(this.d.departmentOf(x.agentId) ?? '') && !new RegExp(`@${x.handle}\\b`, 'i').test(m.text)) continue
+      add(x)
+    }
+    return out.slice(0, 3)
+  }
+
+  /** Wakes the agents an agent's own post mentions; returns the suffix for the tool result. Never throws. */
+  private wakeMentions(c: ForumCaller, me: ForumMember, m: ForumMessage, addressed = true): string {
+    if (!this.d.collab || me.kind !== 'agent') return ''
+    try {
+      const targets = this.mentionTargets(me, m, addressed)
+      if (!targets.length) return ''
+      return notes(this.d.collab.request(c, m, targets, 'mention', ''))
+    } catch {
+      return ''
+    }
+  }
+
+  private teamTool(f: () => string): string {
+    if (!this.d.team) return refuse('Team tools are not available in this Principia')
+    try {
+      return f()
+    } catch (e) {
+      if (e instanceof ForumRefusal) throw e
+      return refuse(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** `@handle` → that agent; a department key → its lead agent. */
+  private resolveAgent(c: ForumCaller, raw: string): ForumMember {
+    const h = raw.trim().replace(/^[@#]/, '').toLowerCase()
+    const m = this.s.memberByHandle(c.companyId, h)
+    if (m && m.status === 'active') {
+      if (m.kind !== 'agent') refuse(`@${m.handle} is a person; ask people with forum_ask`)
+      return m
+    }
+    const dep = this.s.channels(c.companyId, this.s.owner(c.companyId).id).find((ch) => ch.system === 'department' && !ch.archivedAt && ch.name === h)
+    if (dep?.departmentId) {
+      const lead = this.d.leadOf?.(c.companyId, dep.departmentId)
+      const lm = lead ? this.s.memberForAgent(lead) : null
+      if (!lm || lm.status !== 'active') refuse(`#${dep.name} has no agent that can answer`)
+      return lm!
+    }
+    return refuse(`No agent or department @${h} in this company`)
+  }
+
+  private async askAgent(c: ForumCaller, me: ForumMember, a: ForumArgs['forum_ask_agent'], origin: string, opts: { signal?: AbortSignal; opKey?: string }): Promise<string> {
+    if (!this.d.collab) refuse('Agents cannot ask agents in this Principia')
+    const target = this.resolveAgent(c, a.to)
+    if (target.id === me.id) refuse('You cannot ask yourself')
+    return this.askAgents(c, me, [target], { question: a.question, why: a.why, channel: a.channel, wait_s: a.wait_s }, origin, opts)
+  }
+
+  private async askAgents(
+    c: ForumCaller,
+    me: ForumMember,
+    targets: ForumMember[],
+    a: { question: string; why?: string; channel?: string; wait_s?: number; options?: string[] },
+    origin: string,
+    opts: { signal?: AbortSignal; opKey?: string }
+  ): Promise<string> {
+    const collab = this.d.collab!
+    this.checkRate(c, me, origin)
+    // the guards run before anything is posted: a refused ask leaves no orphan card
+    const ok: ForumMember[] = []
+    const refused: string[] = []
+    const home = this.defaultChannel(c, me)
+    for (const t of targets) {
+      const v = collab.check(c, t, null)
+      if (v.refusal) refused.push(collab.recordRefusal(c, t, v.refusal, a.why ?? a.question, home.id))
+      else ok.push(t)
+    }
+    if (!ok.length) refuse(refused.join('; '))
+    const open = this.s.openAsks(c.companyId, me.id)
+    if (open.length >= FORUM_LIMITS.openAsksPerAgent) refuse(`You have ${open.length} open asks (${open.map((m) => m.ref).join(', ')}); wait for answers or end your turn.`)
+    const ch = a.channel ? this.resolveChannel(c, me, a.channel) : (this.agentHome(c, ok[0]) ?? home)
+    const ask: ForumAsk = { status: 'open', to: ok.map((t) => t.id), ...(a.options ? { options: a.options } : {}), taskId: null, runId: c.runId }
+    const handles = ok.map((t) => `@${t.handle}`).join(' ')
+    const text = `${handles} ${a.question}${a.why ? `\n(why: ${a.why})` : ''}`
+    const m = this.s.post(me.id, { channelId: ch.id, text, kind: 'ask', ask, origin, opKey: opts.opKey })
+    const where = ch.name ? `#${ch.name}` : 'DM'
+    const res = collab.request(c, m, ok, 'ask', a.why ?? '')
+    const tail = `${notes(res)}${refused.length ? ` · ${refused.join('; ')}` : ''}`
+    const st = this.d.collabSettings?.()
+    const woke = res.some((r) => r.status === 'started' || r.status === 'queued')
+    const wait = woke ? Math.min(a.wait_s ?? st?.waitDefaultS ?? 0, st?.waitMaxS ?? FORUM_LIMITS.waitMaxS, FORUM_LIMITS.waitMaxS) : 0
+    if (wait > 0 && this.d.waitAnswer) {
+      this.d.presence?.(c, 'working', ch.id)
+      const answered = await this.d.waitAnswer(m.id, wait * 1000, opts.signal)
+      if (answered?.ask?.status === 'answered') {
+        const by = answered.ask.answeredBy ? this.s.member(answered.ask.answeredBy) : null
+        return `answered ${m.ref} by @${by?.handle ?? 'someone'}: ${clip(flat(answered.ask.answer ?? ''), 1500)}`
+      }
+      return `open ${m.ref} ${where}${tail} · no answer within ${wait}s; it will be in forum_read {"thread":"${m.ref}"} and your next brief. Continue with what you know.`
+    }
+    return `open ${m.ref} ${where}${tail} · the answer will be in forum_read {"thread":"${m.ref}"} and your next brief`
+  }
+
+  /** The target agent's department channel (where it reads), else null. */
+  private agentHome(c: ForumCaller, target: ForumMember): ForumChannel | null {
+    const dep = target.agentId ? this.d.departmentOf?.(target.agentId) : null
+    const chans = this.s.channels(c.companyId, target.id)
+    return chans.find((ch) => ch.system === 'department' && !ch.archivedAt && (dep ? ch.departmentId === dep : ch.memberIds.includes(target.id))) ?? null
   }
 
   /** The digest an inject agent gets in its brief: same text as forum_read, nothing marked read. */
@@ -392,6 +560,18 @@ export class ForumAgentApi {
   line(c: ForumCaller, m: ForumMessage): string {
     return messageLine(this.lookup(c), m)
   }
+}
+
+/** The handles a message opens with ("@livia @sergio: can you…" → livia, sergio), lowercase. */
+export function leadingHandles(text: string): Set<string> {
+  const m = /^\s*((?:@[a-z0-9._-]+[\s,:]*)+)/i.exec(text)
+  return new Set(m ? [...m[1].matchAll(/@([a-z0-9._-]+)/gi)].map((x) => x[1].toLowerCase().replace(/\.+$/, '')) : [])
+}
+
+/** Tool-result suffix for wake outcomes (" · woke @livia (hop 1/3, run r_…)"). */
+function notes(res: CollabOutcome[]): string {
+  const lines = res.map((r) => r.note).filter(Boolean)
+  return lines.length ? ` · ${lines.join('; ')}` : ''
 }
 
 /** Thread replies in a digest name their root (`m3g1 ↳m3fk …`). */

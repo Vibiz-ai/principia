@@ -306,6 +306,7 @@ function SessionPane({
       { id: 'dir', label: 'Open ARTIFACTS_DIR' },
       { type: 'separator' },
       { id: 'find', label: 'Find…', accelerator: 'Cmd+F' },
+      ...(s.adapter !== 'shell' ? [{ id: 'newco', label: 'New Company from This Chat…' }] : []),
       ...(multi ? [{ id: 'hide', label: 'Remove from Grid' }] : [])
     ])
     if (id === 'kill') void closeSession(s.id)
@@ -318,8 +319,12 @@ function SessionPane({
     if (id === 'reveal') void attempt(() => hive.app.showItemInFolder({ path: s.cwd }))
     if (id === 'dir') void attempt(() => hive.artifacts.openDir({ sessionId: s.id }))
     if (id === 'find') termRef.current?.openSearch()
+    if (id === 'newco') void newCompanyFromChat()
     if (id === 'hide') removeFromGrid(s.id)
   }
+
+  // shared/chatCompany.ts: the confirmation card, by hand (codex panes have no hive tools; their brief points here)
+  const newCompanyFromChat = (): Promise<unknown> => attempt(() => hive.chatCompany.open({ sessionId: s.id }), 'New company')
 
   return (
     <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
@@ -338,6 +343,11 @@ function SessionPane({
         {!exited && <StalledBadge agent={root} />}
         <span className="flex1" />
         {handoffButton}
+        {s.adapter !== 'shell' && s.adapter !== 'claude' && !exited && (
+          <Button size="sm" onClick={() => void newCompanyFromChat()} title="Set up what you are talking about as a new Principia company (you review the plan first)">
+            New company from chat
+          </Button>
+        )}
         <IconButton icon="more" label="Session actions" onClick={() => void menu()} />
         {multi && <IconButton icon="close" label="Remove from grid" onClick={() => removeFromGrid(s.id)} />}
       </div>

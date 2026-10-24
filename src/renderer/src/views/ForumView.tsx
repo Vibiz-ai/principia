@@ -4,6 +4,7 @@
  * One Forum per company: All mode asks which one. Lives behind the board switch (companies + departments).
  */
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { AgentTalkPanel } from '../components/forum/AgentTalk'
 import type { ForumChannel, ForumMember, ForumMessage, ForumRef } from '@shared/forum'
 import { channelLabel } from '@shared/forum'
 import { EmptyState, Loading } from '../components/ui'
@@ -19,6 +20,7 @@ import { confirmNative, hive, nativeMenu } from '../lib/hive'
 import { initForumEvents, loadChannel, loadForum, loadThread, markRead, post, setViewing, useForum } from '../state/forum'
 import { activeCompany, attempt, departmentsOn, enterCompany, navigate, openBoard, toast, useStore } from '../state/store'
 import '../styles/forum.css'
+import '../styles/agentTalk.css'
 
 const EMPTY: ForumMessage[] = []
 
@@ -65,6 +67,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
   const [threadId, setThreadId] = useState<string | null>(wantedThread ?? null)
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<ForumMessage[] | null>(null)
+  const [agentTalk, setAgentTalk] = useState(false)
   const [sheet, setSheet] = useState<null | { kind: 'channel' } | { kind: 'invite' } | { kind: 'decide'; m: ForumMessage } | { kind: 'edit'; m: ForumMessage } | { kind: 'propose'; k: 'department' | 'agent' | null }>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -279,7 +282,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
 
   return (
     <ForumContext.Provider value={ctx}>
-      <div className={`view fm-view ${threadId || results ? 'has-side' : ''}`}>
+      <div className={`view fm-view ${threadId || results || agentTalk ? 'has-side' : ''}`}>
         <ForumNav
           companyName={companyName}
           channels={channels}
@@ -294,6 +297,8 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
           onOpen={openChannel}
           onNewChannel={() => setSheet({ kind: 'channel' })}
           onInvite={() => setSheet({ kind: 'invite' })}
+          agentTalk={agentTalk}
+          onAgentTalk={() => (setAgentTalk((x) => !x), setThreadId(null), setSearch(''), setResults(null))}
           onNewDm={async () => {
             const others = members.filter((m) => m.status === 'active' && m.id !== state.me && m.kind !== 'guest')
             const id = await nativeMenu(others.map((m) => ({ id: m.id, label: `${display(m.id)?.name ?? m.name}${m.kind === 'agent' ? ` · ${display(m.id)?.role}` : ''}` })))
@@ -397,6 +402,8 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
               <Loading />
             )}
           </aside>
+        ) : agentTalk ? (
+          <AgentTalkPanel companyId={companyId} onClose={() => setAgentTalk(false)} />
         ) : null}
         {sheet?.kind === 'channel' && (
           <NewChannelSheet
@@ -491,7 +498,9 @@ function ForumNav({
   onOpen,
   onNewChannel,
   onInvite,
-  onNewDm
+  onNewDm,
+  agentTalk,
+  onAgentTalk
 }: {
   companyName: string
   channels: ForumChannel[]
@@ -507,6 +516,8 @@ function ForumNav({
   onNewChannel: () => void
   onInvite: () => void
   onNewDm: () => void
+  agentTalk: boolean
+  onAgentTalk: () => void
 }): React.JSX.Element {
   const ctx = useContextSafe()
   const departments = useStore((s) => s.departments)
@@ -568,6 +579,19 @@ function ForumNav({
             c.kind === 'private' ? <Icon name="lock" size={12} /> : c.departmentId ? <span className="fm-nav__dept" style={{ background: deptColor(c) ?? 'var(--text-tertiary)' }} aria-hidden /> : '#'
           )
         )}
+        <div
+          className={`fm-nav__row ${agentTalk ? 'is-selected' : ''}`}
+          role="button"
+          tabIndex={0}
+          title="Conversations between agents: who asked whom, why, cost, and the limits"
+          onClick={onAgentTalk}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onAgentTalk())}
+        >
+          <span className="fm-nav__lead">
+            <Icon name="chat" size={12} />
+          </span>
+          <span className="fm-nav__label">Agent talk</span>
+        </div>
         {proposals.length > 0 && (
           <>
             <div className="fm-nav__section">

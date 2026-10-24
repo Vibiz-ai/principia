@@ -107,6 +107,8 @@ export class Hive {
   private leftoverCache: LeftoverProcess[] = []
   /** AUTHORING.md: `hive` tool broker, worktree per run, notify nodes, Claude history (null until wired / on failure). */
   author: AuthorBroker | null = null
+  /** shared/chatCompany.ts: the "start a company from this chat" cards (author/wire.ts). */
+  chatProposals: import('./company/chatProposals').ChatProposals | null = null
   worktrees: WorktreeManager | null = null
   notifyNode: NotifyNode | null = null
   history: ClaudeHistory | null = null

@@ -4,6 +4,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { McpServerSpec, ProcessReaper } from '../../shared/engine'
 import { AUTHOR_SERVER_NAME, AUTHOR_TOOLS, approveLabel, type AuthoringContext } from '../../shared/authoring'
@@ -24,6 +25,8 @@ import { checkTarget } from '../handlers/runs'
 import { guardSameCompany, guardWorkflowTargets, workflowRepoRefs } from '../handlers/companyScope'
 import { repoForCwd } from '../memory/service'
 import { AuthorBroker } from './broker'
+import { ChatProposals } from '../company/chatProposals'
+import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
@@ -196,6 +199,21 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   }
 
   const drafts = new AuthorDrafts(h.db, redact)
+  const proposals = new ChatProposals({
+    emit: (p) => emit('chatCompany:updated', p),
+    sessionTitle: (id) => h.store.getSession(id)?.title ?? null,
+    home: os.homedir(),
+    // the founder said yes in the chat, so they are usually looking at it; a notification only when Principia is behind
+    attention: (p) => {
+      try {
+        if (h.windows.isFocused()) return
+        notify({ title: p.name ? `Create ${p.name}?` : 'Create a new company?', body: 'A chat suggests setting this up as a new Principia company.', sound: h.settings().notificationSound, onClick: () => h.windows.show() })
+      } catch {
+        /* best effort */
+      }
+    }
+  })
+  h.chatProposals = proposals
   h.author = new AuthorBroker({
     drafts,
     owner: (sessionId): DraftOwner | null => {
@@ -358,6 +376,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       alertUserId: () => h.settings().slackAlertUserId ?? null,
       channelName: (id) => h.slack?.connector.names.channel(id) ?? id
     },
+    // shared/chatCompany.ts: the confirmation card behind principia_propose_company
+    proposals: { propose: (sessionId, args, signal) => proposals.propose(sessionId, args, signal) },
     tasks: {
       resolve: (owner) => tasks.resolveCaller(owner),
       call: (caller, tool, args, hints) => tasks.call(caller as TaskCaller, tool, args, hints)
@@ -429,7 +449,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           HIVE_LIVE_DIR: liveDir,
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
           // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}`,
+          // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
           // COMPANY.md §6: the session's company (main still scopes every call by the session itself)
           ...(companyId ? { HIVE_COMPANY_ID: companyId } : {}),
@@ -440,7 +461,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     // pre-allowed mcp__hive__* names for the pane: the slack group joins once Slack is connected
     get tools() {
       // company_departments reads; company_file_task is left to the pane's own permission prompt (a second yes)
-      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? [...TASK_TOOLS, 'company_departments'] : [])]
+      // principia_propose_company only opens a card in Principia (the founder confirms there): pre-allowed
+      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? [...TASK_TOOLS, 'company_departments'] : [])]
     },
     spawnDir
   }

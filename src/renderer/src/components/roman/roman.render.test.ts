@@ -395,6 +395,28 @@ describe('Medallion', () => {
     expect(failed).toContain('rm-medallion__fail')
   })
 
+  it('a company logo takes the initial’s place inside the same rings, cropped round, outside the line art', () => {
+    const logo = 'data:image/svg+xml;base64,PHN2Zy8+'
+    for (const logoFit of [null, 'fill', 'plain', 'backed'] as const) {
+      for (const size of [18, 32, 36]) {
+        const html = render(createElement(Medallion, { name: 'Acme', color: '#4c9cff', logo, logoFit, size, working: true }))
+        // the SVG keeps every line-art rule; the logo is an <img> beside it, not inside it
+        const svgPart = html.slice(html.indexOf('<svg'), html.indexOf('</svg>') + 6)
+        expectRomanInvariants(svgPart)
+        expect(svgPart).not.toContain('<text')
+        expect(svgPart).not.toContain('rm-medallion__tessera')
+        expect(html).toContain(`<img src="${logo}" alt=""`)
+        expect(html).toContain(`rm-medallion__logo--${logoFit ?? 'plain'}`)
+        expect(html.indexOf('<img')).toBeLessThan(html.indexOf('<svg'))
+      }
+    }
+    // the frame stays: outer ring, beaded rim, inner ring on the full-size coin
+    const full = render(createElement(Medallion, { name: 'Acme', logo, logoFit: 'plain' }))
+    for (const r of ['18.6', '16.9', '15.2']) expect(full).toContain(`r="${r}"`)
+    expect(full).toContain('aria-label="Acme"')
+    expect(full).toContain('width:23px;height:23px')
+  })
+
   it('never announces an empty label', () => {
     const bare = render(createElement(Medallion, { name: '  ' }))
     expect(bare).not.toContain('role="img"')

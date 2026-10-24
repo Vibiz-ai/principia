@@ -237,10 +237,26 @@ function applyResult(res: LaunchResult): void {
     }
   }))
   onboardingDispatch({ type: 'launchStarted', journalId: res.journalId })
+  if (res.status === 'done') applyChatLogo(getState().onboardingDraft, res.companyId)
   if (res.status === 'done') onboardingDispatch({ type: 'launchDone', journalId: res.journalId })
   else if (res.status === 'failed') onboardingDispatch({ type: 'launchFailed', journalId: res.journalId })
   else if (res.status === 'discarded') discardOnboarding()
   flushOnboardingDraft()
+}
+
+/**
+ * A company started from a chat (shared/chatCompany.ts): the emblem picked on the card, once it exists. With a repo
+ * (`keepDetected`) the repo's own logo wins when one was found. Once per draft; failures keep the initial.
+ */
+const logoApplied = new Set<string>()
+function applyChatLogo(d: OnboardingDraft | null, companyId: string | null): void {
+  const logo = d?.fromChat?.logo
+  if (!d || !logo || !companyId || logoApplied.has(d.id)) return
+  logoApplied.add(d.id)
+  void hive.company
+    .setLogo({ id: companyId, pick: { kind: 'emblem', variant: logo.variant, keepDetected: logo.keepDetected } })
+    .then((res) => res && setState((s) => ({ companyLogos: { ...s.companyLogos, [companyId]: res } })))
+    .catch(() => undefined)
 }
 
 async function runLaunch(call: () => Promise<LaunchResult>, d: OnboardingDraft): Promise<void> {

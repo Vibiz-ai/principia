@@ -37,6 +37,15 @@ export function registerAuthorHandlers(h: Hive): void {
   handle('author:grants', () => broker().grants())
   handle('author:revokeRun', ({ workflowId, ownerKey }) => broker().revokeRun(workflowId, ownerKey))
 
+  // shared/chatCompany.ts: "start a company from this chat" cards (the tool call waits on chatCompany:decide)
+  const proposals = () => {
+    if (!h.chatProposals) throw new HiveError('internal', 'Chat company cards are not available')
+    return h.chatProposals
+  }
+  handle('chatCompany:list', () => (h.chatProposals ? h.chatProposals.list() : []))
+  handle('chatCompany:decide', (req) => proposals().decide(req))
+  handle('chatCompany:open', (req) => proposals().openLocal({ sessionId: req.sessionId ?? null, ...(req.name ? { name: req.name } : {}), ...(req.brief ? { brief: req.brief } : {}) }))
+
   handle('worktrees:list', (q) => (h.worktrees ? h.worktrees.list(q?.status) : []))
   handle('worktrees:remove', async ({ id, discardWork }) => {
     if (!h.worktrees) throw new HiveError('internal', 'Worktrees are not available')

@@ -17,6 +17,10 @@ import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
 import { ForumHttpServer } from './http'
 import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type ForumTool } from './protocol'
 import { formatBrief } from './format'
+import { stepSummary } from './summary'
+import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
+import { TeamTools, type TeamTask } from './teamTools'
+import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
 const fail = (m: string): never => {
   throw new HiveError('bad_request', m)
@@ -53,6 +57,16 @@ export interface ForumServiceDeps {
     /** "Copywriter, Marketing" for an agent seat */
     seatLabel(agentId: string): string | null
   }
+  /** AGENT-COLLAB.md: the board for team_board (CompanyStore.listTasks) */
+  board?: (companyId: string) => TeamTask[]
+  /** Settings → agentCollab (absent = the defaults) */
+  collabSettings?: () => Partial<AgentCollabSettings> | null | undefined
+  /** an agent seat: its department, whether it can run a reply; a department's lead (first active profile seat) */
+  seats?: {
+    departmentOf(agentId: string): string | null
+    canAnswer(agentId: string): boolean
+    leadOf(companyId: string, departmentId: string): string | null
+  }
   /** out/main/forum-cli.js; null = no CLI/MCP (tests) */
   cliScript?: string | null
   execPath?: string
@@ -66,15 +80,7 @@ interface TokenEntry { caller: ForumCaller; adapter: AdapterId; hits: number[] }
 /** A run started to answer a Forum message (responder.ts): where its fallback reply goes. */
 export interface ForumReplyRun { memberId: string; channelId: string; messageId: string }
 
-/** Fenced blocks and tool chatter never go into an automatic post. */
-export function stepSummary(output: string, max: number): string {
-  const text = output
-    .replace(/```[a-z-]*\n[\s\S]*?```/gi, ' ')
-    .replace(/<\/?principia-[^>]*>/gi, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-  return clip(text, max)
-}
+export { stepSummary }
 interface Waiter { resolve: (m: ForumMessage | null) => void; timer: NodeJS.Timeout }
 
 export class ForumService implements ForumBridge {
@@ -93,9 +99,41 @@ export class ForumService implements ForumBridge {
   /** responder.ts: a human posted (set by wire.ts; absent in tests that do not need it) */
   onHumanPost: ((m: ForumMessage) => void) | null = null
 
+  readonly team: TeamTools
+  readonly collab: AgentCollab
+  /** responder.ts wakeForAgent (set by wire.ts; absent in tests that do not wake) */
+  collabWake: ((req: CollabWakeRequest) => CollabWakeResult) | null = null
+
   constructor(private readonly d: ForumServiceDeps) {
     this.store = new ForumStore(d.db, { directory: d.directory, now: d.now, redact: d.redact, onEvent: (e) => this.onStoreEvent(e) })
+    const settings = () => collabSettings(d.collabSettings?.())
+    this.team = new TeamTools({
+      db: d.db,
+      store: () => this.store,
+      directory: d.directory,
+      board: d.board,
+      companyName: (id) => d.company?.companyName(id) ?? '',
+      redact: d.redact,
+      collabUsage: (companyId) => this.collab.usage(companyId),
+      now: d.now
+    })
+    this.collab = new AgentCollab({
+      db: d.db,
+      store: () => this.store,
+      settings,
+      ready: () => !!this.collabWake,
+      canAnswer: d.seats ? (agentId) => d.seats!.canAnswer(agentId) : undefined,
+      wake: (req) => (this.collabWake ? this.collabWake(req) : { runId: null, queued: false, error: 'agents cannot be woken in this Principia' }),
+      cost: (runIds) => this.team.runCost(runIds),
+      now: d.now,
+      log: d.log
+    })
     this.api = new ForumAgentApi({
+      collab: this.collab,
+      collabSettings: settings,
+      team: this.team,
+      leadOf: d.seats ? (companyId, depId) => d.seats!.leadOf(companyId, depId) : undefined,
+      departmentOf: d.seats ? (agentId) => d.seats!.departmentOf(agentId) : undefined,
       store: () => this.store,
       now: d.now,
       tasks: d.tasks
@@ -530,7 +568,17 @@ export class ForumService implements ForumBridge {
       if (reply) {
         const text = stepSummary(e.output, FORUM_LIMITS.agentText)
         if (!text) return
-        this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
+        const posted = this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
+        // AGENT-COLLAB.md: the answer of a woken agent that did not reply itself still answers the ask it was woken for
+        const root = this.store.message(posted.threadId ?? reply.messageId)
+        this.collab.noteReplied(member.id, root.seq)
+        if (root.kind === 'ask' && root.ask?.status === 'open' && root.ask.to.includes(member.id)) {
+          try {
+            this.answer(root.id, member.id, text, posted.id)
+          } catch {
+            /* it stays a reply */
+          }
+        }
         return
       }
       if (!taskId) return
@@ -561,9 +609,22 @@ export class ForumService implements ForumBridge {
       members: this.store.members(companyId, { includeRemoved: true }),
       channels,
       presence: this.presenceOf(companyId),
-      openAsks: this.store.openAsks(companyId).length,
+      // asks between agents are their conversation (AGENT-COLLAB.md), not something the owner must answer
+      openAsks: this.store.openAsks(companyId).filter((m) => m.ask?.to.some((id) => this.store.member(id)?.kind !== 'agent')).length,
       openProposals: this.store.openProposals(companyId).length
     }
+  }
+
+  // ---------- agent conversations (AGENT-COLLAB.md §5) ----------
+
+  collabState(companyId: string): CollabState {
+    this.assertEnabled()
+    this.store.sync(companyId)
+    return this.collab.state(companyId)
+  }
+  runConversation(runId: string): RunConversation {
+    this.assertEnabled()
+    return this.collab.forRun(runId)
   }
 
   /** The viewer on this Mac: the company owner. */

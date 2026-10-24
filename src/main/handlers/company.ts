@@ -6,6 +6,9 @@ import { baseChildEnv } from '../loginEnv'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { registerPassportStubs } from './passportStubs'
+import { BrowserWindow, dialog, nativeImage } from 'electron'
+import type { CompanyPassport } from '../../shared/company'
+import { CompanyLogoStore, type Shrink } from '../company/logoStore'
 /** The departments store the handlers write through (one per Hive; stateless over the same db as h.company). */
 const deptStores=new WeakMap<Hive,DepartmentStore>()
 export function departmentStoreFor(h: Hive): DepartmentStore {
@@ -38,6 +41,28 @@ export function createTaskGuarded(h: Hive, task: CompanyTaskInput): BoardTask {
   if(!boardOff) departmentStoreFor(h).assertTaskCreate(task)
   return h.company.createTask(task)
 }
+/** Electron's decoder for the big rasters (png/jpeg); anything it cannot read is stored as it is. */
+const shrinkImage: Shrink = (buf, _ext, max) => {
+  const img = nativeImage.createFromBuffer(buf)
+  if (img.isEmpty()) return null
+  const { width, height } = img.getSize()
+  if (Math.max(width, height) <= max) return null
+  const small = width >= height ? img.resize({ width: max, quality: 'best' }) : img.resize({ height: max, quality: 'best' })
+  return { buf: small.toPNG(), ext: 'png' }
+}
+const logoStores=new WeakMap<Hive,CompanyLogoStore>()
+/** The company logos (rail coin, sidebar chips): copies in `<userData>/companies/<slug>/logo/`. */
+export function logoStoreFor(h: Hive): CompanyLogoStore {
+  let s=logoStores.get(h)
+  if(!s){
+    s=new CompanyLogoStore(h.company.scope.companiesRoot,{
+      reposOf:(c)=>c.repoIds.map(id=>h.store.getRepo(id)).filter(r=>!!r&&r.exists).map(r=>({name:r!.name,path:r!.path})),
+      shrink:shrinkImage
+    })
+    logoStores.set(h,s)
+  }
+  return s
+}
 export function registerCompanyHandlers(h: Hive): void {
   const c=h.company
   const changed=(domain:'company'|'tasks'|'departments')=>emit('data:changed',{domain})
@@ -61,6 +86,26 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('company:reorder',({ids})=>{const list=c.reorder(ids);changed('company');return list})
   handle('company:assignRepo',({repoId,companyId})=>{const p=c.assignRepo(repoId,companyId);changed('company');emit('data:changed',{domain:'repos'});return p})
   handle('company:overview',()=>c.overview())
+  const logos=logoStoreFor(h)
+  handle('company:logos',()=>logos.list(c.listPassports()))
+  handle('company:logoCandidates',({id})=>logos.candidates(c.passport(id)))
+  handle('company:setLogo',async({id,pick},sender)=>{
+    const co:CompanyPassport=c.passport(id)
+    let out
+    if(pick.kind==='candidate') out=logos.setCandidate(co,pick.path)
+    else if(pick.kind==='none') out=logos.setNone(co)
+    else if(pick.kind==='auto') out=logos.setAuto(co)
+    else if(pick.kind==='emblem') out=logos.setEmblem(co,pick.variant,pick.keepDetected===true)
+    else {
+      const win=BrowserWindow.fromWebContents(sender)
+      const opts:Electron.OpenDialogOptions={title:`Logo for ${co.name}`,buttonLabel:'Use as Logo',properties:['openFile'],filters:[{name:'Images',extensions:['svg','png','webp','jpg','jpeg','gif','ico']}]}
+      const r=win?await dialog.showOpenDialog(win,opts):await dialog.showOpenDialog(opts)
+      if(r.canceled||!r.filePaths[0]) return null
+      out=logos.setFile(co,r.filePaths[0])
+    }
+    changed('company')
+    return out
+  })
   registerPassportStubs()
   handle('company:export',({id})=>JSON.parse(h.vault.redact(JSON.stringify(c.exportPassport(id)))))
   handle('company:previewImport',({json})=>c.previewImport(json))

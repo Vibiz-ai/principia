@@ -1,7 +1,9 @@
 import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
 import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
+import type { CollabState, RunConversation } from './collab'
 import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
-import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyOverview, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
+import type { CompanyProposal, ProposalDecision } from './chatCompany'
+import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyLogo, CompanyOverview, LogoCandidate, LogoPick, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
 /**
  * Typed IPC contract between main and renderer. The ONLY bridge is `window.hive` (src/preload).
  * Channel naming: invoke `<domain>:<verb>`, fire-and-forget send `<domain>:<verb>`, events `evt:<name>`.
@@ -155,6 +157,12 @@ export interface InvokeMap {
   /** Future runs and sessions only. Refused with open tasks or anything live on the repo. companyId co_personal = unassign. */
   'company:assignRepo': [{ repoId: Id; companyId: Id }, CompanyPassport]
   'company:overview': [V, CompanyOverview[]]
+  /** Rail coin / chip logos of the listed companies (auto logos re-detect when their repositories changed). */
+  'company:logos': [V, CompanyLogo[]]
+  /** The picker grid: logo-like images found in the company's repositories, best first. */
+  'company:logoCandidates': [{ id: Id }, LogoCandidate[]]
+  /** Copies the pick into the company's app data. `file` opens the native dialog; null = the dialog was canceled. */
+  'company:setLogo': [{ id: Id; pick: LogoPick }, CompanyLogo | null]
   'company:export': [{id: string}, PassportExport]
   'company:previewImport': [{json: string}, PassportExport]
   'company:import': [{json: string; repoIds: string[]}, CompanyPassport]
@@ -235,6 +243,9 @@ export interface InvokeMap {
   'forum:revokeInvite': [{ inviteId: Id }, ForumInvite]
   'forum:acceptInvite': [{ code: string; name: string; handle?: string }, ForumMember]
   'forum:toTask': [{ messageId: Id; agentId?: Id | null }, { id: Id; identifier: string }]
+  /** AGENT-COLLAB.md §5: agent conversations of a company (Agent talk panel) and the Forum conversation of one run */
+  'forum:collab': [{ companyId: Id }, CollabState]
+  'forum:runConversation': [{ runId: Id }, RunConversation | null]
 
   'gateway:connect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:disconnect': [{ id: string }, import('./gateway').GatewayConnection]
@@ -413,6 +424,12 @@ export interface InvokeMap {
   'author:decide': [AuthorDecideRequest, AuthorDraft]
   'author:grants': [V, AuthorRunGrant[]]
   'author:revokeRun': [{ workflowId: Id; ownerKey: string }, V]
+  /** shared/chatCompany.ts: the open "start a company from this chat" cards. */
+  'chatCompany:list': [V, CompanyProposal[]]
+  /** Confirm (opens the onboarding in the renderer) or decline a card; the chat's waiting tool call gets the outcome. */
+  'chatCompany:decide': [ProposalDecision, CompanyProposal]
+  /** "New company from chat" (codex panes, or by hand): a card with nobody waiting on it. */
+  'chatCompany:open': [{ sessionId?: Id | null; name?: string; brief?: string }, CompanyProposal]
   'worktrees:list': [{ status?: RunWorktree['status'][] } | V, RunWorktree[]]
   'worktrees:remove': [{ id: Id; discardWork?: boolean }, RunWorktree]
   /** Local branches created while the run ran (any repo it touched) that are still there. */
@@ -582,6 +599,7 @@ export interface EventMap {
   'processes:changed': LeftoverProcess[]
   // authoring (CONTRACT §14.5)
   'author:updated': AuthorDraft
+  'chatCompany:updated': CompanyProposal
   'worktree:updated': RunWorktree
   'history:changed': { total: number }
   // Slack (CONTRACT "Slack.5")
@@ -717,7 +735,7 @@ export const INVOKE_CHANNELS = [
   'company:list', 'company:save', 'company:export', 'company:previewImport', 'company:import',
   'company:exportOpenPassport', 'company:previewOpenPassport', 'company:importOpenPassport', 'company:openPassportSync',
   'company:passportConnect', 'company:passportImport',
-  'company:create', 'company:update', 'company:archive', 'company:reorder', 'company:assignRepo', 'company:overview',
+  'company:create', 'company:update', 'company:archive', 'company:reorder', 'company:assignRepo', 'company:overview', 'company:logos', 'company:logoCandidates', 'company:setLogo',
   'tasks:previewGithub', 'tasks:list', 'tasks:create', 'tasks:update', 'tasks:get', 'tasks:start', 'tasks:comment',
   'departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets',
   'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
@@ -725,7 +743,7 @@ export const INVOKE_CHANNELS = [
   'board:autopilot',
   'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
   'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
-  'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask',
+  'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask', 'forum:collab', 'forum:runConversation',
   'gateway:connect', 'gateway:disconnect', 'gateway:list', 'gateway:save', 'gateway:remove', 'gateway:test',
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',
@@ -753,7 +771,7 @@ export const INVOKE_CHANNELS = [
   'agents:list', 'agents:get', 'agents:events', 'agents:reply', 'asks:list', 'asks:answer', 'app:dashboard',
   'app:markSeen', 'schedules:skipNext',
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
-  'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'worktrees:list',
+  'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
   'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
@@ -779,7 +797,7 @@ export const EVENT_NAMES = [
   'pty:data', 'pty:exit', 'session:updated', 'run:updated', 'run:step', 'run:output', 'artifact:added',
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
   'settings:changed', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
-  'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'worktree:updated', 'history:changed',
+  'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'chatCompany:updated', 'worktree:updated', 'history:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',
   'onboarding:progress', 'onboarding:cloneProgress', 'forum:event', 'cloud'
 ] as const satisfies readonly EventName[]

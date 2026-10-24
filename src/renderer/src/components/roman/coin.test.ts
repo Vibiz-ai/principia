@@ -80,8 +80,13 @@ describe('Medallion: the engraved coin (VOICE.md §5.6)', () => {
   })
 
   it('the Portfolio card coin marks Personal as "P" with no tessera, like the rail', () => {
+    // the card draws the shared CompanyCoin (logo-aware), which keeps Personal's "P"
     const src = readFileSync(join(__dirname, '../../views/PortfolioView.tsx'), 'utf8')
-    expect(src).toMatch(/<Medallion[^>]*initial=\{isPersonal\(c\) \? 'P' : undefined\}/)
+    expect(src).toMatch(/<CompanyCoin company=\{c\}/)
+    const rail = readFileSync(join(__dirname, '../../shell/CompanyRail.tsx'), 'utf8')
+    const coin = rail.slice(rail.indexOf('export function CompanyCoin'))
+    expect(coin).toMatch(/const personal = isPersonal\(company\)/)
+    expect(coin).toMatch(/<Medallion[^>]*initial=\{personal \? 'P' : undefined\}/)
   })
 
   it('working renders twelve 2-unit blue tiles on r 13.2 with a staggered index, and no ring', () => {

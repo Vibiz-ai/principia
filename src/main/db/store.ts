@@ -86,7 +86,11 @@ export const DEFAULT_SETTINGS: Settings = {
   experimental: { companies: false, vault: false, vaultAI: false },
   // VOICE.md §0
   tone: 'playful',
-  personas: true
+  personas: true,
+  // AGENT-COLLAB.md §2 (stored as given; collabSettings() clamps and fills the defaults)
+  agentCollab: {},
+  // AUTOPILOT.md §4 (UI bookkeeping)
+  autopilots: {}
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments stays absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
@@ -180,6 +184,7 @@ export class Store {
     s.experimental = { ...DEFAULT_EXPERIMENTAL, ...(s.experimental && typeof s.experimental === 'object' ? s.experimental : {}) }
     // never hand out the shared default object (a caller mutating it would change every later read)
     s.expandedCompanies = s.expandedCompanies && typeof s.expandedCompanies === 'object' && !Array.isArray(s.expandedCompanies) ? { ...s.expandedCompanies } : {}
+    s.autopilots = s.autopilots && typeof s.autopilots === 'object' && !Array.isArray(s.autopilots) ? { ...s.autopilots } : {}
     return s
   }
   updateSettings(patch: Partial<Settings>): Settings {
@@ -189,7 +194,9 @@ export class Store {
     this.db.transaction(() => {
       // experimental is patched flag by flag (settings:update sends only the flags it changes)
       const experimental = patch.experimental ? { ...this.getSettings().experimental, ...patch.experimental } : undefined
-      for (const [k, v] of Object.entries({ ...patch, ...(experimental ? { experimental } : {}) })) {
+      // AGENT-COLLAB.md: the collaboration guards are patched field by field too
+      const agentCollab = patch.agentCollab ? { ...(this.getSettings().agentCollab ?? {}), ...patch.agentCollab } : undefined
+      for (const [k, v] of Object.entries({ ...patch, ...(experimental ? { experimental } : {}), ...(agentCollab ? { agentCollab } : {}) })) {
         if (v === undefined || !(SETTINGS_KEYS as string[]).includes(k)) continue
         stmt.run(k, JSON.stringify(v))
       }

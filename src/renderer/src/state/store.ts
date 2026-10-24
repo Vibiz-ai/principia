@@ -16,8 +16,9 @@ import type {
   StatusSnapshot
 } from '@shared/types'
 import type { MemoryOverview } from '@shared/memory'
-import type { CompanyAgent, CompanyOverview, CompanyPassport, CompanyTask, Department, DepartmentPresetKey } from '@shared/company'
+import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, Department, DepartmentPresetKey } from '@shared/company'
 import { PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
+import type { CompanyProposal } from '@shared/chatCompany'
 import type { AgentNode as LiveAgent, Ask } from '@shared/live'
 import type { AuthorDraft } from '@shared/authoring'
 import { LAUNCH_STEP_LABELS, type CloneProgressEvent, type JournalMeta, type LaunchStepName, type OnboardingDraft, type OnboardingPlan, type OnboardingStatus, type ProgressEvent } from '@shared/onboarding'
@@ -37,6 +38,7 @@ import {
   receiveAgentPlan,
   reconcileLaunchDraft,
   reduceOnboarding,
+  type ChatSeed,
   type OnboardingAction,
   type OnboardingMode,
   type PlanInputContext
@@ -53,7 +55,7 @@ export type ViewState =
   /** DEPARTMENTS.md §9: the Board once departments are on. `taskId` selects a card, `departmentId` filters (BoardView). */
   | { name: 'tasks'; taskId?: Id; departmentId?: Id }
   /** DEPARTMENTS.md §9: department page (charter, passport section, agents, recurring, routing, filtered board). */
-  | { name: 'department'; id: Id; focus?: 'charter' | 'agents'; nonce?: number }
+  | { name: 'department'; id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }
   /** DEPARTMENTS.md §9: one agent seat (current task, queue, run history, instructions). */
   | { name: 'agentSeat'; id: Id }
   /** PASSPORT.md §10: the company vault (P7's view; the legacy Memory page until it ships). Always the active company. */
@@ -152,6 +154,12 @@ export interface State {
   companyError: string | null
   /** company:overview by company id (failed-24h dots, portfolio cards). Live badges come from agents/asks. */
   companyOverview: Record<Id, CompanyOverview>
+  /** company:logos by company id: the rail coin and chips show the logo instead of the initial (dataUrl null = initial). */
+  companyLogos: Record<Id, CompanyLogo>
+  /** shared/chatCompany.ts: open "start a company from this chat" cards (oldest first; the first one is shown). */
+  chatProposals: CompanyProposal[]
+  /** "Change Logo…" picker sheet: the company it is open for, null = closed. */
+  logoPickerFor: Id | null
   /** Company tasks (Tasks page), loaded with the companies. */
   tasks: CompanyTask[]
   /** DEPARTMENTS.md: every company's departments (archived included), loaded with the companies. Empty while the flag is off. */
@@ -219,6 +227,9 @@ const initial: State = {
   companiesLoaded: false,
   companyError: null,
   companyOverview: {},
+  companyLogos: {},
+  chatProposals: [],
+  logoPickerFor: null,
   tasks: [],
   departments: [],
   companyAgents: [],
@@ -395,6 +406,7 @@ export async function boot(): Promise<void> {
   hive.send('ui:ready', undefined)
   reconcileActiveCompany()
   void refreshCompanyOverview()
+  void refreshCompanyLogos()
   void refreshTasks()
   void refreshDepartments()
   // memory is optional: a failure here only hides the Review badge (the Memory page shows the real error)
@@ -404,6 +416,7 @@ export async function boot(): Promise<void> {
   void loadSlack()
   reportVisibleOwner()
   void detectOnboarding()
+  void loadChatProposals()
 }
 
 // ---------- memory ----------
@@ -460,6 +473,8 @@ function wireEvents(): void {
   })
   hive.on('data:changed', ({ domain }) => {
     if (domain === 'repos') void refreshRepos().catch(() => undefined)
+    // an auto logo re-detects when its company's repositories change (main compares the repo set)
+    if (domain === 'repos' || domain === 'company') scheduleCompanyLogos()
     if (domain === 'profiles') void refreshProfiles().catch(() => undefined)
     if (domain === 'company') {
       void refreshCompanies().then(reconcileActiveCompany, () => undefined)
@@ -479,6 +494,7 @@ function wireEvents(): void {
     if (a.kind !== 'subagent') scheduleCompanyOverview()
   })
   hive.on('ui:command', runCommand)
+  hive.on('chatCompany:updated', upsertChatProposal)
   // the page refetches its own data; the shell only keeps the overview (Review badge) fresh
   hive.on('memory:changed', () => scheduleMemoryOverview())
   wireOnboardingEvents()
@@ -1004,6 +1020,36 @@ export async function refreshCompanies(): Promise<CompanyPassport[]> {
     throw e
   }
 }
+/** Company logos (optional: a main without company:logos keeps the initials). */
+export async function refreshCompanyLogos(): Promise<void> {
+  try {
+    const list = await hive.company.logos()
+    setState({ companyLogos: Object.fromEntries(list.map((l) => [l.companyId, l])) })
+  } catch {
+    /* initials */
+  }
+}
+let logosTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleCompanyLogos(): void {
+  if (logosTimer) clearTimeout(logosTimer)
+  logosTimer = setTimeout(() => {
+    logosTimer = null
+    void refreshCompanyLogos()
+  }, 150)
+}
+export function openLogoPicker(companyId: Id): void {
+  setState({ logoPickerFor: companyId })
+}
+export function closeLogoPicker(): void {
+  setState({ logoPickerFor: null })
+}
+/** Applies a logo pick; returns the new logo, or null (canceled file dialog or an error, already toasted). */
+export async function setCompanyLogo(companyId: Id, pick: LogoPick): Promise<CompanyLogo | null> {
+  const res = await attempt(() => hive.company.setLogo({ id: companyId, pick }), 'Change logo')
+  if (!res) return null
+  setState({ companyLogos: { ...state.companyLogos, [companyId]: res } })
+  return res
+}
 export async function refreshTasks(): Promise<void> {
   try {
     setState({ tasks: await hive.tasks.list(), companyError: null })
@@ -1349,6 +1395,7 @@ export async function companyContextMenu(c: CompanyPassport): Promise<void> {
     { id: 'new', label: 'New Session…' },
     { type: 'separator' },
     { id: 'rename', label: 'Rename…' },
+    ...(personal ? [] : ([{ id: 'logo', label: 'Change Logo…' }] as NativeMenuItem[])),
     { label: 'Colour', submenu: COMPANY_COLORS.map((x) => ({ id: `color:${x.value}`, label: x.label, enabled: x.value !== c.color })) },
     { id: 'settings', label: 'Company Settings…' },
     { type: 'separator' },
@@ -1364,6 +1411,7 @@ export async function companyContextMenu(c: CompanyPassport): Promise<void> {
   if (id === 'enter') return void enterCompany(c.id)
   if (id === 'new') return void newSessionMenu(c.id)
   if (id === 'rename') return void window.dispatchEvent(new CustomEvent('hive:renameCompany', { detail: c.id }))
+  if (id === 'logo') return openLogoPicker(c.id)
   if (id.startsWith('color:')) return updateCompany(c.id, { color: id.slice(6) })
   if (id === 'settings') return void enterCompany(c.id, { view: { name: 'company', companyId: c.id, nonce: Date.now() } })
   if (id === 'passport') return openCompanyPassport(c.id)
@@ -1486,6 +1534,58 @@ function reconcileOpenDraft(status: OnboardingStatus | null): void {
   clearOnboardingDraft()
   setState({ onboarding: null })
   toast(`${status.journal?.companyName || 'Your business'} is already set up.`)
+}
+
+// ---------- "start a company from this chat" (shared/chatCompany.ts) ----------
+
+export async function loadChatProposals(): Promise<void> {
+  try {
+    const list = (await hive.chatCompany?.list?.()) ?? []
+    setState({ chatProposals: list.filter((p) => p.status === 'pending') })
+  } catch {
+    /* an older main: no cards */
+  }
+}
+/** chatCompany:updated: a pending card is shown (or refreshed); a decided one leaves. */
+export function upsertChatProposal(p: CompanyProposal): void {
+  setState((s) => {
+    const rest = s.chatProposals.filter((x) => x.id !== p.id)
+    return { chatProposals: p.status === 'pending' ? [...rest, p].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) : rest }
+  })
+}
+
+/**
+ * Why a confirmed chat card cannot open the onboarding now, or null. The flow is open, or a launch was started
+ * (a journal exists: Retry / Discard decide it first).
+ */
+export function chatSeedBlocker(): string | null {
+  if (state.onboarding?.open) return 'Finish or close the company setup that is open first.'
+  const saved = state.onboardingDraft ?? loadDraft(loadJson)
+  if (saved?.journalId && saved.step !== 'ready') return 'A company launch is waiting for Retry or Discard. Open + New company to finish it first.'
+  return null
+}
+/** A saved draft with answers would be replaced by the chat's (the card asks first). */
+export function hasSavedOnboarding(): boolean {
+  const saved = state.onboardingDraft ?? loadDraft(loadJson)
+  return !!saved && saved.step !== 'ready' && hasProgress(saved)
+}
+/** Opens the onboarding on a fresh "From a prompt" draft seeded from a confirmed chat card. false when blocked. */
+export function openOnboardingFromChat(seed: ChatSeed): boolean {
+  if (chatSeedBlocker()) return false
+  forgetDraftStash(state.onboardingDraft ?? loadDraft(loadJson))
+  cancelOnboardingPlan()
+  draftSaver.cancel()
+  const draft = reduceOnboarding(newDraft('new'), { type: 'seedFromChat', seed })
+  setState({
+    onboarding: { open: true, mode: 'new', resumable: false },
+    onboardingDraft: draft,
+    onboardingOffer: null,
+    newCompanyOpen: false,
+    onboardingProgress: { journalId: null, steps: {}, clone: null }
+  })
+  draftSaver.save(draft)
+  void refreshOnboardingStatus()
+  return true
 }
 
 /** Open the flow: resume the saved draft (its mode follows the entry point), else start a fresh one. */

@@ -14,6 +14,7 @@ import { StallMonitor, stallThresholdMs } from './live/stall'
 import { attachGateway } from '../gateway/attach'
 import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
 import { AUTHOR_TOOLS, authorAttachable } from './authoring'
+import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT } from '../../shared/chatCompany'
 import { join } from 'node:path'
 import { LIVE_HOOKS } from './live/attach'
 import { liveProcs } from './process'
@@ -426,7 +427,9 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           // department chat or task session adds the department slot (DEPARTMENTS.md §7)
           opts.companyId ? ctx.passportContext?.(opts.cwd ?? '', opts.companyId, opts.departmentId ?? null) ?? '' : opts.cwd ? ctx.passportContext?.(opts.cwd) ?? '' : '',
           // DEPARTMENTS.md §9: what this chat is told about the company's repos, departments, agents and tasks
-          opts.chatBrief?.trim() ?? ''
+          opts.chatBrief?.trim() ?? '',
+          // shared/chatCompany.ts: "start a new company from this chat" (claude: the tool; codex: the button)
+          authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : ''
         ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []

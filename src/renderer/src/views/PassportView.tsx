@@ -27,6 +27,7 @@ import {
   companyName,
   navigate,
   openCompanyPassport,
+  openLogoPicker,
   openNewCompany,
   refreshCompanies,
   toast,
@@ -314,13 +315,18 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
       <div className="passport-document-scroll">
         <div className="passport-document">
           <div className="passport-document-header">
-            <CompanyAvatar company={{ name: name || c.name, color: c.color }} size={58} className="cs-avatar" />
+            <CompanyAvatar company={{ id: c.id, name: name || c.name, color: c.color }} size={58} className="cs-avatar" />
             <div>
               <div className="passport-eyebrow">
                 COMPANY SETTINGS {personal && <span>RESERVED</span>}
               </div>
               <h1>{companyLabel(c, true)}</h1>
               <p>{dirty ? 'Unsaved changes' : c.updatedAt ? `Updated ${relative(c.updatedAt)}` : ''}</p>
+              {!personal && (
+                <button type="button" className="link-btn cs-logo-btn" onClick={() => openLogoPicker(c.id)}>
+                  Change logo…
+                </button>
+              )}
             </div>
             <div className="passport-context-meter" title={`${filled} of 7 profile fields filled`}>
               <strong>

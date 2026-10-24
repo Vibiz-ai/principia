@@ -47,6 +47,7 @@ import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, 
 import { isBoardTool, isCompanyTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
+import { isChatCompanyTool } from '../../shared/chatCompany'
 
 export const RATE_PER_MIN = 60
 export const MAX_PENDING_PER_OWNER = 5
@@ -119,6 +120,11 @@ export interface BrokerDeps {
     alertUserId(): string | null
     channelName(id: string): string
   }
+  /**
+   * shared/chatCompany.ts: `principia_propose_company` (interactive chat sessions only). Opens the confirmation card
+   * and waits for the founder's decision. Absent = the tool is unknown.
+   */
+  proposals?: { propose(sessionId: Id, args: Record<string, unknown>, signal: AbortSignal): Promise<object> }
   now?: () => number
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>
 }
@@ -195,6 +201,22 @@ export class AuthorBroker {
         .then(() => this.taskCall(owner, tool, args, line))
         .then((result) => answer({ ok: true, result }))
         .catch((e: unknown) => answer({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      return
+    }
+    // "Start a company from this chat": a session owner only; the card waits for the founder (nothing is created here)
+    if (isChatCompanyTool(tool)) {
+      if (!('sessionId' in owner) || !this.d.proposals) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const ac = new AbortController()
+      this.calls.set(key, ac)
+      this.d.proposals
+        .propose(owner.sessionId, isObj(line.args) ? line.args : {}, ac.signal)
+        .then((result) => {
+          if (!ac.signal.aborted) answer({ ok: true, result })
+        })
+        .catch((e: unknown) => {
+          if (!ac.signal.aborted) answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+        })
       return
     }
     // SLACK.md §11.4: the work toolset rides on the same handler (it decides from the owner: Slack-triggered steps only)

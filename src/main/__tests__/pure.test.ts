@@ -398,6 +398,16 @@ dbd('company stamping guards (COMPANY.md §6, experimental.companies)', () => {
     expect(w.store.getSettings()).toMatchObject({ activeCompanyId: w.acme.id, expandedCompanies: { [w.beta.id]: false }, experimental: { companies: false, vault: true, vaultAI: true } })
     expect(w.store.companyGuardsEnforced()).toBe(false)
   })
+  it('settings: autopilots default to {} and persist per company', () => {
+    const w = world()
+    expect(w.store.getSettings().autopilots).toEqual({})
+    const rec = { enabledAt: '2026-10-24T09:00:00Z', paused: true, steps: { triage: { scheduleId: 'sch_1' } }, publish: [] }
+    w.store.updateSettings({ autopilots: { [w.acme.id]: { company: rec } } })
+    expect(w.store.getSettings().autopilots).toEqual({ [w.acme.id]: { company: rec } })
+    // reads never share the stored object
+    w.store.getSettings().autopilots![w.acme.id] = {}
+    expect(w.store.getSettings().autopilots![w.acme.id]).toEqual({ company: rec })
+  })
   it('settings reads never share the default expandedCompanies object', () => {
     const w = world()
     const first = w.store.getSettings()
@@ -500,6 +510,15 @@ describe('IPC schemas for the company and Passport channels (COMPANY.md §7, PAS
     expect(ok('settings:update', { expandedCompanies: { co_abc: true } })).toBe(true)
     expect(ok('settings:update', { experimental: { vault: true } })).toBe(true)
     expect(ok('settings:update', { experimental: { warp: true } })).toBe(false)
+  })
+  it('settings: autopilots bookkeeping (AUTOPILOT.md §4)', () => {
+    const rec = { enabledAt: '2026-10-24T09:00:00Z', paused: false, steps: { seo_report: { scheduleId: 'sch_abc123' }, competitors: { scheduleId: 'sch_def456', workflowId: 'wf_x1' } }, publish: ['linkedin'] }
+    expect(ok('settings:update', { autopilots: { co_abc: { marketing: rec } } })).toBe(true)
+    expect(ok('settings:update', { autopilots: {} })).toBe(true)
+    expect(ok('settings:update', { autopilots: { co_abc: { sales: rec } } })).toBe(false) // unknown autopilot
+    expect(ok('settings:update', { autopilots: { co_abc: { marketing: { ...rec, publish: ['myspace'] } } } })).toBe(false)
+    expect(ok('settings:update', { autopilots: { co_abc: { marketing: { ...rec, steps: { seo_report: { scheduleId: '../x' } } } } } })).toBe(false)
+    expect(ok('settings:update', { autopilots: { co_abc: { marketing: { ...rec, token: 'x' } } } })).toBe(false) // strict
   })
   it('memory:note: vault-relative paths only, note ids, op-specific fields', () => {
     expect(ok('memory:note', { op: 'get', companyId: 'co_a', path: 'People/Ana Ruiz.md' })).toBe(true)

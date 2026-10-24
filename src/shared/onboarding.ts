@@ -466,7 +466,15 @@ export const DraftSchema = z
     /** §2 S0 (new company): how the founder chose to start; absent = guided (drafts from before the choice). */
     start: z.enum(START_MODES).optional(),
     /** "From a prompt": the pasted brief, kept until launch (it seeds the Passport). */
-    brief: z.string().max(BRIEF_MAX).optional()
+    brief: z.string().max(BRIEF_MAX).optional(),
+    /**
+     * shared/chatCompany.ts: started from a chat. `logo`: the generated emblem set once the launch is done
+     * (`keepDetected`: only when the repo has no logo of its own); null = keep the initial / the detected logo.
+     */
+    fromChat: z
+      .object({ proposalId: short(64), logo: z.object({ variant: z.enum(['arch', 'ring', 'tablet']), keepDetected: z.boolean() }).strict().nullable() })
+      .strict()
+      .optional()
   })
   .strict()
 export type OnboardingDraft = z.infer<typeof DraftSchema>

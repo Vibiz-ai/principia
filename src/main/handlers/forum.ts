@@ -99,5 +99,13 @@ export function registerForumHandlers(h: Hive): void {
     return s.store.revokeInvite(meOf(row.company_id), inviteId)
   })
   handle('forum:acceptInvite', (req) => svc().store.acceptInvite(req))
+  handle('forum:collab', ({ companyId }) => svc().collabState(companyId))
+  handle('forum:runConversation', ({ runId }) => {
+    const s = h.forum
+    if (!s || !s.enabled()) return null
+    const run = h.db.prepare('SELECT company_id FROM runs WHERE id=?').get(runId) as { company_id: string | null } | undefined
+    if (!run?.company_id) return null
+    return s.runConversation(runId)
+  })
   handle('forum:toTask', ({ messageId, agentId }) => svc().toTask(messageId, meOf(messageCompany(messageId)), agentId ?? null))
 }

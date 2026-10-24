@@ -5,6 +5,7 @@
  */
 
 import type { MemoryMode, MemoryTransport } from './memory'
+import type { AgentCollabSettings } from './collab'
 import type { AgentEvent, AgentNode as LiveAgentNode, Ask } from './live'
 import type { NotifySlackTarget, SlackRunContext, SlackTrigger } from './slack'
 
@@ -585,6 +586,13 @@ export interface Settings {
   tone?: 'playful' | 'plain'
   /** VOICE.md §0: "Agent names and busts". Off shows the role label and the department-colour initial. Absent = true. */
   personas?: boolean
+  /** AGENT-COLLAB.md §2: agents asking agents and its guards. Absent fields = DEFAULT_AGENT_COLLAB (src/shared/collab.ts). */
+  agentCollab?: Partial<AgentCollabSettings>
+  /**
+   * AUTOPILOT.md §4: per company, what each enabled autopilot created (its schedules and workflows), so Pause and Remove
+   * act on exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.
+   */
+  autopilots?: Record<Id, import('./autopilot').CompanyAutopilots>
 }
 export interface ExperimentalFlags {
   /** company guards throw (on) or warn and still stamp (off) */

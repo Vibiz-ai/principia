@@ -52,7 +52,7 @@ const ROUTABLE_SOURCES: TaskSource[] = ['github', 'sentry', 'posthog', 'slack']
 /** cool accents only (VOICE.md §5: no orange, amber or brown) */
 const COLORS = ['var(--accent)', 'var(--series-2)', 'var(--status-success)', 'var(--status-scheduled)', 'var(--status-idle)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
 
-export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter' | 'agents'; nonce?: number }): React.JSX.Element {
+export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }): React.JSX.Element {
   const dep = useStore((s) => departmentById(id, s))
   const allAgents = useStore((s) => s.companyAgents)
   const tasks = useStore((s) => s.tasks)

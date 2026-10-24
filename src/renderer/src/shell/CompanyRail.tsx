@@ -11,6 +11,7 @@ import { Medallion } from '../components/roman'
 import { companiesHealth } from '../lib/agentHealth'
 import { t } from '../lib/voice'
 import { nativeMenu } from '../lib/hive'
+import { useCompanyLogoUrl, useLogoFit } from '../lib/logo'
 import { companyInitials, companyLabel, isPersonal, useCompanyBadges, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
 import {
   activeCompany,
@@ -32,7 +33,19 @@ import {
 
 const COMPANY_DRAG_TYPE = 'application/x-principia-company'
 
-export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'>; size?: number; className?: string }): React.JSX.Element {
+/**
+ * The company's square chip (sidebar group header, chips, settings). With a logo (company:logos) the logo fills the
+ * chip: cropped when it paints its own ground, inset on the dark surface when it is light, on white when it is dark.
+ */
+export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'> & { id?: Id }; size?: number; className?: string }): React.JSX.Element {
+  const logo = useCompanyLogoUrl(company.id)
+  const fit = useLogoFit(logo)
+  if (logo)
+    return (
+      <span className={`co-avatar co-avatar--logo co-avatar--${fit ?? 'plain'} ${className}`} style={{ width: size, height: size }} aria-hidden>
+        <img src={logo} alt="" draggable={false} />
+      </span>
+    )
   return (
     <span
       className={`co-avatar ${className}`}
@@ -85,10 +98,14 @@ export function badgeTitle(name: string, b: CompanyBadge | undefined, laurel = f
  */
 export function RailCoin({ company, badge, healthy, size = 32 }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system'>; badge: CompanyBadge | undefined; healthy: boolean; size?: number }): React.JSX.Element {
   const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
   return (
     <span className="rail__coin" aria-hidden>
       <Medallion
         name={company.name}
+        logo={logo}
+        logoFit={fit}
         color={company.color || undefined}
         size={size}
         initial={personal ? 'P' : undefined}
@@ -287,7 +304,7 @@ function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: Com
     <div className="rail-pop" style={{ top: Math.min(top, window.innerHeight - 260) }} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={company.name}>
       <div className="rail-pop__head">
         <span className="rail__coin" aria-hidden>
-          <Medallion name={company.name} color={company.color || undefined} size={18} initial={isPersonal(company) ? 'P' : undefined} />
+          <CompanyCoin company={company} />
         </span>
         <span className="rail-pop__name">{companyLabel(company, true)}</span>
       </div>
@@ -305,6 +322,14 @@ function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: Com
       {items.length > shown.length && <div className="rail-pop__more">{items.length - shown.length} more</div>}
     </div>
   )
+}
+
+/** A company's coin with its logo (popover head, Portfolio cards); Personal keeps its "P". */
+export function CompanyCoin({ company, size = 18, laurel = false }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system'>; size?: number; laurel?: boolean }): React.JSX.Element {
+  const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
+  return <Medallion name={company.name} color={company.color || undefined} size={size} laurel={laurel} initial={personal ? 'P' : undefined} logo={logo} logoFit={fit} />
 }
 
 function RailRename({ company, top, onDone }: { company: CompanyPassport | undefined; top: number; onDone: () => void }): React.JSX.Element | null {

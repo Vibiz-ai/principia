@@ -8,6 +8,7 @@ import { LeftoverList, useLeftovers } from '../components/agents/LimitBits'
 import { ActivityCharts } from '../components/home/ActivityCharts'
 import { ComingUpList, HomeGreeting, LearnedList, MorningBrief, NeedsYouEmpty, NeedsYouHeader, RunCardView, SenateBriefing } from '../components/home/DashboardParts'
 import { MilestoneStrip } from '../components/home/MilestoneStrip'
+import { SetupChecklist } from '../components/home/SetupChecklist'
 import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
 import { CloudNeedsYou } from '../components/cloud/NeedsYou'
 import { ClaudeHistorySection } from '../components/home/ClaudeHistory'
@@ -268,6 +269,9 @@ export function HomeView(): React.JSX.Element {
               )}
               {/* CLOUD.md §0.1: one inbox. Cloud asks and passport facts; nothing when this Mac has no cloud */}
               <CloudNeedsYou companyId={scope ?? undefined} />
+
+              {/* AUTOPILOT.md §2: the setup checklist of a focused business, from real state; leads to the autopilots */}
+              {milestones && scope && <SetupChecklist companyId={scope} />}
 
               {/* one Latin phrase per screen (VOICE.md §1): with Otium on the empty Needs you above, the digest stays plain */}
               {briefing && scope && <SenateBriefing companyId={scope} since={pinnedSince.current ?? data.lastSeenAt ?? data.since} latin={needsTotal > 0} />}

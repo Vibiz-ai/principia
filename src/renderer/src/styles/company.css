@@ -196,6 +196,7 @@
 
 /* Company settings */
 .cs-avatar { border-radius: var(--radius-lg) !important; }
+.cs-logo-btn { font-size: var(--text-xs); margin-top: 2px; }
 .cs-colors { display: flex; gap: 8px; }
 .cs-color { width: 24px; height: 24px; border-radius: var(--radius-sm); border: 2px solid transparent; padding: 0; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
 .cs-color.is-on { border-color: var(--text-primary); }
@@ -226,3 +227,43 @@
 .op-import-preview { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .op-import-preview strong { color: var(--text-primary); font-weight: 600; }
 .op-import-preview small { display: block; color: var(--text-tertiary); font-size: 10px; }
+
+/* "Change Logo…" picker: line-art tiles on dark (white hairlines, no colour fields) */
+.logo-pick { display: flex; flex-direction: column; gap: 14px; }
+.logo-pick__now { display: flex; align-items: center; gap: 12px; }
+.logo-pick__now-text { min-width: 0; }
+.logo-pick__now-title { font-weight: var(--weight-semibold); }
+.logo-pick__now-sub { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 440px; }
+.logo-pick__empty { padding: 28px 8px; text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); }
+.logo-pick__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; max-height: 340px; overflow-y: auto; padding: 2px; }
+.logo-pick__item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px 8px; border-radius: var(--radius-md); border: 1px solid var(--border); background: transparent; color: var(--text-primary); cursor: default; min-width: 0; }
+.logo-pick__item:hover { border-color: rgba(255, 255, 255, 0.28); }
+.logo-pick__item.is-sel { border-color: rgba(255, 255, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85); }
+.logo-pick__img { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 0 4px var(--surface-2), 0 0 0 5px rgba(255, 255, 255, 0.12); overflow: hidden; background: rgba(255, 255, 255, 0.04); }
+.logo-pick__img img { width: 74%; height: 74%; object-fit: contain; pointer-events: none; }
+.logo-pick__img--fill img { width: 100%; height: 100%; object-fit: cover; }
+.logo-pick__img--backed { background: rgba(255, 255, 255, 0.94); }
+.logo-pick__name { font-size: var(--text-xs); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logo-pick__meta { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -4px; }
+.logo-pick__actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* "Create <Name> from this chat?" (ChatCompanyCard.tsx): white line art, no warm colours */
+.chat-co { display: flex; flex-direction: column; gap: 12px; }
+.chat-co__lead { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
+.chat-co__strong { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.chat-co__field { display: flex; flex-direction: column; gap: 5px; }
+.chat-co__label { font-size: var(--text-xs); color: var(--text-secondary); min-width: 44px; }
+textarea.input.chat-co__brief { height: 160px; min-height: 96px; max-height: 300px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; }
+.chat-co__row { display: flex; align-items: center; gap: 12px; }
+.chat-co__row--top { align-items: flex-start; }
+.chat-co__row--top .chat-co__label { padding-top: 6px; }
+.chat-co__repo { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text-primary); }
+.chat-co__logos { display: flex; gap: 8px; flex-wrap: wrap; }
+.chat-co__logo { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 8px 6px; border-radius: var(--radius-md); border: 1px solid var(--border); background: transparent; color: var(--text-primary); cursor: default; }
+.chat-co__logo:hover { border-color: rgba(255, 255, 255, 0.28); }
+.chat-co__logo.is-sel { border-color: rgba(255, 255, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85); }
+.chat-co__logo .logo-pick__img { width: 52px; height: 52px; }
+.chat-co__logo-name { font-size: 10px; color: var(--text-secondary); }
+.chat-co__initial { font-family: Cinzel, 'Trajan Pro', Georgia, serif; font-weight: 600; font-size: 22px; color: rgba(255, 255, 255, 0.92); }
+.chat-co__note { font-size: var(--text-xs); margin-top: -4px; }
+.chat-co__foot { font-size: var(--text-xs); }

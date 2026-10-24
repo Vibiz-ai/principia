@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { Loading, Toolbar } from './components/ui'
 import { CommandPalette } from './shell/CommandPalette'
 import { CompanyRail, CompanySwitchToast, NewCompanySheet } from './shell/CompanyRail'
+import { LogoPickerSheet } from './components/LogoPicker'
+import { ChatCompanyCardHost } from './components/ChatCompanyCard'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
 import { Sidebar } from './shell/Sidebar'
@@ -136,6 +138,8 @@ export function App(): React.JSX.Element {
       <MilestoneWatcher />
       <CompanySwitchToast />
       <NewCompanySheet />
+      <LogoPickerSheet />
+      <ChatCompanyCardHost />
       <OnboardingFlow />
     </div>
   )

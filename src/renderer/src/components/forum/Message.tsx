@@ -179,16 +179,27 @@ export function AskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
   if (!ask) return null
   const canAnswer = ask.status === 'open' && !!ctx.me && (ctx.me.role === 'owner' || ctx.me.role === 'admin' || ask.to.includes(ctx.me.id))
   const author = ctx.display(m.authorId)
+  // AGENT-COLLAB.md §5: an agent asking agents is their conversation, not a Needs-you card
+  const agentToAgent = author?.kind === 'agent' && ask.to.length > 0 && ask.to.every((id) => ctx.display(id)?.kind === 'agent')
+  const targets = ask.to.map((id) => ctx.display(id)).filter((d): d is NonNullable<typeof d> => !!d)
   const go = async (a: string) => {
     setBusy(true)
     await ctx.answer(m, a)
     setBusy(false)
   }
   return (
-    <div className={`fm-ask ${ask.status === 'open' ? 'is-open' : 'is-answered'}`}>
+    <div className={`fm-ask ${ask.status === 'open' ? 'is-open' : 'is-answered'} ${agentToAgent ? 'fm-ask--agents' : ''}`}>
       <div className="fm-ask__kicker">
-        <span className={`fm-tessera ${ask.status === 'open' ? 'fm-tessera--needs' : 'fm-tessera--ok'}`} aria-hidden />
-        <span>{ask.status === 'open' ? 'Needs you · ask' : 'Answered'}</span>
+        <span className={`fm-tessera ${ask.status === 'open' ? (agentToAgent ? 'fm-tessera--working' : 'fm-tessera--needs') : 'fm-tessera--ok'}`} aria-hidden />
+        {agentToAgent ? (
+          <span className="fm-ask__route" title="One agent asked another; the asked agent was woken to answer in this thread">
+            Agent ask · {author?.name}
+            {author?.role ? ` (${author.role})` : ''} → {targets.map((t) => `${t.name}${t.role ? ` (${t.role})` : ''}`).join(', ')}
+            {ask.status === 'open' ? ' · answering' : ' · answered'}
+          </span>
+        ) : (
+          <span>{ask.status === 'open' ? 'Needs you · ask' : 'Answered'}</span>
+        )}
         {ask.taskId && <span className="fm-ask__park">{ask.status === 'open' ? 'parks its task until answered' : 'its task resumed'}</span>}
       </div>
       <div className="fm-ask__q">
@@ -217,7 +228,7 @@ export function AskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
       )}
       <div className="fm-ask__foot">
         Asked {ask.to.map((id) => `@${ctx.display(id)?.handle ?? '?'}`).join(', ')}
-        {ask.status === 'open' && author?.kind === 'agent' ? ` · ${author.name} resumes with your answer` : ''}
+        {ask.status === 'open' && author?.kind === 'agent' ? (agentToAgent ? ` · ${targets.map((t) => t.name).join(', ')} was woken to answer; you can answer too` : ` · ${author.name} resumes with your answer`) : ''}
       </div>
     </div>
   )

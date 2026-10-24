@@ -33,6 +33,42 @@ export interface CompanyPassport extends CompanyPassportInput {
   /** DEPARTMENTS.md §3: tasks in flight at once across the company's agents. Absent = DEFAULT_MAX_IN_FLIGHT. */
   maxInFlight?: number
 }
+/**
+ * The company's logo on the rail coin and the sidebar chips. Detected from the company's repositories (public/,
+ * app/icon.*, logo*.svg, manifest icons…) or picked by hand; the image is copied into
+ * `<userData>/companies/<slug>/logo/`, never read from the repo afterwards. `manual` and `none` (Use initials) are
+ * never overridden by a later detection; `auto` re-detects when the company's repositories change.
+ */
+export type CompanyLogoSource = 'auto' | 'manual' | 'none'
+export interface CompanyLogo {
+  companyId: string
+  source: CompanyLogoSource
+  /** data: URL of the stored copy; null = the initial letter */
+  dataUrl: string | null
+  /** where the image came from, repo-relative ("vibiz/public/logo.svg") or the picked file's name */
+  origin: string | null
+  updatedAt: string | null
+}
+/** One image found in a repository, for the picker grid. `path` is what company:setLogo takes back. */
+export interface LogoCandidate {
+  path: string
+  /** "<repo name>/<path inside the repo>" */
+  label: string
+  dataUrl: string
+  width: number | null
+  height: number | null
+  score: number
+  /** confident enough to be used without asking */
+  confident: boolean
+}
+/** company:setLogo: a detected candidate, a file from the open dialog, the initials, or back to automatic detection. */
+export type LogoPick =
+  | { kind: 'candidate'; path: string }
+  | { kind: 'file' }
+  | { kind: 'none' }
+  | { kind: 'auto' }
+  /** the generated line-art monogram (shared/chatCompany.ts emblemSvg); keepDetected: only when no logo was found */
+  | { kind: 'emblem'; variant: 'arch' | 'ring' | 'tablet'; keepDetected?: boolean }
 export interface PassportExport { format: 'principia-passport'; version: 1; passport: Omit<CompanyPassportInput, 'repoIds' | 'vaultPath'> }
 /** company:create. Profile fields default to empty. */
 export type CompanyCreateInput = { name: string; color?: string; vaultPath?: string | null; repoIds?: string[] } & Partial<Record<typeof PROFILE_FIELDS[number], string>>

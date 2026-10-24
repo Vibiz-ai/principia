@@ -10,7 +10,7 @@ import type { CompanyOverview, CompanyPassport } from '@shared/company'
 import type { Run } from '@shared/types'
 import { CompanyChip } from '../components/CompanyChip'
 import { Button, RelativeTime, SectionHeader, StatusGlyph, Toolbar, useTick } from '../components/ui'
-import { companyLabel, EMPTY_BADGE, isPersonal, reposOf, taskCountsLine, useCompanyBadges, useLiveItems, useTaskCounts, type CompanyBadge, type LiveItem, type TaskCounts } from '../lib/company'
+import { companyLabel, EMPTY_BADGE, reposOf, taskCountsLine, useCompanyBadges, useLiveItems, useTaskCounts, type CompanyBadge, type LiveItem, type TaskCounts } from '../lib/company'
 import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
 import { CloudNeedsYou, useCloudNeedsCount } from '../components/cloud/NeedsYou'
 import { runTitle } from '../lib/format'
@@ -18,9 +18,9 @@ import { runVisual } from '../lib/graph'
 import { hive, useHiveEvent } from '../lib/hive'
 import { lastRunsByCompany, missionLine, statusLine } from '../lib/scope'
 import { useCoalesced } from '../lib/useThrottled'
-import { CompanyBadgeMark, railLaurel } from '../shell/CompanyRail'
+import { CompanyBadgeMark, CompanyCoin, railLaurel } from '../shell/CompanyRail'
 import { companiesHealth } from '../lib/agentHealth'
-import { Medallion, MosaicEmpty, PassportTablet } from '../components/roman'
+import { MosaicEmpty, PassportTablet } from '../components/roman'
 import { NeedsYouEmpty } from '../components/home/DashboardParts'
 import { t, useTone } from '../lib/voice'
 import { companyContextMenu, departmentsOn, enterCompany, multiCompany, navigate, newSessionMenu, openBoard, openCompanyPassport, openLiveItem, openNewCompany, useStore } from '../state/store'
@@ -141,7 +141,7 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
       <header className="pcard__head">
         {/* VOICE.md §5.6: the engraved coin at 36. The name button beside it is the accessible name; the laurel's meaning is in the visible text too */}
         <span className="pcard__coin" aria-hidden="true" title={laurel ? t.sr('rail.laurel.sr') : undefined}>
-          <Medallion name={c.name} color={c.color} size={36} laurel={laurel} initial={isPersonal(c) ? 'P' : undefined} />
+          <CompanyCoin company={c} size={36} laurel={laurel} />
         </span>
         <div className="pcard__title">
           <button type="button" className="pcard__name link-btn" onClick={() => void enterCompany(c.id)} title={`Enter ${c.name}`}>

@@ -478,6 +478,21 @@ export type OnboardingAction =
   /** Opened from a failed or running journal on boot (§7.4). */
   | { type: 'resumeJournal'; journalId: string; status: 'failed' | 'running'; name?: string }
   | { type: 'setMode'; mode: OnboardingMode }
+  /**
+   * shared/chatCompany.ts: a fresh draft started from a chat's confirmed card: "From a prompt" on the Brief step with
+   * the brief filled in. A repo folder or clone link puts it on the code branch (its scan and repo ride to launch).
+   */
+  | { type: 'seedFromChat'; seed: ChatSeed }
+
+/** What a confirmed chat card hands the onboarding (renderer lib/chatCompany.ts builds it). */
+export interface ChatSeed {
+  proposalId: string
+  name: string
+  brief: string
+  repo?: DraftRepo
+  github?: DraftGithub
+  logo: { variant: 'arch' | 'ring' | 'tablet'; keepDetected: boolean } | null
+}
 
 const MAX_HISTORY = 32
 
@@ -547,6 +562,27 @@ export function reduceOnboarding(d: OnboardingDraft, a: OnboardingAction): Onboa
       void _g
       void _s
       return { ...rest, start: 'prompt', hasCode: false, repos: [], answers: { ...d.answers, goals: cleanGoals(d.answers.goals, false) } }
+    }
+    case 'seedFromChat': {
+      // only onto a draft with nothing in it (the store starts a fresh one)
+      if (d.step !== 'start' || hasProgress(d)) return d
+      const sd = a.seed
+      const repo = sd.repo && sd.repo.kind === 'local' && sd.repo.path.startsWith('/') ? sd.repo : undefined
+      const github = !repo && sd.github && githubReady(sd.github) ? { ...sd.github, ...(sd.github.url ? { url: withoutUserinfo(sd.github.url) } : {}) } : undefined
+      const hasCode = !!repo || !!github
+      const next: OnboardingDraft = {
+        ...d,
+        start: 'prompt',
+        step: 'brief',
+        history: ['start'],
+        hasCode,
+        repos: repo ? [repo] : [],
+        brief: sd.brief.slice(0, BRIEF_MAX),
+        answers: mergeAnswers(d.answers, sd.name.trim() ? { name: sd.name.trim() } : {}, hasCode),
+        fromChat: { proposalId: sd.proposalId.slice(0, 64), logo: sd.logo }
+      }
+      if (github) next.github = github
+      return next
     }
     case 'setBrief':
       if (launching) return d

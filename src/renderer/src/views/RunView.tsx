@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CollabWake, RunConversation } from '@shared/collab'
+import '../styles/agentTalk.css'
 import type { Artifact, RunDetail, RunStep, RunWorktree } from '@shared/types'
 import type { AgentNode } from '@shared/live'
 import { AgentGlyph, Elapsed, NeedsBadge } from '../components/agents/AgentBits'
@@ -199,6 +201,7 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
           {run.reason && (isNothingToDo(run) ? <div className="callout callout--quiet selectable">Nothing to do · {run.reason}</div> : <div className="callout callout--failed selectable">{run.reason}</div>)}
           {run.worktree && <WorktreeChip wt={run.worktree} />}
           <RunSlackDrafts runId={run.id} />
+          <RunForumConversation runId={run.id} active={active} />
           <div className="run__label">Steps</div>
           {steps.length === 0 && <div className="text-tertiary run__pad">{active ? 'Starting…' : 'No steps recorded.'}</div>}
           {steps.map((s) => {
@@ -527,6 +530,57 @@ function SlackProvenance({ ctx }: { ctx: SlackRunContext }): React.JSX.Element {
     >
       <Icon name="slack" size={11} /> Slack · {ctx.isDm ? `DM with ${ctx.userName}` : `${ctx.channelName.startsWith('#') ? '' : '#'}${ctx.channelName} · ${ctx.userName}`}
     </button>
+  )
+}
+
+/** AGENT-COLLAB.md §5: the conversation this run had with other agents in the Forum (asked, was asked, posted). */
+function RunForumConversation({ runId, active }: { runId: string; active: boolean }): React.JSX.Element | null {
+  const [conv, setConv] = useState<RunConversation | null>(null)
+  const load = useCallback(() => {
+    hive.forum.runConversation({ runId }).then(setConv, () => setConv(null))
+  }, [runId])
+  useEffect(() => load(), [load])
+  // live while the run is going (its asks get answered, its posts land)
+  useHiveEvent('forum:event', (e) => {
+    if (active && e.kind === 'message') load()
+  })
+  if (!conv || (!conv.asked.length && !conv.answered && !conv.messages.length)) return null
+  const cost = (w: CollabWake) => (w.costUsd == null ? '' : ` · ${w.costEstimated ? '~' : ''}$${w.costUsd.toFixed(w.costUsd < 0.01 ? 4 : 2)}`)
+  const threadId = conv.answered?.threadMessageId || conv.asked.find((w) => w.threadMessageId)?.threadMessageId || conv.messages[0]?.threadId || conv.messages[0]?.id
+  return (
+    <div className="run-forum">
+      <div className="run__label">Agent conversation</div>
+      {conv.answered && (
+        <div className="run-forum__wake">
+          Woken by <strong>{conv.answered.fromName}</strong> to answer (hop {conv.answered.depth}, {conv.answered.via}){conv.answered.why ? ` · why: ${conv.answered.why}` : ''} · {conv.answered.status}
+          {cost(conv.answered)}
+        </div>
+      )}
+      {conv.asked.map((w) => (
+        <div key={w.id} className="run-forum__wake">
+          Asked <strong>{w.toName}</strong> (hop {w.depth}, {w.via}) · {w.status === 'refused' ? `refused: ${w.note}` : w.status}
+          {w.why ? ` · why: ${w.why}` : ''}
+          {cost(w)}
+        </div>
+      ))}
+      {conv.messages.length > 0 && (
+        <div className="run-forum__msgs">
+          {conv.messages.map((m) => (
+            <div key={m.id} className="run-forum__msg">
+              <b>{m.authorName}</b> <span>{m.channelName ? `#${m.channelName}` : 'DM'} · {m.ref} · {tooltipTime(m.createdAt)}</span>
+              <p>{m.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {threadId && (
+        <div className="run-forum__open">
+          <Button size="sm" onClick={() => void navigate({ name: 'forum', threadId, channelId: conv.messages[0]?.channelId })}>
+            Open in the Forum
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }
 

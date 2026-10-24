@@ -4,6 +4,7 @@ import { assignRepoSchema, companyAgentSaveSchema, companyCreateSchema, companyR
  * handler runs; failures answer `bad_request` with per-field errors. `satisfies` keeps this map exhaustive.
  */
 import { z } from 'zod'
+import { EMBLEM_VARIANTS } from '../shared/chatCompany'
 import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
@@ -151,6 +152,14 @@ const profileFields = {
   secretNames: z.array(z.string().max(128)).max(500),
   useApiKeyAuth: z.boolean()
 }
+const autopilotRecord = z
+  .object({
+    enabledAt: z.string().max(40),
+    paused: z.boolean(),
+    steps: z.record(z.string().regex(/^[a-z_]{1,32}$/), z.object({ scheduleId: id, workflowId: id.nullable().optional() }).strict()).refine((r) => Object.keys(r).length <= 20, 'Too many steps'),
+    publish: z.array(z.enum(['x', 'linkedin', 'instagram', 'tiktok', 'youtube'])).max(5)
+  })
+  .strict()
 const settingsPatch = z
   .object({
     launchAtLogin: z.boolean(),
@@ -190,7 +199,23 @@ const settingsPatch = z
     experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean() }).partial().strict(),
     // VOICE.md §0
     tone: z.enum(['playful', 'plain']),
-    personas: z.boolean()
+    personas: z.boolean(),
+    // AGENT-COLLAB.md §2: the guards of agents asking agents (ranges = AGENT_COLLAB_RANGES)
+    agentCollab: z
+      .object({
+        enabled: z.boolean(),
+        maxHops: z.number().int().min(1).max(6),
+        perThread: z.number().int().min(1).max(20),
+        perAgentPerHour: z.number().int().min(1).max(60),
+        perAskerPerHour: z.number().int().min(1).max(60),
+        perCompanyPerDay: z.number().int().min(1).max(500),
+        waitDefaultS: z.number().int().min(0).max(600),
+        waitMaxS: z.number().int().min(0).max(600)
+      })
+      .partial()
+      .strict(),
+    // AUTOPILOT.md §4: UI bookkeeping of what each autopilot created
+    autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
   })
   .partial()
   .strict()
@@ -474,6 +499,18 @@ export const REQUEST_SCHEMAS = {
   'company:reorder': z.object({ ids: companyReorderSchema }).strict(),
   'company:assignRepo': assignRepoSchema,
   'company:overview': none,
+  'company:logos': none,
+  'company:logoCandidates': z.object({ id }).strict(),
+  'company:setLogo': z.object({
+    id,
+    pick: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('candidate'), path: z.string().min(1).max(4096) }).strict(),
+      z.object({ kind: z.literal('file') }).strict(),
+      z.object({ kind: z.literal('none') }).strict(),
+      z.object({ kind: z.literal('auto') }).strict(),
+      z.object({ kind: z.literal('emblem'), variant: z.enum(EMBLEM_VARIANTS), keepDetected: z.boolean().optional() }).strict()
+    ])
+  }).strict(),
   'company:export': z.object({id}),
   'company:previewImport': z.object({json: z.string().max(300_000)}),
   'company:import': z.object({json: z.string().max(300_000),repoIds:z.array(id).max(500)}),
@@ -565,6 +602,8 @@ export const REQUEST_SCHEMAS = {
   'forum:revokeInvite': z.object({ inviteId: id }).strict(),
   'forum:acceptInvite': z.object({ code: z.string().trim().min(8).max(120), name: z.string().trim().min(1).max(60), handle: z.string().trim().max(32).optional() }).strict(),
   'forum:toTask': z.object({ messageId: id, agentId: id.nullish() }).strict(),
+  'forum:collab': z.object({ companyId: id }).strict(),
+  'forum:runConversation': z.object({ runId: id }).strict(),
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
   'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional(), companyId }),
@@ -762,6 +801,9 @@ export const REQUEST_SCHEMAS = {
   }),
   'author:grants': none,
   'author:revokeRun': z.object({ workflowId: id, ownerKey: z.string().min(1).max(200) }),
+  'chatCompany:list': none,
+  'chatCompany:decide': z.object({ id, accept: z.boolean(), name: z.string().max(200).optional(), brief: z.string().max(20_000).optional() }).strict(),
+  'chatCompany:open': z.object({ sessionId: id.nullish(), name: z.string().max(200).optional(), brief: z.string().max(20_000).optional() }).strict(),
   'worktrees:list': optObj({ status: z.array(z.enum(['creating', 'active', 'kept', 'removed', 'error'])).max(5).optional() }),
   'worktrees:remove': z.object({ id, discardWork: z.boolean().optional() }),
   'worktrees:branches': z.object({ runId: id }),

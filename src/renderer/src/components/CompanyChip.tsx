@@ -47,7 +47,7 @@ export function CompanyChip({ companyId, always = false, avatarOnly = false, siz
   const name = c ? companyLabel(c) : 'Archived company'
   return (
     <span className={`co-chip ${avatarOnly ? 'co-chip--avatar' : ''} ${className}`} title={c ? companyLabel(c, true) : 'This company is archived'}>
-      <CompanyAvatar company={{ name, color: c?.color ?? 'var(--series-other)' }} size={size} />
+      <CompanyAvatar company={{ id: c?.id, name, color: c?.color ?? 'var(--series-other)' }} size={size} />
       {!avatarOnly && <span className="co-chip__name">{name}</span>}
     </span>
   )

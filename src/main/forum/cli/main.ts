@@ -16,6 +16,10 @@ const USAGE = `forum: Principia Forum protocol v1 (FORUM.md)
        [--propose-department NAME --does TEXT --does-not TEXT --reason TEXT]
        [--propose-agent ROLE --department KEY --instructions TEXT --capabilities TEXT --reason TEXT]
   forum mention <@who[,@who]> <text> [--ref m3fk]
+  forum ask-agent <@who|department> <question> [--why TEXT] [--channel #chan] [--wait SECONDS]
+  forum activity [@who|department] [--hours N] [--limit N]
+  forum usage [@who|department] [--days N]
+  forum board [@who|department] [--status S]
   forum call <tool> '<json args>'
   forum schema
   forum mcp            (stdio MCP server)
@@ -73,6 +77,15 @@ export function parseCli(argv: string[]): [ForumTool, Record<string, unknown>] {
       const target = rest[0]
       return ['forum_read', clean({ channel: target, thread: one('thread'), since: one('since'), limit: num('limit'), budget: num('budget') })]
     }
+    case 'ask-agent':
+      need(2)
+      return ['forum_ask_agent', clean({ to: rest[0], question: rest.slice(1).join(' '), why: one('why'), channel: one('channel'), wait_s: num('wait') })]
+    case 'activity':
+      return ['team_activity', clean({ who: rest[0], hours: num('hours'), limit: num('limit') })]
+    case 'usage':
+      return ['team_usage', clean({ who: rest[0], days: num('days') })]
+    case 'board':
+      return ['team_board', clean({ who: rest[0], status: one('status') })]
     case 'post':
       need(2)
       return ['forum_post', clean({ channel: rest[0], text: rest.slice(1).join(' '), refs: flags.get('ref') })]

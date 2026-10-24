@@ -12,10 +12,16 @@
  * - below 24 px (the 18 px menu coin) the beaded rim and inner ring are dropped: three 1 px rings 0.8 px apart read as
  *   one grey smear, so the small coin is the outer ring, the initial and the tessera only.
  *
+ * - `logo` (a company logo data URL) takes the initial's place inside the same rings, cropped round: `fill` images
+ *   cover the inner disc, transparent ones sit inset, on a light disc when they are dark (`logoFit`, lib/logo.ts).
+ *   It is an HTML <img> under the SVG (the line art stays line art); no tessera with a logo; the working tiles and the
+ *   failed tessera still draw over it.
+ *
  * The SVG is decorative; the wrapper carries the accessible name. Pass `label` to set it verbatim (the rail passes
  * "Sunday Bakery, all agents healthy"); the default is the name, plus the plain healthy line when `laurel` is on.
  */
 import type { CSSProperties, ReactElement } from 'react'
+import type { LogoFit } from '../../lib/logo'
 import { t } from '../../lib/voice/core'
 import { WreathGroup, WREATH_48 } from './Laurel'
 import { LN, PX, accentColor, f2, initialOf } from './geometry'
@@ -32,6 +38,10 @@ export interface MedallionProps {
   failed?: boolean
   /** override the letter (Personal shows "P", which also drops the tessera) */
   initial?: string
+  /** company logo (data URL): replaces the initial and the tessera */
+  logo?: string | null
+  /** how the logo sits in the disc (null while measuring: inset, no backing) */
+  logoFit?: LogoFit | null
   /** accessible name, used verbatim */
   label?: string
   className?: string
@@ -49,8 +59,8 @@ export function workingTiles(c: number): { x: string; y: string }[] {
   })
 }
 
-export function Medallion({ name, color, size = 32, laurel = false, working = false, failed = false, initial, label, className, style }: MedallionProps): ReactElement {
-  const letter = initialOf(initial ?? name)
+export function Medallion({ name, color, size = 32, laurel = false, working = false, failed = false, initial, logo, logoFit, label, className, style }: MedallionProps): ReactElement {
+  const letter = logo ? '' : initialOf(initial ?? name)
   const wreathOn = laurel && !failed
   // with the laurel the SVG grows to 48/40 of the coin, and negative margins keep the coin's box where it was
   const box = wreathOn ? 48 : 40
@@ -59,15 +69,23 @@ export function Medallion({ name, color, size = 32, laurel = false, working = fa
   const pad = Math.round(((px - size) / 2) * 100) / 100
   const full = size >= MEDALLION_FULL_MIN
   const personal = initial?.trim().toUpperCase() === 'P'
-  const tessera = personal ? null : accentColor(color) || PX.a
+  const tessera = personal || logo ? null : accentColor(color) || PX.a
+  // the logo disc sits just inside the inner ring (inside the outer ring on the small coin), in coin px
+  const discPx = Math.round(((full ? 14.2 : 16.6) * 2 * size) / 40)
   const plainName = (name ?? '').trim()
   const accessible = label?.trim() || (wreathOn ? [plainName, t.sr('rail.laurel.sr').toLowerCase()].filter(Boolean).join(', ') : plainName)
-  const cls = ['rm-medallion', wreathOn && 'rm-medallion--laurel', working && 'rm-medallion--working', failed && 'rm-medallion--failed', className]
+  const cls = ['rm-medallion', logo && 'rm-medallion--logo', wreathOn && 'rm-medallion--laurel', working && 'rm-medallion--working', failed && 'rm-medallion--failed', className]
     .filter(Boolean)
     .join(' ')
 
   return (
     <span className={cls} {...(accessible ? { role: 'img', 'aria-label': accessible } : { 'aria-hidden': true })} style={{ width: size, height: size, ...style }}>
+      {/* the logo is content, not line art: an <img> under the rings (same grid cell, painted first), cropped round */}
+      {logo && (
+        <span className={`rm-medallion__logo rm-medallion__logo--${logoFit ?? 'plain'}`} style={{ width: discPx, height: discPx }} aria-hidden="true">
+          <img src={logo} alt="" draggable={false} />
+        </span>
+      )}
       <svg
         className="rm-la rm-medallion__svg"
         viewBox={`0 0 ${box} ${box}`}
