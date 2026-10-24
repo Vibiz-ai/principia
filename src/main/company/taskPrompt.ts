@@ -27,8 +27,10 @@ export interface TaskPromptInput {
   activity: Pick<TaskActivity, 'kind' | 'by' | 'message' | 'createdAt'>[]
   /** why this turn started */
   wake: string[]
+  /** PROACTIVE.md §5: what else is in flight in the company right now (other tasks, their agent and department) */
+  running?: { identifier: string; title: string; agent: string | null; department: string | null }[]
 }
-const LIMITS = { description: 20_000, activity: 500, doneNote: 1000, wake: 4000 }
+const LIMITS = { description: 20_000, activity: 500, doneNote: 1000, wake: 4000, running: 6 }
 const clip = (s: string, n: number) => s.length > n ? `${s.slice(0, n - 1)}…` : s
 /** Data text: a `</principia-…>` inside it cannot close the block it sits in. */
 const data = (s: string) => s.replace(/<(\/?)principia-/gi, '<$1principia‐')
@@ -51,6 +53,13 @@ export function buildTaskPrompt(i: TaskPromptInput): string {
   if (recent.length) {
     lines.push('', 'Recent activity:')
     for (const a of recent) lines.push(`- ${a.createdAt.slice(0, 16).replace('T', ' ')} ${a.kind} (${a.by}): ${data(clip(a.message.replace(/\s+/g, ' ').trim(), LIMITS.activity))}`)
+  }
+  // PROACTIVE.md §5: parallel agents know what else runs, so nobody redoes it
+  const running = (i.running ?? []).slice(0, LIMITS.running)
+  if (running.length) {
+    lines.push('', 'Running right now in this company (do not redo these):')
+    for (const r of running) lines.push(`- ${r.identifier} ${data(clip(r.title, 100))}${r.agent ? ` · ${data(r.agent)}` : ''}${r.department ? ` (${data(r.department)})` : ''}`)
+    if ((i.running ?? []).length > running.length) lines.push(`- and ${(i.running ?? []).length - running.length} more (team_board)`)
   }
   const task = `<principia-task id="${attr(t.identifier)}" company="${attr(i.companyId)}">\n${lines.join('\n')}\n</principia-task>`
   return [role, task, wakeBlock(i.wake), TASK_RULES_FOOTER].join('\n\n')

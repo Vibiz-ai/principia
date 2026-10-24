@@ -17,6 +17,10 @@ export type TaskTool = (typeof TASK_TOOLS)[number]
 /** Tools that write: only ever on the caller's own task (task_create writes a child of it). */
 export const TASK_MUTATIONS: ReadonlySet<TaskTool> = new Set<TaskTool>(['task_comment', 'task_report', 'task_ask', 'task_create', 'task_handoff'])
 export const isTaskTool = (name: string): name is TaskTool => (TASK_TOOLS as readonly string[]).includes(name)
+/** PROACTIVE.md §3: listed to interactive sessions that hold no task (chats); refused anywhere else. */
+export const SESSION_TASK_TOOLS = ['task_update'] as const
+export type SessionTaskTool = (typeof SESSION_TASK_TOOLS)[number]
+export const isSessionTaskTool = (name: string): name is SessionTaskTool => (SESSION_TASK_TOOLS as readonly string[]).includes(name)
 
 /** §6: every result is capped at 8000 chars and marked as data. */
 export const TASK_MAX_OUTPUT = 8000
@@ -29,9 +33,14 @@ export const TASK_SERVER_INSTRUCTIONS =
   'End every turn with exactly one of task_report (outcome review or blocked), task_ask (a decision only the human can make) or task_handoff (another department or agent should take it). ' +
   'task_comment adds a note and never wakes anyone. task_create files a follow-up task (blocksCurrent makes this task wait for it). You cannot mark tasks done: a human approves every task.'
 
+/** PROACTIVE.md §3: what a session holding no task (a chat) is told about the same tools. */
+export const CHAT_TASK_SERVER_INSTRUCTIONS =
+  'Principia task board: task_list {scope:"open"} and task_get read the company board. task_create opens a task this chat tracks and works on itself (never sent to an agent); ' +
+  'task_update moves it (in_progress when you start, in_review once built and checked, blocked with why) and rewrites its brief; task_comment {id} notes on a task you track or filed. Only the founder marks tasks done.'
+
 const ro = { readOnlyHint: true }
 const TASK_ID = { type: 'string', minLength: 1, maxLength: 64, description: 'Task id (task_…) or identifier (PRN-12) of a task of this company. Omit for your current task.' }
-export const TASK_TOOL_DEFS: Record<TaskTool, ToolDef> = {
+export const TASK_TOOL_DEFS: Record<TaskTool | SessionTaskTool, ToolDef> = {
   task_get: {
     name: 'task_get',
     description: 'Your current task (default) or another task of this company: title, description, status, department, agent, dependencies, report, ask and recent activity.',
@@ -53,8 +62,8 @@ export const TASK_TOOL_DEFS: Record<TaskTool, ToolDef> = {
   },
   task_comment: {
     name: 'task_comment',
-    description: 'Adds a comment to your current task (progress notes, findings). Never wakes anyone and never ends the turn.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.comment } }, required: ['text'], additionalProperties: false }
+    description: 'Adds a comment to your current task (progress notes, decisions with the why, handoff notes). In a chat: pass the id of a task this chat tracks or filed. Never wakes anyone and never ends the turn.',
+    inputSchema: { type: 'object', properties: { id: { ...TASK_ID, description: 'Chats: a task this chat tracks or filed. Omit on your current task.' }, text: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.comment } }, required: ['text'], additionalProperties: false }
   },
   task_report: {
     name: 'task_report',
@@ -86,16 +95,38 @@ export const TASK_TOOL_DEFS: Record<TaskTool, ToolDef> = {
   },
   task_create: {
     name: 'task_create',
-    description: 'Files a new task of this company as a subtask of your current task (at most 4 per task, one level deep, 10 per company per hour). blocksCurrent: your task waits until the new one is done.',
+    description:
+      'On a task: files a new task of this company as a subtask of your current task (at most 4 per task, one level deep, 10 per company per hour); blocksCurrent: your task waits until the new one is done. ' +
+      'In a chat (no current task): opens a task this chat tracks and works on itself (never sent to an agent; parent groups several, start moves it to in_progress); move it with task_update.',
     inputSchema: {
       type: 'object',
       properties: {
-        title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title },
-        description: { type: 'string', maxLength: TASK_LIMITS.description },
-        departmentKey: { type: 'string', maxLength: 80, description: 'Department key (e.g. marketing). Omit to let the board route it.' },
-        blocksCurrent: { type: 'boolean', default: false }
+        title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title, description: 'In your own words, never the message pasted in.' },
+        description: { type: 'string', maxLength: TASK_LIMITS.description, description: 'Goal, context, acceptance criteria as "- [ ]" lines.' },
+        departmentKey: { type: 'string', maxLength: 80, description: 'Department key (e.g. marketing). On a task: omit to let the board route it. In a chat: defaults to the chat\'s department.' },
+        blocksCurrent: { type: 'boolean', default: false, description: 'On a task only.' },
+        parent: { ...TASK_ID, description: 'Chats: a task this chat tracks, to group this one under it.' },
+        start: { type: 'boolean', default: false, description: 'Chats: start it now (in_progress).' }
       },
       required: ['title'],
+      additionalProperties: false
+    }
+  },
+  task_update: {
+    name: 'task_update',
+    description:
+      "Chats: moves a task this chat tracks (opened with task_create here). status 'in_progress' when you start it, 'in_review' once it is built and checked (note = what you did and how you checked), 'blocked' with a note saying why. " +
+      'title / description rewrite it (tick "- [x]" criteria, add decisions, a handoff section). A note alone adds a comment. Only the founder marks a task done.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { ...TASK_ID, description: 'A task this chat tracks (PRN-12).' },
+        status: { type: 'string', enum: ['in_progress', 'in_review', 'blocked'] },
+        note: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.summary },
+        title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title },
+        description: { type: 'string', maxLength: TASK_LIMITS.description }
+      },
+      required: ['id'],
       additionalProperties: false
     }
   },
@@ -125,13 +156,18 @@ export const COMPANY_TOOLS = ['company_departments', 'company_file_task', 'compa
 export type CompanyTool = (typeof COMPANY_TOOLS)[number]
 export const isCompanyTool = (name: string): name is CompanyTool => (COMPANY_TOOLS as readonly string[]).includes(name)
 /** Every tool the broker serves through TaskTools. */
-export type BoardTool = TaskTool | CompanyTool
-export const isBoardTool = (name: string): name is BoardTool => isTaskTool(name) || isCompanyTool(name)
+export type BoardTool = TaskTool | SessionTaskTool | CompanyTool
+export const isBoardTool = (name: string): name is BoardTool => isTaskTool(name) || isSessionTaskTool(name) || isCompanyTool(name)
 export const COMPANY_LIMITS = { reason: 500 } as const
 
+/** The passive wording (Settings → "Agents use Principia on their own" off): file only after a yes. */
 export const COMPANY_SERVER_INSTRUCTIONS =
   "Principia company tools: company_departments lists this company's departments (charter, agents, open work). company_file_task files a task into one department. company_create_department adds a department (only when the user asks for it or agrees). " +
   "Answer and do the work in the chat by default. Only when a request clearly belongs to a department's charter and is work for later or for that department's agents, propose filing it, and call company_file_task only after the user agrees or explicitly asks you to send it there. Never route work on your own."
+/** PROACTIVE.md §2: the default. Filing is automatic (capped, deduplicated); new departments still need a yes. */
+export const COMPANY_SERVER_INSTRUCTIONS_PROACTIVE =
+  "Principia company tools: company_departments lists this company's departments (charter, agents, open work). company_file_task hands work to one department's agents. company_create_department adds a department (only when the user asks for it or agrees). " +
+  "File on your own, without asking first, when work belongs to another department's charter or is for its agents or for later: check task_list {scope:'open'} so you never file the same thing twice, then tell the user the identifier."
 
 export const COMPANY_TOOL_DEFS: Record<CompanyTool, ToolDef> = {
   company_create_department: {
@@ -160,7 +196,7 @@ export const COMPANY_TOOL_DEFS: Record<CompanyTool, ToolDef> = {
   company_file_task: {
     name: 'company_file_task',
     description:
-      "Files a task into one department of this company, routed by the board's rules (its eligible agent, or the one you name). Only after the user agreed to send it there, or asked you to. Returns the new task's identifier.",
+      "Hands work to one department of this company: a task routed by the board's rules (its eligible agent, or the one you name). Check task_list {scope:'open'} first and never file the same thing twice. Returns the new task's identifier.",
     inputSchema: {
       type: 'object',
       properties: {

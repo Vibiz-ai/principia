@@ -28,6 +28,7 @@ import { AuthorBroker } from './broker'
 import { ChatProposals } from '../company/chatProposals'
 import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
+import { SESSION_TASK_TOOLS } from '../company/taskToolDefs'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
 import { NotifyNode } from '../notifyNode'
@@ -435,7 +436,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       let taskId: Id | null = null
       if (board) {
         try {
-          taskId = (h.db.prepare("SELECT id FROM company_tasks WHERE run_id = ? AND status = 'in_progress' LIMIT 1").get(sessionId) as { id: Id } | undefined)?.id ?? null
+          // PROACTIVE.md §3: a task the chat tracks for itself never makes it a task session
+          taskId = (h.db.prepare("SELECT id FROM company_tasks WHERE run_id = ? AND status = 'in_progress' AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%' LIMIT 1").get(sessionId) as { id: Id } | undefined)?.id ?? null
         } catch {
           /* older db */
         }
@@ -452,6 +454,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
           HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
+          // PROACTIVE.md §2: the passive wording of the company tools when "Agents use Principia on their own" is off
+          ...(proactiveOn(h) ? {} : { HIVE_PROACTIVE: '0' }),
           // COMPANY.md §6: the session's company (main still scopes every call by the session itself)
           ...(companyId ? { HIVE_COMPANY_ID: companyId } : {}),
           ...(opts.reaper?.tag(sessionId) ?? { HIVE_SPAWN_ID: sessionId, HIVE_USER_DATA: h.paths.userData })
@@ -460,11 +464,23 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // pre-allowed mcp__hive__* names for the pane: the slack group joins once Slack is connected
     get tools() {
-      // company_departments reads; company_file_task is left to the pane's own permission prompt (a second yes)
-      // principia_propose_company only opens a card in Principia (the founder confirms there): pre-allowed
-      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? [...TASK_TOOLS, 'company_departments'] : [])]
+      // company_departments reads; principia_propose_company only opens a card in Principia (the founder confirms there)
+      // PROACTIVE.md §2: with "Agents use Principia on their own" on (the default) filing and tracking tasks needs no
+      // permission prompt (capped and deduplicated by the board); off, company_file_task waits for the pane's prompt.
+      // company_create_department always does (a second yes).
+      const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
+      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
+  }
+}
+
+/** PROACTIVE.md §2: Settings → "Agents use Principia on their own". Absent = on. */
+export function proactiveOn(h: Pick<Hive, 'settings'>): boolean {
+  try {
+    return h.settings().proactiveAgents !== false
+  } catch {
+    return true
   }
 }
 

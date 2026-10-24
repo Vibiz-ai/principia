@@ -593,7 +593,19 @@ export interface Settings {
    * act on exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.
    */
   autopilots?: Record<Id, import('./autopilot').CompanyAutopilots>
+  /**
+   * PROACTIVE.md: agents and chats use Principia on their own (track and file tasks, read and write memory, ask
+   * teammates) without being asked. Off: the passive wording, and filing waits for a yes. Absent = true.
+   */
+  proactiveAgents?: boolean
+  /**
+   * PROACTIVE.md §3: "Track work as tasks". off: chats never open tasks for their own work unasked; auto (default): when
+   * one message asks for two or more separate things or multi-step work; always: every multi-step turn, with a one-time
+   * gentle reminder at the end of an untracked one. Absent = 'auto'.
+   */
+  trackTasks?: TrackTasks
 }
+export type TrackTasks = 'off' | 'auto' | 'always'
 export interface ExperimentalFlags {
   /** company guards throw (on) or warn and still stamp (off) */
   companies?: boolean

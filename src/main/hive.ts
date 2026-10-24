@@ -269,7 +269,9 @@ export class Hive {
       tasks: boardOn && req.departmentId ? c.listTasks(company.id) : [],
       departmentId: req.departmentId,
       // the `hive` server (claude panes) lists company_file_task while the board is on
-      fileTool: boardOn && req.adapter === 'claude'
+      fileTool: boardOn && req.adapter === 'claude',
+      // PROACTIVE.md §2
+      proactive: this.settings().proactiveAgents !== false
     })
     if (req.departmentId && !placed.department) return null
     return placed

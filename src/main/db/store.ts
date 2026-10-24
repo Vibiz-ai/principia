@@ -90,7 +90,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // AGENT-COLLAB.md §2 (stored as given; collabSettings() clamps and fills the defaults)
   agentCollab: {},
   // AUTOPILOT.md §4 (UI bookkeeping)
-  autopilots: {}
+  autopilots: {},
+  // PROACTIVE.md
+  proactiveAgents: true,
+  trackTasks: 'auto'
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments stays absent (= off) so settings:get keeps its three-flag shape until the feature is enabled

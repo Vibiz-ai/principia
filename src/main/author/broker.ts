@@ -268,7 +268,8 @@ export class AuthorBroker {
     if (isCompanyTool(tool)) {
       if (caller.kind !== 'session') throw new Error(`Unknown tool: ${tool}`)
       if (tool === 'company_file_task' && caller.taskId) throw new Error('You are working on a task: use task_create or task_handoff instead')
-    } else if (TASK_MUTATIONS.has(tool as TaskTool) && !(tool === 'task_create' && caller.kind === 'session' && !caller.taskId)) {
+    } else if (TASK_MUTATIONS.has(tool as TaskTool) && !((tool === 'task_create' || tool === 'task_comment') && caller.kind === 'session' && !caller.taskId)) {
+      // PROACTIVE.md §3: a chat tracks its own tasks (task_create) and notes on the ones it tracks or filed (task_comment {id})
       if (!caller.taskId) throw new Error('You are not working on a task')
       if (!caller.holdsTask) throw new Error('This task is no longer yours to change (its run or session ended)')
     }

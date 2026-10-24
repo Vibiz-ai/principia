@@ -153,8 +153,14 @@ describe('the hive server lists the company tools for chats only', () => {
     const names = (sets: string) => (buildAuthorHandlers({ HIVE_LIVE_DIR: path.join(dir, 'live'), HIVE_TOOLSETS: sets }).listTools() as { name: string }[]).map((t) => t.name)
     expect(names('author,task,company')).toEqual(expect.arrayContaining([...COMPANY_TOOLS]))
     expect(names('author,task')).not.toContain('company_file_task')
-    const h = buildAuthorHandlers({ HIVE_LIVE_DIR: path.join(dir, 'live'), HIVE_TOOLSETS: 'author,company' })
-    expect(typeof h.instructions === 'function' ? h.instructions() : h.instructions).toContain('only after the user agrees')
+    // PROACTIVE.md §2: filing is the chat's own initiative by default; HIVE_PROACTIVE=0 keeps the passive wording
+    const text = (env: Record<string, string>) => { const h = buildAuthorHandlers({ HIVE_LIVE_DIR: path.join(dir, 'live'), HIVE_TOOLSETS: 'author,company', ...env }); return typeof h.instructions === 'function' ? h.instructions() : h.instructions }
+    expect(text({})).toContain('File on your own, without asking first')
+    expect(text({})).toContain('never file the same thing twice')
+    expect(text({ HIVE_PROACTIVE: '0' })).toContain('only after the user agrees')
+    // a chat lists task_update; a task session (HIVE_TASK_ID) does not
+    expect(names('author,task')).toContain('task_update')
+    expect((buildAuthorHandlers({ HIVE_LIVE_DIR: path.join(dir, 'live'), HIVE_TOOLSETS: 'author,task', HIVE_TASK_ID: 'task_x' }).listTools() as { name: string }[]).map((t) => t.name)).not.toContain('task_update')
   })
 })
 

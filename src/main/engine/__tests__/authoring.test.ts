@@ -22,6 +22,8 @@ import {
 import { createEngineWith } from '../index'
 import { baseBranch, installPushGuard, pushGuardEnv } from '../pushGuard'
 import { validateWorkflow } from '../validate'
+import { CLAUDE_CONTEXT_FILE } from '../live/attach'
+import { OPS_TITLE } from '../../company/principiaOps'
 import { addWorkflow, fakeAdapter, fakeCtx, fakeProviders, profile, waitRun, type FakeCall, type FakeCtx } from './fakes'
 
 // ---------- builders ----------
@@ -615,7 +617,8 @@ describe('hive server attach: interactive claude only (PO1, PO7)', () => {
     expect(append).toContain('mcp__hive__* tools')
     expect(append).toContain('<hive-memory>')
 
-    // resume: same attach, no re-sent hint
+    // resume (PROACTIVE.md §4): same attach, and the hint is passed again (claude keeps its snapshot; after a compaction
+    // the system prompt is rendered from this launch's text)
     const resumed = engine.providers.interactiveSpawn(profile('p_claude', 'claude'), {
       artifactsDir: '/a/',
       author,
@@ -623,7 +626,45 @@ describe('hive server attach: interactive claude only (PO1, PO7)', () => {
       live: { dir: liveDir, hookCommand: 'hook', mcpEnv: {} }
     })
     expect(resumed.args).toContain('--mcp-config')
-    expect(resumed.args).not.toContain('--append-system-prompt')
+    expect(resumed.args[resumed.args.indexOf('--append-system-prompt') + 1]).toContain('mcp__hive__* tools')
+  })
+
+  it('PROACTIVE.md: a company chat pane gets the Use Principia section and the resume/compact context hook; the nudge only under Always', async () => {
+    const ctx = setup()
+    const engine = await engineFor(ctx)
+    const liveDir = join(ctx.root, 'live', 's_2')
+    mkdirSync(liveDir, { recursive: true })
+    const chatAuthor: McpServerSpec = { ...author, env: { ...author.env, HIVE_LIVE_DIR: liveDir, HIVE_TOOLSETS: 'author,task,company,newco', HIVE_COMPANY_ID: 'co_1' } }
+    const spawn = (o: { resumeAgentSessionId?: string } = {}) =>
+      engine.providers.interactiveSpawn(profile('p_claude', 'claude'), {
+        artifactsDir: '/a/', author: chatAuthor, authorTools: [...AUTHOR_TOOLS], live: { dir: liveDir, hookCommand: 'hook', mcpEnv: {} }, companyId: 'co_1', chatBrief: '## This chat: Acme', ...o
+      })
+    const spec = spawn()
+    const append = spec.args[spec.args.indexOf('--append-system-prompt') + 1]!
+    expect(append).toContain(OPS_TITLE)
+    for (const t of ['task_create', 'task_update', 'company_file_task', 'hive_workflow_create']) expect(append).toContain(t)
+    const settings = JSON.parse(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')) as { hooks: Record<string, { matcher?: string; hooks: { command: string; async?: boolean }[] }[]> }
+    const ctxHook = settings.hooks.SessionStart!.find((e) => e.matcher === 'resume|compact')!
+    expect(ctxHook.hooks[0]!.command).toContain(`--context '${join(liveDir, CLAUDE_CONTEXT_FILE)}'`)
+    expect(ctxHook.hooks[0]!.async).toBeUndefined()
+    // the default ("When it helps") never blocks the end of a turn
+    expect(JSON.stringify(settings.hooks.Stop)).not.toContain('--nudge')
+    expect(readFileSync(join(liveDir, CLAUDE_CONTEXT_FILE), 'utf8')).toContain(OPS_TITLE)
+    // "Always": every multi-step turn, with the one-time gentle reminder
+    ctx.settings.trackTasks = 'always'
+    expect(spawn().args.join(' ')).toContain('Track every multi-step turn')
+    const always = JSON.parse(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')) as typeof settings
+    expect(always.hooks.Stop!.some((e) => e.hooks.some((h) => h.command.endsWith('--nudge') && !h.async))).toBe(true)
+    // "Off": no tracking rules
+    ctx.settings.trackTasks = 'off'
+    expect(spawn().args.join(' ')).not.toContain('task_update')
+    ctx.settings.trackTasks = 'always'
+    // a resumed pane passes it again
+    expect(spawn({ resumeAgentSessionId: 'uuid-9' }).args.join(' ')).toContain(OPS_TITLE)
+    // off in Settings: no section, no nudge
+    ctx.settings.proactiveAgents = false
+    expect(spawn().args.join(' ')).not.toContain(OPS_TITLE)
+    expect(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')).not.toContain('--nudge')
   })
 
   it('other adapters never get it, and neither do panes without a spawn dir', async () => {

@@ -1,6 +1,6 @@
 import { GatewayConnections } from '../components/GatewayConnections'
 import { useEffect, useRef, useState } from 'react'
-import type { AdapterId, AgentProfile, AgentProfileInput, PermissionMode, SecretMeta } from '@shared/types'
+import type { AdapterId, AgentProfile, AgentProfileInput, PermissionMode, SecretMeta, TrackTasks } from '@shared/types'
 import { ADAPTER_IDS } from '@shared/types'
 import type { MemoryMode } from '@shared/memory'
 import { MEMORY_MODES } from '@shared/memory'
@@ -149,6 +149,8 @@ function Agents(): React.JSX.Element {
   const profiles = useStore((s) => s.profiles)
   const info = useStore((s) => s.info)
   const interactiveBypass = useStore((s) => s.settings?.interactiveBypass ?? false)
+  const proactiveAgents = useStore((s) => s.settings?.proactiveAgents !== false)
+  const trackTasks = useStore((s) => s.settings?.trackTasks ?? 'auto')
   const [checking, setChecking] = useState(false)
   const [showPath, setShowPath] = useState(false)
   const [editing, setEditing] = useState<AgentProfile | 'new' | null>(null)
@@ -207,6 +209,27 @@ function Agents(): React.JSX.Element {
           desc="Off: interactive panes start in the CLI’s normal mode and ask before editing or running commands. Workflow steps run headless and can’t ask, so they follow each profile’s setting below."
         >
           <Switch checked={interactiveBypass} onChange={(v) => void updateSettings({ interactiveBypass: v })} label="Skip permission prompts in terminal sessions" />
+        </SRow>
+        <SRow
+          label="Agents use Principia on their own"
+          desc="On: chats and agents track their work as board tasks, hand work to the right department, read and write company memory and ask teammates without being asked. Spending money, publishing, deleting and new companies still wait for your yes."
+        >
+          <Switch checked={proactiveAgents} onChange={(v) => void updateSettings({ proactiveAgents: v })} label="Agents use Principia on their own" />
+        </SRow>
+        <SRow
+          label="Track work as tasks"
+          desc="When it helps: a chat opens board tasks when one message asks for several things or multi-step work, never for questions, quick asks or when you say “just do it”. Always: every multi-step turn, with one gentle reminder when it forgets. Off: only when you ask."
+        >
+          <Segmented<TrackTasks>
+            size="sm"
+            value={trackTasks}
+            items={[
+              { value: 'off', label: 'Off' },
+              { value: 'auto', label: 'When it helps' },
+              { value: 'always', label: 'Always' }
+            ]}
+            onChange={(v) => void updateSettings({ trackTasks: v })}
+          />
         </SRow>
       </div>
       <SessionMemory />

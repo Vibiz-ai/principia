@@ -17,6 +17,8 @@ import { AUTHOR_TOOLS, authorAttachable } from './authoring'
 import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT } from '../../shared/chatCompany'
 import { join } from 'node:path'
 import { LIVE_HOOKS } from './live/attach'
+import { listedHiveTools } from '../author/server/tools'
+import { principiaOps, principiaOpsReminder } from '../company/principiaOps'
 import { liveProcs } from './process'
 import { detectProviders, resolveBin, sameProviders } from './providers'
 import { createScheduler, describeWhen, previewWhen } from './scheduler'
@@ -391,6 +393,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         const authorSpec = author ? { ...author, env: { ...author.env, ...(opts.spawnTag ?? {}) } } : null
         const authorDir = opts.authorSpawnDir ?? opts.live?.dir ?? null
         let authored = false
+        let memAttached = false
         if (authorSpec && authorDir) {
           try {
             const path = memOk ? join(grant!.spawnDir, `${grant!.grantId}.mcp.json`) : join(authorDir, 'hive.mcp.json')
@@ -401,6 +404,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
             ])
             writeMcpFiles(mcp.files)
             authored = true
+            memAttached = memOk
           } catch (e) {
             ctx.log.warn('engine: session hive MCP attach failed; memory only', { error: String(e) })
             mcp = null
@@ -410,6 +414,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           try {
             mcp = a.mcpAttach!(grant!)
             writeMcpFiles(mcp.files)
+            memAttached = true
           } catch (e) {
             ctx.log.warn('engine: session memory MCP attach failed', { grantId: grant!.grantId, error: String(e) })
             mcp = null
@@ -420,6 +425,12 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
           if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) writeMcpFiles(mcp.files) }
         }
+        // PROACTIVE.md §1: the "Use Principia" section, from the tools this pane really has (company panes only)
+        const proactive = !!opts.companyId && ctx.getSettings().proactiveAgents !== false && (profile.adapter === 'claude' || profile.adapter === 'codex')
+        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? listedHiveTools(authorSpec.env ?? {}) : [])]
+        // Settings → "Track work as tasks" (absent = when it helps)
+        const track = ctx.getSettings().trackTasks ?? 'auto'
+        const ops = proactive ? principiaOps({ tools: paneTools, kind: authorSpec?.env?.HIVE_TASK_ID ? 'task' : opts.chatBrief?.trim() ? 'chat' : 'session', track }) : ''
         const memoryBrief = ctx.secrets.redact([
           // nobody harvests an interactive pane's output (PASSPORT.md §7.6 is headless steps only)
           grant ? agentBrief(grant, !!mcp && memOk, { harvest: false }) : '',
@@ -429,7 +440,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           // DEPARTMENTS.md §9: what this chat is told about the company's repos, departments, agents and tasks
           opts.chatBrief?.trim() ?? '',
           // shared/chatCompany.ts: "start a new company from this chat" (claude: the tool; codex: the button)
-          authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : ''
+          authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : '',
+          ops
         ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []
@@ -439,7 +451,13 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         if (opts.live && a.hooksAttach && LIVE_HOOKS[profile.adapter]) {
           try {
             const gm = profile.adapter === 'gemini' && mcp && memOk && grant ? { server: grant.server, toolNames: grant.toolNames } : null
-            const h = a.hooksAttach({ dir: opts.live.dir, hookCommand: opts.live.hookCommand }, { headless: false, gate: false, mcp: gm })
+            // PROACTIVE.md §4: claude re-reads the rules on resume / compact; under "Always" only, a one-time gentle
+            // reminder at the end of an untracked multi-step turn (never under the default: the founder may just want to work)
+            const boardTools = track === 'always' && paneTools.some((t) => t === 'task_create' || t === 'company_file_task')
+            const h = a.hooksAttach(
+              { dir: opts.live.dir, hookCommand: opts.live.hookCommand },
+              { headless: false, gate: false, mcp: gm, ...(ops ? { context: ctx.secrets.redact(principiaOpsReminder(ops)) } : {}), ...(ops && boardTools ? { nudge: true } : {}) }
+            )
             if (h.warning) ctx.log.warn(`engine: ${h.warning}`)
             writeMcpFiles(h.files)
             hookArgs = h.args

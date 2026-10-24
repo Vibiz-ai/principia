@@ -65,8 +65,19 @@ describe('chatBrief', () => {
     expect(b).toContain('- acme-web: /Users/me/acme-web')
     expect(b).not.toContain('/Users/me/old')
     expect(b).toContain('- Marketing (marketing): Launch posts and campaigns')
-    expect(b).toContain('Answer and do the work here in the chat by default')
+    expect(b).toContain('Do the work the founder asks for here')
     expect(b).toContain('company_file_task')
+    // PROACTIVE.md §2: routing is the chat's own initiative now, deduplicated; new departments still need a yes
+    expect(b).toContain('file it there yourself with company_file_task')
+    expect(b).toContain('never twice')
+    expect(b).toContain('No need to ask first')
+    expect(b).toContain('company_create_department only after the founder says yes')
+    expect(b).not.toContain('Never file or route work on your own initiative')
+  })
+
+  it('with "Agents use Principia on their own" off it keeps the passive rules', () => {
+    const b = chatBrief(base({ proactive: false }))
+    expect(b).toContain('Answer and do the work here in the chat by default')
     expect(b).toContain('only after the user says yes')
     expect(b).toContain('Never file or route work on your own initiative')
   })
@@ -93,7 +104,8 @@ describe('chatBrief', () => {
   })
 
   it('without the file tool (codex, gemini) it asks the user to file it on the Board', () => {
-    expect(routingRules(false, null).join('\n')).toContain('file it on the Board')
+    expect(routingRules(false, null).join('\n')).toContain('suggest filing it on the Board')
+    expect(routingRules(false, null, false).join('\n')).toContain('file it on the Board')
     expect(chatBrief(base({ fileTool: false }))).not.toContain('company_file_task')
   })
 })

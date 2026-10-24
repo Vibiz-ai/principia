@@ -28,6 +28,8 @@ export interface TransitionCtx {
   start?: boolean
   /** a dependency of a blocked(deps) task was canceled: it can never heal, so it parks for the human */
   depCanceled?: boolean
+  /** PROACTIVE.md §3: the move is the chat that tracks this task (shared/company.ts trackedBy) moving it */
+  tracked?: boolean
 }
 
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
@@ -50,6 +52,7 @@ const parked = (s: TaskState) => s.status === 'blocked' && s.blockReason !== 'de
 const RUN_END_REASONS: readonly (BlockReason | null | undefined)[] = ['needs_input', 'agent', 'run_failed', 'no_report', 'interrupted', 'limit', 'deps', 'handoff_cap']
 const HUMAN = ['human'] as const
 const SYSTEM = ['system'] as const
+const AGENT = ['agent'] as const
 
 /** §1.4, row by row. Order does not matter: a move is legal when any row allows it. */
 export const TRANSITIONS: readonly Rule[] = [
@@ -79,7 +82,12 @@ export const TRANSITIONS: readonly Rule[] = [
   { row: 'plan (todo ↔ backlog ↔ triage)', from: s => ['todo', 'backlog', 'triage'].includes(s.status), to: s => ['todo', 'backlog', 'triage'].includes(s.status), actors: HUMAN,
     check: (ctx, from, to) => from.status === 'triage' && to.status !== 'triage' && ctx.routed === false ? 'Choose a department before moving the task out of the Inbox' : null },
   { row: 'reopen (done / canceled → todo / backlog / triage)', from: s => s.status === 'done' || s.status === 'canceled', to: s => ['todo', 'backlog', 'triage'].includes(s.status), actors: HUMAN },
-  { row: 'park by hand → blocked(manual)', from: s => ['todo', 'backlog', 'triage'].includes(s.status), to: s => s.status === 'blocked' && s.blockReason === 'manual', actors: HUMAN }
+  { row: 'park by hand → blocked(manual)', from: s => ['todo', 'backlog', 'triage'].includes(s.status), to: s => s.status === 'blocked' && s.blockReason === 'manual', actors: HUMAN },
+  // PROACTIVE.md §3: the chat that tracks a task moves it through its own work (never to done)
+  { row: 'tracked: start (todo / backlog / parked / in review → in_progress)', from: s => ['todo', 'backlog', 'triage', 'in_review'].includes(s.status) || parked(s), to: 'in_progress', actors: AGENT,
+    check: (ctx) => !ctx.tracked ? 'Only the chat that tracks this task can move it' : ctx.depsDone === false ? 'Complete dependencies before starting this task' : null },
+  { row: 'tracked: in_progress → in_review', from: 'in_progress', to: 'in_review', actors: AGENT, check: (ctx) => ctx.tracked ? null : 'Only the chat that tracks this task can move it' },
+  { row: 'tracked: in_progress → blocked(agent)', from: 'in_progress', to: s => s.status === 'blocked' && s.blockReason === 'agent', actors: AGENT, check: (ctx) => ctx.tracked ? null : 'Only the chat that tracks this task can move it' }
 ]
 function startCheck(ctx: TransitionCtx): string | null {
   if (!ctx.start) return 'Use Run now to start this task'

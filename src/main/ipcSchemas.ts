@@ -215,7 +215,10 @@ const settingsPatch = z
       .partial()
       .strict(),
     // AUTOPILOT.md §4: UI bookkeeping of what each autopilot created
-    autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
+    autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // PROACTIVE.md
+    proactiveAgents: z.boolean(),
+    trackTasks: z.enum(['off', 'auto', 'always'])
   })
   .partial()
   .strict()

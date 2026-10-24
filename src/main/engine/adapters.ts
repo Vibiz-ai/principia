@@ -245,6 +245,14 @@ const positional = (s: string): string => (s.startsWith('-') ? ` ${s}` : s)
  * resume and check retry (docs/research/LANDSCAPE.md quick win).
  */
 const resumeSafeAppend = (resumeId: string | null, text: string): string[] => (resumeId ? [] : ['--append-system-prompt', text])
+/**
+ * PROACTIVE.md §4: an interactive pane passes its system text on resume too. claude (2.1.310) snapshots the system
+ * prompt on a conversation's first request and reuses it on resume, so a resumed pane keeps its own; the text passed
+ * now only takes effect where no snapshot is used (after a compaction, or --system-prompt-snapshot off), which is
+ * exactly where skipping it lost the Passport, the chat brief and the Principia rules. A resume costs one spawn, not
+ * one per turn. The SessionStart hook (live/attach.ts) re-adds the rules as context on resume and compaction.
+ */
+const paneAppend = (text: string): string[] => (text.trim() ? ['--append-system-prompt', text] : [])
 const withHint = (req: HeadlessRequest): string => `${artifactsHint(req.artifactsDir, req.keyNames)}\n\n${req.prompt}`
 
 export const claudeAdapter: Adapter = {
@@ -307,10 +315,7 @@ export const claudeAdapter: Adapter = {
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : []),
         ...model(req.profile, '--model'),
         ...claudeInteractiveMode(req),
-        ...resumeSafeAppend(
-          req.resumeId,
-          [artifactsHint(req.artifactsDir, req.keyNames), req.authorHint ? AUTHOR_HINT : '', req.memoryBrief?.trim() ?? ''].filter(Boolean).join('\n\n')
-        ),
+        ...paneAppend([artifactsHint(req.artifactsDir, req.keyNames), req.authorHint ? AUTHOR_HINT : '', req.memoryBrief?.trim() ?? ''].filter(Boolean).join('\n\n')),
         ...extra(req.profile)
       ]
     }
@@ -353,7 +358,8 @@ export const codexAdapter: Adapter = {
         '--no-alt-screen',
         // Per-process context only: never modify the user's global Codex configuration.
         // A profile's explicit extraArgs overrides remain authoritative below.
-        ...(req.memoryBrief?.trim() && !req.resumeId ? ['-c', `developer_instructions=${JSON.stringify(req.memoryBrief)}`] : []),
+        // codex never resumes a pane (canResume false): every spawn is a new conversation that needs its instructions
+        ...(req.memoryBrief?.trim() ? ['-c', `developer_instructions=${JSON.stringify(req.memoryBrief)}`] : []),
         ...(req.mcpArgs ?? []),
         ...(ibypass(req) ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
         ...addDirArgs(req.addDirs, 'each'),

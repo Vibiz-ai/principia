@@ -163,6 +163,19 @@ export function withTaskDefaults<T extends CompanyTaskInput>(t: T): T & TaskBoar
     routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0 }
 }
 
+/**
+ * PROACTIVE.md §3: a task a chat tracks for its own work (task_create from a session that holds no task). Its source key
+ * names the session: `externalId = track:<sessionId>:<call>`. Never routed to an agent; only that chat moves it
+ * (todo → in_progress → in_review, or blocked), and only a human marks it done.
+ */
+export const TRACK_PREFIX = 'track:'
+export function trackedBy(t: Pick<CompanyTaskInput, 'source' | 'externalId'>): string | null {
+  if (t.source !== 'agent' || !t.externalId?.startsWith(TRACK_PREFIX)) return null
+  const rest = t.externalId.slice(TRACK_PREFIX.length)
+  const i = rest.indexOf(':')
+  return (i < 0 ? rest : rest.slice(0, i)) || null
+}
+
 /** §1.5 derived lanes. Every surface (board, overview, rail badge, Needs you) uses laneOf. */
 export const TASK_LANES = ['inbox', 'queued', 'working', 'needs_you', 'done'] as const
 export type TaskLane = typeof TASK_LANES[number]

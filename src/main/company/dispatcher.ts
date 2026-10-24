@@ -18,7 +18,7 @@
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, agentActive, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, agentActive, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -480,6 +480,17 @@ export class Dispatcher {
       if (this.d.sessions.isLive(r.sessionId) || this.leaseOf(r.taskId) !== r.sessionId) continue
       try { this.endLease(r.taskId, 'canceled', 'The session closed before Submit for review or Park') } catch (err) { this.warn('closing a session lease failed', { taskId: r.taskId, error: String(err) }) }
     }
+    // PROACTIVE.md §3: a chat closed while it still had tracked work in progress: the task waits for the human
+    const tracked = this.db.prepare("SELECT id, run_id FROM company_tasks WHERE status='in_progress' AND run_id IS NOT NULL AND json_extract(data,'$.externalId') LIKE 'track:%'").all() as { id: string; run_id: string }[]
+    for (const r of tracked) {
+      if (this.d.sessions.isLive(r.run_id)) continue
+      try {
+        const t = this.c.task(r.id)
+        if (trackedBy(t) !== r.run_id) continue
+        const out = this.c.park(r.id, 'no_report', 'The chat closed before it finished this task')
+        this.d.onChange?.(out.companyId)
+      } catch (err) { this.warn('parking a tracked task failed', { taskId: r.id, error: String(err) }) }
+    }
   }
   private endLease(taskId: string, status: 'passed' | 'canceled', reason: string | null): BoardTask {
     const sid = this.leaseOf(taskId) ?? fail('This task is not open as a session')
@@ -499,6 +510,8 @@ export class Dispatcher {
     if (!this.d.enabled()) return
     try {
       const t = this.c.task(taskId)
+      // PROACTIVE.md §3: a chat's own tracked task stays with the chat until a human assigns it
+      if (trackedBy(t) && !t.agentId) return
       const ctx = this.routeContext(t.companyId)
       if (!routingInUse(t, ctx) || !shouldReroute(prev, t)) return
       const d = route(t, ctx)

@@ -5,6 +5,7 @@
  */
 import { attachGateway } from '../gateway/attach'
 import { attachForum } from '../forum/attach'
+import { principiaOps } from '../company/principiaOps'
 import { isHarnessAuthFailure } from './harnessFailure'
 import { createWriteStream, existsSync, mkdirSync, rmdirSync, writeFileSync, type WriteStream } from 'node:fs'
 import { homedir } from 'node:os'
@@ -840,7 +841,10 @@ export class Execution {
       // FORUM.md §3, §5: a seat's step gets the Forum (token, `forum` CLI, MCP for claude/codex) and its brief block
       forum = runnable && s.adapterId !== 'shell' ? this.openForum(s, stepId) : null
       const forumPrompt = forum?.prompt && !s.resumeId ? `${forum.prompt}\n\n${companyPrompt}` : companyPrompt
-      const prompt = mem && !s.resumeId ? withBrief(agentBrief(mem.grant, !!mem.attachment), forumPrompt) : forumPrompt
+      const briefed = mem && !s.resumeId ? withBrief(agentBrief(mem.grant, !!mem.attachment), forumPrompt) : forumPrompt
+      // PROACTIVE.md §1: a board task turn ends with the "Use Principia" section, from the tools this step really has;
+      // a resumed turn (its conversation already holds the section) gets a one-line reminder
+      const prompt = this.withOps(s, briefed, [...(mem?.attachment ? (mem.servers ?? []).flatMap((x) => x.toolNames) : []), ...(forum?.server ? forum.toolNames : [])])
       // SLACK.md §9.4 / SA2: the `hive` server with only the slack toolset, in ONE --mcp-config next to hivemem
       if (runnable && (s.adapterId === 'claude' || s.adapterId === 'codex') && this.slackToolsWanted()) {
         slackMcp = this.attachSlackTools(s.adapterId, stepId, mem, live)
@@ -1178,6 +1182,14 @@ export class Execution {
     } catch (e) {
       this.ctx.log.warn('engine: onStepOutput failed', { runId: this.run.id, stepId, error: String(e) })
     }
+  }
+
+  /** PROACTIVE.md §1: the Principia operating section of a board task step (claude/codex with board, team or memory tools). */
+  private withOps(s: StepSpec, prompt: string, tools: string[]): string {
+    if (!this.task || s.adapterId === 'shell' || this.ctx.getSettings().proactiveAgents === false) return prompt
+    const ops = principiaOps({ tools, kind: 'task' })
+    if (!ops) return prompt
+    return s.resumeId ? `${prompt}\n\nKeep following the "Use Principia" rules from the start of this conversation.` : `${prompt}\n\n${ops}`
   }
 
   private openMemory(s: StepSpec, stepId: string, adapter: Adapter, live: StepLive | null): OpenMemory | null {

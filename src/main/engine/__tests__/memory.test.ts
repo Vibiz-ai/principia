@@ -140,10 +140,10 @@ describe('memory: adapter rendering', () => {
     const sp = inv.args[inv.args.indexOf('--append-system-prompt') + 1]
     expect(sp).toContain('$ARTIFACTS_DIR')
     expect(sp.endsWith('BRIEF')).toBe(true)
-    // Restart / Open as session resumes: the brief and hint are not re-sent, everything else stays
+    // Restart / Open as session resumes (PROACTIVE.md §4): the brief is passed again (claude's system prompt snapshot
+    // wins until a compaction, which then renders it from this text instead of losing it), everything else stays
     const re = claudeAdapter.interactive({ profile: profile('p', 'claude'), artifactsDir: '/a/', resumeId: 'u9', mcpArgs: att.args, memoryBrief: 'BRIEF' })
-    expect(re.args).not.toContain('--append-system-prompt')
-    expect(re.args.join(' ')).not.toContain('BRIEF')
+    expect(re.args[re.args.indexOf('--append-system-prompt') + 1]!.endsWith('BRIEF')).toBe(true)
     expect(re.args.slice(0, 4)).toEqual(att.args)
     expect(re.args[re.args.indexOf('--resume') + 1]).toBe('u9')
   })

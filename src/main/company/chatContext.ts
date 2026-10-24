@@ -7,8 +7,10 @@
  *   one-liner). cwd: the company's only repo when it has exactly one, else the company workspace.
  * - Department chat: the department's agents (name, role) and open tasks (title, status, assignee; capped), and the
  *   repos. cwd: the one repo its agents default to, else the company's only repo, else the workspace.
- * - Both: answer and do the work in the chat by default; propose filing work into a department only when it clearly
- *   belongs to that department's charter, and file it (company_file_task) only after the user agrees or asks.
+ * - Both (PROACTIVE.md §2, the default): do the work asked here; route work that belongs to another department's charter
+ *   on the chat's own initiative (company_file_task, deduplicated against the open board), and track multi-part work
+ *   with the chat's own tasks (the "Use Principia" section the engine appends, principiaOps.ts). New departments still
+ *   need the founder's yes. With Settings → "Agents use Principia on their own" off: propose, and file only after a yes.
  */
 import type { BoardTask, CompanyAgent, Department } from '../../shared/company'
 
@@ -31,6 +33,8 @@ export interface ChatContextInput {
   departmentId: string | null
   /** the chat can call company_file_task / company_departments (claude with the board on) */
   fileTool: boolean
+  /** PROACTIVE.md §2: Settings → "Agents use Principia on their own" (absent = on) */
+  proactive?: boolean
 }
 export interface ChatPlacement {
   /** the chat's cwd; null = the company workspace */
@@ -76,8 +80,18 @@ export function chatPlacement(input: ChatContextInput): ChatPlacement {
   return { cwd: at?.path ?? null, addDirs, brief: chatBrief({ ...input, departmentId: dep?.id ?? null }, at), department: dep ? { id: dep.id, key: dep.key, name: dep.name } : null }
 }
 
-/** The routing rules both chats follow (DEPARTMENTS.md §9). */
-export function routingRules(fileTool: boolean, inDepartment: string | null): string[] {
+/** The routing rules both chats follow (DEPARTMENTS.md §9, PROACTIVE.md §2). */
+export function routingRules(fileTool: boolean, inDepartment: string | null, proactive = true): string[] {
+  if (proactive) {
+    return [
+      '### How to work in this chat',
+      '- Do the work the founder asks for here. Most requests are for you.',
+      fileTool
+        ? `- Work that belongs to ${inDepartment ? 'another' : 'a'} department's charter, or is for its agents or for later: file it there yourself with company_file_task (check the open board first, never twice), then say which task you filed. No need to ask first.`
+        : `- Work that belongs to ${inDepartment ? 'another' : 'a'} department's charter: say which department and why, and suggest filing it on the Board for it.`,
+      ...(fileTool ? ['- A department that does not exist yet: propose it, and create it with company_create_department only after the founder says yes; its agents are hired in Principia.'] : [])
+    ]
+  }
   const how = fileTool
     ? 'call the company_file_task tool (departmentKey, title, description, reason) only after the user says yes, or when they explicitly ask you to send it there'
     : 'if the user agrees, tell them to file it on the Board for that department'
@@ -130,6 +144,6 @@ export function chatBrief(input: ChatContextInput, at: ChatRepo | null = chatRep
     out.push('', dep ? `### Other departments of ${company}` : `### Departments of ${company}`)
     for (const d of departments) out.push(`- ${one(d.name, 60)} (${d.key})${d.data.charter.does.trim() ? `: ${one(d.data.charter.does, 140)}` : ''}`)
   }
-  if (departments.length || dep) out.push('', ...routingRules(input.fileTool, dep ? dep.name : null))
+  if (departments.length || dep) out.push('', ...routingRules(input.fileTool, dep ? dep.name : null, input.proactive !== false))
   return out.join('\n')
 }

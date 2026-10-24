@@ -183,7 +183,8 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     const s = sessions.create({ companyId: z.co.id, profileId: a.profile.id, repoId: null, cols: 80, rows: 24, title: 'Zeta chat', initialPrompt: '', resumeAgentSessionId: null })
     const so: LiveOwner = { sessionId: s.id }
     expect((await viaBroker(b, so, 'task_get', { id: mine.id })).error).toBe('Task not found in this company')
-    expect((await viaBroker(b, so, 'task_comment', { text: 'hi' })).error).toBe('You are not working on a task')
+    expect((await viaBroker(b, so, 'task_comment', { text: 'hi' })).error).toContain('You are not working on a task')
+    expect((await viaBroker(b, so, 'task_comment', { id: theirs.id, text: 'hi' })).error).toContain('was not opened by this chat')
     expect((await viaBroker(b, so, 'task_list', { scope: 'open' })).result?.tasks).toEqual([expect.objectContaining({ id: theirs.id })])
     // a run with no task gets no task tools at all
     expect((await viaBroker(b, { runId: 'r_none', stepId: 'st_none' }, 'task_get', {})).error).toContain('only available to runs started for a board task')
@@ -509,5 +510,68 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
     const { owner } = b.run(t.id)
     enabled = false
     expect(() => tools.resolveCaller(owner)).toThrow('board is off')
+  })
+})
+
+describe('PROACTIVE.md §3: tasks a chat tracks for its own work', () => {
+  const chat = (b: ReturnType<typeof board>, departmentId: string | null = null) => {
+    const s = sessions.create({ companyId: b.co.id, profileId: b.profile.id, repoId: null, cols: 80, rows: 24, title: 'Chat', initialPrompt: '', resumeAgentSessionId: null })
+    if (departmentId) db.prepare('UPDATE sessions SET department_id=? WHERE id=?').run(departmentId, s.id)
+    return { sessionId: s.id } as LiveOwner
+  }
+  const callAs = (owner: LiveOwner, tool: string, args: Record<string, unknown>, callId?: string) => tools.call(tools.resolveCaller(owner), tool as TaskTool, args, callId ? { callId } : {})
+
+  it('task_create from a chat tracks the task: never routed to an agent, even an auto one; the chat moves it, never to done', async () => {
+    const b = board()
+    c.departments.saveAgent({ id: b.writer.id, companyId: b.co.id, departmentId: b.marketing.id, kind: 'profile', refId: b.profile.id, name: 'Copywriter', data: { autonomy: 'auto' } })
+    c.setAutopilot(b.co.id, true)
+    const owner = chat(b, b.marketing.id)
+    const parent = callAs(owner, 'task_create', { title: 'Launch week', description: '- [ ] post\n- [ ] email' }, 'toolu_p') as { task: { id: string; identifier: string }; tracked: boolean }
+    expect(parent.tracked).toBe(true)
+    const child = callAs(owner, 'task_create', { title: 'Write the launch post', parent: parent.task.identifier, start: true }, 'toolu_c') as { task: { id: string } }
+    await settle()
+    const t = c.task(child.task.id)
+    // the department chat's department, no agent, in progress held by the chat, under its parent; nothing started a run
+    expect(t).toMatchObject({ departmentId: b.marketing.id, agentId: null, status: 'in_progress', runId: (owner as { sessionId: string }).sessionId, parentId: parent.task.id })
+    expect(c.task(parent.task.id)).toMatchObject({ agentId: null, status: 'todo' })
+    expect(started).toHaveLength(0)
+    // the chat is still a chat: it holds no task, so company_file_task stays open to it
+    expect(tools.resolveCaller(owner).taskId).toBeNull()
+    callAs(owner, 'task_comment', { id: child.task.id, text: 'Decision: short post, because the list is small' })
+    callAs(owner, 'task_update', { id: child.task.id, description: '- [x] post' })
+    const done = callAs(owner, 'task_update', { id: child.task.id, status: 'in_review', note: 'Wrote it; checked the links' }) as { task: { status: string } }
+    expect(done.task.status).toBe('in_review')
+    expect(c.task(child.task.id)).toMatchObject({ runId: null, description: '- [x] post', report: expect.objectContaining({ outcome: 'review', summary: 'Wrote it; checked the links' }) })
+    expect(() => callAs(owner, 'task_update', { id: child.task.id, status: 'done' })).toThrow()
+    // a replayed call returns the first task
+    expect((callAs(owner, 'task_create', { title: 'Launch week' }, 'toolu_p') as { replayed?: boolean }).replayed).toBe(true)
+    // blocked needs a reason
+    callAs(owner, 'task_update', { id: parent.task.id, status: 'in_progress' })
+    expect(() => callAs(owner, 'task_update', { id: parent.task.id, status: 'blocked' })).toThrow('needs a note')
+    expect((callAs(owner, 'task_update', { id: parent.task.id, status: 'blocked', note: 'Waiting for the logo' }) as { task: { status: string } }).task.status).toBe('blocked')
+  })
+
+  it("another chat, a task run and the founder's own tasks are out of reach", () => {
+    const b = board()
+    const mine = chat(b), other = chat(b)
+    const r = callAs(mine, 'task_create', { title: 'Mine' }) as { task: { id: string } }
+    expect(() => callAs(other, 'task_update', { id: r.task.id, status: 'in_progress' })).toThrow('not tracked by this chat')
+    expect(() => callAs(other, 'task_comment', { id: r.task.id, text: 'hi' })).toThrow('not opened by this chat')
+    const manual = b.task({ agentId: null })
+    expect(() => callAs(mine, 'task_update', { id: manual.id, status: 'in_progress' })).toThrow('not tracked by this chat')
+    // a task run never gets task_update, and comments only on its own task
+    const { owner } = b.run(b.task().id)
+    expect(() => callAs(owner, 'task_update', { id: r.task.id, status: 'in_progress' })).toThrow('for chats')
+    expect(() => callAs(owner, 'task_comment', { id: r.task.id, text: 'x' })).toThrow('only comment on your current task')
+  })
+
+  it('a chat that closes with work in progress parks it for the founder', () => {
+    const b = board()
+    const owner = chat(b)
+    const r = callAs(owner, 'task_create', { title: 'Mine', start: true }) as { task: { id: string } }
+    const live = sessions.isLive
+    sessions.isLive = () => false
+    try { d.checkSessions() } finally { sessions.isLive = live }
+    expect(c.task(r.task.id)).toMatchObject({ status: 'blocked', blockReason: 'no_report', runId: null })
   })
 })

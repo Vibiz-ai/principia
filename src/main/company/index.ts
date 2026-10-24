@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
+import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -605,6 +605,47 @@ export class CompanyStore {
       this.writeTask(next);this.activity(id,reason==='interrupted'?'interrupted':'parked',message);return next
     })()
   }
+  /**
+   * PROACTIVE.md §3: the chat that tracks a task moves it through its own work. in_progress holds the chat's session id
+   * in runId (like an "Open as session" lease, without sessions.task_id: the chat stays a chat). in_review keeps the
+   * chat's summary as the task's report; blocked(agent) its reason. Never done: a human approves every task.
+   */
+  moveTracked(id: string, holderId: string, to: 'in_progress'|'in_review'|'blocked', note: string|null): BoardTask {
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+      if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      const next:BoardTask={...t,updatedAt:new Date().toISOString()}
+      if(to==='in_progress') {
+        if(t.status==='blocked'&&t.blockReason==='deps') fail(`${t.identifier} waits for its dependencies`)
+        assertTransition(t,{status:'in_progress'},'agent',{tracked:true,depsDone:this.depsDone(t)})
+        Object.assign(next,{status:'in_progress',blockReason:null,runId:holderId,report:null,ask:null})
+      } else if(to==='in_review') {
+        assertTransition(t,{status:'in_review'},'agent',{tracked:true})
+        Object.assign(next,{status:'in_review',blockReason:null,runId:null,report:note ? {outcome:'review',summary:note.slice(0,10_000),evidence:[],at:next.updatedAt} : null})
+      } else {
+        assertTransition(t,{status:'blocked',blockReason:'agent'},'agent',{tracked:true})
+        Object.assign(next,{status:'blocked',blockReason:'agent',runId:null,report:note ? {outcome:'blocked',summary:note.slice(0,10_000),evidence:[],at:next.updatedAt} : null})
+      }
+      if(next.status===t.status&&next.blockReason===t.blockReason) return t
+      this.writeTask(next)
+      const label={in_progress:'Started',in_review:'Ready for review',blocked:'Blocked'}[to]
+      this.activity(id,to==='in_progress'?'started':to==='in_review'?'report':'parked',`${label} (chat)${note ? `: ${note.replace(/\s+/g,' ').trim().slice(0,1000)}` : ''}`,'agent')
+      return next
+    })()
+  }
+  /** PROACTIVE.md §3: the tracking chat rewrites its task's title or brief (decisions, criteria, handoff notes). */
+  editTracked(id: string, holderId: string, patch: { title?: string; description?: string }): BoardTask {
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+      if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      if(t.status==='done'||t.status==='canceled') fail(`${t.identifier} is closed`)
+      const next:BoardTask={...t,...(patch.title!==undefined ? {title:patch.title.slice(0,240)} : {}),...(patch.description!==undefined ? {description:patch.description.slice(0,50_000)} : {}),updatedAt:new Date().toISOString()}
+      this.writeTask(next);this.activity(id,'updated','Task details updated (chat)','agent')
+      return next
+    })()
+  }
   /** board:autopilot. Stored in the company row's JSON (§1.1); both default off / DEFAULT_MAX_IN_FLIGHT. */
   setAutopilot(companyId: string, on: boolean, maxInFlight?: number): BoardSettings {
     const c=this.passport(companyId)
@@ -696,7 +737,8 @@ export class CompanyStore {
     if(company.archivedAt) fail(`${company.name} is archived`)
     const settings=this.boardSettings(task.companyId)
     if(!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
-    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND id<>?").get(task.companyId,task.id) as {n:number}).n
+    // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot
+    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
     if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
@@ -707,7 +749,11 @@ export class CompanyStore {
   private taskPrompt(task: BoardTask, agent: CompanyAgent|null, wake: string[]): string {
     const department=task.departmentId ? this.departments.get(task.departmentId) : null
     const deps=task.dependencyIds.map(d=>this.task(d)).map(d=>({identifier:d.identifier,title:d.title,status:d.status,doneNote:d.doneNote}))
-    return buildTaskPrompt({task,companyId:task.companyId,department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake})
+    const running=this.listTasks(task.companyId).filter(t=>t.status==='in_progress'&&t.id!==task.id).map(t=>{
+      const a=t.agentId ? this.departments.getAgent(t.agentId) : null;const d=t.departmentId ? this.departments.get(t.departmentId) : null
+      return {identifier:t.identifier,title:t.title,agent:a ? a.name : trackedBy(t) ? 'a chat' : null,department:d?.name ?? null}
+    })
+    return buildTaskPrompt({task,companyId:task.companyId,department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running})
   }
   /**
    * Run end (§1.4, §4.5): ask → blocked(needs_input); report blocked → blocked(agent); report review, or passed with no

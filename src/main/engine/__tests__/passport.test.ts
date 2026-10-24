@@ -25,7 +25,8 @@ describe('company Passport in interactive sessions', () => {
       for (const cwd of [undefined, '/company-b']) {
         expect(engine.providers.interactiveSpawn(profile('p', adapter), { artifactsDir: '/a', cwd }).args.join(' ')).not.toContain('Company Passport')
       }
-      expect(engine.providers.interactiveSpawn(profile('p', adapter), { artifactsDir: '/a', cwd: '/company-a', resumeAgentSessionId: 'existing' }).args.join(' ')).not.toContain('Company Passport')
+      // PROACTIVE.md §4: a resumed pane keeps its Passport (claude: --append-system-prompt; codex never resumes a pane)
+      expect(engine.providers.interactiveSpawn(profile('p', adapter), { artifactsDir: '/a', cwd: '/company-a', resumeAgentSessionId: 'existing' }).args.join(' ')).toContain('Company Passport')
     })
   }
 })
