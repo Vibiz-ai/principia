@@ -158,7 +158,7 @@ export function AgentSeatView({ id }: { id: Id }): React.JSX.Element {
           <section className="dep-card" aria-label="Waiting for you">
             <header className="dep-card__head">
               <h2>Waiting for you</h2>
-              <span className="side-row__badge side-row__badge--needs">⚑ {waiting.length}</span>
+              <span className="side-row__badge side-row__badge--needs">◆ {waiting.length}</span>
             </header>
             <div className="dep-list">{waiting.map((t) => taskRow(t))}</div>
           </section>

@@ -205,7 +205,7 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
 
   return (
     <div className="view">
-      <Toolbar title="Artifacts">
+      <Toolbar title="Files">
         <Segmented size="sm" items={KINDS} value={kind} onChange={setKind} className="no-drag" />
         <select className="input input--sm input--select-fixed no-drag" value={owner} onChange={(e) => setOwner(e.target.value)} title={owner ? (owners.find(([k]) => k === owner)?.[1] ?? '') : 'Filter by run or session'}>
           <option value="">All sources</option>

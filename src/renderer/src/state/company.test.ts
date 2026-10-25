@@ -67,7 +67,8 @@ describe('company focus', () => {
     // nothing to go back to from the previous company
     m.goBack({ name: 'agents' })
     await Promise.resolve()
-    expect(m.getState().view).toEqual({ name: 'agents' })
+    // five doors: the old Agents route is an alias of Chats on Live
+    expect(m.getState().view).toEqual({ name: 'chats', filter: 'live' })
   })
 
   it('⌃N picks the Nth company in rail order, ⌃0 picks All', async () => {

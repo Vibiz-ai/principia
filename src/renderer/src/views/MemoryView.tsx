@@ -59,7 +59,7 @@ export function MemoryView({ view }: { view: MemoryViewState }): React.JSX.Eleme
   }, [view])
   return (
     <div className="view">
-      <Toolbar title="Passport" />
+      <Toolbar title="Knowledge" />
       <Loading />
     </div>
   )
@@ -392,7 +392,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
   if (ovError && !overview) {
     return (
       <div className="view">
-        <Toolbar title="Memory" />
+        <Toolbar title="Knowledge" />
         <ErrorState error={`Couldn’t open memory: ${ovError}`} onRetry={loadOverview} />
       </div>
     )
@@ -400,7 +400,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
   if (!overview || !scope) {
     return (
       <div className="view">
-        <Toolbar title="Memory" />
+        <Toolbar title="Knowledge" />
         <Loading />
       </div>
     )
@@ -422,7 +422,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
   return (
     <div className="view mview">
       <Toolbar
-        title="Memory"
+        title="Knowledge"
         sub={
           !nothingAtAll && (
             <div className="mview__pickers">

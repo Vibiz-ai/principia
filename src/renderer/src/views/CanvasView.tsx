@@ -244,7 +244,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   const empty = !!graph && graph.nodes.length === 0
   return (
     <div className="view">
-      <Toolbar title="Canvas">
+      <Toolbar title="Activity">
         <div className="canvas-modes" role="group" aria-label="Canvas view">
           <Button variant={canvasMode === 'agents' && !showActivity ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'agents' && !showActivity} onClick={() => { if (showActivity) toggleActivity(); changeMode('agents') }}>Agents</Button>
           <Button variant={canvasMode === 'workflows' && !showActivity ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'workflows' && !showActivity} onClick={() => { if (showActivity) toggleActivity(); changeMode('workflows') }}>Workflows</Button>

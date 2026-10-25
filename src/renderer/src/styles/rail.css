@@ -32,7 +32,7 @@
 /*
  * VOICE.md §5.6 engraved coins: tile 44 × 40, coin 32 (18 in the popover head), laurel ring 38.4 (the Medallion grows
  * its SVG around the coin without moving it). Working is the twelve blue tesserae inside the rim (roman.css, reduced-
- * motion aware); needs-you takes precedence and shows the amber count instead; a failed run is the Medallion's 6 px red
+ * motion aware); needs-you takes precedence and shows the accent count instead; a failed run is the Medallion's 6 px red
  * square tessera (no round dot) and hides the laurel. Line art: no drop shadows, no lift; hover only adds the glow.
  */
 .rail__coin { position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; line-height: 0; pointer-events: none; }
@@ -44,12 +44,16 @@
 .rail__tile.is-active .rail__coin .rm-medallion__fail { box-shadow: 0 0 0 2px var(--sidebar-selected), 0 0 0 2px var(--sidebar-bg); }
 .rail__count { position: absolute; top: 0; right: 0; z-index: 1; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--radius-full); background: var(--status-needs-soft); color: var(--status-needs); border: 1px solid var(--status-needs); font-size: 10px; font-weight: var(--weight-semibold); line-height: 14px; text-align: center; font-variant-numeric: tabular-nums; backdrop-filter: blur(6px); }
 .rail__tile .rail__count { background: color-mix(in srgb, var(--sidebar-bg) 30%, var(--status-needs-soft)); }
+/* five doors A4: the paused mark, white line art on dark (grey ‖ chip at the tile's foot); the coin dims */
+.rail__paused { position: absolute; left: 50%; bottom: 1px; transform: translateX(-50%); z-index: 1; height: 13px; min-width: 15px; padding: 0 3px; border-radius: var(--radius-full); border: 1px solid var(--border-strong); background: var(--sidebar-bg); color: var(--text-secondary); font-size: 8px; font-weight: var(--weight-semibold); line-height: 11px; letter-spacing: -1px; text-align: center; }
+.rail__tile.is-paused .rail__coin { opacity: 0.55; }
 .rail__working-dot { position: absolute; right: 6px; bottom: 5px; width: 6px; height: 6px; background: var(--status-running); box-shadow: 0 0 0 2px var(--sidebar-bg); animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }
 
 /* hover popover: that company's working and needs-you work */
 .rail-pop { position: fixed; left: 60px; z-index: var(--z-popover); width: 280px; background: var(--surface-2); border-radius: var(--radius-md); box-shadow: var(--shadow-popover); padding: 6px; animation: fade var(--dur-fast); }
 .rail-pop__head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 6px; font-weight: var(--weight-semibold); font-size: var(--text-sm); }
 .rail-pop__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-pop__state { margin-left: auto; flex: none; color: var(--text-tertiary); font-size: var(--text-xs); }
 .rail-pop__empty, .rail-pop__more { padding: 4px 6px 6px; color: var(--text-tertiary); font-size: var(--text-xs); }
 .rail-pop__row { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 6px; border: 0; background: none; border-radius: var(--radius-sm); color: var(--text-primary); text-align: left; font-size: var(--text-sm); }
 .rail-pop__row:hover { background: var(--row-hover); }

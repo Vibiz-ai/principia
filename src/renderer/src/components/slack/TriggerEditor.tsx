@@ -1,6 +1,6 @@
 /**
  * Slack triggers (SLACK.md §9, §12.5): the list on Schedules › Slack triggers, the editor sheet, the dry-run Test, and
- * the workflow chip. Draft is the default reply mode; Auto is amber, needs an allow-list, shows the fixed limits and is
+ * the workflow chip. Draft is the default reply mode; Auto is marked as caution, needs an allow-list, shows the fixed limits and is
  * disabled for unfiltered "any message" triggers (PO-S3c).
  */
 import { useEffect, useMemo, useState } from 'react'

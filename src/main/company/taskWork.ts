@@ -7,7 +7,8 @@
  *   guard env (TaskRunBridge.workdir). Beyond the company's maxInFlight it is queued and starts when a seat frees up.
  * - The PR (gh, read-only): looked up once the branch is pushed, then polled every 60 s while open and on window focus.
  *   Ready → in_review; changes requested (a review not handled yet) → the agent goes again with the reviewer's note;
- *   merged (on GitHub, or Merge… here) or a local merge into the base → done, doneNote "Merged #N". Errors back off.
+ *   approved by a reviewer → done ("Approved #N", the worktree stays until it merges); merged (on GitHub, or Merge…
+ *   here) or a local merge into the base → done, doneNote "Merged #N". Errors back off.
  * - The worktree folder gone while the task is open → a banner: Cancel Task · Back to Backlog · Keep As Is.
  *
  * Every status move is a compare-and-set on the task's status with a `work` activity by 'system', checked by
@@ -442,8 +443,15 @@ export class TaskWorkService {
     if (pr.state === 'OPEN' && pr.reviewDecision === 'CHANGES_REQUESTED' && t.status === 'in_review') changes = await latestChanges(this.d.gh, cwd, pr.url)
     const move = nextMove(t, pr, w, changes?.at ?? null)
     if (pr.state === 'OPEN' && !pr.isDraft && t.status !== 'in_progress' && w.readySeen !== pr.number) this.writeWork(taskId, { readySeen: pr.number })
-    if (move.kind === 'done') {
+    if (move.kind === 'done' && move.approved) {
+      // approved, not merged yet: done, and the worktree stays until the PR merges (followed while open)
+      this.complete(t, move.note, 'approved')
+    } else if (move.kind === 'done') {
       this.complete(t, move.note)
+      await this.cleanup(taskId)
+    } else if (pr.state === 'MERGED' && t.status === 'done' && !t.plan && prev?.state === 'OPEN') {
+      // done on approval, merged since: the worktree goes now (when nothing would be lost)
+      this.c.activity(taskId, 'work', `Pull request #${pr.number} merged`, 'system')
       await this.cleanup(taskId)
     } else if (move.kind === 'review') {
       this.moveTo(t, 'in_review', { work: 'pr_ready' }, `Pull request #${pr.number} is open: In Review`)
@@ -467,7 +475,7 @@ export class TaskWorkService {
   }
 
   /** done with the auto note, by the system on behalf of the human who merged. Heals the tasks waiting on it. */
-  private complete(t: BoardTask, note: string): void {
+  private complete(t: BoardTask, note: string, how: 'merged' | 'approved' = 'merged'): void {
     if (!this.depsDone(t)) {
       if (!t.work?.error?.startsWith('Merged')) {
         this.writeWork(t.id, { error: `${note}, but its dependencies are not done yet` })
@@ -475,7 +483,7 @@ export class TaskWorkService {
       }
       return
     }
-    this.moveTo(t, 'done', { work: 'merged', doneNote: note }, `${note}: Done`, { doneNote: note })
+    this.moveTo(t, 'done', { work: how, doneNote: note }, `${note}: Done`, { doneNote: note })
     this.c.heal(t.companyId)
   }
 

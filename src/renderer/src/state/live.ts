@@ -10,7 +10,10 @@ import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
 import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
-import { focusSession, followCompany, getState, navigate, setState, toast, toastError, useStore } from './store'
+import { departmentsOn, focusSession, followCompany, getState, navigate, setState, toast, toastError, useStore, type State } from './store'
+import { liveTruth, needsIn, workingIn, type LiveScope, type LiveTruth, type NeedsSlice, type WorkingSlice } from '../lib/liveTruth'
+import { taskCounts, taskNeedsIn } from '../lib/companyModel'
+import { laneContext } from '../lib/departments'
 
 const DAY = 24 * 60 * 60_000
 
@@ -112,11 +115,67 @@ export function wireLiveEvents(): void {
     pendingAsks.push(a)
     schedule()
   })
+  // A2: a run or session that ended takes its live agents with it in the same render, even when the agents' own
+  // final update is still on its way (or never comes: a killed CLI)
+  hive.on('run:updated', (run) => {
+    if (run.status === 'queued' || run.status === 'running') return
+    endOwned((a) => a.runId === run.id && a.kind !== 'session', run.status === 'passed' ? 'done' : run.status === 'failed' ? 'failed' : 'canceled')
+  })
+  hive.on('pty:exit', ({ sessionId }) => endOwned((a) => a.sessionId === sessionId, 'done'))
   hive.on('agent:events', ({ agentId, events }) => {
     const subs = eventSubs.get(agentId)
     if (subs) for (const f of subs) f(events)
   })
   if (typeof window !== 'undefined') window.addEventListener('focus', () => markVisibleSeen())
+}
+
+/** Ends every live agent `owned` matches (run end, pane exit): the same batch as agent updates, so one render. */
+function endOwned(owned: (a: AgentNode) => boolean, status: 'done' | 'failed' | 'canceled'): void {
+  const now = new Date().toISOString()
+  for (const a of Object.values(getState().agents)) {
+    if (!owned(a) || !isLive(a)) continue
+    pendingAgents.push({ ...a, status, needs: null, endedAt: a.endedAt ?? now, updatedAt: now })
+  }
+  schedule()
+}
+
+// ---------- A2: the one live source ----------
+let truthMemo: { deps: unknown[]; truth: LiveTruth } | null = null
+/**
+ * Every working and needs-you number and list reads this (lib/liveTruth.ts). Memoised on the store slices it reads,
+ * so every surface in a render shares one result.
+ */
+export function truthOf(s: State): LiveTruth {
+  const on = departmentsOn(s)
+  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, on]
+  if (truthMemo && truthMemo.deps.every((d, i) => d === deps[i])) return truthMemo.truth
+  const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
+  const counts = on ? taskCounts(s.tasks, laneContext(s.asks, s.companyAgents, paused)) : {}
+  const taskNeeds: Record<Id, number> = {}
+  for (const id of Object.keys(counts)) taskNeeds[id] = taskNeedsIn(counts, id)
+  const truth = liveTruth({ agents: Object.values(s.agents), asks: Object.values(s.asks), seen: new Set(Object.keys(s.seenIdle)), sessions: s.sessions, tasks: s.tasks, taskNeeds })
+  truthMemo = { deps, truth }
+  return truth
+}
+export function useLiveTruth(): LiveTruth {
+  return useStore(truthOf)
+}
+/** Agents working now in a scope (a company id, or 'all' / undefined for every company). */
+export function useWorking(scope?: LiveScope): WorkingSlice {
+  const t = useLiveTruth()
+  return useMemo(() => workingIn(t, scope), [t, scope])
+}
+/** Everything that needs you in a scope: live asks, finished turns and board tasks waiting on you. */
+export function useNeeds(scope?: LiveScope): NeedsSlice {
+  const t = useLiveTruth()
+  return useMemo(() => needsIn(t, scope), [t, scope])
+}
+/** The same slices outside React (palette commands, ⌘J). */
+export function workingNow(scope?: LiveScope): WorkingSlice {
+  return workingIn(truthOf(getState()), scope)
+}
+export function needsNow(scope?: LiveScope): NeedsSlice {
+  return needsIn(truthOf(getState()), scope)
 }
 
 // ---------- visible owner + A3 seen ----------

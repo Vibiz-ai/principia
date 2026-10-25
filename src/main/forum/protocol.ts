@@ -60,7 +60,7 @@ export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
   },
   forum_post: {
     name: 'forum_post',
-    description: 'Post in a channel (#name) or DM (@handle). Mention with @handle or @department. refs: PRN-12, [[Note]], art_…, m3fk, URLs.',
+    description: 'Post in a channel (#name) or DM (@handle). Mention with @handle or @department. refs: task ids like NC-12, [[Note]], art_…, m3fk, URLs.',
     inputSchema: {
       type: 'object',
       properties: {

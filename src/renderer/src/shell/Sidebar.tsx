@@ -1,23 +1,45 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Repo, Schedule, Session } from '@shared/types'
+/**
+ * Five doors (design.md §2-3, pm-review step 1). One fixed order, the same in every mode:
+ * CompanyHeader → Search or ask (⌘K) → Home · Team · Board · Chats · Knowledge (⌘1-⌘5) → More (popover with pins)
+ * → LIVE (working agents, two lines, up to 4, each opens that exact chat) → REPOSITORIES + (code companies and
+ * Personal) → PINNED (the user's own, per company in settings.sidebarNav) → Settings.
+ * The CHAT, DEPARTMENTS, FORUM channel, NEEDS YOU and OTHER COMPANIES sections and the All-mode company trees are
+ * gone: their contents live behind the doors (Chats, Team, Forum in More, Home, the rail).
+ */
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { Repo, Session } from '@shared/types'
 import type { AgentNode } from '@shared/live'
 import { Icon } from '../components/Icon'
 import { IconButton, Kbd, StatusGlyph, useTick } from '../components/ui'
-import { hive, useHiveEvent } from '../lib/hive'
-import { useNeedsOwners, useNeedsYouCount } from '../state/live'
-import { isSetUp, usePendingSlackDrafts, useSlack, useUnreadCount } from '../state/slack'
+import { hive } from '../lib/hive'
+import { useNeedsOwners, useNeeds, useWorking } from '../state/live'
+import { usePendingSlackDrafts, useSlack } from '../state/slack'
 import { AgentGlyph } from '../components/agents/AgentBits'
 import { agentVisual, isStalled } from '../lib/live'
 import { age, startedHint } from '../lib/time'
 import { collapseExited, sessionEndLabel, tildify } from '../lib/format'
-import { agentCompanyResolver, companyOf, reposOf, useCompanyBadges, useLiveItems, type LiveItem } from '../lib/company'
+import { agentCompanyResolver, companyOf, reposOf, useLiveItems, type LiveItem } from '../lib/company'
+import {
+  MORE,
+  moreByKey,
+  moreGroups,
+  morePopoverBox,
+  navKeyOf,
+  pinnedRefs,
+  prefsFor,
+  PRIMARY,
+  togglePin,
+  isPinned,
+  viewFor,
+  type DoorKey,
+  type MoreKey
+} from '../lib/nav'
 import {
   addRepoPaths,
   moveRepo,
   addRepos,
   focusSession,
   navigate,
-  openChat,
   renameSession,
   repoContextMenu,
   saveJson,
@@ -33,57 +55,24 @@ import {
   assignRepoToCompany,
   multiCompany,
   openLiveItem,
-  openNewCompany,
-  scopeCompanyId,
+  openPalette,
   departmentsOn,
-  type ViewState
+  departmentContextMenu,
+  openDepartment,
+  updateSidebarPrefs,
+  companyName
 } from '../state/store'
-import { CompanyGroup, REPO_DRAG_TYPE } from './CompanyGroup'
-import { DepartmentChatRows, DepartmentGroup, NeedsYouTasksSlot, useBoardCounts, useNeedsYouTaskCount } from './DepartmentGroup'
-import { CompanyAvatar } from './CompanyRail'
-import { CompanySwitcher, OtherCompanies } from './OtherCompanies'
-import { ForumSidebarSection, useForumBadge } from '../components/forum/SidebarSection'
-import { CloudMark } from '../components/cloud/bits'
+import { DepartmentIcon } from './DepartmentGroup'
+import { CompanyHeader } from './CompanyHeader'
+import { useForumBadge } from '../components/forum/SidebarSection'
 import { useCloudBadge } from '../state/cloud'
 import { plansEnabled } from '@shared/plans'
+import { nativeMenu } from '../lib/hive'
 
-type NavItem = { key: ViewState['name']; label: string; icon: string; kbd?: string }
-
-/** Personal-only and All mode. PASSPORT.md §10: Passport replaces Memory (⌘7). */
-const NAV: NavItem[] = [
-  { key: 'agents', label: 'Agents', icon: 'agents', kbd: '⇧⌘A' },
-  { key: 'home', label: 'Home', icon: 'home', kbd: '⌘1' },
-  { key: 'tasks', label: 'Tasks', icon: 'tasks' },
-  { key: 'plans', label: 'Plans', icon: 'plans' },
-  { key: 'canvas', label: 'Canvas', icon: 'canvas', kbd: '⌘2' },
-  { key: 'workflows', label: 'Workflows', icon: 'workflows', kbd: '⌘3' },
-  { key: 'marketplace', label: 'Marketplace', icon: 'marketplace' },
-  { key: 'schedules', label: 'Schedules', icon: 'schedules', kbd: '⌘4' },
-  { key: 'artifacts', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5' },
-  { key: 'keys', label: 'Keys', icon: 'keys', kbd: '⌘6' },
-  { key: 'passport', label: 'Passport', icon: 'passport', kbd: '⌘7' },
-  { key: 'slack', label: 'Slack', icon: 'slack', kbd: '⇧⌘L' },
-  { key: 'forum', label: 'Forum', icon: 'forum', kbd: '⇧⌘F' },
-  { key: 'usage', label: 'Usage', icon: 'coins' },
-  { key: 'cloud', label: 'Cloud', icon: 'cloud' }
-]
-/** COMPANY.md §8.4: focused NAV, every badge counts this company only. */
-const NAV_FOCUSED: NavItem[] = [
-  { key: 'home', label: 'Home', icon: 'home', kbd: '⌘1' },
-  { key: 'agents', label: 'Agents', icon: 'agents', kbd: '⇧⌘A' },
-  { key: 'canvas', label: 'Canvas', icon: 'canvas', kbd: '⌘2' },
-  { key: 'workflows', label: 'Workflows', icon: 'workflows', kbd: '⌘3' },
-  { key: 'schedules', label: 'Schedules', icon: 'schedules', kbd: '⌘4' },
-  { key: 'artifacts', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5' },
-  { key: 'keys', label: 'Keys', icon: 'keys', kbd: '⌘6' },
-  { key: 'passport', label: 'Passport', icon: 'passport', kbd: '⌘7' },
-  { key: 'slack', label: 'Slack', icon: 'slack', kbd: '⇧⌘L' },
-  { key: 'tasks', label: 'Tasks', icon: 'tasks' },
-  { key: 'plans', label: 'Plans', icon: 'plans' },
-  { key: 'forum', label: 'Forum', icon: 'forum', kbd: '⇧⌘F' },
-  { key: 'usage', label: 'Usage', icon: 'coins' },
-  { key: 'cloud', label: 'Cloud', icon: 'cloud' }
-]
+/** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
+export const REPO_DRAG_TYPE = 'application/x-principia-repository'
+/** LIVE shows this many rows, then "+N more in Chats". */
+const LIVE_MAX = 4
 
 /** Custom title when the user renamed it, else the agent name. */
 function sessionLabel(s: Session): { label: string; custom: boolean } {
@@ -99,70 +88,63 @@ export function Sidebar(): React.JSX.Element {
   const companies = useStore((s) => s.companies)
   const multi = useStore((s) => multiCompany(s))
   const active = useStore((s) => activeCompany(s))
-  const scopeNonce = useStore((s) => s.scopeNonce)
-  const expandedCompanies = useStore((s) => s.expandedCompanies)
-  // DEPARTMENTS.md §9: with the flag off nothing below changes (no Board label, no Departments, no task items)
   const departments = useStore((s) => departmentsOn(s))
-  // PLANS.md §0: Plans sit behind their own experimental flag
   const plansOn = useStore((s) => plansEnabled(s.settings?.experimental))
-  const boardCounts = useBoardCounts()
-  // All mode: board task items join the Needs you section (header count = live items + task items)
-  const needsTaskCount = useNeedsYouTaskCount()
-  /** 'flat': Personal only, the pre-company sidebar. 'all': grouped by company. 'focused': one company. */
+  const navPrefs = useStore((s) => s.settings?.sidebarNav)
+  /** 'flat': Personal only, no rail. 'all': All companies. 'focused': one company. */
   const mode: 'flat' | 'all' | 'focused' = !multi ? 'flat' : active === 'all' ? 'all' : 'focused'
-  const focusedCompany = mode === 'focused' ? companies.find((c) => c.id === active) : undefined
-  // focused mode lists this company's chats and repos only (§8.4); All mode groups everything
-  const repos = useMemo(() => (mode === 'focused' ? reposOf(allRepos, active) : allRepos), [mode, allRepos, active])
+  const focusedCompany = mode === 'focused' ? (companies.find((c) => c.id === active) ?? null) : null
+  const scope = mode === 'focused' ? active : undefined
+  // repositories belong to one company: focused lists that company's, flat (Personal only) lists them all
+  const repos = useMemo(() => (mode === 'focused' ? reposOf(allRepos, active) : mode === 'flat' ? allRepos : []), [mode, allRepos, active])
   const sessions = useMemo(() => (mode === 'focused' ? allSessions.filter((s) => companyOf(s) === active) : allSessions), [mode, allSessions, active])
-  const { byCompany } = useCompanyBadges()
-  const needsItems = useLiveItems()
-  const status = useStore((s) => s.status)
+  // five doors A2: the Home badge, the Team dot and LIVE are slices of the one live source (state/live.ts), the same
+  // numbers the rail, the status bar and Home show
+  const workingSlice = useWorking(scope)
+  const needsSlice = useNeeds(scope)
+  const liveRows = useLiveItems({ working: true, companyId: scope })
+  const working = workingSlice.items
+  // a repo row counts the sessions LIVE counts (working now), not every open terminal, so the numbers agree
+  const workingSessions = useMemo(() => new Set(working.map((i) => i.sessionId).filter((x): x is string => !!x)), [working])
   const grid = useStore((s) => s.grid)
   const focused = useStore((s) => s.focusedSession)
   const expanded = useStore((s) => s.expandedRepos)
   const memoryPending = useStore((s) => s.memory?.counts.pending ?? 0)
   const memoryPaused = useStore((s) => !!s.memory?.agentWritesPaused)
-  const globalNeedsYou = useNeedsYouCount()
-  const needsYou = mode === 'focused' ? (byCompany[active]?.needsYou ?? 0) : globalNeedsYou
-  const slackUnread = useUnreadCount()
+  // the Home badge counts what Home lists under Needs you: open asks and finished turns, plus board tasks waiting on you
+  const needsYou = needsSlice.count
+  const workingCount = workingSlice.count
   const slackDrafts = usePendingSlackDrafts().filter((d) => d.status === 'pending' || d.status === 'failed').length
-  const slackState = useSlack((s) => (s.available === false ? null : s.status))
-  const slackAutoPaused = useStore((s) => !!s.settings?.slackAutoPaused)
-  // FORUM.md §8: mentions and unread DMs of the focused company's Forum
+  const slackError = useSlack((s) => (s.available === false ? false : s.status?.state === 'error'))
+  // FORUM.md §8: mentions and unread DMs of the focused company's Forum (its "Show when active" signal)
   const forumBadge = useForumBadge(mode === 'focused' ? active : null, departments)
-  // CLOUD.md §13.1: open cloud asks plus new passport facts
+  // CLOUD.md §13.1: open cloud asks plus new passport facts; Cloud sync now lives in Settings
   const cloudBadge = useCloudBadge()
   const allNeedsOwners = useNeedsOwners()
-  const agentsWorkingAll = useStore((s) => Object.values(s.agents).some((a) => a.status === 'working' || a.status === 'starting'))
-  const agentsWorking = mode === 'focused' ? (byCompany[active]?.working ?? 0) > 0 : agentsWorkingAll
   const agentsMap = useStore((s) => s.agents)
-  // focused: runs needing you only count when they belong to this company
+  const allDepartments = useStore((s) => s.departments)
   const needsOwners = useMemo(() => {
     if (mode !== 'focused') return allNeedsOwners
-    const runs = new Set(needsItems.filter((i) => i.companyId === active && i.runId).map((i) => i.runId!))
+    const runs = new Set(liveRows.filter((i) => i.companyId === active && i.runId).map((i) => i.runId!))
     return { sessions: allNeedsOwners.sessions, runs }
-  }, [mode, active, allNeedsOwners, needsItems])
-  // an agent's company: its stamp, else its root's or its session's (the badge rule), so focused counts match the rail
-  const agentCompany = useMemo(() => agentCompanyResolver(Object.values(agentsMap), allSessions), [agentsMap, allSessions])
-  // "Stalled?" (no output for Settings.stallMinutes): live roots only; sessions keyed by session id for their rows
+  }, [mode, active, allNeedsOwners, liveRows])
+  const allTasks = useStore((s) => s.tasks)
+  const agentCompany = useMemo(() => agentCompanyResolver(Object.values(agentsMap), allSessions, allTasks), [agentsMap, allSessions, allTasks])
+  // "Stalled?" (no output for Settings.stallMinutes): sessions keyed by session id for their repo rows
   const stalled = useMemo(() => {
     const sessions = new Set<string>()
-    let roots = 0
     for (const a of Object.values(agentsMap)) {
-      if (a.kind === 'subagent' || !isStalled(a)) continue
+      if (a.kind !== 'session' || !a.sessionId || !isStalled(a)) continue
       if (mode === 'focused' && agentCompany(a) !== active) continue
-      roots++
-      if (a.kind === 'session' && a.sessionId) sessions.add(a.sessionId)
+      sessions.add(a.sessionId)
     }
-    return { sessions, roots }
+    return { sessions }
   }, [agentsMap, mode, active, agentCompany])
-  // the live session agent per session row: working vs finished-your-turn, not just "process alive"
   const sessionAgents = useMemo(() => {
     const m = new Map<string, AgentNode>()
     for (const a of Object.values(agentsMap)) if (a.kind === 'session' && a.sessionId) m.set(a.sessionId, a)
     return m
   }, [agentsMap])
-  const [schedules, setSchedules] = useState<Schedule[]>([])
   const [filter, setFilter] = useState('')
   const [drop, setDrop] = useState(false)
   const [draggedRepo, setDraggedRepo] = useState<string | null>(null)
@@ -170,19 +152,9 @@ export function Sidebar(): React.JSX.Element {
   const [width, setWidth] = useState<number>(() => loadJson('hive.sidebarWidth', 232))
   const [showEnded, setShowEnded] = useState<Record<string, boolean>>({})
   const [renaming, setRenaming] = useState<{ kind: 'repo' | 'session'; id: string } | null>(null)
+  const [more, setMore] = useState<DOMRect | null>(null)
   const filterRef = useRef<HTMLInputElement>(null)
-
-  const loadSchedules = (): void => {
-    const companyId = scopeCompanyId()
-    void hive.schedules.list(companyId ? { companyId } : undefined).then(setSchedules, () => undefined)
-  }
-  useEffect(loadSchedules, [scopeNonce])
-  useHiveEvent('schedule:updated', (s) => {
-    const scope = scopeCompanyId()
-    if (scope && companyOf(s) !== scope) return setSchedules((list) => list.filter((x) => x.id !== s.id))
-    setSchedules((list) => (list.some((x) => x.id === s.id) ? list.map((x) => (x.id === s.id ? s : x)) : [...list, s]))
-  })
-  useHiveEvent('data:changed', ({ domain }) => domain === 'schedules' && loadSchedules())
+  const moreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onRename = (e: Event): void => setRenaming({ kind: (e.type === 'hive:renameRepo' ? 'repo' : 'session') as 'repo' | 'session', id: (e as CustomEvent<string>).detail })
@@ -201,32 +173,20 @@ export function Sidebar(): React.JSX.Element {
       window.removeEventListener('keydown', onKey)
     }
   }, [])
+  // a company switch closes the More popover (its pins belong to the company you left)
+  useEffect(() => setMore(null), [active])
 
-  // focused: this company's running sessions plus the runs its live step agents belong to
-  const running = useMemo(() => {
-    if (mode !== 'focused') return (status?.runningSessions ?? 0) + (status?.runningRuns ?? 0)
-    const runs = new Set<string>()
-    for (const a of Object.values(agentsMap)) {
-      if (a.kind === 'step' && a.runId && (a.status === 'working' || a.status === 'starting' || a.status === 'needs_you') && agentCompany(a) === active) runs.add(a.runId)
-    }
-    return sessions.filter((s) => s.status === 'running').length + runs.size
-  }, [mode, status, agentsMap, sessions, active, agentCompany])
   const sessionNeeds = (s: Session): boolean => s.status === 'running' && needsOwners.sessions.has(s.id)
-  // Canvas shows running sessions and runs; amber as soon as one of them waits for you
-  const canvasNeeds = needsOwners.runs.size > 0 || sessions.some(sessionNeeds)
-  const enabledSchedules = schedules.filter((s) => s.enabled).length
   const byRepo = useMemo(() => {
     const m = new Map<string, Session[]>()
     for (const s of sessions) {
-      // DEPARTMENTS.md §9: a department chat lists under its department (with the flag on), not in Chat or a repo
-      if (s.departmentId && departments) continue
-      const k = s.repoId ?? '__chat'
-      if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(s)
+      if (!s.repoId) continue
+      if (!m.has(s.repoId)) m.set(s.repoId, [])
+      m.get(s.repoId)!.push(s)
     }
     for (const l of m.values()) l.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
     return m
-  }, [sessions, departments])
+  }, [sessions])
   /** Sessions whose row label would repeat a sibling's ("Claude", "Claude"): those also show their start time. */
   const dupLabel = useMemo(() => {
     const count = new Map<string, number>()
@@ -234,28 +194,26 @@ export function Sidebar(): React.JSX.Element {
     for (const s of sessions) count.set(key(s), (count.get(key(s)) ?? 0) + 1)
     return new Set(sessions.filter((s) => (count.get(key(s)) ?? 0) > 1).map((s) => s.id))
   }, [sessions])
-  const chatSessions = byRepo.get('__chat') ?? []
-  const chatsByCompany = useMemo(() => {
-    const m = new Map<string, Session[]>()
-    for (const s of chatSessions) {
-      const k = companyOf(s)
-      if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(s)
-    }
-    return m
-  }, [chatSessions])
   const shownRepos = filter ? repos.filter((r) => r.name.toLowerCase().includes(filter.toLowerCase())) : repos
   const inSession = view.name === 'session' && !view.missing && !view.missingRepoId
   const focusedSess = sessions.find((s) => s.id === focused)
+  const current = navKeyOf(view)
+  // code companies (any repository) get REPOSITORIES; a shop, and a new user with no folders yet, never see it
+  // (design §2.1: 7 rows). ⌘O, ⌘K "repo", New ▾ and dropping a folder on the sidebar still add the first one.
+  const showRepos = mode !== 'all' && repos.length > 0
 
-  const navActive = (k: ViewState['name']): boolean => {
-    if (k === 'workflows') return view.name === 'workflows' || view.name === 'editor'
-    if (k === 'canvas') return view.name === 'canvas'
-    if (k === 'home') return view.name === 'home' || view.name === 'portfolio'
-    if (k === 'passport') return view.name === 'passport' || view.name === 'memory'
-    if (k === 'settings') return view.name === 'settings' || view.name === 'company'
-    if (k === 'tasks') return view.name === 'tasks' || view.name === 'department' || view.name === 'agentSeat'
-    return view.name === k
+  // ---------- pins and More (settings.sidebarNav, per company) ----------
+  const prefs = prefsFor(navPrefs, active, multi)
+  const available = (k: MoreKey): boolean => (k === 'plans' ? plansOn && departments : true)
+  const moreBadge = (k: MoreKey): number => (k === 'forum' ? forumBadge : k === 'slack' ? slackDrafts : 0)
+  const activeMore = useMemo(() => new Set<string>(MORE.filter((m) => moreBadge(m.key) > 0 || (m.key === 'slack' && slackError)).map((m) => m.key)), [forumBadge, slackDrafts, slackError])
+  const pins = pinnedRefs(prefs, { active: activeMore, available, department: (id) => allDepartments.some((d) => d.id === id && !d.archivedAt && (mode !== 'focused' || d.companyId === active)) })
+  // the More row carries a dot when something in it wants you and is not already shown in PINNED
+  const moreWants = [...activeMore].some((k) => !pins.includes(k))
+  const openMore = (): void => setMore(more ? null : (moreRef.current?.getBoundingClientRect() ?? null))
+  const pinMenu = async (ref: string): Promise<void> => {
+    const id = await nativeMenu([{ id: 'unpin', label: 'Unpin from Sidebar' }])
+    if (id === 'unpin') updateSidebarPrefs((p) => togglePin(p, ref))
   }
 
   const onDrop = (e: React.DragEvent): void => {
@@ -284,23 +242,81 @@ export function Sidebar(): React.JSX.Element {
     window.addEventListener('mouseup', up)
   }
 
-  /** All-mode Needs you (§8.3): every open ask and unseen idle turn across companies, with the company avatar. */
-  const needsRow = (it: LiveItem): React.JSX.Element => {
-    const c = companies.find((x) => x.id === it.companyId)
-    return (
-      <div key={it.key} className="side-row side-row--session side-row--needs" role="button" tabIndex={0} title={`${c?.name ?? 'Personal'} · ${it.title}${it.detail ? `\n${it.detail}` : ''}`} onClick={() => void openLiveItem(it)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), void openLiveItem(it))}>
-        {c ? <CompanyAvatar company={c} size={14} /> : <AgentGlyph visual="needs" />}
-        <span className="side-row__label">{it.title}</span>
-        <AgentGlyph visual={it.kind === 'idle' ? 'idle' : 'needs'} />
-      </div>
-    )
+  /** One nav row (a door, More, a pin, Settings): keyboard-activatable, aria-current when it is the page. */
+  const navRow = (o: { key: string; label: React.ReactNode; icon: React.ReactNode; selected: boolean; onOpen: () => void; title?: string; kbd?: string; badge?: React.ReactNode; className?: string; onContextMenu?: () => void; refEl?: React.Ref<HTMLDivElement>; popup?: { expanded: boolean } }): React.JSX.Element => (
+    <div
+      key={o.key}
+      ref={o.refEl}
+      className={`side-row side-row--nav ${o.selected ? 'is-selected' : ''} ${o.className ?? ''}`}
+      // More opens a popover, so it is a button with popup semantics, not a link
+      role={o.popup ? 'button' : 'link'}
+      aria-haspopup={o.popup ? 'dialog' : undefined}
+      aria-expanded={o.popup ? o.popup.expanded : undefined}
+      tabIndex={0}
+      aria-current={o.selected && !o.popup ? 'page' : undefined}
+      aria-keyshortcuts={o.kbd ? o.kbd.replace('⇧', 'Shift+').replace('⌘', 'Meta+') : undefined}
+      title={o.title}
+      onClick={o.onOpen}
+      onContextMenu={o.onContextMenu ? (e) => (e.preventDefault(), o.onContextMenu!()) : undefined}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          o.onOpen()
+        }
+      }}
+    >
+      {o.icon}
+      <span className="side-row__label">{o.label}</span>
+      {o.badge}
+      {o.kbd && <Kbd>{o.kbd}</Kbd>}
+    </div>
+  )
+
+  const doorBadge = (k: DoorKey): React.ReactNode => {
+    if (k === 'home' && needsYou > 0)
+      return (
+        <span className="side-row__count" title={`${needsYou} thing${needsYou === 1 ? '' : 's'} need${needsYou === 1 ? 's' : ''} you · ⌘J jumps to the oldest`} aria-label={`${needsYou} need you`}>
+          {needsYou > 99 ? '99+' : needsYou}
+        </span>
+      )
+    if (k === 'team' && workingCount > 0)
+      return (
+        <span className="side-row__badge side-row__working" title={`${workingCount} working`} aria-label={`${workingCount} working`}>
+          <span className="glyph glyph--running status-dot--running">●</span> {workingCount}
+        </span>
+      )
+    if (k === 'knowledge') {
+      if (memoryPaused) return <span className="pill pill--warning" title="Agent writes to memory are paused">paused</span>
+      if (mode === 'flat' && memoryPending > 0) return <span className="side-row__badge" title={`${memoryPending} new fact${memoryPending === 1 ? '' : 's'} waiting for review`}>{memoryPending} new</span>
+    }
+    return null
   }
+
+  /** LIVE (design §2.6): name + time, then the full activity sentence. A click opens that agent's own chat. */
+  const liveRow = (it: LiveItem): React.JSX.Element => (
+    <button key={it.key} type="button" className="live-row" title={`${it.title}${it.detail ? `\n${it.detail}` : ''}`} onClick={() => void openLiveItem(it)}>
+      <span className="live-row__dot" aria-hidden />
+      <span className="live-row__text">
+        <span className="live-row__l1">
+          <span className="live-row__name">{it.title}</span>
+          <span className="live-row__age">{age(agentsMap[it.agentId]?.startedAt ?? it.at)}</span>
+        </span>
+        {/* All companies: the company leads line 2, so the title keeps the width (design §2.6: the full sentence) */}
+        {(it.detail || mode === 'all') && (
+          <span className="live-row__l2">
+            {mode === 'all' && <span className="live-row__co">{companyName(it.companyId)}{it.detail ? ' · ' : ''}</span>}
+            {it.detail}
+          </span>
+        )}
+      </span>
+    </button>
+  )
 
   const sessionGlyph = (s: Session): React.JSX.Element => {
     if (sessionNeeds(s)) return <AgentGlyph visual="needs" />
     const a = s.status === 'running' ? sessionAgents.get(s.id) : undefined
     if (!a) return <StatusGlyph status={s.status === 'running' ? 'running' : 'exited'} />
-    // seen idle turn: static amber "your turn"; working pulses blue
+    // seen idle turn: static accent "your turn"; working pulses blue
     const v = agentVisual(a, true)
     return v === 'idle' ? <AgentGlyph visual="idle" title="Finished, your turn" /> : <AgentGlyph visual={v} />
   }
@@ -355,8 +371,8 @@ export function Sidebar(): React.JSX.Element {
   }
   const repoRow = (r: Repo): React.JSX.Element => {
     const list = byRepo.get(r.id) ?? []
-    const live = list.filter((s) => s.status === 'running').length
-    const liveNeeds = list.some(sessionNeeds)
+    const live = list.filter((s) => s.status === 'running' && workingSessions.has(s.id)).length
+    const needing = list.filter(sessionNeeds).length
     const folded = collapseExited(list)
     const showAll = !!showEnded[r.id]
     const open = !!expanded[r.id]
@@ -428,7 +444,7 @@ export function Sidebar(): React.JSX.Element {
           >
             {list.length > 0 && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />}
           </button>
-          {!r.exists && <Icon name="folderMissing" size={14} />}
+          {r.exists ? <Icon name="branch" size={14} className="side-row__repo-icon" /> : <Icon name="folderMissing" size={14} />}
           {isRenaming ? (
             <InlineRename
               value={r.name}
@@ -440,7 +456,17 @@ export function Sidebar(): React.JSX.Element {
           ) : (
             <span className="side-row__label">{r.name}</span>
           )}
-          {!r.exists ? <span className="side-row__meta">folder missing</span> : live > 0 && (liveNeeds ? <span className="side-row__badge side-row__badge--needs" title="A session here needs you">⚑ {live}</span> : <span className="side-row__badge"><span className="glyph glyph--running">●</span> {live}</span>)}
+          {!r.exists ? (
+            <span className="side-row__meta">folder missing</span>
+          ) : needing > 0 ? (
+            <span className="side-row__badge side-row__badge--needs" title={`${needing} session${needing === 1 ? '' : 's'} here need${needing === 1 ? 's' : ''} you`}>◆ {needing}</span>
+          ) : (
+            live > 0 && (
+              <span className="side-row__badge" title={`${live} working`}>
+                <span className="glyph glyph--running">●</span> {live}
+              </span>
+            )
+          )}
         </div>
         {open && (showAll ? list : folded.shown).map((s) => sessionRow(s))}
         {open && folded.hidden > 0 && (
@@ -453,9 +479,8 @@ export function Sidebar(): React.JSX.Element {
   }
 
   return (
-    <DepartmentChatRows.Provider value={sessionRow}>
     <aside
-      className={`sidebar ${drop ? 'is-drop' : ''}`}
+      className={`sidebar sidebar--doors ${drop ? 'is-drop' : ''}`}
       style={{ width }}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes('Files')) {
@@ -468,207 +493,254 @@ export function Sidebar(): React.JSX.Element {
       }}
       onDrop={onDrop}
     >
-      <div className={`sidebar__drag drag ${multi ? 'has-rail' : ''} ${focusedCompany ? 'has-switcher' : ''}`}>{focusedCompany && <CompanySwitcher company={focusedCompany} />}</div>
-      <nav className="sidebar__nav">
-        {(mode === 'focused' ? NAV_FOCUSED : NAV).filter((n) => n.key !== 'plans' || plansOn).map((n) => (
-          <div
-            key={n.key}
-            className={`side-row side-row--nav ${navActive(n.key) ? 'is-selected' : ''}`}
-            role="link"
-            tabIndex={0}
-            aria-current={navActive(n.key) ? 'page' : undefined}
-            aria-keyshortcuts={n.kbd ? n.kbd.replace('⇧', 'Shift+').replace('⌘', 'Meta+') : undefined}
-            title={n.kbd ? `${n.label} (${n.kbd})` : n.label}
-            onClick={() => void navigate({ name: n.key } as ViewState)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                void navigate({ name: n.key } as ViewState)
-              }
-            }}
-          >
-            {n.key === 'cloud' ? <CloudMark size={16} className="icon" /> : <Icon name={n.icon} />}
-            <span className="side-row__label">{n.key === 'tasks' && departments ? 'Board' : n.label}</span>
-            {n.key === 'agents' &&
-              (needsYou > 0 ? (
-                <span className="side-row__badge side-row__badge--needs" title={`${needsYou} thing${needsYou === 1 ? '' : 's'} need${needsYou === 1 ? 's' : ''} you · ⌘J jumps to the oldest · ${n.kbd} opens Agents`} aria-label={`${needsYou} need you`}>
-                  ⚑ {needsYou}
-                </span>
-              ) : stalled.roots > 0 ? (
-                <span className="stalled-badge stalled-badge--side" title={`${stalled.roots} agent${stalled.roots === 1 ? '' : 's'} with no output for a while. Principia never stops them on its own.`}>
-                  Stalled? {stalled.roots}
-                </span>
-              ) : (
-                agentsWorking && <span className="glyph glyph--running status-dot--running" title="Agents are working">●</span>
-              ))}
-            {n.key === 'canvas' &&
-              running > 0 &&
-              (canvasNeeds ? (
-                <span className="side-row__badge side-row__badge--needs" title={`${running} running · something here needs you`}>
-                  ⚑ {running}
-                </span>
-              ) : (
-                <span className="side-row__badge">
-                  <span className="glyph glyph--running">●</span> {running}
-                </span>
-              ))}
-            {n.key === 'passport' && (memoryPaused ? <span className="pill pill--warning" title="Agent writes to memory are paused">paused</span> : mode === 'flat' && memoryPending > 0 && <span className="side-row__badge" title={`${memoryPending} memor${memoryPending === 1 ? 'y' : 'ies'} waiting for review, across all repositories`}>{memoryPending}</span>)}
-            {n.key === 'slack' &&
-              (slackState?.state === 'error' ? (
-                <span className="pill pill--failed" title={slackState.error ?? 'Slack connection error'}>
-                  error
-                </span>
-              ) : slackDrafts > 0 ? (
-                <span className="side-row__badge side-row__badge--needs" title={`${slackDrafts} Slack draft${slackDrafts === 1 ? '' : 's'} waiting for you`}>
-                  ⚑ {slackDrafts}
-                </span>
-              ) : slackAutoPaused && isSetUp(slackState) ? (
-                <span className="pill pill--warning" title="Auto-replies are paused: every reply becomes a draft">
-                  paused
-                </span>
-              ) : (
-                slackUnread > 0 && <span className="schan__dot schan__dot--side" title={`${slackUnread} conversation${slackUnread === 1 ? '' : 's'} with new messages`} aria-label="Unread" />
-              ))}
-            {n.key === 'cloud' && cloudBadge > 0 && <span className="side-row__badge side-row__badge--needs" title={`${cloudBadge} thing${cloudBadge === 1 ? '' : 's'} from your cloud need${cloudBadge === 1 ? 's' : ''} you`}>{cloudBadge}</span>}
-            {n.key === 'forum' && forumBadge > 0 && <span className="side-row__badge side-row__badge--needs" title={`${forumBadge} mention${forumBadge === 1 ? '' : 's'} or direct message${forumBadge === 1 ? '' : 's'} for you`}>{forumBadge}</span>}
-            {n.key === 'schedules' && (status?.schedulesPaused ? <span className="pill pill--warning">paused</span> : enabledSchedules > 0 && <span className="side-row__badge">{enabledSchedules}</span>)}
-          </div>
-        ))}
-      </nav>
-      {mode === 'all' ? (
-        <div className="sidebar__groups" onDragOverCapture={e => {
-          if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
-          const bounds = e.currentTarget.getBoundingClientRect()
-          if (e.clientY < bounds.top + 40) e.currentTarget.scrollTop -= 16
-          if (e.clientY > bounds.bottom - 40) e.currentTarget.scrollTop += 16
-        }}>
-          {needsItems.length + needsTaskCount > 0 && (
-            <>
-              <div className="sidebar__section sidebar__section--needs">
-                <span>Needs you</span>
-                <span className="side-row__badge side-row__badge--needs">⚑ {needsItems.length + needsTaskCount}</span>
-              </div>
-              {needsItems.slice(0, 8).map((it) => needsRow(it))}
-              {needsItems.length > 8 && (
-                <div className="side-row side-row--session side-row--more" onClick={() => void navigate({ name: 'agents' })}>
-                  <span className="side-row__label">{needsItems.length - 8} more in Agents</span>
-                </div>
-              )}
-            </>
-          )}
-          <NeedsYouTasksSlot limit={8} />
-          {allRepos.length > 10 && (
-            <div className="sidebar__filter">
-              <input ref={filterRef} className="input input--sm" placeholder="Filter  ⌘⌥F" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} />
-            </div>
-          )}
-          {companies.map((c) => (
-            <CompanyGroup
-              key={c.id}
-              company={c}
-              badge={byCompany[c.id]}
-              board={departments ? boardCounts[c.id] : undefined}
-              expanded={filter ? true : expandedCompanies[c.id] !== false}
-              chats={filter ? [] : (chatsByCompany.get(c.id) ?? [])}
-              repos={reposOf(shownRepos, c.id)}
-              renderSession={sessionRow}
-              renderRepo={repoRow}
-              onRepoDrop={(id) => {
-                const repo = allRepos.find((r) => r.id === id)
-                if (repo) void assignRepoToCompany(repo, c.id)
-              }}
-            />
-          ))}
-          {allRepos.length === 0 && (
-            <div className="sidebar__empty">
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => void addRepos()}>
-                <Icon name="plus" size={12} /> <span>Add Repository…</span>
-              </button>
-              <div className="text-tertiary">or drop folders here</div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="sidebar__body" onDragOverCapture={e => {
-          if (!e.dataTransfer.types.includes(REPO_DRAG_TYPE)) return
-          const bounds = e.currentTarget.getBoundingClientRect()
-          if (e.clientY < bounds.top + 40) e.currentTarget.scrollTop -= 16
-          if (e.clientY > bounds.bottom - 40) e.currentTarget.scrollTop += 16
-        }}>
-        <div className="sidebar__section">
-          <span>Chat</span>
-          <IconButton icon="plus" label="New Chat — a session with no repository (⌥⌘N)" onClick={() => void openChat(true)} />
-        </div>
-        <div className="sidebar__chat">
-          {chatSessions.length === 0 ? (
-            <div className="side-row side-row--session is-dim" onClick={() => void openChat(false)} title={focusedCompany ? `Start an agent in ${focusedCompany.name}’s workspace folder, not tied to a repository` : "Start an agent in Principia's scratch folder, not tied to a repository"}>
-              <Icon name="chat" size={14} />
-              <span className="side-row__label">New chat (no repo)</span>
-            </div>
-          ) : (
-            collapseExited(chatSessions).shown.slice(0, 5).map((s) => sessionRow(s, false))
-          )}
-        </div>
-        {focusedCompany && departments && (
-          <>
-            <NeedsYouTasksSlot companyId={focusedCompany.id} limit={5} heading />
-            <DepartmentGroup companyId={focusedCompany.id} companyName={focusedCompany.name} />
-            <ForumSidebarSection companyId={focusedCompany.id} />
-          </>
-        )}
-        <div className="sidebar__section">
-          <span>Repositories</span>
-          <span className="sidebar__section-actions">
-            {mode === 'flat' && <IconButton icon="passport" label="New company… — group repositories, keys and memory per business" onClick={openNewCompany} />}
-            <IconButton icon="plus" label={focusedCompany ? `Add Repository to ${focusedCompany.name}… (⌘O)` : 'Add Repository… (⌘O)'} onClick={() => void addRepos()} />
-          </span>
-        </div>
-        {repos.length > 10 && (
-          <div className="sidebar__filter">
-            <input ref={filterRef} className="input input--sm" placeholder="Filter  ⌘⌥F" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} />
-          </div>
-        )}
-        <div className="sidebar__repos">
-          {repos.length === 0 ? (
-            <div className="sidebar__empty">
-              <div>Add the folders you work in.</div>
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => void addRepos()}>
-                <Icon name="plus" size={12} /> <span>Add Repository…</span>
-              </button>
-              <div className="text-tertiary">or drop folders here</div>
-            </div>
-          ) : (
-            shownRepos.map(repoRow)
-          )}
-        </div>
+      <div className={`sidebar__drag drag ${multi ? 'has-rail has-switcher' : ''}`}>{multi && <CompanyHeader company={focusedCompany} />}</div>
+      {!multi && (
+        <div className="sidebar__head">
+          <CompanyHeader company={companies[0] ?? null} flat />
         </div>
       )}
-      {/* Pinned footer: the lists above scroll, so Other companies and Settings never get pushed off the window. */}
+      <button type="button" className="side-search" onClick={() => openPalette('all')} title="Search pages, agents, chats and commands (⌘K)">
+        <Icon name="search" size={14} />
+        <span className="side-search__text">Search or ask…</span>
+        <Kbd>⌘K</Kbd>
+      </button>
+      <nav className="sidebar__nav sidebar__doors" aria-label="Main">
+        {PRIMARY.map((d) =>
+          navRow({
+            key: d.key,
+            label: d.label,
+            icon: <Icon name={d.icon} />,
+            selected: current === d.key,
+            onOpen: () => void navigate(viewFor(d.key)),
+            title: `${d.label}: ${d.desc} (${d.kbd})`,
+            kbd: d.kbd,
+            badge: doorBadge(d.key)
+          })
+        )}
+        {navRow({
+          key: 'more',
+          label: 'More',
+          icon: <Icon name="more" />,
+          selected: !!more || (!!current && current !== 'settings' && !!moreByKey(current) && !pins.includes(current)),
+          onOpen: openMore,
+          title: 'Automations, Add-ons, Files, Forum, Activity, Spend…',
+          badge: moreWants ? <span className="side-row__dot" aria-label="Something in More wants you" /> : null,
+          className: 'side-row--more-anchor',
+          refEl: moreRef,
+          popup: { expanded: !!more }
+        })}
+      </nav>
+      <div className="sidebar__body">
+        {working.length > 0 && (
+          <section className="side-sec" aria-label="Live">
+            <div className="sidebar__section">
+              <span>Live</span>
+              <span className="sidebar__section-meta">{working.length} working</span>
+            </div>
+            <div className="side-sec__rows">
+              {working.slice(0, LIVE_MAX).map(liveRow)}
+              {working.length > LIVE_MAX && (
+                <button type="button" className="live-row live-row--more" onClick={() => void navigate({ name: 'chats', filter: 'live' })}>
+                  +{working.length - LIVE_MAX} more in Chats
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+        {showRepos && (
+          <section className="side-sec" aria-label="Repositories">
+            <div className="sidebar__section">
+              <span>Repositories</span>
+              <IconButton icon="plus" label={focusedCompany ? `Add Repository to ${focusedCompany.name}… (⌘O)` : 'Add Repository… (⌘O)'} onClick={() => void addRepos()} />
+            </div>
+            {repos.length > 10 && (
+              <div className="sidebar__filter">
+                <input ref={filterRef} className="input input--sm" placeholder="Filter  ⌘⌥F" value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setFilter('')} />
+              </div>
+            )}
+            <div className="sidebar__repos">{shownRepos.map(repoRow)}</div>
+          </section>
+        )}
+        {pins.length > 0 && (
+          <section className="side-sec" aria-label="Pinned">
+            <div className="sidebar__section">
+              <span>Pinned</span>
+            </div>
+            <div className="side-sec__rows side-sec__rows--nav">
+              {pins.map((ref) => {
+                if (ref.startsWith('dept:')) {
+                  const d = allDepartments.find((x) => x.id === ref.slice(5))
+                  if (!d) return null
+                  return navRow({
+                    key: ref,
+                    label: (
+                      <>
+                        {d.name} <span className="side-row__kind">department</span>
+                      </>
+                    ),
+                    icon: <DepartmentIcon department={d} size={16} />,
+                    selected: view.name === 'department' && view.id === d.id,
+                    onOpen: () => openDepartment(d),
+                    title: `${d.name}: right-click for its menu`,
+                    onContextMenu: () => void departmentContextMenu(d)
+                  })
+                }
+                const m = moreByKey(ref)!
+                const n = moreBadge(m.key)
+                return navRow({
+                  key: ref,
+                  label: m.label,
+                  icon: <Icon name={m.icon} />,
+                  selected: current === m.key,
+                  onOpen: () => void navigate(viewFor(m.key)),
+                  title: `${m.label}: ${m.desc}${isPinned(prefs, ref) ? ' · right-click to unpin' : ' · shown while it has something for you'}`,
+                  badge: n > 0 ? <span className="side-row__count">{n}</span> : m.key === 'slack' && slackError ? <span className="pill pill--failed">error</span> : null,
+                  onContextMenu: isPinned(prefs, ref) ? () => void pinMenu(ref) : undefined
+                })
+              })}
+            </div>
+          </section>
+        )}
+      </div>
       <div className="sidebar__foot">
-        {focusedCompany && <OtherCompanies activeId={focusedCompany.id} />}
-        <div
-          className={`side-row side-row--nav sidebar__settings ${view.name === 'settings' ? 'is-selected' : ''}`}
-          role="link"
-          tabIndex={0}
-          aria-current={view.name === 'settings' ? 'page' : undefined}
-          aria-keyshortcuts="Meta+,"
-          title="Settings (⌘,)"
-          onClick={() => void navigate({ name: 'settings' })}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              void navigate({ name: 'settings' })
-            }
-          }}
-        >
-          <Icon name="settings" />
-          <span className="side-row__label">Settings</span>
-          <Kbd>⌘,</Kbd>
-        </div>
+        {navRow({
+          key: 'settings',
+          label: 'Settings',
+          icon: <Icon name="settings" />,
+          selected: current === 'settings',
+          onOpen: () => void navigate({ name: 'settings' }),
+          title: 'Settings (⌘,)',
+          kbd: '⌘,',
+          className: 'sidebar__settings',
+          badge: cloudBadge > 0 ? <span className="side-row__count" title={`${cloudBadge} thing${cloudBadge === 1 ? '' : 's'} from Cloud sync need${cloudBadge === 1 ? 's' : ''} you`}>{cloudBadge}</span> : null
+        })}
       </div>
       <div className="sidebar__resizer" onMouseDown={startResize} />
+      {more && (
+        <MorePopover
+          anchor={more}
+          onClose={(refocus) => {
+            setMore(null)
+            if (refocus) moreRef.current?.focus()
+          }}
+          available={available}
+          badge={moreBadge}
+          pinned={(k) => isPinned(prefs, k)}
+          onPin={(k) => updateSidebarPrefs((p) => togglePin(p, k))}
+          onOpen={(k) => {
+            setMore(null)
+            void navigate(viewFor(k))
+          }}
+          current={current}
+          slackHint={slackDrafts === 0 && !slackError}
+        />
+      )}
     </aside>
-    </DepartmentChatRows.Provider>
+  )
+}
+
+/**
+ * More (design §2.3): three groups, every row with a pin. Pinning moves the item into PINNED for this company; the
+ * pin turns solid. Esc and an outside click close it; ↑/↓ move between rows.
+ */
+function MorePopover({
+  anchor,
+  onClose,
+  available,
+  badge,
+  pinned,
+  onPin,
+  onOpen,
+  current,
+  slackHint
+}: {
+  anchor: DOMRect
+  /** `refocus`: closed from the keyboard (Esc), so focus goes back to the More row */
+  onClose: (refocus?: boolean) => void
+  available: (k: MoreKey) => boolean
+  badge: (k: MoreKey) => number
+  pinned: (k: MoreKey) => boolean
+  onPin: (k: MoreKey) => void
+  onOpen: (k: MoreKey) => void
+  current: string | null
+  slackHint: boolean
+}): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const down = (e: MouseEvent): void => {
+      const t = e.target as HTMLElement
+      if (ref.current && !ref.current.contains(t) && !t.closest('.side-row--more-anchor')) onClose()
+    }
+    const key = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        e.preventDefault()
+        onClose(true)
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const rows = [...(ref.current?.querySelectorAll<HTMLElement>('.more-pop__open') ?? [])]
+        if (!rows.length) return
+        e.preventDefault()
+        const i = rows.indexOf(document.activeElement as HTMLElement)
+        rows[(i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length]?.focus()
+      }
+    }
+    window.addEventListener('mousedown', down, true)
+    window.addEventListener('keydown', key, true)
+    return () => {
+      window.removeEventListener('mousedown', down, true)
+      window.removeEventListener('keydown', key, true)
+    }
+  }, [onClose])
+  const width = 320
+  const left = Math.min(anchor.right + 6, window.innerWidth - width - 8)
+  // measured, then clamped into the window: at 720px tall the popover opens upward instead of running off the bottom
+  const [box, setBox] = useState<{ top: number; maxHeight: number }>(() => ({ top: Math.max(8, anchor.top - 8), maxHeight: window.innerHeight - 16 }))
+  useLayoutEffect(() => {
+    const place = (): void => {
+      const el = ref.current
+      // the full content height, borders included, even while a max-height is clipping it
+      const h = el ? el.scrollHeight + (el.offsetHeight - el.clientHeight) : 0
+      setBox(morePopoverBox(anchor.top, h, window.innerHeight))
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [anchor.top])
+  // keyboard users land on the first row (↑/↓ move, Esc returns to More)
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>('.more-pop__open')?.focus({ preventScroll: true })
+  }, [])
+  return (
+    <div className="more-pop" ref={ref} style={{ left, top: box.top, width, maxHeight: box.maxHeight }} role="dialog" aria-label="More">
+      {moreGroups(available).map((g) => (
+        <div key={g.group} className="more-pop__group" role="group" aria-label={g.group}>
+          <div className="more-pop__head">{g.group}</div>
+          {g.items.map((m) => {
+            const on = pinned(m.key)
+            const n = badge(m.key)
+            const desc = m.key === 'slack' && slackHint ? 'Connect it in Settings › Connections' : m.key === 'forum' && !on ? 'Shows up when a thread needs you' : m.desc
+            return (
+              <div key={m.key} className={`more-pop__row ${current === m.key ? 'is-current' : ''}`}>
+                <button type="button" className="more-pop__open" onClick={() => onOpen(m.key)}>
+                  <Icon name={m.icon} />
+                  <span className="more-pop__text">
+                    <span className="more-pop__label">
+                      {m.label}
+                      {n > 0 && <span className="side-row__count">{n}</span>}
+                    </span>
+                    <span className="more-pop__desc">{desc}</span>
+                  </span>
+                </button>
+                <button type="button" className={`more-pop__pin ${on ? 'is-on' : ''}`} aria-pressed={on} title={on ? `Unpin ${m.label} from the sidebar` : `Pin ${m.label} to the sidebar`} onClick={() => onPin(m.key)}>
+                  <Icon name="pin" size={13} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+      <div className="more-pop__foot">Pins are saved for this company. Everything is also in ⌘K.</div>
+    </div>
   )
 }
 

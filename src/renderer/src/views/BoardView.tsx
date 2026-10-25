@@ -9,9 +9,9 @@ import { TaskEditor } from '../components/board/TaskEditor'
 import { TaskInspector } from '../components/board/TaskInspector'
 import { LinearBanner, LinearSheet } from '../components/board/LinearSheet'
 import { linearLine, startedInLinear, useLinear } from '../lib/linear'
-import { PRIORITIES, SOURCE_LABEL, STATUS_LABEL, useCompanyData } from '../lib/company'
+import { PRIORITIES, SOURCE_LABEL, STATUS_LABEL, useCompanyData, useLaneContext } from '../lib/company'
 import { BOARD_LANES, TASK_DRAG_TYPE, agentDrop, autopilotToggle, dropSeats, filterTasks, keptDepartmentFilter, laneColumns, laneDrop, laneText, swimlanes, type AutopilotView, type DropAction, type DropResult } from '../lib/board'
-import { departmentsOf, laneContext, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
+import { departmentsOf, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
 import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { relative } from '../lib/time'
 import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, saveJson, toast, useStore } from '../state/store'
@@ -44,10 +44,9 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const { companies, tasks: allTasks, loading, error, reload } = useCompanyData()
   const { scope, chips } = useScope()
   const view = useStore((s) => s.view)
-  const asks = useStore((s) => s.asks)
   const allAgents = useStore((s) => s.companyAgents)
   const allDepartments = useStore((s) => s.departments)
-  const ctx = useMemo(() => laneContext(asks, allAgents), [asks, allAgents])
+  const ctx = useLaneContext()
   const fixedDep = fixedDepartmentId ? allDepartments.find((d) => d.id === fixedDepartmentId) : undefined
   // the department page is its department's company; otherwise the active company (All mode: every company)
   const companyId = fixedDep?.companyId ?? scope
@@ -129,6 +128,22 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   // amphora mosaic, one sentence and New task; a filter that hides everything keeps the empty columns
   const nothing = fixedDepartmentId ? !tasks.some((t) => taskDepartment(t, ctx) === fixedDepartmentId) : tasks.length === 0
   const newTask = (): void => (companies.length ? setCreating(true) : openNewCompany())
+  // C on the Board opens New task (Linear's key), unless you are typing, a sheet or the palette is open, or a modifier is held
+  const newTaskRef = useRef(newTask)
+  newTaskRef.current = newTask
+  useEffect(() => {
+    if (embedded) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== 'c' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat || e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest('.xterm'))) return
+      if (document.querySelector('.sheet-layer, .palette-layer, [role=dialog]')) return
+      e.preventDefault()
+      newTaskRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [embedded])
   // a failed company load shows its error and Retry, not "create your first company" over companies that exist
   const body = loading ? <Loading label="Loading the board…" /> : !companies.length && error ? null : !companies.length ? <CompanyEmpty icon="passport" title="Give your work a company." text="Create a Passport with your business context, then turn ideas, issues and conversations into work your agents can do." action={<Button variant="primary" icon="passport" onClick={openNewCompany}>Create your first company</Button>} /> : nothing ? <BoardEmpty onNew={newTask} /> : layout === 'list' ? <BoardList tasks={filtered} ctx={ctx} depById={depById} agentById={agentById} chips={chips && !companyId} selected={selected} onOpen={open} /> : lanesByDept ? <div className="board-swimlanes">
     {swimlanes(filtered, depFilter ? allDepartments.filter((d) => d.id === depFilter) : departments, ctx).map((s) => <div key={s.department?.id ?? 'none'} className="board-swimlane">
@@ -139,7 +154,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
 
   const filterBar = <div className="task-filterbar board-filterbar">
     <label className="company-search"><Icon name="search" size={14} /><input aria-label="Search tasks" placeholder="Search tasks…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
-    {!fixedDepartmentId && (departments.length > 0 || !!filterDep) && <select aria-label="Filter by department" value={depFilter ?? ''} onChange={(e) => setDepFilter(e.target.value || null)}><option value="">All departments</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}{filterDep?.archivedAt && <option value={filterDep.id}>{filterDep.name} (archived)</option>}</select>}
+    {!fixedDepartmentId && (departments.length > 0 || !!filterDep) && <select aria-label="Filter by department" value={depFilter ?? ''} onChange={(e) => setDepFilter(e.target.value || null)}><option value="">All departments</option>{departments.map((d) => <option key={d.id} value={d.id}>{!companyId && companies.length > 1 ? `${d.name} · ${companies.find((c) => c.id === d.companyId)?.name ?? ''}` : d.name}</option>)}{filterDep?.archivedAt && <option value={filterDep.id}>{filterDep.name} (archived)</option>}</select>}
     {seats.length > 0 && <div className="board-seats" role="group" aria-label="Agents: click to filter, drop a card to assign">{seats.map((a) => <SeatDrop key={a.id} agent={a} color={a.departmentId ? (depById.get(a.departmentId)?.color ?? null) : null} active={agentFilter === a.id} over={dragOver === `agent:${a.id}`} onClick={() => setAgentFilter((x) => (x === a.id ? null : a.id))} zone={dropZone(`agent:${a.id}`, (t) => agentDrop(t, a))} />)}</div>}
     <span className="flex1" />
     <button type="button" className={`hchip ${showBacklog ? 'is-on' : ''}`} aria-pressed={showBacklog} onClick={() => setShowBacklog(!showBacklog)}>Backlog</button>
@@ -234,6 +249,10 @@ function AutopilotSwitch({ company }: { company: CompanyPassport }): React.JSX.E
       (e: unknown) => toast(errorMessage(e), 'error')
     )
   }
+  // A4: a paused company starts nothing, so its switch reads "Off while paused" and is greyed out (as in the company menu)
+  if (company.pausedAt) return <div className="board-autopilot is-held" title={`Resume ${company.name} to turn Autopilot on`}>
+    <label className="board-autopilot__label"><span>Autopilot: off while paused</span><Switch checked={false} onChange={() => undefined} disabled label={`Autopilot for ${company.name}: off while paused`} /></label>
+  </div>
   return <div className="board-autopilot">
     {on && <button type="button" className="board-autopilot__pill" onClick={() => void navigate({ name: 'agents' })} title="See what the agents are doing"><Pill tone="running">Autopilot on</Pill></button>}
     <label className="board-autopilot__label"><span>Autopilot</span><Switch checked={on} onChange={flip} disabled={busy} label={`Autopilot for ${company.name}`} /></label>
@@ -283,7 +302,7 @@ function LegacyTasksView(): React.JSX.Element {
   const groups = TASK_STATUSES.map((status) => ({ status, items: filtered.filter((t) => t.status === status) })).filter((g) => g.items.length || board && ['todo', 'in_progress', 'in_review', 'done'].includes(g.status))
   const active = tasks.filter((t) => !['done', 'canceled'].includes(t.status)).length
   return <div className="view company-view">
-    <Toolbar title="Tasks" sub={<span className="company-toolbar-meta">{active} open</span>}>
+    <Toolbar title="Board" sub={<span className="company-toolbar-meta">{active} open</span>}>
       <Button icon="plus" variant="primary" onClick={() => companies.length ? setCreating(true) : openNewCompany()}>{companies.length ? 'New task' : 'Create a company'}</Button>
     </Toolbar>
     <div className="task-filterbar">

@@ -306,11 +306,8 @@ export class TaskTools {
 
   /** A task of the caller's company by id or identifier; another company's reads as not found. */
   private find(companyId: string, ref: string): BoardTask {
-    const byId = this.db.prepare('SELECT id FROM company_tasks WHERE id=? AND company_id=?').get(ref, companyId) as { id: string } | undefined
-    if (byId) return this.c.task(byId.id)
-    const m = /^PRN-(\d+)$/i.exec(ref)
-    const bySeq = m ? this.db.prepare('SELECT id FROM company_tasks WHERE seq=? AND company_id=?').get(Number(m[1]), companyId) as { id: string } | undefined : undefined
-    return bySeq ? this.c.task(bySeq.id) : fail('Task not found in this company')
+    // five doors step 2: NC-12 inside the company (and a Personal task's old PRN-<seq>)
+    return this.c.findTask(companyId, ref) ?? fail('Task not found in this company')
   }
   private own(caller: TaskCaller): BoardTask {
     const t = this.c.task(caller.taskId ?? fail('You are not working on a task'))

@@ -6,6 +6,7 @@
  * department cards as charter sections separated by hairlines.
  * Keyboard (department rows, unchanged): ↑/↓ rows, Space include, ↵ rename, ⌫ remove, ⌘↵ launches (the flow's primary).
  */
+import { personaNamesElsewhere } from '@shared/personas'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { templatePlan } from '@shared/onboardingPlan'
 import { Button, Switch } from '../../components/ui'
@@ -42,7 +43,7 @@ export function PlanStep({ color }: { color?: string } = {}): React.JSX.Element 
     if (!cur) return null
     const { input, hash: h } = currentInputs(cur)
     try {
-      return { plan: templatePlan(input, availableFor(input, installedAdapters(), onboardingPlanContext().sharedKeys), { siteUrl: cur.answers.siteUrl }), hash: h }
+      return { plan: templatePlan(input, availableFor(input, installedAdapters(), onboardingPlanContext().sharedKeys, [...personaNamesElsewhere(null, getState().companyAgents, getState().departments)]), { siteUrl: cur.answers.siteUrl }), hash: h }
     } catch {
       return null
     }

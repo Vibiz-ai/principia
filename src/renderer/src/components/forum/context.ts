@@ -15,6 +15,8 @@ export interface ForumCtx {
   openThread: (m: ForumMessage) => void
   openChannel: (channelId: string) => void
   openRef: (ref: ForumRef, from: ForumMessage) => void
+  /** five doors step 2: a task id of this company's board (NC-12); anything else that looks like one stays text */
+  knowsTask?: (identifier: string) => boolean
   react: (m: ForumMessage, emoji: string) => void
   edit: (m: ForumMessage) => void
   remove: (m: ForumMessage) => void

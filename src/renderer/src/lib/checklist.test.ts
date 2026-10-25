@@ -72,13 +72,20 @@ describe('checklistItems: every item checks itself from real state', () => {
   })
 
   it('agents: progress per staffed department; the action opens the first empty one', () => {
-    const i = fresh({ departments: [marketing, finance], agents: [agent('a1', 'dep_m'), agent('a2', 'dep_f', { pausedAt: 'x' })] })
+    const i = fresh({ departments: [marketing, finance], agents: [agent('a1', 'dep_m'), agent('a2', 'dep_f', { archivedAt: 'x' })] })
     expect(item(i, 'agents')).toMatchObject({ done: false, progress: { n: 1, of: 2 }, action: { kind: 'department', departmentId: 'dep_f', focus: 'agents' }, actionLabel: 'Add agent to Finance' })
     expect(item(fresh({ departments: [marketing], agents: [agent('a1', 'dep_m')] }), 'agents').done).toBe(true)
     // an archived department does not count
     expect(item(fresh({ departments: [marketing, dep('dep_x', 'sales', 'Sales', { archivedAt: 'x' })], agents: [agent('a1', 'dep_m')] }), 'agents').done).toBe(true)
     // another company's agent never staffs this one
     expect(item(fresh({ departments: [marketing], agents: [agent('a1', 'dep_m', { companyId: 'co_b' })] }), 'agents').done).toBe(false)
+  })
+
+  it('§2.6/A4: pausing never reads as missing; a paused seat still staffs its department, so the checklist does not go backwards', () => {
+    const running = fresh({ departments: [marketing, finance], agents: [agent('a1', 'dep_m'), agent('a2', 'dep_f')] })
+    const paused = fresh({ departments: [marketing, finance], agents: [agent('a1', 'dep_m', { pausedAt: 'x' }), agent('a2', 'dep_f', { pausedAt: 'x' })] })
+    expect(item(paused, 'agents')).toMatchObject({ done: true, detail: 'Every department has at least one agent.' })
+    expect(checklistProgress(checklistItems(paused))).toEqual(checklistProgress(checklistItems(running)))
   })
 
   it('dashboards: Search Console or GEO in Marketing, Stripe in Finance; missing department offers to add it', () => {

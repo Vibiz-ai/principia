@@ -5,7 +5,7 @@ import type { CollabState, RunConversation } from './collab'
 import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
 import type { CompanyProposal, ProposalDecision } from './chatCompany'
 import { PLANS_CHANNELS, type PlansInvokeMap } from './plans'
-import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyLogo, CompanyOverview, LogoCandidate, LogoPick, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
+import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyLogo, CompanyOverview, CompanyPauseResult, LogoCandidate, LogoPick, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
 /**
  * Typed IPC contract between main and renderer. The ONLY bridge is `window.hive` (src/preload).
  * Channel naming: invoke `<domain>:<verb>`, fire-and-forget send `<domain>:<verb>`, events `evt:<name>`.
@@ -161,6 +161,8 @@ export interface InvokeMap extends PlansInvokeMap {
   /** Future runs and sessions only. Refused with open tasks or anything live on the repo. companyId co_personal = unassign. */
   'company:assignRepo': [{ repoId: Id; companyId: Id }, CompanyPassport]
   'company:overview': [V, CompanyOverview[]]
+  /** Five doors A4: pause or resume ONE company (agents, schedules, autopilot; work in flight is saved) */
+  'company:pause': [{ id: Id; paused: boolean }, CompanyPauseResult]
   /** Rail coin / chip logos of the listed companies (auto logos re-detect when their repositories changed). */
   'company:logos': [V, CompanyLogo[]]
   /** The picker grid: logo-like images found in the company's repositories, best first. */
@@ -266,7 +268,8 @@ export interface InvokeMap extends PlansInvokeMap {
 
   'gateway:connect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:disconnect': [{ id: string }, import('./gateway').GatewayConnection]
-  'gateway:list': [void, import('./gateway').GatewayConnection[]]
+  /** five doors A1: with companyId, only what that company's agents get (shared + its own) */
+  'gateway:list': [{ companyId?: Id } | void, import('./gateway').GatewayConnection[]]
   'gateway:save': [import('./gateway').GatewayConnectionInput, import('./gateway').GatewayConnection]
   'gateway:remove': [{ id: string }, void]
   'gateway:test': [{ id: string }, unknown]
@@ -669,7 +672,8 @@ export type UiCommand =
   | { kind: 'openApproval'; draftId: Id } // approval notification click (AUTHORING.md §2.2)
   | { kind: 'openSlack'; channelId?: string; threadTs?: string } // SLACK.md §12.2
   | { kind: 'openSlackDraft'; draftId: Id } // Slack draft notification click (SLACK.md §8.3)
-export type View = 'home' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
+/** The app menu's View items. team, board, chats and knowledge are the five doors (⌘2-⌘5); the rest stay as aliases. */
+export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
 
 export interface SessionCreateRequest {
   /**
@@ -769,7 +773,7 @@ export const INVOKE_CHANNELS = [
   'company:list', 'company:save', 'company:export', 'company:previewImport', 'company:import',
   'company:exportOpenPassport', 'company:previewOpenPassport', 'company:importOpenPassport', 'company:openPassportSync',
   'company:passportConnect', 'company:passportImport',
-  'company:create', 'company:update', 'company:archive', 'company:reorder', 'company:assignRepo', 'company:overview', 'company:logos', 'company:logoCandidates', 'company:setLogo',
+  'company:create', 'company:update', 'company:archive', 'company:reorder', 'company:assignRepo', 'company:overview', 'company:pause', 'company:logos', 'company:logoCandidates', 'company:setLogo',
   'tasks:previewGithub', 'tasks:list', 'tasks:create', 'tasks:update', 'tasks:get', 'tasks:start', 'tasks:comment',
   'departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets',
   'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',

@@ -119,7 +119,7 @@ const TAIL = [
   'Metrics questions: use the "Department dashboards" numbers above with their date; never invent numbers.',
   'Ask the founder first before anything that costs money, publishes or sends outside the company, deletes data, or creates a company or department.'
 ]
-const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier (PRN-12) in your answer. The founder\'s explicit wishes override these defaults.'
+const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier (like NC-12) in your answer. The founder\'s explicit wishes override these defaults.'
 
 /** The section for one spawn, or '' when none of Principia's tools are attached. */
 export function principiaOps(input: OpsInput): string {

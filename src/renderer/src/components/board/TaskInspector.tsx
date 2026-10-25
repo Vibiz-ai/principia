@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { agentActive, type CompanyPassport, type CompanyTask, type CompanyTaskInput, type TaskDetail } from '@shared/company'
 import type { Artifact, Run, Session } from '@shared/types'
 import { Button, IconButton, Loading, Pill, RelativeTime } from '../ui'
@@ -9,9 +9,9 @@ import { ActivityTimeline } from './ActivityTimeline'
 import { TaskEditor } from './TaskEditor'
 import { BriefPanel } from './BriefPanel'
 import { BLOCK_REASON_TEXT, LANE_LABELS, REASON_LABEL, canApprove, inspectorActions, statusChoices } from '../../lib/board'
-import { PRIORITIES, STATUS_LABEL } from '../../lib/company'
+import { PRIORITIES, STATUS_LABEL, useLaneContext } from '../../lib/company'
 import { reposOf } from '../../lib/companyModel'
-import { departmentsOf, laneContext, taskLane, taskReason } from '../../lib/departments'
+import { departmentsOf, taskLane, taskReason } from '../../lib/departments'
 import { errorMessage, hive, useHiveEvent } from '../../lib/hive'
 import { runVisual } from '../../lib/graph'
 import { runTitle } from '../../lib/format'
@@ -47,7 +47,6 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
   const repos = useStore((s) => s.repos)
   const allDepartments = useStore((s) => s.departments)
   const allAgents = useStore((s) => s.companyAgents)
-  const asks = useStore((s) => s.asks)
   const sessions = useStore((s) => s.sessions)
   const termSize = useStore((s) => s.lastTermSize)
   const version = tasks.find((t) => t.id === id)?.updatedAt
@@ -70,7 +69,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
   }
   const task = detail?.task
   const runs = useTaskRuns(task)
-  const ctx = useMemo(() => laneContext(asks, allAgents), [asks, allAgents])
+  const ctx = useLaneContext()
 
   if (!task) return <aside className="task-inspector board-inspector" aria-label="Task details">
     <header className="task-inspector-top"><span>Task details</span><div><IconButton icon="close" label="Close task details" onClick={onClose} /></div></header>
@@ -122,6 +121,27 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
     focusSession(out.session.id)
   })
 
+  // a task waiting on your review opens with Approve and Send back on top (Maya: "Where's the button to say yes?");
+  // the brief, properties and report follow
+  const reviewFirst = task.status === 'in_review' && (actions.has('approve') || actions.has('sendBack'))
+  const actionsPanel = (
+      <section className="task-agent-panel board-actions"><div className="task-agent-heading"><Icon name="agents" size={16} /><h3>{agent ? agent.name : 'Agent'}</h3>{inFlight && <span className="task-live-dot" />}</div>
+        <p>{elsewhere ? `${linearWorkLabel(linear).replace(/^i/, 'I')} (${linear!.key}). Move it to Todo to run an agent here.` : inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? 'The agent finished. Approve it with a done note, or send it back with what to change.' : actions.has('run') ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : runBlocked || 'Nothing to do here right now.'}</p>
+        {actions.has('run') && <Button icon="play" variant={task.status === 'in_review' || startOffered ? 'secondary' : 'primary'} disabled={busy || !!runBlocked} title={runBlocked} onClick={() => void mutate(() => hive.tasks.start({ id: task.id }), `Started ${task.identifier}`)}>Run now</Button>}
+        {actions.has('openSession') && <Button icon="terminal" disabled={busy || !!runBlocked} title={runBlocked} onClick={() => openSession(false)}>Open as session</Button>}
+        {actions.has('takeover') && <Button icon="terminal" disabled={busy} onClick={() => openSession(true)}>Take over</Button>}
+        {actions.has('stop') && <Button icon="stop" disabled={busy} onClick={() => void mutate(() => hive.tasks.stop({ id: task.id }), `Stopped ${task.identifier}`)}>Stop</Button>}
+        {actions.has('unpark') && <Button icon="refresh" disabled={busy} onClick={() => void mutate(() => hive.tasks.unpark({ id: task.id }), `Unparked ${task.identifier}`)}>Unpark</Button>}
+        {(actions.has('approve') || actions.has('sendBack')) && <div className="board-review">
+          <textarea aria-label="Done note or what to change" rows={3} maxLength={4000} placeholder="Done note (what shipped, where) or what to change…" value={note} onChange={(e) => setNote(e.target.value)} />
+          <div className="board-review__buttons">
+            <Button variant="primary" icon="check" disabled={busy || !canApprove(task, note)} title={canApprove(task, note) ? 'Mark the task done with this note' : 'Write a done note first'} onClick={() => void mutate(() => hive.tasks.approve({ id: task.id, doneNote: note.trim() })).then((ok) => { if (ok) { doneToast(task); setNote('') } })}>Approve as done</Button>
+            <Button icon="reply" disabled={busy || !note.trim()} title={note.trim() ? 'Send it back to the agent with this note' : 'Say what to change first'} onClick={() => void mutate(() => hive.tasks.sendBack({ id: task.id, note: note.trim() }), `Sent ${task.identifier} back`).then((ok) => ok && setNote(''))}>Send back with note</Button>
+          </div>
+        </div>}
+        {task.doneNote && <div className="board-done-note"><strong>Done note</strong><p className="selectable">{task.doneNote}</p></div>}
+      </section>
+  )
   return <aside className="task-inspector board-inspector" aria-label="Task details">
     <header className="task-inspector-top"><span>{task.identifier}</span><div><IconButton icon="edit" label="Edit task" disabled={busy || inFlight} title={inFlight ? 'Stop the agent before editing' : 'Edit task'} onClick={() => setEditing(true)} /><IconButton icon="close" label="Close task details" onClick={onClose} /></div></header>
     {error && <div className="company-error" role="alert">{error}</div>}
@@ -131,6 +151,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
       <WorkStart task={task} company={company} busy={busy} onDone={() => { load(); onSaved() }} />
       <WorkSection task={task} onDone={() => { load(); onSaved() }} />
       <div className="board-inspector__lane">{elsewhere ? <Pill tone="idle">{linearWorkLabel(linear).replace(/^i/, 'I')}</Pill> : <Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{LANE_LABELS[lane]}</Pill>}{reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{reason === 'review' && !task.report ? ' · no report' : ''}</span>}</div>
+      {reviewFirst && <div className="board-review-first">{actionsPanel}</div>}
       <BriefPanel task={task} onChanged={() => { load(); onSaved() }} />
 
       {task.status === 'blocked' && task.blockReason && task.blockReason !== 'needs_input' && <div className="board-callout" role="note">{BLOCK_REASON_TEXT[task.blockReason]}</div>}
@@ -152,22 +173,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
         {task.parentId && <div><span>Parent</span><button className="link-btn" onClick={() => onSelect?.(task.parentId!)}>{tasks.find((t) => t.id === task.parentId)?.identifier ?? task.parentId}</button></div>}
       </div>
 
-      <section className="task-agent-panel board-actions"><div className="task-agent-heading"><Icon name="agents" size={16} /><h3>{agent ? agent.name : 'Agent'}</h3>{inFlight && <span className="task-live-dot" />}</div>
-        <p>{elsewhere ? `${linearWorkLabel(linear).replace(/^i/, 'I')} (${linear!.key}). Move it to Todo to run an agent here.` : inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? 'The agent finished. Approve it with a done note, or send it back with what to change.' : actions.has('run') ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : runBlocked || 'Nothing to do here right now.'}</p>
-        {actions.has('run') && <Button icon="play" variant={task.status === 'in_review' || startOffered ? 'secondary' : 'primary'} disabled={busy || !!runBlocked} title={runBlocked} onClick={() => void mutate(() => hive.tasks.start({ id: task.id }), `Started ${task.identifier}`)}>Run now</Button>}
-        {actions.has('openSession') && <Button icon="terminal" disabled={busy || !!runBlocked} title={runBlocked} onClick={() => openSession(false)}>Open as session</Button>}
-        {actions.has('takeover') && <Button icon="terminal" disabled={busy} onClick={() => openSession(true)}>Take over</Button>}
-        {actions.has('stop') && <Button icon="stop" disabled={busy} onClick={() => void mutate(() => hive.tasks.stop({ id: task.id }), `Stopped ${task.identifier}`)}>Stop</Button>}
-        {actions.has('unpark') && <Button icon="refresh" disabled={busy} onClick={() => void mutate(() => hive.tasks.unpark({ id: task.id }), `Unparked ${task.identifier}`)}>Unpark</Button>}
-        {(actions.has('approve') || actions.has('sendBack')) && <div className="board-review">
-          <textarea aria-label="Done note or what to change" rows={3} maxLength={4000} placeholder="Done note (what shipped, where) or what to change…" value={note} onChange={(e) => setNote(e.target.value)} />
-          <div className="board-review__buttons">
-            <Button variant="primary" icon="check" disabled={busy || !canApprove(task, note)} title={canApprove(task, note) ? 'Mark the task done with this note' : 'Write a done note first'} onClick={() => void mutate(() => hive.tasks.approve({ id: task.id, doneNote: note.trim() })).then((ok) => { if (ok) { doneToast(task); setNote('') } })}>Approve as done</Button>
-            <Button icon="reply" disabled={busy || !note.trim()} title={note.trim() ? 'Send it back to the agent with this note' : 'Say what to change first'} onClick={() => void mutate(() => hive.tasks.sendBack({ id: task.id, note: note.trim() }), `Sent ${task.identifier} back`).then((ok) => ok && setNote(''))}>Send back with note</Button>
-          </div>
-        </div>}
-        {task.doneNote && <div className="board-done-note"><strong>Done note</strong><p className="selectable">{task.doneNote}</p></div>}
-      </section>
+      {!reviewFirst && actionsPanel}
 
       {task.report && <section className="board-section"><h3>Report <span className="board-muted">· {task.report.outcome === 'review' ? 'ready for review' : 'blocked'} · <RelativeTime iso={task.report.at} /></span></h3>
         <TextWithDiagrams text={task.report.summary} renderText={(t) => <p className="selectable board-report">{t}</p>} />

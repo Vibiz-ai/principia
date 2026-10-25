@@ -51,7 +51,7 @@ export function MarketplaceView(): React.JSX.Element {
   const openLink = (url: string): void => { void attempt(() => hive.app.openExternal({ url }), 'Open link') }
 
   return <div className="view">
-    <Toolbar title="Marketplace">
+    <Toolbar title="Add-ons">
       <Button icon="refresh" disabled={loading} onClick={() => void load(true)}>Refresh</Button>
       <Button icon="plus" onClick={() => openLink(`${REPO}/issues/new?template=marketplace.yml`)}>Contribute</Button>
     </Toolbar>

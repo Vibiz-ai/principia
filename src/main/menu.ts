@@ -66,14 +66,13 @@ export function buildAppMenu(a: MenuActions): void {
     {
       label: 'View',
       submenu: [
-        { label: 'Agents', accelerator: 'Shift+CmdOrCtrl+A', click: () => a.ui({ kind: 'navigate', view: 'agents' }) },
+        // five doors: the same labels and ⌘1-⌘5 as the sidebar (renderer lib/nav PRIMARY)
         nav('Home', 'home', '1'),
-        nav('Canvas', 'canvas', '2'),
-        nav('Workflows', 'workflows', '3'),
-        nav('Schedules', 'schedules', '4'),
-        nav('Artifacts', 'artifacts', '5'),
-        nav('Keys', 'keys', '6'),
-        nav('Memory', 'memory', '7'),
+        nav('Team', 'team', '2'),
+        nav('Board', 'board', '3'),
+        nav('Chats', 'chats', '4'),
+        nav('Knowledge', 'knowledge', '5'),
+        { label: 'Live Chats', accelerator: 'Shift+CmdOrCtrl+A', click: () => a.ui({ kind: 'navigate', view: 'agents' }) },
         { type: 'separator' },
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: () => a.ui({ kind: 'toggleSidebar' }) },
         { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: () => a.ui({ kind: 'commandPalette' }) },

@@ -21,7 +21,8 @@ import { inScope } from '../lib/scope'
 import { loadJson, openPalette, saveJson, useStore } from '../state/store'
 import { TaskRunChip } from '../components/board/TaskRunChip'
 
-export function AgentsView(): React.JSX.Element {
+/** Five doors: mounted as Chats → Live (ChatsView passes its title, tabs and New chat). */
+export function AgentsView({ title = 'Agents', sub, actions }: { title?: string; sub?: React.ReactNode; actions?: React.ReactNode } = {}): React.JSX.Element {
   useTick()
   const { scope, chips } = useScope()
   const { idx, asks: allAsks } = useScopedLive(scope)
@@ -64,12 +65,13 @@ export function AgentsView(): React.JSX.Element {
 
   return (
     <div className="view">
-      <Toolbar title="Agents">
+      <Toolbar title={title} sub={sub}>
         {groups.needs.length > 0 && (
           <Button onClick={goNextNeedsYou} kbd="⌘J" title="Jump to the oldest thing waiting for you">
             Next
           </Button>
         )}
+        {actions}
       </Toolbar>
       <div className="scroll view__body">
         <div className="hub">
@@ -88,7 +90,7 @@ export function AgentsView(): React.JSX.Element {
           {available === null ? (
             <Loading />
           ) : empty ? (
-            <EmptyState icon="agents" text={repoId ? 'No agents in this repository in the last 24 hours.' : scope ? 'No agents running in this company. Its sessions, workflow steps and their subagents show up here while they work.' : 'No agents running. Sessions, workflow steps and their subagents show up here while they work.'}>
+            <EmptyState icon="agents" text={repoId ? 'No agents in this repository in the last 24 hours.' : title === 'Chats' ? 'Nothing is live right now. Chats and agent work show up here while they run; every conversation is under All.' : scope ? 'No agents running in this company. Its sessions, workflow steps and their subagents show up here while they work.' : 'No agents running. Sessions, workflow steps and their subagents show up here while they work.'}>
               {repoId ? (
                 <Button onClick={() => pickRepo(null)}>Show all repos</Button>
               ) : (

@@ -517,6 +517,15 @@ describe('DEPARTMENTS.md board: task model, state machine, heal and park',()=>{
     expect(c.setAutopilot(acme.id,false).autopilot).toBe(false);expect(c.boardSettings(acme.id).maxInFlight).toBe(5)
     c.archive(acme.id);expect(()=>c.setAutopilot(acme.id,true)).toThrow('Unarchive')
   })
+  it('the listed passport carries the autopilot switch, so the company menu shows its real state and can turn it off',()=>{
+    const {acme}=board()
+    expect(c.listPassports().find(x=>x.id===acme.id)?.autopilot).toBe(false)
+    c.setAutopilot(acme.id,true,4)
+    expect(c.listPassports().find(x=>x.id===acme.id)).toMatchObject({autopilot:true,maxInFlight:4})
+    expect(c.passport(acme.id).autopilot).toBe(true)
+    c.setAutopilot(acme.id,false)
+    expect(c.listPassports().find(x=>x.id===acme.id)?.autopilot).toBe(false)
+  })
   it('accepting a model suggestion applies it; without one it is refused',()=>{
     const {acme,dep,agent}=board()
     const t=task({companyId:acme.id,status:'triage'})

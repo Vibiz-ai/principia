@@ -48,7 +48,7 @@ import {
 } from '../../shared/onboarding'
 import { briefForPlan } from '../../shared/onboardingBrief'
 import { finalizePlan, scheduleCostly, validatePlan, type ScreenFn } from '../../shared/onboardingPlan'
-import { pickPersona, type AgentPersona } from '../../shared/personas'
+import { personaNamesElsewhere, pickPersona, type AgentPersona } from '../../shared/personas'
 import type { AgentProfile, ExperimentalFlags, Repo, Schedule, ScheduleInput, Settings } from '../../shared/types'
 import type { CompanyStore } from '../company'
 import { ensureDefaultProfile } from '../db/seed'
@@ -299,7 +299,8 @@ export class LaunchService {
       workflows: workflowsForKeys(present),
       profileAdapters: this.d.profileAdapters().filter((a) => (PLAN_ADAPTERS as readonly string[]).includes(a)),
       hasCode: input.hasCode && (input.repos.length > 0 || !!input.github),
-      departmentsOn: input.enableFlags || departmentsEnabled(flags)
+      departmentsOn: input.enableFlags || departmentsEnabled(flags),
+      personasElsewhere: [...this.personasElsewhere(null)]
     }
     const planInput: PlanInput = {
       hasCode: available.hasCode,
@@ -744,17 +745,27 @@ export class LaunchService {
    * included) is kept; an agent whose draft had none is picked again with the real seed (companyId + ':' + ref).
    * Deterministic, so a resumed launch gives the same answer; names stay unique across the plan.
    */
+  /** Names other companies' agents already have (never this one's): a new agent avoids them while any are free. */
+  private personasElsewhere(companyId: string | null): Set<string> {
+    try {
+      const d = this.d.company.departments
+      return personaNamesElsewhere(companyId, d.listAgents(), d.list(undefined, { includeArchived: true }))
+    } catch {
+      return new Set()
+    }
+  }
   private launchPersonas(companyId: string, prep: Prepared, agents: OnboardingPlan['agents']): Map<string, AgentPersona> {
     const drafted = new Set(prep.input.plan.agents.filter((a) => a.persona).map((a) => a.ref))
     const keep = (a: OnboardingPlan['agents'][number]) => !!a.persona && drafted.has(a.ref)
     const used = new Set(agents.filter(keep).map((a) => a.persona!.name.trim().toLowerCase()))
     const out = new Map<string, AgentPersona>()
+    const avoid = this.personasElsewhere(companyId)
     for (const a of agents) {
       if (keep(a)) {
         out.set(a.ref, a.persona!)
         continue
       }
-      const p = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, seed: `${companyId}:${a.ref}` })
+      const p = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, avoid, seed: `${companyId}:${a.ref}` })
       used.add(p.name.toLowerCase())
       out.set(a.ref, p)
     }

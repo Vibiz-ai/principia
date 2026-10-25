@@ -10,6 +10,7 @@
 .board-seat.is-paused .seat-avatar { opacity: 0.5; }
 .board-autopilot { display: inline-flex; align-items: center; gap: 8px; }
 .board-autopilot__label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-secondary); }
+.board-autopilot.is-held .board-autopilot__label { color: var(--text-tertiary); }
 .board-autopilot__pill { border: 0; background: none; padding: 0; }
 .board-autopilot__pill .pill { margin-left: 0; }
 
@@ -69,7 +70,7 @@
 .board-callout { font-size: 11px; line-height: 1.6; color: var(--text-secondary); background: var(--status-needs-soft); border-radius: 6px; padding: 9px 11px; margin-bottom: 16px; }
 .board-section { margin-bottom: 20px; }
 .board-section h3 { font-size: 11px; font-weight: 550; margin-bottom: 8px; }
-.board-section--ask { border: 1px solid rgba(56, 214, 232, 0.35); background: var(--status-needs-soft); border-radius: 7px; padding: 12px; }
+.board-section--ask { border: 1px solid rgba(110, 140, 255, 0.35); background: var(--status-needs-soft); border-radius: 7px; padding: 12px; }
 .board-routing > span:last-child { color: var(--text-secondary); line-height: 1.5; }
 .board-actions .btn { flex: none; }
 .board-review { display: flex; flex-direction: column; gap: 8px; width: 100%; }
@@ -149,3 +150,4 @@
 .board-empty__latin { font-size: 12px; }
 .board-empty .btn { margin-top: 6px; }
 .board--embedded .board-empty { padding: 20px 16px; }
+.board-review-first { margin-bottom: 16px; }

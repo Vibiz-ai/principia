@@ -21,6 +21,14 @@ export interface GatewayConnection {
   authError?: string
   hasCredentials: boolean
 }
+/**
+ * Five doors A1: the connections a company's Connections page lists: the ones its agents get (shared ones, without
+ * `companyIds`, and its own), never a connection only another company's agents get. No company = every connection.
+ */
+export function connectionsFor<T extends Pick<GatewayConnection, 'companyIds'>>(list: readonly T[], companyId?: string | null): T[] {
+  if (!companyId) return [...list]
+  return list.filter((c) => !c.companyIds?.length || c.companyIds.includes(companyId))
+}
 export interface GatewayConnectionInput extends Omit<GatewayConnection, 'hasCredentials' | 'authStatus' | 'authError'> {
   /** Environment for stdio, headers for HTTP. Encrypted at rest, never returned. Omit to retain. */
   credentials?: Record<string, string>

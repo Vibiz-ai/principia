@@ -116,8 +116,8 @@ describe('DEPARTMENTS.md §8: task-mode schedules keep one standing card', () =>
     expect(kinds(card.id).filter(k => k === 'coalesced')).toHaveLength(2)
     expect(started).toHaveLength(1)
     expect(mem.events.map(e => e.kind)).toEqual(['fired', 'fired', 'fired'])
-    expect(mem.events[0].message).toMatch(/^Created PRN-\d+$/)
-    expect(mem.events[1].message).toMatch(/^Coalesced into PRN-\d+ \(agent busy\)$/)
+    expect(mem.events[0].message).toMatch(/^Created [A-Z][A-Z0-9]{1,4}-\d+$/)
+    expect(mem.events[1].message).toMatch(/^Coalesced into [A-Z][A-Z0-9]{1,4}-\d+ \(agent busy\)$/)
     expect(mem.schedules.get('sch_digest')!).toMatchObject({ lastFireAt: '2026-10-20T10:10:00.000Z', nextFireAt: '2026-10-20T10:15:00.000Z', lastRunId: null })
 
     // the run ends in review: the coalesced fires become exactly one follow-up turn
@@ -141,7 +141,7 @@ describe('DEPARTMENTS.md §8: task-mode schedules keep one standing card', () =>
     expect(card.pendingWake?.count).toBe(2)
     expect(comments(card.id)).toHaveLength(2)
     expect(started).toHaveLength(0)
-    expect(mem.events.map(e => e.message)).toEqual([expect.stringMatching(/^Created PRN-\d+; Autopilot is off/), expect.stringMatching(/^Commented on PRN-\d+; Autopilot is off/)])
+    expect(mem.events.map(e => e.message)).toEqual([expect.stringMatching(/^Created [A-Z][A-Z0-9]{1,4}-\d+; Autopilot is off/), expect.stringMatching(/^Commented on [A-Z][A-Z0-9]{1,4}-\d+; Autopilot is off/)])
   })
 
   it('a closed card is never replaced or reopened by a fire: the fire is a comment and the event says so', async () => {
@@ -344,7 +344,7 @@ describe('DEPARTMENTS.md §8: task-mode Slack triggers map a thread to one task'
     expect(c.task(t.id).pendingWake?.reasons[0]).toMatch(/^Slack follow-up in #support: 1 new message[\s\S]*it also fails on Safari/)
     expect(started).toHaveLength(1)
     expect(h.kinds()).toEqual(['fired', 'fired', 'fired'])
-    expect(h.st.trigEvents.map(e => e.message)).toEqual([expect.stringMatching(/^Created PRN-/), expect.stringMatching(/^Coalesced into PRN-/), expect.stringMatching(/^Coalesced into PRN-/)])
+    expect(h.st.trigEvents.map(e => e.message)).toEqual([expect.stringMatching(/^Created [A-Z][A-Z0-9]{1,4}-/), expect.stringMatching(/^Coalesced into [A-Z][A-Z0-9]{1,4}-/), expect.stringMatching(/^Coalesced into [A-Z][A-Z0-9]{1,4}-/)])
     expect(h.st.trigEvents.every(e => e.runId === null)).toBe(true)
     h.stop()
   })

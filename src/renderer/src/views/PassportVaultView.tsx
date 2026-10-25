@@ -52,7 +52,7 @@ export function PassportVaultView({ view }: { view: PassportViewState }): React.
   if (!companyId) {
     return (
       <div className="view">
-        <Toolbar title="Passport" />
+        <Toolbar title="Knowledge" />
         <div className="scroll view__body">
           <CompanyChooser
             title="Pick a company"
@@ -377,7 +377,7 @@ function CompanyPassport({ companyId, view }: { companyId: Id; view: PassportVie
   }
   const title = (
     <span className="pview__title">
-      Passport
+      Knowledge
       {company && <span className="pview__company">{companyLabel(company)}</span>}
     </span>
   )

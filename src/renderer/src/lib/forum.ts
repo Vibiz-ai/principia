@@ -68,7 +68,8 @@ export type Token =
   | { t: 'msgref'; v: string }
   | { t: 'br' }
 
-const TOKEN_RE = /(`[^`\n]{1,400}`)|(\*\*[^*\n]{1,200}\*\*)|(https?:\/\/[^\s<>()"'`]+[^\s<>()"'`.,;:!?])|(\[\[[^\[\]\n]{1,200}\]\])|((?:^|(?<=[\s(]))@[a-z0-9][a-z0-9._-]{0,31})|((?:^|(?<=[\s(]))#[a-z0-9][a-z0-9-]{1,39})|(\bPRN-\d{1,7}\b)|((?:^|(?<=[\s(]))m[0-9a-z]*\d[0-9a-z]*(?=$|[\s),.:;!?]))|(\n)/gi
+// five doors step 2: task ids carry their company's prefix (NC-12, LA-3); the case-insensitive flag is the other tokens'
+const TOKEN_RE = /(`[^`\n]{1,400}`)|(\*\*[^*\n]{1,200}\*\*)|(https?:\/\/[^\s<>()"'`]+[^\s<>()"'`.,;:!?])|(\[\[[^\[\]\n]{1,200}\]\])|((?:^|(?<=[\s(]))@[a-z0-9][a-z0-9._-]{0,31})|((?:^|(?<=[\s(]))#[a-z0-9][a-z0-9-]{1,39})|(\b[A-Z][A-Z0-9]{1,4}-\d{1,7}\b)|((?:^|(?<=[\s(]))m[0-9a-z]*\d[0-9a-z]*(?=$|[\s),.:;!?]))|(\n)/gi
 
 /** Inline tokens of a message text: mentions, channels, task ids, [[notes]], URLs, `code`, **bold**, m3fk refs. */
 export function tokenize(text: string): Token[] {

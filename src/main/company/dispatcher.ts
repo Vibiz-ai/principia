@@ -177,6 +177,8 @@ export class Dispatcher {
   private autopilotRoom(companyId: string): number {
     const company = this.c.scope.get(companyId)
     if (!company || company.archivedAt) return 0
+    // five doors A4: autopilot reads "Off while paused" and starts nothing until the company resumes
+    if (this.c.isPaused(companyId)) return 0
     const s = this.c.boardSettings(companyId)
     if (!s.autopilot) return 0
     return s.maxInFlight - this.inFlight(companyId)
@@ -292,7 +294,7 @@ export class Dispatcher {
 
   // ---------- human starts ----------
 
-  /** "Run now": a human start (no autopilot gate); one in flight per agent ("Copywriter is busy on PRN-12"). */
+  /** "Run now": a human start (no autopilot gate); one in flight per agent ("Copywriter is busy on NC-12"). */
   runNow(taskId: string, profileId?: string): BoardTask {
     const t = this.c.task(taskId)
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null

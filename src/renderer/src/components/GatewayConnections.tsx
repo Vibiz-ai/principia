@@ -4,6 +4,7 @@ import type { Repo } from '@shared/types'
 import { confirmNative, errorMessage, hive } from '../lib/hive'
 import { connectionProblem, importGatewayConfig } from '../lib/gatewayForm'
 import { Button, Switch } from './ui'
+import { scopeCompanyId, useStore } from '../state/store'
 import { ConnectionCatalog } from './ConnectionCatalog'
 import { presetForUrl, type ConnectionPreset } from '../lib/connectionCatalog'
 
@@ -12,6 +13,9 @@ type Draft = { id: string; name: string; transport: 'http' | 'stdio'; url: strin
 const blank = (): Draft => ({ id: '', name: '', transport: 'http', url: '', command: '', args: '', auth: 'oauth', token: '', header: 'Authorization', env: '', roots: [], scope: 'projects', enabled: true })
 
 export function GatewayConnections(): React.JSX.Element {
+  // five doors A1: inside a company only what its agents get (shared + its own), never another client's connection
+  const scope = useStore((s) => scopeCompanyId(s))
+  const listArg = scope ? { companyId: scope } : undefined
   const [connections, setConnections] = useState<GatewayConnection[]>([])
   const [repos, setRepos] = useState<Repo[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -28,23 +32,24 @@ export function GatewayConnections(): React.JSX.Element {
   useEffect(() => {
     mounted.current = true
     const current = ++revision.current
-    void Promise.all([hive.gateway.list(), hive.repos.list()]).then(([items, projects]) => {
+    void Promise.all([hive.gateway.list(listArg), hive.repos.list()]).then(([items, projects]) => {
       if (mounted.current) { setRepos(projects); if (revision.current === current) setConnections(items) }
     }).catch(() => { if (mounted.current) setMessage('Could not load connections. Try reopening Settings.') })
     return () => { mounted.current = false }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope])
   const connecting = connections.some(c => c.authStatus === 'connecting')
   useEffect(() => {
     if (!connecting) return
     let canceled = false
-    const timer = setInterval(() => { if (!pending.current) { const current = revision.current; void hive.gateway.list().then(items => { if (!canceled && revision.current === current) setConnections(items) }).catch(() => {}) } }, 1200)
+    const timer = setInterval(() => { if (!pending.current) { const current = revision.current; void hive.gateway.list(listArg).then(items => { if (!canceled && revision.current === current) setConnections(items) }).catch(() => {}) } }, 1200)
     return () => { canceled = true; clearInterval(timer) }
   }, [connecting])
   const action = async (fn: () => Promise<string>): Promise<void> => {
     if (pending.current) return
     pending.current = true; ++revision.current; setBusy(true); setMessage('')
-    try { const result = await fn(); const items = await hive.gateway.list(); if (mounted.current) { setConnections(items); setMessage(result) } }
-    catch (error) { const items = await hive.gateway.list().catch(() => null); if (mounted.current) { if (items) setConnections(items); setMessage(errorMessage(error)) } }
+    try { const result = await fn(); const items = await hive.gateway.list(listArg); if (mounted.current) { setConnections(items); setMessage(result) } }
+    catch (error) { const items = await hive.gateway.list(listArg).catch(() => null); if (mounted.current) { if (items) setConnections(items); setMessage(errorMessage(error)) } }
     finally { pending.current = false; if (mounted.current) setBusy(false) }
   }
   useEffect(() => { if (draft) editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, [draft?.id])

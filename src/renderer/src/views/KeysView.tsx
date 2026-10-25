@@ -140,7 +140,7 @@ export function KeysView(): React.JSX.Element {
   if (vaultDown || (info && !info.safeStorageAvailable)) {
     return (
       <div className="view">
-        <Toolbar title="Keys" />
+        <Toolbar title="Keys & secrets" />
         <EmptyState icon="lock" text="macOS Keychain encryption is unavailable, so Principia won’t store keys.">
           <Button onClick={() => void attempt(() => hive.app.showItemInFolder({ path: '/System/Applications/Utilities/Keychain Access.app' }))}>Show Keychain Access</Button>
         </EmptyState>
@@ -232,12 +232,16 @@ export function KeysView(): React.JSX.Element {
       onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDrop(false)}
       onDrop={(e) => void onDrop(e)}
     >
-      <Toolbar title="Keys" sub={multi && scope ? <CompanyChip companyId={scope} always className="toolbar-company" /> : undefined}>
-        <Button icon="download" onClick={() => void pickEnv()} title={home ? `Import into ${company?.name ?? 'this company'}` : multi ? 'Import as Shared keys' : undefined}>
-          Import .env…
+      <Toolbar
+        title="Keys & secrets"
+        sub={multi && scope ? <CompanyChip companyId={scope} always className="toolbar-company" /> : multi ? <span className="company-toolbar-meta">All companies · new keys here are Shared</span> : undefined}
+      >
+        {/* All companies: say where a key goes (Shared = every company); a client's own key is added from its section */}
+        <Button icon="download" onClick={() => void pickEnv()} title={home ? `Import into ${company?.name ?? 'this company'}` : multi ? 'Import as Shared keys (every company gets them)' : undefined}>
+          {multi && !home ? 'Import Shared .env…' : 'Import .env…'}
         </Button>
-        <Button variant="primary" icon="plus" onClick={() => setAdding({ space: home })}>
-          Add Key
+        <Button variant="primary" icon="plus" onClick={() => setAdding({ space: home })} title={multi && !home ? 'A Shared key: every company’s agents get it. To add one for a single company, use + in its section.' : undefined}>
+          {multi && !home ? 'Add Shared Key' : 'Add Key'}
         </Button>
       </Toolbar>
       <div className="keys-note">

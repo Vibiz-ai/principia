@@ -1,12 +1,13 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
+import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
 import type { Store } from '../db/store'
 import { log } from '../log'
 import { DepartmentStore } from './departments'
+import { normalizePrefix, PERSONAL_PREFIX, pickPrefix, TASK_IDENT_RE } from './prefix'
 import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpdateSchema, passportExportSchema, passportInputSchema, taskInputSchema, taskPatchSchema } from './schemas'
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
 import { briefPromptBlock, contextFromDescription, planStartRefusal } from './brief'
@@ -52,7 +53,7 @@ export class CompanyStore {
   /** experimental.departments (§0.8); off, plain tasks keep today's statuses (no dependency lock, no auto heal) */
   private boardOn: () => boolean = ()=>true
   /** why main canceled a task's run (time or wake cap); consumed at its run end */
-  private readonly stopReasons = new Map<string, 'limit'|'interrupted'|'handoff_cap'>()
+  private readonly stopReasons = new Map<string, 'limit'|'interrupted'|'handoff_cap'|'paused'>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
   private readonly runLinks: boolean
   /** LINEAR.md: told after every task write (sync schedules a push); never fails the write */
@@ -77,6 +78,7 @@ export class CompanyStore {
     this.departments=new DepartmentStore(store,this)
     // openDatabase already did this; kept so a store over a db without the Personal row still lists it
     if (!this.store.db.prepare('SELECT 1 FROM company_passports WHERE id=?').get(PERSONAL_COMPANY_ID)) ensureCompanyRows(store.db)
+    this.ensureTaskPrefixes()
   }
   /** Rail / sidebar order, Personal last. Archived companies only with includeArchived (Settings → Companies). */
   listPassports(opts: { includeArchived?: boolean } = {}): CompanyPassport[] { return this.scope.list(opts) }
@@ -113,7 +115,7 @@ export class CompanyStore {
       const {color, vaultPath, ...profile} = input
       // data keeps the shape older builds' listPassports parses; the §2.1 fields live in their own columns
       // the board switch (§1.1) lives in the same JSON and survives a profile save
-      const board = existing ? (({autopilot, maxInFlight})=>({...(autopilot!==undefined?{autopilot}:{}),...(maxInFlight!==undefined?{maxInFlight}:{})}))(this.companyJson(pid)) : {}
+      const board = existing ? keepRowState(this.companyJson(pid)) : {}
       const data = {...board,...profile,repoIds:personal?[]:[...new Set(input.repoIds)],id:pid,createdAt:existing?.createdAt??now,updatedAt:now}
       if (existing) {
         this.store.db.prepare('UPDATE company_passports SET data=?, color=COALESCE(?,color), vault_path=? WHERE id=?')
@@ -130,7 +132,7 @@ export class CompanyStore {
       }
       return {id: pid, isNew: !existing}
     })()
-    if (created.isNew) this.tryWorkspace(created.id)
+    if (created.isNew) { this.tryWorkspace(created.id); this.taskPrefix(created.id) }
     return this.passport(created.id)
   }
   /** §3: repo-less chats of a new company get `<userData>/companies/<slug>/workspace`. Best effort; sessions re-ensure it. */
@@ -179,6 +181,7 @@ export class CompanyStore {
       if (p.sortOrder !== undefined) this.store.db.prepare('UPDATE company_passports SET sort_order=? WHERE id=?').run(p.sortOrder, id)
       if (p.vaultPath && p.vaultPath !== c.vaultPath) this.scope.checkVaultPath(id, p.vaultPath)
       if (p.vaultPath !== undefined) this.store.db.prepare('UPDATE company_passports SET vault_path=? WHERE id=?').run(p.vaultPath, id)
+      if (p.taskPrefix !== undefined) this.setTaskPrefix(id, p.taskPrefix)
     })()
     return this.passport(id)
   }
@@ -379,8 +382,10 @@ export class CompanyStore {
       this.validate(input);const key=this.sourceKey(input)
       if(key) { const found=this.store.db.prepare('SELECT data FROM company_tasks WHERE company_id=? AND source_key=?').get(input.companyId,key) as {data:string}|undefined;if(found) return readTask(found.data) }
       const now=new Date().toISOString();const id=uid('task')
-      const row=this.store.db.prepare('INSERT INTO company_tasks(id,company_id,source_key,data) VALUES(?,?,?,?)').run(id,input.companyId,key,'{}')
-      const task=withTaskDefaults({...input,id,identifier:`PRN-${row.lastInsertRowid}`,runId:null,createdAt:now,updatedAt:now,dependencyIds:[...new Set(input.dependencyIds)]}) as BoardTask
+      // the company's own counter (five doors step 2), taken before the row exists so the prefix backfill never sees it
+      const identifier=this.nextIdentifier(input.companyId)
+      this.store.db.prepare('INSERT INTO company_tasks(id,company_id,source_key,data) VALUES(?,?,?,?)').run(id,input.companyId,key,'{}')
+      const task=withTaskDefaults({...input,id,identifier,runId:null,createdAt:now,updatedAt:now,dependencyIds:[...new Set(input.dependencyIds)]}) as BoardTask
       if(task.status!=='blocked') task.blockReason=null
       else if(!task.blockReason) task.blockReason=this.boardOn()&&task.dependencyIds.length&&!this.depsDone(task)?'deps':'manual'
       const locked=this.lockDeps(task) ?? this.parkOnCanceledDep(task)
@@ -651,7 +656,7 @@ export class CompanyStore {
     })()
   }
   /** The next run end of this task parks with `reason` instead of no_report (a time or wake cap canceled it). */
-  expectStop(taskId: string, reason: 'limit'|'interrupted'|'handoff_cap'): void { this.stopReasons.set(taskId,reason) }
+  expectStop(taskId: string, reason: 'limit'|'interrupted'|'handoff_cap'|'paused'): void { this.stopReasons.set(taskId,reason) }
   /** Parks an in-flight task whose run or session is gone (no live run to cancel). */
   park(id: string, reason: 'no_report'|'interrupted'|'limit'|'run_failed', message: string): BoardTask {
     return this.store.db.transaction(()=> {
@@ -702,10 +707,166 @@ export class CompanyStore {
       return next
     })()
   }
+  // ---------- five doors step 2: per-company task prefixes ----------
+  /**
+   * Every company without a prefix gets one (Personal keeps PRN), and its tasks still numbered PRN-<global seq> are
+   * numbered again inside the company, oldest first: NC-1, NC-2… Idempotent; a task's PRN-<seq> keeps resolving
+   * through findTask. One transaction, so a crash never leaves half a company renumbered.
+   */
+  private ensureTaskPrefixes(): void {
+    const rows=this.store.db.prepare('SELECT id,data FROM company_passports').all() as {id:string;data:string}[]
+    const json=(d:string):Record<string,unknown>=>{ try { const v=JSON.parse(d);return v&&typeof v==='object'?v:{} } catch { return {} } }
+    const missing=rows.filter(r=>typeof json(r.data).taskPrefix!=='string')
+    if(!missing.length) return
+    this.store.db.transaction(()=> {
+      const taken=new Set(rows.map(r=>json(r.data).taskPrefix).filter((p):p is string=>typeof p==='string'))
+      // the rail order decides who gets a contested prefix first
+      const order=new Map(this.listPassports({includeArchived:true}).map((c,i)=>[c.id,i]))
+      missing.sort((a,b)=>(order.get(a.id)??1e9)-(order.get(b.id)??1e9))
+      for(const r of missing) {
+        const data=json(r.data)
+        const prefix=pickPrefix(r.id,typeof data.name==='string'?data.name:r.id,taken)
+        taken.add(prefix)
+        const tasks=this.store.db.prepare('SELECT seq,id,data FROM company_tasks WHERE company_id=? ORDER BY seq').all(r.id) as {seq:number;id:string;data:string}[]
+        let n=0
+        for(const t of tasks) {
+          const td=json(t.data)
+          const m=typeof td.identifier==='string'?TASK_IDENT_RE.exec(td.identifier):null
+          // a hand-made or imported identifier of another shape keeps its name; only the old global numbers move
+          if(!m) continue
+          if(m[1]!.toUpperCase()!==PERSONAL_PREFIX) { n=Math.max(n,m[1]!.toUpperCase()===prefix?Number(m[2]):n);continue }
+          td.identifier=`${prefix}-${++n}`
+          this.store.db.prepare('UPDATE company_tasks SET data=? WHERE id=?').run(JSON.stringify(td),t.id)
+        }
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...data,taskPrefix:prefix,taskSeq:n}),r.id)
+      }
+    })()
+  }
+  /** This company's task prefix ("NC"). */
+  taskPrefix(companyId: string): string {
+    const p=this.companyJson(companyId).taskPrefix
+    if(typeof p==='string'&&p) return p
+    this.ensureTaskPrefixes()
+    const again=this.companyJson(companyId).taskPrefix
+    return typeof again==='string'&&again ? again : PERSONAL_PREFIX
+  }
+  /** The next identifier of this company (NC-13), counted inside the company. Call inside the create transaction. */
+  private nextIdentifier(companyId: string): string {
+    const prefix=this.taskPrefix(companyId)
+    const data=this.companyJson(companyId)
+    const n=(typeof data.taskSeq==='number'&&Number.isInteger(data.taskSeq)?data.taskSeq:0)+1
+    this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...data,taskSeq:n}),companyId)
+    return `${prefix}-${n}`
+  }
+  /**
+   * A task of this company by id, identifier (NC-12, any case) or its pre-prefix PRN-<seq>; another company's task
+   * reads as not found.
+   */
+  findTask(companyId: string, ref: string): BoardTask|null {
+    const r=ref.trim()
+    const byId=this.store.db.prepare('SELECT data FROM company_tasks WHERE id=? AND company_id=?').get(r,companyId) as {data:string}|undefined
+    if(byId) return readTask(byId.data)
+    const m=TASK_IDENT_RE.exec(r)
+    if(!m) return null
+    const ident=`${m[1]!.toUpperCase()}-${Number(m[2])}`
+    const byIdent=this.store.db.prepare("SELECT data FROM company_tasks WHERE company_id=? AND json_extract(data,'$.identifier')=?").get(companyId,ident) as {data:string}|undefined
+    if(byIdent) return readTask(byIdent.data)
+    if(m[1]!.toUpperCase()!==PERSONAL_PREFIX) return null
+    const bySeq=this.store.db.prepare('SELECT data FROM company_tasks WHERE seq=? AND company_id=?').get(Number(m[2]),companyId) as {data:string}|undefined
+    return bySeq ? readTask(bySeq.data) : null
+  }
+  /**
+   * Company settings › General: a new task prefix. 2-5 letters or digits, starting with a letter, held by no other
+   * company (PRN stays Personal's). The company's tasks keep their numbers under the new prefix (NC-12 → NW-12).
+   */
+  setTaskPrefix(companyId: string, raw: string): CompanyPassport {
+    const prefix=normalizePrefix(raw) ?? fail('A task prefix is 2 to 5 letters or digits and starts with a letter')
+    const c=this.passport(companyId)
+    if(prefix===PERSONAL_PREFIX&&c.system!=='personal') fail('PRN is Personal\'s prefix. Choose another one.')
+    const old=this.taskPrefix(companyId)
+    if(old===prefix) return c
+    const owner=this.listPassports({includeArchived:true}).find(o=>o.id!==companyId&&o.taskPrefix===prefix)
+    if(owner) fail(`${owner.name} already uses ${prefix}. Choose another prefix.`)
+    this.store.db.transaction(()=> {
+      for(const t of this.listTasks(companyId)) {
+        const m=TASK_IDENT_RE.exec(t.identifier)
+        if(!m||m[1]!.toUpperCase()!==old) continue
+        this.writeTask({...t,identifier:`${prefix}-${m[2]}`} as BoardTask)
+      }
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...this.companyJson(companyId),taskPrefix:prefix}),companyId)
+    })()
+    return this.passport(companyId)
+  }
+
+  // ---------- five doors A4: pause one company ----------
+  /** The company's pause record, or null while it runs. */
+  pauseState(companyId: string): { at: string; seats: string[]; checkpoints: CompanyPauseCheckpoint[] }|null {
+    const p=this.companyJson(companyId).pause as {at?:unknown;seats?:unknown;checkpoints?:unknown}|undefined
+    if(!p||typeof p.at!=='string') return null
+    return { at:p.at, seats:Array.isArray(p.seats)?p.seats.filter((x):x is string=>typeof x==='string'):[], checkpoints:Array.isArray(p.checkpoints)?(p.checkpoints as CompanyPauseCheckpoint[]):[] }
+  }
+  isPaused(companyId: string): boolean {
+    try { return !!this.pauseState(companyId) } catch { return false }
+  }
+  /**
+   * Pauses this one company: its active seats are paused (and remembered, so Resume brings back exactly those), and the
+   * row holds `pause`, which every start path checks (tasks, the dispatcher, schedules, the engine). Returns the work in
+   * flight, which the caller saves (cancels with a 'paused' checkpoint: the task returns to To do and continues on
+   * resume). Pausing a paused company changes nothing.
+   */
+  pauseCompany(companyId: string): { seats: string[]; inFlight: CompanyPauseCheckpoint[]; already: boolean } {
+    const c=this.passport(companyId)
+    if(c.archivedAt) fail(`${c.name} is archived`)
+    return this.store.db.transaction(()=> {
+      const cur=this.pauseState(companyId)
+      if(cur) return {seats:[],inFlight:[],already:true}
+      const now=new Date().toISOString()
+      const seats=this.departments.listAgents({companyId}).filter(a=>!a.archivedAt&&!a.pausedAt).map(a=>a.id)
+      for(const id of seats) this.store.db.prepare('UPDATE company_agents SET paused_at=?, updated_at=? WHERE id=?').run(now,now,id)
+      const inFlight=this.listTasks(companyId)
+        .filter(t=>t.status==='in_progress'&&!!t.runId&&!trackedBy(t)&&!this.startedElsewhere(t)&&['queued','running'].includes(this.store.getRun(t.runId)?.status??''))
+        .map(t=>this.checkpointOf(t))
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...this.companyJson(companyId),pause:{at:now,seats,checkpoints:inFlight}}),companyId)
+      return {seats,inFlight,already:false}
+    })()
+  }
+  /** Resume: the seats this pause paused run again, and the pause record goes. Returns them and the saved work. */
+  resumeCompany(companyId: string): { seats: string[]; checkpoints: CompanyPauseCheckpoint[] } {
+    this.passport(companyId)
+    return this.store.db.transaction(()=> {
+      const cur=this.pauseState(companyId)
+      if(!cur) return {seats:[],checkpoints:[]}
+      const now=new Date().toISOString()
+      const seats:string[]=[]
+      for(const id of cur.seats) {
+        const a=this.departments.getAgent(id)
+        if(!a||a.companyId!==companyId||!a.pausedAt) continue
+        this.store.db.prepare('UPDATE company_agents SET paused_at=NULL, updated_at=? WHERE id=?').run(now,id)
+        seats.push(id)
+      }
+      const {pause:_p,...rest}=this.companyJson(companyId);void _p
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(rest),companyId)
+      return {seats,checkpoints:cur.checkpoints}
+    })()
+  }
+  private checkpointOf(t: BoardTask): CompanyPauseCheckpoint {
+    const a=t.agentId ? this.departments.getAgent(t.agentId) : null
+    return {taskId:t.id,identifier:t.identifier,title:t.title.slice(0,200),agentId:a?.id ?? null,agentName:a ? (a.data.persona?.name || a.name) : null}
+  }
+  /** The refusal every start path gives while the company is paused (A4: a paused company starts nothing). */
+  assertRunning(companyId: string): void {
+    if(!this.isPaused(companyId)) return
+    let name='This company'
+    try { name=this.passport(companyId).name } catch { /* gone */ }
+    throw new HiveError('conflict', `${name} is paused. Resume it to start work.`)
+  }
+
   /** board:autopilot. Stored in the company row's JSON (§1.1); both default off / DEFAULT_MAX_IN_FLIGHT. */
   setAutopilot(companyId: string, on: boolean, maxInFlight?: number): BoardSettings {
     const c=this.passport(companyId)
     if(on&&c.archivedAt) fail(`Unarchive ${c.name} before turning Autopilot on`)
+    // A4: a paused company starts nothing; Autopilot stays off until it resumes
+    if(on&&this.isPaused(companyId)) throw new HiveError('conflict', `Autopilot is off while ${c.name} is paused. Resume it first.`)
     if(maxInFlight!==undefined&&(!Number.isInteger(maxInFlight)||maxInFlight<1||maxInFlight>20)) fail('Tasks in flight must be between 1 and 20')
     this.store.db.transaction(()=> {
       const data=this.companyJson(companyId)
@@ -734,6 +895,8 @@ export class CompanyStore {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
+      // A4: a paused company starts nothing, whoever asks (resume clears the pause before it restarts saved work)
+      this.assertRunning(task.companyId)
       if(this.startedElsewhere(task)) fail(`${this.externalLink(task.id)?.key ?? 'This task'} is in progress in Linear. Move it to Todo to run an agent here.`)
       // PLANS.md §2.4: a plan task runs only through the plan pilot (its milestone worktree), never in the checkout
       if(task.plan&&!opts.plan) fail(planStartRefusal(task))
@@ -828,6 +991,8 @@ export class CompanyStore {
       assertTransition(t,end.to,'system')
       this.stopReasons.delete(t.id)
       const next:BoardTask={...t,status:end.to.status,blockReason:end.to.blockReason ?? null,updatedAt:new Date().toISOString()}
+      // five doors A4: the next turn picks up where the paused one stopped (the provider session resumes when it can)
+      if(end.kind==='paused') next.pendingWake=addWake(t.pendingWake,'Paused by the founder mid-turn. Your work so far is saved: continue where you left off.')
       // waiting on a dependency that was canceled during the run: it would never heal
       const parked=this.parkOnCanceledDep(next)
       this.writeTask(next);this.activity(t.id,end.kind,end.message,end.by);changed=true
@@ -844,6 +1009,15 @@ export class CompanyStore {
       else this.park(t.id,'interrupted',`Previous execution${t.runId ? ` ${t.runId}`:''} was interrupted. Review and retry explicitly.`)
     }
   }
+}
+/**
+ * The row JSON a profile save keeps: the board switch (§1.1), the company pause (five doors A4) and the task prefix and
+ * counter (five doors step 2). Everything else in the JSON is the profile, rewritten by the save.
+ */
+function keepRowState(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of ['autopilot', 'maxInFlight', 'pause', 'taskPrefix', 'taskSeq']) if (data[k] !== undefined) out[k] = data[k]
+  return out
 }
 /** Older rows lack the §1.3 fields; a bad JSON field never hides the task. */
 function readTask(data: string): BoardTask { return withTaskDefaults(JSON.parse(data)) as BoardTask }

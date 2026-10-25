@@ -201,7 +201,7 @@ export function SlackView({ channelId, threadTs, search, nonce }: { channelId?: 
   )
 }
 
-/** PO-S3e: one switch; amber while auto triggers exist and it is off. */
+/** PO-S3e: one switch; caution while auto triggers exist and it is off. */
 function AutoPauseSwitch(): React.JSX.Element {
   const paused = useStore((s) => !!s.settings?.slackAutoPaused)
   const [triggers, setTriggers] = useState<SlackTrigger[]>([])
@@ -222,8 +222,8 @@ function DraftsWaiting(): React.JSX.Element | null {
   const drafts = usePendingSlackDrafts().filter((d) => d.status === 'pending' || d.status === 'failed')
   if (!drafts.length) return null
   return (
-    <Button size="sm" className="btn--amber" onClick={() => void openSlackDraft(drafts[0]!.id)} title="Open the oldest draft in its thread">
-      ⚑ {drafts.length} draft{drafts.length === 1 ? '' : 's'} waiting
+    <Button size="sm" className="btn--caution" onClick={() => void openSlackDraft(drafts[0]!.id)} title="Open the oldest draft in its thread">
+      ◆ {drafts.length} draft{drafts.length === 1 ? '' : 's'} waiting
     </Button>
   )
 }

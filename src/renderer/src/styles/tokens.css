@@ -73,8 +73,8 @@
   --status-warning-soft: rgba(214, 224, 240, 0.14);
   --status-canceled: #6d6e76;
   --status-canceled-soft: rgba(109, 110, 118, 0.14);
-  --status-needs: #38d6e8;                /* Needs you: asks, idle turns (LIVE.md §11) */
-  --status-needs-soft: rgba(56, 214, 232, 0.14);
+  --status-needs: var(--accent);          /* Needs you: asks, idle turns. Five doors A2: the accent, never amber */
+  --status-needs-soft: var(--accent-soft);
 
   /* ---------- Chart series (categorical, fixed order; validated on the dark surface) ---------- */
   --series-1: #3987e5;
@@ -85,7 +85,7 @@
   --series-other: #8b8d96;
 
   /* ---------- Providers (dots, segment tints only) ---------- */
-  --provider-claude: #d97757;
+  --provider-claude: #a9b8ff;            /* cool periwinkle (was Claude terracotta: no warm hues anywhere, design §7) */
   --provider-codex: #10a37f;
   --provider-cursor: #e6e6e9;
   --provider-gemini: #4f8df5;

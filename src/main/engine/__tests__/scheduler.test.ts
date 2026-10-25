@@ -250,3 +250,30 @@ describe('skipNext (LIVE.md §8)', () => {
     expect(() => s.skipNext('o')).toThrow(/no upcoming run/)
   })
 })
+
+describe('five doors A4: one paused company', () => {
+  it("a paused company's slot is skipped (logged), another company's fires; Run now refuses", () => {
+    const store = new MemStore()
+    const started: string[] = []
+    const s = createScheduler({
+      store,
+      startRun: (_t, o) => {
+        started.push(o.scheduleId ?? '')
+        return { id: `r_${started.length}` } as Run
+      },
+      isScheduleActive: () => false,
+      emit: () => {},
+      log: { info: () => {}, warn: () => {} },
+      now: () => NOW,
+      paused: false,
+      companyPaused: (sch) => (sch.id === 'harbor' ? 'Harbor Dental Group' : null)
+    })
+    store.schedules.set('harbor', sched('harbor', UTC_CRON('0 10 * * *'), { nextFireAt: '2026-10-15T10:00:00.000Z' }))
+    store.schedules.set('ledgerly', sched('ledgerly', UTC_CRON('0 10 * * *'), { nextFireAt: '2026-10-15T10:00:00.000Z' }))
+    s.tick()
+    expect(started).toEqual(['ledgerly'])
+    expect(store.events.find((e) => e.scheduleId === 'harbor')).toMatchObject({ kind: 'skipped', message: 'Harbor Dental Group is paused' })
+    expect(store.schedules.get('harbor')!.nextFireAt).toBe('2026-10-16T10:00:00.000Z')
+    expect(() => s.fireNow('harbor')).toThrow(/Harbor Dental Group is paused/)
+  })
+})

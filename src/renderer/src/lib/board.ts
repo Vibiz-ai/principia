@@ -174,7 +174,7 @@ export function coalesceActivity(activity: TaskActivity[]): TimelineItem[] {
 export const ACTIVITY_LABEL: Record<TaskActivityKind, string> = {
   created: 'Created', routed: 'Routed', assigned: 'Assigned', woke: 'Woke', coalesced: 'Coalesced', started: 'Started', report: 'Report', asked: 'Asked',
   answered: 'Answered', parked: 'Parked', healed: 'Healed', handoff: 'Handoff', approved: 'Approved', sent_back: 'Sent back', comment: 'Comment',
-  run_finished: 'Run finished', interrupted: 'Interrupted', updated: 'Updated', work: 'Work'
+  run_finished: 'Run finished', interrupted: 'Interrupted', updated: 'Updated', work: 'Work', paused: 'Paused'
 }
 
 export type InspectorAction = 'run' | 'openSession' | 'takeover' | 'stop' | 'approve' | 'sendBack' | 'unpark'

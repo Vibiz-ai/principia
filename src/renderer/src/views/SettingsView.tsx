@@ -10,7 +10,7 @@ import { LeftoverEmpty, LeftoverList, useLeftovers } from '../components/agents/
 import { confirmNative, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { ADAPTER_AUTH_VARS } from '../lib/secrets'
 import { personasOn, t, toneOf, type Tone } from '../lib/voice'
-import { attempt, navigate, providerLabel, refreshCompanies, refreshProfiles, refreshProviders, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
+import { activeCompany, attempt, multiCompany, navigate, providerLabel, refreshCompanies, refreshProfiles, refreshProviders, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
 import type { AuthorRunGrant } from '@shared/authoring'
 import type { RunWorktree } from '@shared/types'
 import type { CompanyPassport } from '@shared/company'
@@ -20,22 +20,64 @@ import { slackCall } from '../lib/slackApi'
 import { acceptAlertSuggestion, isSetUp, useSlack } from '../state/slack'
 import { SlackConnectionCard } from '../components/slack/SetupGuide'
 import { UserPicker } from '../components/slack/bits'
+import { PassportView } from './PassportView'
+import { KeysView } from './KeysView'
+import { CloudView } from './CloudView'
 
-const SECTIONS: { id: SettingsSection; label: string }[] = [
+/**
+ * Five doors §2.4: two scopes. This company holds what belongs to one company (its settings page, Connections, Keys &
+ * secrets); App holds the rest. Keys, Cloud and Company Settings used to be nav items or their own routes; their old
+ * routes resolve here (lib/nav resolveView). The full split (Team & autonomy, AI providers, Storage) is step 4.
+ */
+const COMPANY_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: 'company', label: 'Company' },
+  { id: 'connections', label: 'Connections' },
+  { id: 'keys', label: 'Keys & secrets' }
+]
+const APP_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'agents', label: 'Agents' },
-  { id: 'connections', label: 'Connections' },
   { id: 'notifications', label: 'Notifications' },
+  { id: 'cloud', label: 'Cloud sync' },
   { id: 'data', label: 'Data' },
   { id: 'about', label: 'About' }
 ]
+/** Sections that mount a whole existing page (its own toolbar becomes the section header). */
+const HOSTED: ReadonlySet<SettingsSection> = new Set(['company', 'keys', 'cloud'])
 
-export function SettingsView({ section }: { section?: SettingsSection }): React.JSX.Element {
-  const [cur, setCur] = useState<SettingsSection>(section ?? 'general')
+/**
+ * Where Settings opens without a section: inside a company, on its Connections (round 2: "Settings opening on
+ * Connections" was a win); in All companies, on App › General, since the company pages need one company picked.
+ */
+export function defaultSettingsSection(inCompany: boolean): SettingsSection {
+  return inCompany ? 'connections' : 'general'
+}
+
+export function SettingsView({ section, nonce }: { section?: SettingsSection; nonce?: number }): React.JSX.Element {
+  // the group heading: the focused company's name; Personal for a Personal-only user; "Each company" in All companies
+  const companyTitle = useStore((s) => {
+    if (!multiCompany(s)) return s.companies[0]?.name ?? 'Personal'
+    const a = activeCompany(s)
+    return a === 'all' ? null : (s.companies.find((x) => x.id === a)?.name ?? null)
+  })
+  const [cur, setCur] = useState<SettingsSection>(section ?? defaultSettingsSection(companyTitle !== null))
   useEffect(() => {
     if (section) setCur(section)
-  }, [section])
+  }, [section, nonce])
   const settings = useStore((s) => s.settings)
+  const navRow = (s: { id: SettingsSection; label: string }): React.JSX.Element => (
+    <div
+      key={s.id}
+      className={`side-row side-row--nav ${cur === s.id ? 'is-selected' : ''}`}
+      role="link"
+      tabIndex={0}
+      aria-current={cur === s.id ? 'page' : undefined}
+      onClick={() => setCur(s.id)}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setCur(s.id))}
+    >
+      <span className="side-row__label">{s.label}</span>
+    </div>
+  )
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && !document.querySelector('.sheet-layer') && !(e.target as HTMLElement).closest('input, textarea')) {
@@ -50,13 +92,15 @@ export function SettingsView({ section }: { section?: SettingsSection }): React.
     <div className="view">
       <Toolbar title="Settings" />
       <div className="settings">
-        <nav className="settings__nav">
-          {SECTIONS.map((s) => (
-            <div key={s.id} className={`side-row side-row--nav ${cur === s.id ? 'is-selected' : ''}`} onClick={() => setCur(s.id)}>
-              <span className="side-row__label">{s.label}</span>
-            </div>
-          ))}
+        <nav className="settings__nav" aria-label="Settings sections">
+          <div className="settings__group" title={companyTitle ?? 'These pages belong to one company: each one asks which'}>{companyTitle ?? 'Each company'}</div>
+          {COMPANY_SECTIONS.map(navRow)}
+          <div className="settings__group">App</div>
+          {APP_SECTIONS.map(navRow)}
         </nav>
+        {HOSTED.has(cur) ? (
+          <div className="settings__host">{cur === 'company' ? <PassportView /> : cur === 'keys' ? <KeysView /> : <CloudView />}</div>
+        ) : (
         <div className="settings__body scroll">
           {!settings ? null : cur === 'general' ? (
             <General />
@@ -72,6 +116,7 @@ export function SettingsView({ section }: { section?: SettingsSection }): React.
             <About />
           )}
         </div>
+        )}
       </div>
     </div>
   )

@@ -207,7 +207,7 @@ export function formatBrief(l: FormatLookup, i: BriefInput): string {
   const home = i.home ? `#${i.home}` : 'your department channel'
   const habit = i.update === false
     ? 'Answer in the thread you were asked in; do not post anywhere else in this run.'
-    : `Keep the team posted: reply in the thread to unread mentions, and before you end post one short update in ${home} (what you did, what is next, refs like PRN-12).`
+    : `Keep the team posted: reply in the thread to unread mentions, and before you end post one short update in ${home} (what you did, what is next, task ids like NC-12).`
   const fixed = open.length + close.length + tools.length + habit.length + 5
   let body = parts.join('\n')
   if (i.transport === 'inject' && i.digest) body += `\n${i.digest}`

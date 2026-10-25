@@ -82,6 +82,13 @@ describe('nextMove: the task follows its PR', () => {
     expect(nextMove({ status: 'in_review' }, cr, work({ reviewSeenAt: '2026-10-25T01:00:00Z' }), '2026-10-25T02:00:00Z').kind).toBe('changes')
     expect(nextMove({ status: 'blocked' }, cr, w, null).kind).toBe('none')
   })
+  it('A3: approved by a reviewer → done on a task in review, never while a run holds it or after a send back', () => {
+    const ap = pr({ reviewDecision: 'APPROVED' })
+    expect(nextMove({ status: 'in_review' }, ap, w, null)).toEqual({ kind: 'done', note: 'Approved #42', approved: true })
+    expect(nextMove({ status: 'in_progress' }, ap, w, null).kind).toBe('none')
+    expect(nextMove({ status: 'todo' }, ap, work({ readySeen: 42 }), null).kind).toBe('none')
+    expect(nextMove({ status: 'in_review' }, pr({ reviewDecision: 'APPROVED', isDraft: true }), w, null).kind).toBe('none')
+  })
   it('a closed PR moves nothing', () => {
     expect(nextMove({ status: 'in_review' }, pr({ state: 'CLOSED' }), w, null).kind).toBe('none')
   })

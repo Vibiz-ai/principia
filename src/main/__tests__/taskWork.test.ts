@@ -268,6 +268,32 @@ d('the task follows its PR', () => {
     expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('founder edit\n')
   })
 
+  it('A3: approved on GitHub → Done "Approved #N"; the worktree stays until the PR merges, then goes', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId })
+    await svc.startTask(t.id)
+    const w = c.task(t.id).work!
+    commitIn(w.worktreePath, 'fix.txt')
+    expect(spawnSync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: w.worktreePath, env: GIT_ENV }).status).toBe(0)
+    const n = gh.open(w.branch)
+    end('passed')
+    await svc.checkTask(t.id)
+    expect(c.task(t.id).status).toBe('in_review')
+    gh.of(w.branch).reviewDecision = 'APPROVED'
+    await svc.checkTask(t.id)
+    const done = c.task(t.id)
+    expect(done.status).toBe('done')
+    expect(done.doneNote).toBe(`Approved #${n}`)
+    expect(activity(t.id)).toContain(`work:system:Approved #${n}: Done`)
+    expect(fs.existsSync(w.worktreePath)).toBe(true)
+    gh.of(w.branch).state = 'MERGED'
+    gh.of(w.branch).mergedAt = '2026-10-25T02:00:00Z'
+    await svc.checkTask(t.id)
+    expect(c.task(t.id).status).toBe('done')
+    expect(c.task(t.id).doneNote).toBe(`Approved #${n}`)
+    expect(fs.existsSync(w.worktreePath)).toBe(false)
+  })
+
   it('A1: Merge… is refused while the task is In Progress (an agent may still push); gh is never called', async () => {
     const { companyId, repoId } = company()
     const t = task({ companyId, repoId })

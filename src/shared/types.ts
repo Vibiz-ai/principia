@@ -604,8 +604,21 @@ export interface Settings {
    * gentle reminder at the end of an untracked one. Absent = 'auto'.
    */
   trackTasks?: TrackTasks
+  /**
+   * Five doors (design §3): the sidebar's PINNED section and More items, per company ('all' for All companies). UI
+   * state only: main never reads it. Absent = the registry defaults (Forum "Show when active", the rest in More).
+   */
+  sidebarNav?: Record<string, SidebarPrefs>
 }
 export type TrackTasks = 'off' | 'auto' | 'always'
+/** A More item's place in the sidebar: always in PINNED, in PINNED only while it has something for you, or in More. */
+export type NavVisibility = 'always' | 'active' | 'hidden'
+export interface SidebarPrefs {
+  /** More item keys and `dept:<id>` refs set to Always show, in the order they were pinned */
+  pins?: string[]
+  /** More item key -> visibility, only where it differs from the registry default */
+  visibility?: Record<string, NavVisibility>
+}
 export interface ExperimentalFlags {
   /** company guards throw (on) or warn and still stamp (off) */
   companies?: boolean
@@ -658,6 +671,8 @@ export interface StatusSnapshot {
   queuedRuns: number
   schedulesPaused: boolean
   nextFire: NextFire | null
+  /** Five doors: the next fire of each company (a paused company has none). nextFire is the earliest of these. */
+  nextFireByCompany?: Record<Id, NextFire>
   last24h: { passed: number; failed: number }
   /** COMPANY.md §7: last24h per company (Personal for unstamped runs); a focused company's status bar shows its own. */
   last24hByCompany?: Record<Id, { passed: number; failed: number }>

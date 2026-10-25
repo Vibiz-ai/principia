@@ -19,7 +19,7 @@ export function isTerminal(s: AgentStatus): boolean {
 }
 
 export type AgentVisual = VisualStatus | 'needs'
-/** Canvas/list glyph status. Needs you is amber everywhere (LIVE.md §11). */
+/** Canvas/list glyph status. Needs you is the accent everywhere (five doors A2). */
 export function agentVisual(a: Pick<AgentNode, 'status' | 'needs'>, seen = false): AgentVisual {
   switch (a.status) {
     case 'starting':
@@ -43,6 +43,8 @@ export function agentVisual(a: Pick<AgentNode, 'status' | 'needs'>, seen = false
 export function mergeAgent(prev: AgentNode | undefined, next: AgentNode): AgentNode {
   if (!prev) return next
   if (isTerminal(prev.status) && !isTerminal(next.status)) return prev
+  // the renderer ends a run's agents itself at the run's end (A2); main's own final row (cost, report) still wins
+  if (isTerminal(prev.status) && isTerminal(next.status)) return next
   if (next.updatedAt < prev.updatedAt && !(isTerminal(next.status) && !isTerminal(prev.status))) return prev
   return next
 }
@@ -379,7 +381,7 @@ export function pillsFor(idx: AgentIndex, rootId: Id, askAgents: ReadonlySet<Id>
 
 // ---------- events ----------
 export function eventGlyph(e: AgentEvent): string {
-  if (e.kind === 'ask') return '⚑'
+  if (e.kind === 'ask') return '◆'
   if (e.kind === 'answer') return '↩'
   if (e.kind === 'error' || e.state === 'error') return '✕'
   if (e.state === 'denied') return '⊘'

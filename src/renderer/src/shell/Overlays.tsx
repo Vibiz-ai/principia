@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { Sheet } from '../components/ui'
 import { LatinLine } from '../components/roman'
-import { addRepoPaths, setState, useStore } from '../state/store'
+import { addRepoPaths, dismissToast, setState, useStore } from '../state/store'
 
 export function Toasts(): React.JSX.Element {
   const toasts = useStore((s) => s.toasts)
   return (
     <div className="toasts" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast toast--${t.kind}`}>
+        <div key={t.id} className={`toast toast--${t.kind} ${t.action ? 'toast--action' : ''}`}>
           {t.kind === 'error' ? '✕ ' : ''}
           {t.text}
           {t.latin && (
@@ -16,6 +16,18 @@ export function Toasts(): React.JSX.Element {
               {' '}
               <LatinLine pair={t.latin} />
             </>
+          )}
+          {t.action && (
+            <button
+              type="button"
+              className="toast__btn"
+              onClick={() => {
+                dismissToast(t.id)
+                t.action!.run()
+              }}
+            >
+              {t.action.label}
+            </button>
           )}
         </div>
       ))}

@@ -2,17 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Run, Schedule, SecretMeta, Workflow } from '@shared/types'
 import { Icon } from '../components/Icon'
 import { Kbd } from '../components/ui'
-import { fuzzyFilter } from '../lib/fuzzy'
+import { rankPalette } from '../lib/paletteRank'
+import { paletteEntities } from '../lib/paletteEntities'
+import { agentNameNow } from './DepartmentGroup'
+import { CONNECTION_CATALOG } from '../lib/connectionCatalog'
 import { runTitle, sessionPlace, tildify } from '../lib/format'
 import { hive } from '../lib/hive'
-import { activityLine, agentLabel, isLive } from '../lib/live'
-import { goNextNeedsYou } from '../state/live'
+import { goNextNeedsYou, useLiveTruth } from '../state/live'
+import { paletteSources } from '../lib/paletteScope'
 import { showChecklist } from '../state/checklist'
 import { openApproval } from '../state/authoring'
 import { openVisualize } from '../state/diagrams'
 import { kindVerb } from '../lib/authoring'
-import { agentCompanyResolver, companyLabel, companyOf, reposOf } from '../lib/company'
+import { goToEntries, viewFor } from '../lib/nav'
+import { plansEnabled } from '@shared/plans'
+import { companyLabel, companyOf, isPersonal, reposOf } from '../lib/company'
 import {
+  openAgentSeat,
+  openBoard,
   activeCompany,
   addRepos,
   closePalette,
@@ -30,7 +37,8 @@ import {
   openChat,
   openPalette,
   openRunInputs,
-  pauseAll,
+  pauseAllSchedulesAsked,
+  setCompanyPaused,
   providerLabel,
   sessionTitle,
   startSession,
@@ -48,6 +56,12 @@ interface Item {
   hintIsPath?: boolean
   icon: string
   kbd?: string
+  /** extra search text, never shown: old nav names ("Canvas" finds Activity) and synonyms */
+  keywords?: string
+  /** typed exactly, these make the row the top hit (lib/paletteRank) */
+  exact?: readonly string[]
+  /** touches every company: never the Enter default by accident, and asks first */
+  global?: boolean
   run: () => void
 }
 
@@ -74,7 +88,11 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
   const agents = useStore((s) => s.agents)
   const asks = useStore((s) => s.asks)
   const drafts = useStore((s) => s.drafts)
+  const companyAgents = useStore((s) => s.companyAgents)
+  const tasks = useStore((s) => s.tasks)
+  const truth = useLiveTruth()
   const adapter = settings?.defaultAdapter ?? 'claude'
+  const plansOn = plansEnabled(settings?.experimental)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -127,8 +145,13 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
           ...(active !== 'all' ? [{ id: 'co:all', group: 'Companies', label: 'Switch to All companies', icon: 'grid', kbd: '⌃0', run: () => void enterCompany('all') }] : []),
           ...companies.flatMap<Item>((c, i) => [
             ...(c.id !== active ? [{ id: `co:sw:${c.id}`, group: 'Companies', label: `Switch to ${companyLabel(c, true)}`, icon: 'passport', kbd: i < 9 ? `⌃${i + 1}` : undefined, run: () => void enterCompany(c.id) }] : []),
-            { id: `co:new:${c.id}`, group: 'Companies', label: `New session in ${companyLabel(c)}…`, icon: 'terminal', run: () => setTimeout(() => openPalette('newSession', c.id), 0) },
-            { id: `co:pp:${c.id}`, group: 'Companies', label: `Open ${companyLabel(c)} Passport`, icon: 'passport', run: () => openCompanyPassport(c.id) }
+            // "Only {company}": another company's Knowledge and sessions stay out until the scope is widened
+            ...(!scope || c.id === scope
+              ? [
+                  { id: `co:new:${c.id}`, group: 'Companies', label: `New session in ${companyLabel(c)}…`, icon: 'terminal', run: () => setTimeout(() => openPalette('newSession', c.id), 0) },
+                  { id: `co:pp:${c.id}`, group: 'Companies', label: `Open ${companyLabel(c)} Knowledge`, keywords: 'passport', icon: 'knowledge', run: () => openCompanyPassport(c.id) }
+                ]
+              : [])
           ]),
           { id: 'co:new', group: 'Companies', label: 'New Company…', icon: 'plus', run: openNewCompany },
           { id: 'co:quick', group: 'Companies', label: 'New company (name only)', hint: 'skip the setup, just a name and a colour', icon: 'plus', run: openQuickCompany }
@@ -151,80 +174,85 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       { id: 'a:newWf', group: 'Actions', label: 'New Workflow', icon: 'workflows', kbd: '⌘⇧N', run: () => void navigate({ name: 'editor', workflowId: null, nonce: Date.now() }) },
       { id: 'a:newSch', group: 'Actions', label: 'New Schedule', icon: 'schedules', run: () => void navigate({ name: 'schedules', seed: {}, nonce: Date.now() }) },
       { id: 'a:addRepo', group: 'Actions', label: 'Add Repository…', icon: 'folder', kbd: '⌘O', run: () => void addRepos() },
+      // the company's own pause comes before the global one (design §8: Pause/Resume company in ⌘K)
+      ...(scope && companies.some((c) => c.id === scope && !isPersonal(c))
+        ? (() => {
+            const paused = !!companies.find((c) => c.id === scope)?.pausedAt
+            return [{ id: 'a:pauseCo', group: 'Actions', label: `${paused ? 'Resume' : 'Pause'} ${companyName(scope)}`, hint: paused ? 'agents, schedules and autopilot start again' : 'agents, schedules and autopilot; work in flight is saved; other companies keep running', keywords: 'pause company stop resume agents', icon: paused ? 'play' : 'pause', run: () => void setCompanyPaused(scope, !paused) }]
+          })()
+        : []),
       {
+        // principle 1: it touches every company, so it says so, ranks last and asks first (never fired by "schedules")
         id: 'a:pause',
         group: 'Actions',
-        label: getState().status?.schedulesPaused ? 'Resume All Schedules' : 'Pause All Schedules',
+        label: `${getState().status?.schedulesPaused ? 'Resume' : 'Pause'} ${multi ? 'Schedules in All Companies…' : 'All Schedules'}`,
         icon: 'pause',
-        run: () => void pauseAll(!getState().status?.schedulesPaused)
+        global: multi,
+        run: () => void pauseAllSchedulesAsked(!getState().status?.schedulesPaused)
       },
       { id: 'a:visualize', group: 'Actions', label: 'Visualize…', hint: 'ask the agent in the focused chat to draw it as a diagram', icon: 'canvas', run: () => setTimeout(() => openVisualize(), 0) },
       { id: 'a:sidebar', group: 'Actions', label: 'Toggle Sidebar', icon: 'sidebar', kbd: '⌘B', run: toggleSidebar },
-      { id: 'a:memSearch', group: 'Actions', label: 'Search Memory…', hint: 'what agents remember about your repos', icon: 'search', run: () => void navigate({ name: 'memory', search: true, nonce: Date.now() }) },
+      { id: 'a:memSearch', group: 'Actions', label: 'Search Knowledge…', hint: 'what your agents know about the business', keywords: 'memory passport notes', icon: 'search', run: () => void navigate({ name: 'passport', search: '', nonce: Date.now() }) },
       { id: 'a:nextNeeds', group: 'Actions', label: 'Next Needs You', hint: 'the oldest thing waiting for you', icon: 'agents', kbd: '⌘J', run: goNextNeedsYou },
-      { id: 'v:agents', group: 'Go to', label: 'Agents', icon: 'agents', kbd: '⇧⌘A', run: () => void navigate({ name: 'agents' }) },
-      { id: 'v:home', group: 'Go to', label: 'Home', icon: 'home', kbd: '⌘1', run: () => void navigate({ name: 'home' }) },
-      { id: 'v:tasks', group: 'Go to', label: 'Tasks — company work and agent runs', icon: 'tasks', run: () => void navigate({ name: 'tasks' }) },
-      { id: 'v:passport', group: 'Go to', label: 'Passport — what agents know about the company', icon: 'passport', kbd: '⌘7', run: () => void navigate({ name: 'passport', nonce: Date.now() }) },
-      { id: 'v:company', group: 'Go to', label: 'Company Settings — name, colour, repositories, profile', icon: 'settings', run: () => void navigate({ name: 'company', nonce: Date.now() }) },
-      { id: 'v:canvas', group: 'Go to', label: 'Canvas', icon: 'canvas', kbd: '⌘2', run: () => void navigate({ name: 'canvas' }) },
-      { id: 'v:market', group: 'Go to', label: 'Marketplace — workflows and skills', icon: 'marketplace', run: () => void navigate({ name: 'marketplace' }) },
-      { id: 'v:wf', group: 'Go to', label: 'Workflows', icon: 'workflows', kbd: '⌘3', run: () => void navigate({ name: 'workflows' }) },
-      { id: 'v:sch', group: 'Go to', label: 'Schedules', icon: 'schedules', kbd: '⌘4', run: () => void navigate({ name: 'schedules' }) },
-      { id: 'v:art', group: 'Go to', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5', run: () => void navigate({ name: 'artifacts' }) },
-      { id: 'v:keys', group: 'Go to', label: 'Keys', icon: 'keys', kbd: '⌘6', run: () => void navigate({ name: 'keys' }) },
-      { id: 'v:memory', group: 'Go to', label: 'Open Memory', icon: 'memory', run: () => void navigate({ name: 'memory' }) },
-      { id: 'v:usage', group: 'Go to', label: 'Usage', hint: 'tokens, cost and disk per company', icon: 'coins', run: () => void navigate({ name: 'usage' }) },
-      { id: 'v:cloud', group: 'Go to', label: 'Cloud', hint: 'Principia Cloud: agents online while your Mac sleeps', icon: 'globe', run: () => void navigate({ name: 'cloud' }) },
-      { id: 'v:slack', group: 'Go to', label: 'Slack', icon: 'slack', kbd: '⇧⌘L', run: () => void navigate({ name: 'slack', nonce: Date.now() }) },
+      // five doors: "Go to" labels are the nav's own (lib/nav), old names still match as keywords
+      ...goToEntries((k) => k !== 'plans' || plansOn).map<Item>((g) => ({
+        id: g.id,
+        group: 'Go to',
+        label: g.label,
+        hint: g.hint,
+        icon: g.icon,
+        kbd: g.kbd,
+        keywords: g.keywords,
+        exact: g.exact,
+        run: () => void navigate('door' in g.target ? viewFor(g.target.door) : 'more' in g.target ? viewFor(g.target.more) : { name: 'settings', section: g.target.settings, nonce: Date.now() })
+      })),
+      { id: 'v:workflows', group: 'Go to', label: 'Automations › Workflows', hint: 'multi-step agent workflows and scripts', keywords: 'workflow editor scripts', icon: 'workflows', run: () => void navigate({ name: 'workflows' }) },
       { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Principia’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },
       { id: 'a:slackTriggers', group: 'Actions', label: 'Slack Triggers', hint: 'run a workflow when someone mentions @hive', icon: 'slack', run: () => void navigate({ name: 'schedules', tab: 'slack', nonce: Date.now() }) },
       ...(scope && companies.some((c) => c.id === scope && !c.system)
         ? [{ id: 'a:checklist', group: 'Actions', label: 'Show Setup Checklist', hint: 'get the most out of Principia: connections, dashboards, autopilots', icon: 'check', run: () => showChecklist(scope) }]
         : []),
       { id: 'a:slackConnect', group: 'Actions', label: 'Slack Connection…', hint: 'Settings › Connections', icon: 'settings', run: () => void navigate({ name: 'settings', section: 'connections' }) },
-      { id: 'v:settings', group: 'Go to', label: 'Settings', icon: 'settings', kbd: '⌘,', run: () => void navigate({ name: 'settings' }) }
+      { id: 'a:linear', group: 'Actions', label: 'Linear Sync…', hint: 'Settings › Company › Linear: bring issues in as tasks', keywords: 'linear issues sync tracker', exact: ['linear', 'linear sync'], icon: 'link', run: () => void navigate({ name: 'settings', section: 'company', nonce: Date.now() }) },
+      // Connections → {each} (design §8): a tool's name finds where to connect it
+      ...CONNECTION_CATALOG.map<Item>((c) => ({ id: `conn:${c.id}`, group: 'Connections', label: `Connect ${c.name}…`, hint: `Settings › Connections · ${c.description}`, keywords: c.keywords, icon: 'link', run: () => void navigate({ name: 'settings', section: 'connections', nonce: Date.now() }) })),
+      { id: 'v:settings', group: 'Go to', label: 'Settings', icon: 'settings', kbd: '⌘,', keywords: 'preferences', run: () => void navigate({ name: 'settings' }) }
     )
-    const openAsks = Object.values(asks).filter((a) => a.status === 'open' && a.kind !== 'approval').sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
-    const agentCompany = agentCompanyResolver(Object.values(agents), sessions)
+    // five doors A1/A2: inside a company only its own live rows; the working rows are the one live source's
+    const live = paletteSources({ asks: Object.values(asks), drafts: Object.values(drafts), sessions, truth }, scope)
     out.push(
-      ...Object.values(drafts)
-        .filter((d) => d.status === 'pending')
-        .map<Item>((d) => ({
-          id: `draft:${d.id}`,
-          group: 'Needs you',
-          label: `Review: ${kindVerb(d.kind)} “${d.workflowName}”`,
-          hint: d.ownerLabel,
-          icon: 'workflows',
-          run: () => void openApproval(d.id)
-        }))
+      ...live.drafts.map<Item>((d) => ({
+        id: `draft:${d.id}`,
+        group: 'Needs you',
+        label: `Review: ${kindVerb(d.kind)} “${d.workflowName}”`,
+        hint: d.ownerLabel,
+        icon: 'workflows',
+        run: () => void openApproval(d.id)
+      }))
     )
     out.push(
-      ...openAsks.map<Item>((a) => ({
+      ...live.asks.map<Item>(({ ask: a, companyId }) => ({
         id: `ask:${a.id}`,
         group: 'Needs you',
         label: `Answer: ${a.kind === 'question' ? (a.question ?? a.title) : a.title}`,
-        hint: [multi ? companyName((a as { companyId?: string }).companyId || agentCompany(agents[a.agentId] ?? agents[a.rootId], a.sessionId)) : null, agents[a.rootId]?.title ?? agents[a.agentId]?.title].filter(Boolean).join(' · '),
+        hint: [multi && !scope ? companyName(companyId) : null, agents[a.rootId]?.title ?? agents[a.agentId]?.title].filter(Boolean).join(' · '),
         icon: 'reply',
-        run: () => void openLiveItem({ agentId: a.agentId, askId: a.id, companyId: (a as { companyId?: string }).companyId || agentCompany(agents[a.agentId] ?? agents[a.rootId], a.sessionId) })
+        run: () => void openLiveItem({ agentId: a.agentId, askId: a.id, companyId })
       })),
-      ...Object.values(agents)
-        .filter((a) => isLive(a))
-        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-        .slice(0, 40)
-        .map<Item>((a) => ({
-          id: `agent:${a.id}`,
-          group: 'Live agents',
-          label: `Go to ${a.kind === 'subagent' ? `${agentLabel(a)} (subagent)` : a.title}`,
-          hint: multi ? `${companyName(agentCompany(a))} · ${activityLine(a) ?? ''}` : activityLine(a),
-          icon: 'agents',
-          run: () => void openLiveItem({ agentId: a.id, askId: null, companyId: agentCompany(a) })
-        }))
+      ...(live.working.length
+        ? [{ id: 'a:working', group: 'Working now', label: `Go to working… (${live.working.length})`, hint: 'Chats › Live', keywords: 'running live sessions agents', icon: 'agents', run: () => void navigate({ name: 'chats', filter: 'live' }) }]
+        : []),
+      ...live.working.slice(0, 40).map<Item>((it) => ({
+        id: `agent:${it.agentId}`,
+        group: 'Working now',
+        label: `Go to ${it.title}`,
+        hint: [multi && !scope ? companyName(it.companyId) : null, it.detail].filter(Boolean).join(' · ') || undefined,
+        icon: 'agents',
+        run: () => void openLiveItem({ agentId: it.agentId, askId: null, companyId: it.companyId })
+      }))
     )
     out.push(
-      ...sessions
-        .filter((s) => s.status === 'running')
-        .map<Item>((s) => ({ id: `s:${s.id}`, group: 'Sessions', label: sessionTitle(s), hint: multi ? `${chip(s)} · ${sessionPlace(s)}` : sessionPlace(s), hintIsPath: !!s.repoId && !multi, icon: 'terminal', run: () => focusSession(s.id) }))
+      ...live.sessions.map<Item>((s) => ({ id: `s:${s.id}`, group: 'Sessions', label: sessionTitle(s), hint: multi && !scope ? `${chip(s)} · ${sessionPlace(s)}` : sessionPlace(s), hintIsPath: !!s.repoId && !multi, icon: 'terminal', run: () => focusSession(s.id) }))
     )
     if (!multi) out.push(...companyItems)
     out.push(...repoItems, ...wfItems)
@@ -243,19 +271,32 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
           followCompany(companyOf(r))
         }
       })),
+      // tasks by ID or title, agents by persona name (scoped like everything else here)
+      ...(mode === 'all'
+        ? paletteEntities({ tasks, agents: companyAgents, scope: active === 'all' ? undefined : active, nameOf: agentNameNow, companyName, multi }).map<Item>((r) => ({
+            id: r.id,
+            group: r.group,
+            label: r.label,
+            hint: r.hint || undefined,
+            keywords: r.keywords,
+            exact: r.exact,
+            icon: r.kind === 'task' ? 'tasks' : 'agents',
+            run: () => (r.kind === 'task' ? openBoard(r.companyId, { taskId: r.targetId }) : openAgentSeat({ id: r.targetId, companyId: r.companyId }))
+          }))
+        : []),
       ...secrets.map<Item>((k) => ({
         id: `key:${k.companyId ?? 'shared'}:${k.name}`,
         group: 'Keys',
         label: k.name,
         hint: multi ? [k.companyId ? companyName(k.companyId) : 'Shared', k.label].filter(Boolean).join(' · ') : k.label,
         icon: 'keys',
-        run: () => void navigate({ name: 'keys' })
+        run: () => void navigate({ name: 'settings', section: 'keys', nonce: Date.now() })
       }))
     )
     return out
-  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany])
+  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany, plansOn, companyAgents, truth, tasks])
 
-  const filtered = useMemo(() => fuzzyFilter(items, q, (i) => `${i.label} ${i.group}`, 60), [items, q])
+  const filtered = useMemo(() => rankPalette(items, q, 60), [items, q])
   useEffect(() => setSel(0), [q])
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-idx="${sel}"]`)?.scrollIntoView({ block: 'nearest' })
@@ -276,11 +317,8 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       setSel((s) => Math.max(0, s - 1))
     } else if (e.key === 'Enter') {
       e.preventDefault()
+      // no match: Enter does nothing; the fallbacks below are explicit buttons, never the Enter default (D13)
       if (filtered.length) choose(filtered[sel])
-      else if (q.trim()) {
-        closePalette()
-        void navigate({ name: 'editor', workflowId: null, nonce: Date.now() })
-      }
     } else if (e.key === 'Escape') {
       e.preventDefault()
       closePalette()
@@ -315,6 +353,16 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
               {q.trim() ? (
                 <>
                   No results for “{q}”.{' '}
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--sm"
+                    onClick={() => {
+                      closePalette()
+                      void navigate({ name: 'settings', section: 'connections', nonce: Date.now() })
+                    }}
+                  >
+                    Look in Connections
+                  </button>{' '}
                   <button
                     type="button"
                     className="btn btn--secondary btn--sm"

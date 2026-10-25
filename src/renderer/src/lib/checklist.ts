@@ -6,7 +6,7 @@
  *
  * Dismiss and collapse are per-viewer conveniences in localStorage (CHECKLIST_KEY), parsed by parseChecklistPrefs.
  */
-import { agentActive, type CompanyAgent, type CompanyPassport, type Department, type DepartmentPresetKey } from '@shared/company'
+import { type CompanyAgent, type CompanyPassport, type Department, type DepartmentPresetKey } from '@shared/company'
 import type { DashboardKind } from '@shared/dashboards'
 import { departmentFor, type AutopilotId, type CompanyAutopilots } from '@shared/autopilot'
 import type { SocialStatus } from '@shared/socials'
@@ -83,14 +83,15 @@ function dashboardItem(i: ChecklistInput, id: 'marketingDashboards' | 'financeDa
 export function checklistItems(i: ChecklistInput): ChecklistItem[] {
   const co = i.company
   const deps = i.departments.filter((d) => d.companyId === co.id && !d.archivedAt).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
-  const seats = i.agents.filter((a) => a.companyId === co.id && agentActive(a))
+  // a paused seat is still hired (§2.6: pausing never reads as missing, the checklist does not go backwards)
+  const seats = i.agents.filter((a) => a.companyId === co.id && !a.archivedAt)
   const staffed = deps.filter((d) => seats.some((a) => a.departmentId === d.id))
   const firstEmpty = deps.find((d) => !staffed.includes(d))
   const readySocials = i.socials?.filter((s) => s.ready) ?? []
   const anyAutopilot = !!i.autopilots && Object.values(i.autopilots).some(Boolean)
   const items: ChecklistItem[] = [
     { id: 'logo', title: 'Add your logo', detail: 'Shown on the rail, the sidebar and the Portfolio. Picked from your repositories or a file.', done: i.hasLogo, action: { kind: 'logo' }, actionLabel: i.hasLogo ? 'Change' : 'Choose logo' },
-    { id: 'passport', title: 'Write your mission', detail: 'The Passport tells every agent what the company does, for whom and in which voice.', done: !!co.mission?.trim(), action: { kind: 'passport' }, actionLabel: co.mission?.trim() ? 'Edit' : 'Open Passport' },
+    { id: 'passport', title: 'Write your mission', detail: 'The Passport tells every agent what the company does, for whom and in which voice.', done: !!co.mission?.trim(), action: { kind: 'passport' }, actionLabel: co.mission?.trim() ? 'Edit' : 'Write it' },
     { id: 'repo', title: 'Connect a repository', detail: 'Development agents work in your code; the logo and stack are read from it.', done: i.repoCount > 0, action: { kind: 'repo' }, actionLabel: i.repoCount > 0 ? 'Add another' : 'Add repository' },
     !i.departmentsOn
       ? { id: 'departments', title: 'Turn on departments', detail: 'Departments, agent seats, the board and dashboards. Settings → Experimental.', done: false, action: { kind: 'enableDepartments' }, actionLabel: 'Turn on' }

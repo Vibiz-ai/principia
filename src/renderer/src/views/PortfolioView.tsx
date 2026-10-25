@@ -10,7 +10,7 @@ import type { CompanyOverview, CompanyPassport } from '@shared/company'
 import type { Run } from '@shared/types'
 import { CompanyChip } from '../components/CompanyChip'
 import { Button, RelativeTime, SectionHeader, StatusGlyph, Toolbar, useTick } from '../components/ui'
-import { companyLabel, EMPTY_BADGE, reposOf, taskCountsLine, useCompanyBadges, useLiveItems, useTaskCounts, type CompanyBadge, type LiveItem, type TaskCounts } from '../lib/company'
+import { companyLabel, EMPTY_BADGE, isCompanyPaused, isPersonal, reposOf, taskCountsLine, useCompanyBadges, useLiveItems, useTaskCounts, type CompanyBadge, type LiveItem, type TaskCounts } from '../lib/company'
 import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
 import { CloudNeedsYou, useCloudNeedsCount } from '../components/cloud/NeedsYou'
 import { runTitle } from '../lib/format'
@@ -23,7 +23,8 @@ import { companiesHealth } from '../lib/agentHealth'
 import { MosaicEmpty, PassportTablet } from '../components/roman'
 import { NeedsYouEmpty } from '../components/home/DashboardParts'
 import { t, useTone } from '../lib/voice'
-import { companyContextMenu, departmentsOn, enterCompany, multiCompany, navigate, newSessionMenu, openBoard, openCompanyPassport, openLiveItem, openNewCompany, useStore } from '../state/store'
+import { companyContextMenu, departmentsOn, enterCompany, multiCompany, navigate, newSessionMenu, openBoard, openCompanyPassport, openLiveItem, openNewCompany, setCompanyPaused, useStore } from '../state/store'
+import { useNeeds } from '../state/live'
 import '../styles/portfolio.css'
 
 export function PortfolioView(): React.JSX.Element {
@@ -45,8 +46,9 @@ export function PortfolioView(): React.JSX.Element {
     () => (deptOn ? companiesHealth(companies.map((c) => c.id), { companyAgents, tasks: allTasks, asks, badges: byCompany }) : ({} as Record<string, boolean>)),
     [deptOn, companies, companyAgents, allTasks, asks, byCompany]
   )
-  // a running task waiting on a live ask is already one of `needs`: counted once
-  const taskNeeds = Object.values(taskCounts).reduce((n, c) => n + c.needsYou - (c.liveAsks ?? 0), 0)
+  // five doors A2: the one live source's count (live items + board tasks, a live ask counted once)
+  const allNeeds = useNeeds('all')
+  const taskNeeds = allNeeds.tasks
   /** null until the first load: cards say "Loading…" rather than "No runs yet" */
   const [runs, setRuns] = useState<Run[] | null>(null)
 
@@ -68,7 +70,7 @@ export function PortfolioView(): React.JSX.Element {
   if (!multi)
     return (
       <div className="view">
-        <Toolbar title="Portfolio" />
+        <Toolbar title="All companies" />
         <div className="portfolio-empty">
           {/* VOICE.md §5.8: the coin mosaic, one sentence, one action (same in both tones) */}
           <MosaicEmpty motif="coin" width={140}>
@@ -83,7 +85,7 @@ export function PortfolioView(): React.JSX.Element {
 
   return (
     <div className="view">
-      <Toolbar title="Portfolio" sub={<span className="company-toolbar-meta">{statusLine(total)}</span>}>
+      <Toolbar title="All companies" sub={<span className="company-toolbar-meta">{statusLine(total)}</span>}>
         <Button icon="plus" onClick={openNewCompany}>
           New Company
         </Button>
@@ -95,7 +97,7 @@ export function PortfolioView(): React.JSX.Element {
               <CompanyCard key={c.id} company={c} badge={byCompany[c.id] ?? EMPTY_BADGE} laurel={railLaurel(c, byCompany[c.id], !!health[c.id])} tasks={taskCounts[c.id]} overview={overview[c.id]} runs={runs ? (lastRuns[c.id] ?? []) : null} repoCount={reposOf(repos, c.id).length} />
             ))}
           </div>
-          <SectionHeader title="Needs you across companies" count={needs.length + taskNeeds + cloudNeeds ? <span className="text-needs">{needs.length + taskNeeds + cloudNeeds}</span> : undefined} />
+          <SectionHeader title="Needs you across companies" count={allNeeds.count + cloudNeeds ? <span className="text-needs">{allNeeds.count + cloudNeeds}</span> : undefined} />
           {taskNeeds > 0 && (
             <div className="group-list portfolio__tasks">
               <NeedsYouTasks />
@@ -126,9 +128,11 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
   const mission = missionLine(c.mission)
   const taskLine = taskCountsLine(tasks)
   const passport = o && (o.noteCount || o.ghostCount || o.pendingSuggestions)
+  const paused = isCompanyPaused(c)
+  const personal = isPersonal(c)
   return (
     <article
-      className={`pcard ${badge.needsYou ? 'is-needs' : badge.working ? 'is-working' : ''}`}
+      className={`pcard ${paused ? 'is-paused' : badge.needsYou ? 'is-needs' : badge.working ? 'is-working' : ''}`}
       onContextMenu={(e) => {
         e.preventDefault()
         void companyContextMenu(c)
@@ -147,7 +151,9 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
           <button type="button" className="pcard__name link-btn" onClick={() => void enterCompany(c.id)} title={`Enter ${c.name}`}>
             {companyLabel(c, true)}
           </button>
-          <div className={`pcard__status ${badge.needsYou ? 'text-needs' : badge.working ? 'text-running' : 'text-tertiary'}`}>{statusLine(badge)}</div>
+          <div className={`pcard__status ${badge.needsYou ? 'text-needs' : badge.working ? 'text-running' : 'text-tertiary'}`}>
+            {paused ? `‖ Paused${badge.needsYou ? ` · ${statusLine({ needsYou: badge.needsYou, working: 0 })}` : ''}` : statusLine(badge)}
+          </div>
           {laurel && <span className="rm-sr">{t.sr('rail.laurel.sr')}</span>}
           {taskLine && (
             <button type="button" className="pcard__tasks link-btn" onClick={() => openBoard(c.id)} title={`Open ${c.name}’s Board`}>
@@ -201,6 +207,12 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
         <Button size="sm" variant="ghost" icon="passport" onClick={() => openCompanyPassport(c.id)}>
           Open Passport
         </Button>
+        {/* design §4.8: a labelled Pause / Resume per card; it touches this company only */}
+        {!personal && (
+          <Button size="sm" variant="ghost" icon={paused ? 'play' : 'pause'} onClick={() => void setCompanyPaused(c.id, !paused)} title={paused ? `Resume ${c.name}` : `Pause ${c.name} only. Other companies keep running.`}>
+            {paused ? 'Resume' : 'Pause'}
+          </Button>
+        )}
       </footer>
     </article>
   )
@@ -209,7 +221,7 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
 function NeedsRow({ item }: { item: LiveItem }): React.JSX.Element {
   return (
     <div className="list-row portfolio__need" onClick={() => void openLiveItem(item)} title="Open it">
-      <span className={`glyph ${item.kind === 'ask' ? 'text-needs' : 'text-tertiary'}`}>{item.kind === 'ask' ? '⚑' : '◐'}</span>
+      <span className={`glyph ${item.kind === 'ask' ? 'text-needs' : 'text-tertiary'}`}>{item.kind === 'ask' ? '◆' : '◐'}</span>
       <CompanyChip companyId={item.companyId} />
       <span className="list-row__main">
         <span className="portfolio__need-title">{item.title}</span>

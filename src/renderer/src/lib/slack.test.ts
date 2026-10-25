@@ -220,10 +220,10 @@ describe('trigger sentence and validation', () => {
     expect(lastAgentNodeId(wf)).toBe('answer')
     expect(defaultTrigger(wf).reply).toEqual({ mode: 'draft', autoChannels: [], replyNode: 'answer' })
   })
-  it('approval card row: amber for auto with the fixed limits', () => {
+  it('approval card row: caution tone for auto with the fixed limits', () => {
     expect(replyModeRow('draft', [], 4, namer)).toEqual({ tone: 'neutral', text: 'Replies: as drafts you approve (Needs you)' })
     const auto = replyModeRow('auto', ['C1', 'dm'], 4, namer)
-    expect(auto.tone).toBe('amber')
+    expect(auto.tone).toBe('caution')
     expect(auto.text).toBe('Replies: AUTO-POSTS in #support, DMs with @hive (no approval) · 1 post per run · max 4 per thread and 6 per channel per hour')
   })
   it('input mapping autocomplete offers trigger.* after {{', () => {

@@ -13,8 +13,7 @@ import { hive } from '../../lib/hive'
 import { rerun } from '../../lib/runActions'
 import { attempt, departmentsOn, navigate, openBoard, toast, useStore } from '../../state/store'
 import { overnight, REASON_LABEL, type OvernightGroup, type OvernightKind } from '../../lib/board'
-import { laneContext } from '../../lib/departments'
-import { taskCountsLine, useTaskCounts } from '../../lib/company'
+import { taskCountsLine, useLaneContext, useTaskCounts } from '../../lib/company'
 import { latinLine, t, useTone, type Tone } from '../../lib/voice'
 import { Laurel, LatinLine, MosaicEmpty } from '../roman'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
@@ -309,13 +308,11 @@ export function agentSummary(items: OvernightGroup['items']): string {
 export function SenateBriefing({ companyId, since, now, latin = true }: { companyId: Id; since: string; now?: Date; latin?: boolean }): React.JSX.Element | null {
   const on = useStore((s) => departmentsOn(s))
   const tasks = useStore((s) => s.tasks)
-  const asks = useStore((s) => s.asks)
-  const agents = useStore((s) => s.companyAgents)
   const departments = useStore((s) => s.departments)
   const tone = useTone()
   const who = useAgentDisplay()
   const counts = useTaskCounts()[companyId]
-  const ctx = useMemo(() => laneContext(asks, agents), [asks, agents])
+  const ctx = useLaneContext()
   const groups = useMemo(() => (on ? overnight(tasks, companyId, since, departments, ctx) : []), [on, tasks, companyId, since, departments, ctx])
   const people = useMemo(() => byAgent(groups, ctx.agentsById), [groups, ctx])
   if (!on) return null

@@ -114,7 +114,13 @@ export class CompanyScope {
       sortOrder: r.sort_order ?? Number.MAX_SAFE_INTEGER,
       system: personal ? 'personal' : null,
       archivedAt: personal ? null : r.archived_at,
-      vaultPath: r.vault_path
+      vaultPath: r.vault_path,
+      // the board switch (DEPARTMENTS.md §1.1) shares the row JSON; the company menu and the Board read it from here
+      autopilot: data.autopilot === true,
+      ...(typeof data.maxInFlight === 'number' && Number.isInteger(data.maxInFlight) && data.maxInFlight >= 1 ? { maxInFlight: data.maxInFlight } : {}),
+      // Five doors A4: the company pause (`pause.at`) and step 2's task prefix share the row JSON too
+      pausedAt: pauseAt(data.pause),
+      ...(typeof data.taskPrefix === 'string' && data.taskPrefix ? { taskPrefix: data.taskPrefix } : {})
     }
   }
 
@@ -293,4 +299,10 @@ export class CompanyScope {
       return row?.company_id && row.department_id ? this.passportDepartment(row.company_id, row.department_id) : null
     } catch { return null }
   }
+}
+
+/** The `pause.at` of a company row's JSON, or null when the company is running (or the field is malformed). */
+function pauseAt(v: unknown): string | null {
+  const at = v && typeof v === 'object' ? (v as { at?: unknown }).at : null
+  return typeof at === 'string' && at ? at : null
 }

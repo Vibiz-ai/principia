@@ -1,6 +1,6 @@
 /**
  * FORUM.md §8: the Forum in the app sidebar (focused mode). A "Forum" section: channels with something new first
- * (bold = unread, amber count = mentions), then DMs with busts; at most 7 rows, the rest live in the Forum view.
+ * (bold = unread, accent count = mentions), then DMs with busts; at most 7 rows, the rest live in the Forum view.
  * `useForumBadge` feeds the NAV row's count (mentions + unread DMs).
  */
 import { useEffect, useMemo } from 'react'

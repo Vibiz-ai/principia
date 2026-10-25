@@ -74,6 +74,10 @@ export interface SchedulerDeps {
   log: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
   now(): Date
   paused: boolean
+  /** Five doors A4: the schedule's company name while that one company is paused (its slots are skipped), else null. */
+  companyPaused?(s: Schedule): string | null
+  /** Five doors A4: the run's company name while it is paused (its retry waits for the resume), else null. */
+  runCompanyPaused?(r: Run): string | null
 }
 
 // ---------- pure helpers ----------
@@ -253,6 +257,13 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     const now = d.now()
     const oneOff = s.when.kind === 'at'
     const after = { nextFireAt: oneOff ? null : nextAllowed(s, now)?.toISOString() ?? null, ...(oneOff ? { enabled: false } : {}) }
+    const held = d.companyPaused?.(s) ?? null
+    if (held) {
+      // a deliberate pause never fires late: the slot is skipped, the next one waits for the resume
+      event(s, 'skipped', slot, null, `${held} is paused`)
+      setState(s.id, oneOff ? { nextFireAt: null } : { nextFireAt: after.nextFireAt })
+      return
+    }
     if (isTaskMode(s)) {
       // no overlap check: a busy agent coalesces the fire into its card (DEPARTMENTS.md §8)
       try {
@@ -354,6 +365,8 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     }
     for (const r of due) {
       if (r.status === 'queued' || r.status === 'running') continue
+      // its company is paused: the retry waits (dropped only by the 12 h rule), it never fires into a paused company
+      if (d.runCompanyPaused?.(r)) continue
       try {
         if (now.getTime() - Date.parse(r.retryAt!) > CATCHUP_MAX_AGE_MS) {
           d.log.info('scheduler: retry dropped (more than 12 h late)', { runId: r.id, retryAt: r.retryAt })
@@ -474,6 +487,8 @@ export function createScheduler(d: SchedulerDeps): Scheduler {
     fireNow(id) {
       const s = d.store.getSchedule(id)
       if (!s) throw new HiveError('not_found', `Schedule ${id} not found`)
+      const held = d.companyPaused?.(s) ?? null
+      if (held) throw new HiveError('conflict', `${held} is paused. Resume it to start work.`)
       if (!isTaskMode(s)) return { run: runNow(id), card: null }
       const now = d.now()
       const card = fireCard(s, now, 'manual')

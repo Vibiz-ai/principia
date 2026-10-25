@@ -12,7 +12,7 @@ import { companiesHealth } from '../lib/agentHealth'
 import { t } from '../lib/voice'
 import { nativeMenu } from '../lib/hive'
 import { useCompanyLogoUrl, useLogoFit } from '../lib/logo'
-import { companyInitials, companyLabel, isPersonal, useCompanyBadges, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
+import { companyInitials, companyLabel, isCompanyPaused, isPersonal, useCompanyBadges, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
 import {
   activeCompany,
   closeNewCompany,
@@ -57,14 +57,14 @@ export function CompanyAvatar({ company, size = 32, className = '' }: { company:
   )
 }
 
-/** Row badge: amber needs-you count, else a blue working dot, plus a red square tessera for a failed run in 24 h (VOICE.md §5.6). */
+/** Row badge: accent needs-you count, else a blue working dot, plus a red square tessera for a failed run in 24 h (VOICE.md §5.6). */
 export function CompanyBadgeMark({ badge }: { badge: CompanyBadge | undefined }): React.JSX.Element | null {
   if (!badge) return null
   return (
     <>
       {badge.needsYou > 0 ? (
         <span className="side-row__badge side-row__badge--needs" title={`${badge.needsYou} need${badge.needsYou === 1 ? 's' : ''} you`}>
-          ⚑ {badge.needsYou}
+          ◆ {badge.needsYou}
         </span>
       ) : (
         badge.working > 0 && (
@@ -179,13 +179,14 @@ export function CompanyRail(): React.JSX.Element | null {
     const b = byCompany[c.id]
     const draggable = !isPersonal(c)
     const healthy = !!health[c.id]
-    const title = badgeTitle(companyLabel(c, true), b, railLaurel(c, b, healthy))
+    const paused = isCompanyPaused(c)
+    const title = `${badgeTitle(companyLabel(c, true), b, railLaurel(c, b, healthy))}${paused ? ' · paused' : ''}`
     return (
       <button
         key={c.id}
         type="button"
         data-company={c.id}
-        className={`rail__tile ${active === c.id ? 'is-active' : ''} ${b?.working && !b.needsYou ? 'is-working' : ''} ${dragged === c.id ? 'is-dragging' : ''} ${dropAt?.id === c.id ? `rail-drop--${dropAt.placement}` : ''}`}
+        className={`rail__tile ${active === c.id ? 'is-active' : ''} ${paused ? 'is-paused' : ''} ${b?.working && !b.needsYou ? 'is-working' : ''} ${dragged === c.id ? 'is-dragging' : ''} ${dropAt?.id === c.id ? `rail-drop--${dropAt.placement}` : ''}`}
         title={title}
         aria-label={title}
         aria-current={active === c.id ? 'true' : undefined}
@@ -230,6 +231,8 @@ export function CompanyRail(): React.JSX.Element | null {
       >
         <RailCoin company={c} badge={b} healthy={healthy} />
         {b && b.needsYou > 0 && <span className="rail__count">{b.needsYou > 99 ? '99+' : b.needsYou}</span>}
+        {/* A4: the paused mark, grey line art; needs-you items raised before the pause still count */}
+        {paused && <span className="rail__paused" aria-hidden>‖</span>}
       </button>
     )
   }
@@ -294,6 +297,7 @@ async function allTileMenu(): Promise<void> {
 /** Hover: that company's needs-you and working sessions and runs; a click opens the row and enters the company. */
 function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: CompanyPassport | undefined; top: number; onEnter: () => void; onLeave: () => void; onClose: () => void }): React.JSX.Element | null {
   const items = useLiveItems({ working: true, companyId: company?.id })
+  const paused = isCompanyPaused(company)
   if (!company) return null
   const shown = items.slice(0, 8)
   const open = (it: LiveItem): void => {
@@ -307,13 +311,14 @@ function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: Com
           <CompanyCoin company={company} />
         </span>
         <span className="rail-pop__name">{companyLabel(company, true)}</span>
+        {paused && <span className="rail-pop__state" title="Nothing in this company starts until you resume it">‖ Paused</span>}
       </div>
       {shown.length === 0 ? (
-        <div className="rail-pop__empty">Nothing running. Click to enter.</div>
+        <div className="rail-pop__empty">{paused ? 'Paused. Click to enter and resume.' : 'Nothing running. Click to enter.'}</div>
       ) : (
         shown.map((it) => (
           <button key={it.key} type="button" className="rail-pop__row" onClick={() => open(it)}>
-            <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '⚑'}</span>
+            <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '◆'}</span>
             <span className="rail-pop__label">{it.title}</span>
             {it.detail && <span className="rail-pop__detail">{it.detail}</span>}
           </button>

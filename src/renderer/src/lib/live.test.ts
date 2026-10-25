@@ -131,7 +131,7 @@ describe('live agent tree (fixtures)', () => {
     expect(mergeAgent({ ...done, status: 'working', endedAt: null }, { ...older, status: 'working', endedAt: null }).activity).not.toBe('old')
   })
 
-  it('canvas: the step card grows one pill per subagent, with the ⚑ count from open asks in its tree', () => {
+  it('canvas: the step card grows one pill per subagent, with the ◆ count from open asks in its tree', () => {
     const { updates } = replayClaudeStream('claude-subagent-fg.stream.jsonl')
     const live = apply(updates).map((a) => (a.kind === 'subagent' ? { ...a, status: 'working' as const, endedAt: null } : a))
     const idx = indexAgents(live)

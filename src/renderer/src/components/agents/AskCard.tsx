@@ -38,7 +38,7 @@ function SlackReplyAsk({ ask, hotkeys = false, compact = false }: { ask: Ask; ho
   return (
     <div className="ask-card ask-card--compact" role="group" aria-label={ask.title}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />
@@ -63,7 +63,7 @@ function ApprovalAsk({ ask, hotkeys = false, compact = false }: { ask: Ask; hotk
   return (
     <div className="ask-card ask-card--compact" role="group" aria-label={ask.title}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />
@@ -131,7 +131,7 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
   return (
     <div ref={ref} className={`ask-card ${compact ? 'ask-card--compact' : ''} ${open ? '' : 'is-closed'}`} role="group" aria-label={`${providerLabel(ask.provider)} needs you: ${ask.title}`}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{isQuestion ? (ask.question ?? ask.title) : ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />

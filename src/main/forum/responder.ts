@@ -164,7 +164,7 @@ function agentRules(me: string, channel: string, replyTo: string, a: AgentAsker)
   const left = Math.max(0, a.maxHops - a.depth)
   return [
     `You are @${me} in the company Forum. @${a.handle}${a.label ? ` (${attr(a.label)})` : ''}, another agent of your company, asked you this in ${channel} (agent conversation, hop ${a.depth} of ${a.maxHops}).${a.why ? ` Why they ask: ${clip(flat(a.why), 300)}` : ''} Answer now, as yourself in your role.`,
-    `Reply with forum_reply {"to":"${replyTo}","text":"…"} (or \`forum reply ${replyTo} "…"\`): one short, concrete answer (facts, numbers, refs like PRN-12). That reply answers their ask and reaches their run.`,
+    `Reply with forum_reply {"to":"${replyTo}","text":"…"} (or \`forum reply ${replyTo} "…"\`): one short, concrete answer (facts, numbers, task ids like NC-12). That reply answers their ask and reaches their run.`,
     'To check facts use team_activity (what the team ran), team_board (its tasks), team_usage (tokens and cost), forum_read or the company notes. Do not start long work in this run; if it needs real work, say so and suggest a task.',
     left > 0
       ? `Only if you cannot answer without a third agent, use forum_ask_agent (it costs a hop; ${left} left). Never ask @${a.handle} back: your reply already reaches them.`

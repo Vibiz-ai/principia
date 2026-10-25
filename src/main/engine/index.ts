@@ -206,6 +206,9 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       if (co.enforced()) throw new HiveError('bad_request', problem)
       ctx.log.warn('engine: company guard (not enforced)', { companyId, problem })
     }
+    // five doors A4: a paused company starts nothing, whatever started it (schedule, retry, task, a click)
+    const paused = co.pausedName?.(companyId) ?? null
+    if (paused) throw new HiveError('conflict', `${paused} is paused. Resume it to start work.`)
     return companyId
   }
 
@@ -339,6 +342,20 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     log: ctx.log,
     now,
     board: ctx.company?.boards?.schedules ?? null,
+    // five doors A4: one paused company's schedules hold (logged as skipped); every other company's keep their time
+    companyPaused: (sch) => {
+      const co = ctx.company
+      if (!co?.pausedName) return null
+      try {
+        return co.pausedName(co.resolve({ scheduleId: sch.id }))
+      } catch {
+        return null
+      }
+    },
+    runCompanyPaused: (r) => {
+      const co = ctx.company
+      return co?.pausedName && r.companyId ? co.pausedName(r.companyId) : null
+    },
     paused: (() => {
       try {
         return !!ctx.getSettings().schedulesPaused

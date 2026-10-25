@@ -189,7 +189,7 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
         ) : (
           <Button onClick={() => void rerun(run)}>Re-run</Button>
         )}
-        <Button onClick={() => void navigate({ name: 'canvas', focusRunId: run.id })}>Canvas</Button>
+        <Button onClick={() => void navigate({ name: 'canvas', focusRunId: run.id })} title="See this run in Activity">Activity</Button>
         <IconButton icon="more" label="More" onClick={() => void runMenu()} />
       </Toolbar>
       {run.stopReason === 'rate_limited' && (

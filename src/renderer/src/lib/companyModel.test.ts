@@ -58,7 +58,7 @@ describe('company ordering', () => {
     expect(reorderIds(ids, 'z', 'a', 'after')).toBe(ids)
   })
   it('labels, initials and NULL stamps', () => {
-    expect(companyLabel(personal, true)).toBe('Personal / Unassigned')
+    expect(companyLabel(personal, true)).toBe('Personal')
     expect(companyLabel(acme, true)).toBe('Acme')
     expect(companyInitials('Beta Labs')).toBe('BL')
     expect(companyInitials('acme')).toBe('AC')
@@ -125,12 +125,13 @@ describe('companyBadges with three companies', () => {
     expect(total.needsYou).toBe(4)
   })
   it('counts working roots and failed runs per company', () => {
-    expect(byCompany.co_a!.working).toBe(1)
+    // five doors A2: ag_a waits on its open ask k1, so it is Needs you, not working (the hub's rule, one source)
+    expect(byCompany.co_a!.working).toBe(0)
     expect(byCompany.co_b!.working).toBe(0)
-    expect(byCompany.co_c!.working).toBe(1)
+    expect(byCompany.co_c!.working).toBe(0)
     expect(byCompany.co_c!.failed).toBe(true)
     expect(byCompany.co_a!.failed).toBe(false)
-    expect(total.working).toBe(2)
+    expect(total.working).toBe(0)
     expect(total.failed).toBe(true)
   })
   it('subagents inherit the root’s company', () => {

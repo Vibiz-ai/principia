@@ -149,7 +149,7 @@ export function SetupChecklist({ companyId }: { companyId: Id }): React.JSX.Elem
               )}
             </>
           )}
-          <AutopilotTiles setup={setup} onOpen={(id) => setAutopilot(id)} />
+          <AutopilotTiles companyId={companyId} setup={setup} onOpen={(id) => setAutopilot(id)} />
         </>
       )}
       {socialsOpen && <SocialsSheet companyId={companyId} socials={setup.socials} onClose={() => setSocialsOpen(false)} />}
@@ -189,8 +189,10 @@ function ChecklistRow({ item, next, onAct }: { item: ChecklistItem; next: boolea
 }
 
 /** The two autopilots, with how many of their steps can run today. */
-function AutopilotTiles({ setup, onOpen }: { setup: CompanySetup; onOpen: (id: AutopilotId) => void }): React.JSX.Element | null {
+function AutopilotTiles({ companyId, setup, onOpen }: { companyId: Id; setup: CompanySetup; onOpen: (id: AutopilotId) => void }): React.JSX.Element | null {
   const plans = useMemo(() => (setup.ctx ? AUTOPILOTS.map((a) => ({ a, steps: planAutopilot(a.id, setup.ctx!) })) : []), [setup.ctx])
+  // A4: a paused company's autopilots read "Off while paused" and are greyed out (still openable to look)
+  const held = useStore((s) => !!s.companies.find((c) => c.id === companyId)?.pausedAt)
   if (!plans.length) return null
   return (
     <div className="ck-auto">
@@ -201,11 +203,11 @@ function AutopilotTiles({ setup, onOpen }: { setup: CompanySetup; onOpen: (id: A
           const ready = steps.filter((s) => s.ready).length
           const on = rec ? Object.keys(rec.steps).length : 0
           return (
-            <button key={a.id} type="button" className={`ck-auto__tile ${rec ? 'is-on' : ''}`} onClick={() => onOpen(a.id)}>
+            <button key={a.id} type="button" className={`ck-auto__tile ${rec && !held ? 'is-on' : ''} ${held ? 'is-held' : ''}`} onClick={() => onOpen(a.id)}>
               <span className="ck-auto__name">{a.name}</span>
               <span className="ck-auto__tag">{a.tagline}</span>
               <span className="ck-auto__state">
-                {rec ? `${rec.paused ? 'Paused' : 'On'} · ${on} step${on === 1 ? '' : 's'}` : `${ready} of ${steps.length} steps ready`}
+                {held ? 'Off while paused' : rec ? `${rec.paused ? 'Paused' : 'On'} · ${on} step${on === 1 ? '' : 's'}` : `${ready} of ${steps.length} steps ready`}
               </span>
             </button>
           )

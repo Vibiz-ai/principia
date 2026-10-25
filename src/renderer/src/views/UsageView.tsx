@@ -64,7 +64,7 @@ export function UsageView(): React.JSX.Element {
 
   return (
     <div className="view">
-      <Toolbar title="Usage">
+      <Toolbar title="Spend">
         <Segmented
           items={RANGES}
           value={range}

@@ -123,6 +123,8 @@ describe('WORKTREE.md: the task follows its PR', () => {
     no(S('in_review'), S('in_progress'), 'system', { start: true }); no(S('in_review'), S('in_progress'), 'system', { work: 'changes_requested' })
     ok(S('in_review'), S('done'), 'system', { work: 'merged', doneNote: 'Merged #42' }); ok(S('blocked', 'agent'), S('done'), 'system', { work: 'merged', doneNote: 'Merged #42' })
     no(S('in_review'), S('done'), 'system', { work: 'merged', doneNote: ' ' }); no(S('in_progress'), S('done'), 'system', { work: 'merged', doneNote: 'x' })
+    ok(S('in_review'), S('done'), 'system', { work: 'approved', doneNote: 'Approved #42' }); no(S('blocked', 'agent'), S('done'), 'system', { work: 'approved', doneNote: 'Approved #42' })
+    no(S('in_review'), S('done'), 'agent', { work: 'approved', doneNote: 'x' }, 'Only a human')
     no(S('in_review'), S('done'), 'system', { doneNote: 'x' }, 'Only a human can mark a task done'); no(S('in_review'), S('done'), 'agent', { work: 'merged', doneNote: 'x' }, 'Only a human')
   })
   it('Back to Backlog after the worktree went away: human, any open task not in flight', () => {

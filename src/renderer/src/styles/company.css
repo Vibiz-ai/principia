@@ -48,17 +48,17 @@
 .task-status--triage { border-style: dotted; }
 .task-status--backlog { border-style: dashed; }
 .task-status--todo { border-color: var(--text-secondary); }
-.task-status--in_progress { border-color: #e2b45c; background: linear-gradient(90deg, #e2b45c 50%, transparent 50%); }
+.task-status--in_progress { border-color: var(--status-running); background: linear-gradient(90deg, var(--status-running) 50%, transparent 50%); }
 .task-status--in_review { border-color: #ad91e9; background: linear-gradient(90deg, #ad91e9 75%, transparent 75%); }
 .task-status--done { background: var(--status-success); border-color: var(--status-success); color: var(--bg); }
 .task-status--blocked { color: var(--status-failed); border-color: var(--status-failed); }
 .task-priority { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 14px; height: 13px; color: var(--text-secondary); flex: 0 0 auto; }
 .task-priority i { width: 2px; background: currentColor; border-radius: 1px; }
-.task-priority--1 { background: #df9361; color: #1b1c1f; height: 14px; border-radius: 3px; font-size: 11px; font-weight: 750; align-items: center; }
+.task-priority--1 { background: var(--text-primary); color: var(--surface-0, #1b1c1f); height: 14px; border-radius: 3px; font-size: 11px; font-weight: 750; align-items: center; }
 .task-source { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
 .task-source img { width: 12px; height: 12px; object-fit: contain; }
 .task-slack { font-size: 16px; line-height: 12px; font-weight: 700; color: #c799d7; }
-.task-posthog { font-size: 14px; line-height: 12px; color: #e7a75f; }
+.task-posthog { font-size: 14px; line-height: 12px; color: var(--text-secondary); }
 .task-source-note { display: flex; align-items: center; gap: 7px; font-size: 10px; color: var(--text-tertiary); padding: 16px 24px; margin-top: auto; }
 .task-board { display: flex; gap: 18px; padding: 20px; overflow-x: auto; flex: 1; align-items: flex-start; }
 .task-board .task-group { min-width: 270px; width: 280px; }

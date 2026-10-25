@@ -93,7 +93,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autopilots: {},
   // PROACTIVE.md
   proactiveAgents: true,
-  trackTasks: 'auto'
+  trackTasks: 'auto',
+  // Five doors: sidebar pins and More visibility per company (UI state)
+  sidebarNav: {}
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments and plans stay absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
@@ -188,6 +190,7 @@ export class Store {
     // never hand out the shared default object (a caller mutating it would change every later read)
     s.expandedCompanies = s.expandedCompanies && typeof s.expandedCompanies === 'object' && !Array.isArray(s.expandedCompanies) ? { ...s.expandedCompanies } : {}
     s.autopilots = s.autopilots && typeof s.autopilots === 'object' && !Array.isArray(s.autopilots) ? { ...s.autopilots } : {}
+    s.sidebarNav = s.sidebarNav && typeof s.sidebarNav === 'object' && !Array.isArray(s.sidebarNav) ? { ...s.sidebarNav } : {}
     return s
   }
   updateSettings(patch: Partial<Settings>): Settings {

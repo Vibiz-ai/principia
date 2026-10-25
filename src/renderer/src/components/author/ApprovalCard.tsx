@@ -236,7 +236,7 @@ export function ApprovalCard({
       )}
 
       {trigFlag && trigRow && (
-        <div className={`approval__slack ${isUnsafe ? 'approval__slack--unsafe' : trigRow.tone === 'amber' ? 'approval__slack--auto' : ''}`} data-slack-trigger="" data-reply-mode={trigFlag.replyMode} data-unsafe-access={isUnsafe ? '' : undefined}>
+        <div className={`approval__slack ${isUnsafe ? 'approval__slack--unsafe' : trigRow.tone === 'caution' ? 'approval__slack--auto' : ''}`} data-slack-trigger="" data-reply-mode={trigFlag.replyMode} data-unsafe-access={isUnsafe ? '' : undefined}>
           <div className="approval__slack-head">
             <span className="approval__slack-tag">Slack trigger</span>
             <span className="selectable">{trigFlag.sentence}</span>

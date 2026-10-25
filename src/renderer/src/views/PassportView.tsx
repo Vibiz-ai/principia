@@ -59,9 +59,11 @@ export function PassportView(): React.JSX.Element {
   const { active, companies, multi } = useScope()
   const { loading, error, reload } = useCompanyData()
   const [importing, setImporting] = useState(false)
-  const target = view.name === 'company' ? view.companyId : undefined
-  const create = view.name === 'company' && !!view.create
-  const nonce = view.name === 'company' ? view.nonce : undefined
+  // Settings → Company carries what the old `company` route did (lib/nav resolveView)
+  const own = view.name === 'company' || (view.name === 'settings' && view.section === 'company') ? view : null
+  const target = own?.companyId
+  const create = !!own?.create
+  const nonce = own?.nonce
   // the view's company, else the focused one; a Personal-only user always edits Personal
   const companyId = target ?? (active !== 'all' ? active : multi ? null : (companies[0]?.id ?? null))
   const company = companyId ? companies.find((c) => c.id === companyId) : undefined
@@ -81,7 +83,7 @@ export function PassportView(): React.JSX.Element {
         <CompanySettings key={company.id} company={company} importButton={importButton} />
       ) : (
         <>
-          <Toolbar title="Company Settings">
+          <Toolbar title="Company settings">
             {importButton}
             <Button variant="primary" icon="plus" onClick={openNewCompany}>
               New Company
@@ -102,7 +104,7 @@ export function PassportView(): React.JSX.Element {
               <CompanyChooser
                 title="Pick a company"
                 text={target ? 'That company is archived or no longer exists. Pick another one.' : 'Settings belong to one company: its name and colour, profile, repositories, Passport folder and export.'}
-                onPick={(id) => void navigate({ name: 'company', companyId: id })}
+                onPick={(id) => void navigate({ name: 'settings', section: 'company', companyId: id, nonce: Date.now() })}
               />
             </div>
           )}
@@ -116,7 +118,7 @@ export function PassportView(): React.JSX.Element {
             setImporting(false)
             void refreshCompanies().catch(() => undefined)
             toast(`Imported ${c.name}`)
-            void navigate({ name: 'company', companyId: c.id })
+            void navigate({ name: 'settings', section: 'company', companyId: c.id, nonce: Date.now() })
           }}
         />
       )}
@@ -299,13 +301,13 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
 
   return (
     <>
-      <Toolbar title="Company Settings" sub={<span className="company-toolbar-meta">{companyLabel(c, true)}</span>}>
+      <Toolbar title="Company settings" sub={<span className="company-toolbar-meta">{companyLabel(c, true)}</span>}>
         {importButton}
         <Button icon="download" disabled={busy || dirty} title={dirty ? 'Save your changes before exporting' : 'Export the Passport for any agent or tool'} onClick={() => void exportMenu()}>
           Export
         </Button>
-        <Button icon="passport" onClick={() => openCompanyPassport(c.id)}>
-          Open Passport
+        <Button icon="knowledge" onClick={() => openCompanyPassport(c.id)} title="What this company's agents know: brand voice, audience, notes (⌘5)">
+          Open Knowledge
         </Button>
       </Toolbar>
       {message && (

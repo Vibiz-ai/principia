@@ -254,7 +254,8 @@ function PassportCard({ dep }: { dep: Department }): React.JSX.Element {
   )
 }
 
-function SeatCard({ agentId, color }: { agentId: Id; color: string | null }): React.JSX.Element | null {
+/** One agent seat as a card (Department page and the Team door). */
+export function SeatCard({ agentId, color }: { agentId: Id; color: string | null }): React.JSX.Element | null {
   const agent = useStore((s) => s.companyAgents.find((a) => a.id === agentId))
   const tasks = useStore((s) => s.tasks)
   const profiles = useStore((s) => s.profiles)

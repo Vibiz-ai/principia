@@ -188,7 +188,7 @@ describe('PLANS.md §2 the pilot', () => {
     expect('cwd' in first).toBe(false)
     expect(first.prompt).toContain('Plan: Run tasks in worktrees')
     expect(first.prompt).toContain('run only the tests that cover the files you change')
-    expect(pilot.detail(plan.id).turn.text).toMatch(/^M1 agent \(\w+\) is working on PRN-\d+\./)
+    expect(pilot.detail(plan.id).turn.text).toMatch(/^M1 agent \(\w+\) is working on [A-Z][A-Z0-9]{1,4}-\d+\./)
 
     finish(t1.id)
     await settle()
@@ -330,7 +330,7 @@ describe('PLANS.md §2 the pilot', () => {
     const p1 = (runsOf(t1.id)[0].target as Extract<RunTarget, { kind: 'prompt' }>).prompt
     const p3 = (runsOf(t3.id)[0].target as Extract<RunTarget, { kind: 'prompt' }>).prompt
     // each names the other's files
-    expect(p3).toMatch(/M1 agent \(\w+\) is working on PRN-\d+ and edits src\/main\/worktrees\.ts; avoid those files/)
+    expect(p3).toMatch(/M1 agent \(\w+\) is working on [A-Z][A-Z0-9]{1,4}-\d+ and edits src\/main\/worktrees\.ts; avoid those files/)
     expect(p1).toContain('src/renderer/src/views/PlansView.tsx')
   })
   it('parallel milestones whose touches overlap do not run side by side', async () => {
@@ -550,7 +550,7 @@ describe('PLANS.md QA fixes: stop, archive, drafts, the stop line', () => {
     const { plan } = await approved('checkins')
     const t1 = taskOf(plan, 'T1'), t2 = taskOf(plan, 'T2')
     pilot.pause(plan.id)
-    expect(pilot.detail(plan.id).turn.text).toMatch(/is working on PRN-\d+\. Paused: nothing new starts after it\.$/)
+    expect(pilot.detail(plan.id).turn.text).toMatch(/is working on [A-Z][A-Z0-9]{1,4}-\d+\. Paused: nothing new starts after it\.$/)
     finish(t1.id); await settle()
     expect(runsOf(t2.id)).toHaveLength(0)
     expect(pilot.detail(plan.id).turn).toMatchObject({ text: 'Paused: nothing new starts. Resume it to go on.', action: { kind: 'resume' } })

@@ -8,6 +8,7 @@
  *   adapters, the departments consent); the renderer cannot claim more.
  * - On registration, a launch left `running` by a quit or crash is marked failed (§7.4).
  */
+import { personaNamesElsewhere, type PersonaAgentLike, type PersonaDepartmentLike } from '../../shared/personas'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -80,19 +81,28 @@ export function hasUserData(db: Pick<DB, 'prepare'>): boolean {
   return false
 }
 
+/** Every company's agent names (a new company is none of them): its plan's personas pick others while any are free. */
+export function personasInUse(company: { departments: { listAgents: () => PersonaAgentLike[]; list: (c?: string, o?: { includeArchived?: boolean }) => PersonaDepartmentLike[] } }): string[] {
+  try {
+    return [...personaNamesElsewhere(null, company.departments.listAgents(), company.departments.list(undefined, { includeArchived: true }))]
+  } catch {
+    return []
+  }
+}
+
 /** Installed non-shell adapters a profile agent can use. */
 export function installedAdapters(providers: readonly ProviderInfo[]): PlanAdapter[] {
   return PLAN_ADAPTERS.filter((a) => providers.some((p) => p.id === a && p.available))
 }
 
 /** The bundled workflows whose key is present: Shared, or checked into the stash by this flow (and still alive). */
-export function availableFor(input: Pick<PlanInput, 'hasCode' | 'keys' | 'departmentsOn'>, ctx: { sharedHas: (k: WorkflowKeyName) => boolean; stashed: (k: OnboardingKeyName) => boolean; adapters: PlanAdapter[]; flagsOn: boolean }): OnboardingAvailable {
+export function availableFor(input: Pick<PlanInput, 'hasCode' | 'keys' | 'departmentsOn'>, ctx: { sharedHas: (k: WorkflowKeyName) => boolean; stashed: (k: OnboardingKeyName) => boolean; adapters: PlanAdapter[]; flagsOn: boolean; personasElsewhere?: string[] }): OnboardingAvailable {
   const present: Partial<Record<WorkflowKeyName, boolean>> = {}
   for (const k of WORKFLOW_KEY_NAMES) present[k] = ctx.sharedHas(k)
   // the renderer's claim counts only when main holds a live stashed key of that name
   if (input.keys.fal && ctx.stashed('FAL_KEY')) present.FAL_KEY = true
   if (input.keys.openai && ctx.stashed('OPENAI_API_KEY')) present.OPENAI_API_KEY = true
-  return { workflows: workflowsForKeys(present), profileAdapters: ctx.adapters, hasCode: input.hasCode, departmentsOn: ctx.flagsOn || input.departmentsOn }
+  return { workflows: workflowsForKeys(present), profileAdapters: ctx.adapters, hasCode: input.hasCode, departmentsOn: ctx.flagsOn || input.departmentsOn, ...(ctx.personasElsewhere?.length ? { personasElsewhere: ctx.personasElsewhere } : {}) }
 }
 
 /** The name a bundled workflow installs under (its .hive.json `workflow.name`), or null when unreadable. */
@@ -287,7 +297,7 @@ export function registerOnboardingHandlers(h: Hive): void {
   })
   handle('onboarding:plan', async ({ requestId, input, useAgent }) => {
     await loadProviders()
-    const available = availableFor(input, { sharedHas, stashed, adapters: installedAdapters(providers), flagsOn: departmentsEnabled(h.settings().experimental) })
+    const available = availableFor(input, { sharedHas, stashed, adapters: installedAdapters(providers), flagsOn: departmentsEnabled(h.settings().experimental), personasElsewhere: personasInUse(h.company) })
     // the plan is made for what main knows, not what the renderer claimed
     const checked: PlanInput = { ...input, hasCode: available.hasCode, departmentsOn: available.departmentsOn, keys: { fal: available.workflows.includes('generate-image-fal'), openai: available.workflows.includes('generate-image-openai') } }
     return plans.generate({ requestId, input: checked, available, useAgent })

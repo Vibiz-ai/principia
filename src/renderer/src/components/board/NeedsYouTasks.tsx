@@ -1,9 +1,10 @@
+import { useLaneContext } from '../../lib/company'
 import { useMemo, useState } from 'react'
 import type { Id } from '@shared/types'
 import type { CompanyAgent, CompanyTask } from '@shared/company'
 import type { AgentPersona } from '@shared/personas'
 import { BLOCK_REASON_TEXT, NEEDS_GROUP_LABEL, REASON_LABEL, needsYouTasks, type NeedsYouItem } from '../../lib/board'
-import { laneContext, seatInitials } from '../../lib/departments'
+import { seatInitials } from '../../lib/departments'
 import { displayName, personasOf } from '../../lib/personaView'
 import { firstLine } from '../../lib/format'
 import { t, usePersonasOn, useTone, type Tone } from '../../lib/voice'
@@ -70,13 +71,12 @@ function parkedWhy(task: CompanyTask, reason: NeedsYouItem['reason']): string {
 export function NeedsYouTasks({ companyId, limit, skipLiveAsks, playfulTop = true }: { companyId?: Id; limit?: number; skipLiveAsks?: boolean; playfulTop?: boolean }): React.JSX.Element | null {
   const on = useStore((s) => departmentsOn(s))
   const tasks = useStore((s) => s.tasks)
-  const asks = useStore((s) => s.asks)
-  const agents = useStore((s) => s.companyAgents)
   const multi = useStore((s) => s.companies.length > 1)
   const tone = useTone()
   const [open, setOpen] = useState<Id | null>(null)
   const skip = skipLiveAsks ?? !companyId
-  const items = useMemo(() => needsYouTasks(tasks, laneContext(asks, agents), companyId, { skipLiveAsks: skip }), [tasks, asks, agents, companyId, skip])
+  const ctx = useLaneContext()
+  const items = useMemo(() => needsYouTasks(tasks, ctx, companyId, { skipLiveAsks: skip }), [tasks, ctx, companyId, skip])
   if (!on || !items.length) return null
   const shown = limit ? items.slice(0, limit) : items
   const more = items.length - shown.length

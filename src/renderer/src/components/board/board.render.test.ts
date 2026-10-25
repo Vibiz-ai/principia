@@ -98,7 +98,8 @@ describe('BoardView', () => {
     await withState(false)
     const { TasksView } = await import('../../views/TasksView')
     const html = renderToStaticMarkup(createElement(TasksView))
-    expect(html).toContain('>Tasks<')
+    // five doors: the page is Board everywhere (nav, title, palette), departments on or off
+    expect(html).toContain('>Board<')
     expect(html).toContain('In review')
     expect(html).not.toContain('Autopilot')
     expect(html).not.toContain('Needs you')
@@ -137,7 +138,7 @@ describe('Sidebar Needs you task items', () => {
     const html = renderToStaticMarkup(createElement(NeedsYouTasksSlot, { companyId: 'co_a', heading: true }))
     // PRN-1 (question) and PRN-4 (review) wait on you
     expect(html).toContain('Needs you')
-    expect(html).toContain('⚑ 2')
+    expect(html).toContain('◆ 2')
     expect(html).toContain('PRN-1')
     // All mode keeps the Sidebar's own header: no second one from the slot
     expect(renderToStaticMarkup(createElement(NeedsYouTasksSlot, { limit: 8 }))).not.toContain('sidebar__section')

@@ -333,7 +333,7 @@ export function finalizePlan(plan: OnboardingPlan, ctx: Pick<PlanContext, 'avail
   }
   cascade(p, dropped)
   applyCaps(p, dropped)
-  assignPersonas(p.agents)
+  assignPersonas(p.agents, ctx.available.personasElsewhere)
   return p
 }
 
@@ -342,7 +342,8 @@ export function finalizePlan(plan: OnboardingPlan, ctx: Pick<PlanContext, 'avail
  * the draft) reserve their names first, in plan order; a later duplicate and every agent without one get
  * pickPersona with the plan-local seed (launch keeps the persona, so the face never changes after preview).
  */
-function assignPersonas(agents: PlanAgent[]): void {
+function assignPersonas(agents: PlanAgent[], elsewhere: readonly string[] = []): void {
+  const avoid = new Set(elsewhere)
   const used = new Set<string>()
   const pending: PlanAgent[] = []
   for (const a of agents) {
@@ -351,7 +352,7 @@ function assignPersonas(agents: PlanAgent[]): void {
     else pending.push(a)
   }
   for (const a of pending) {
-    a.persona = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, seed: a.ref })
+    a.persona = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, avoid, seed: a.ref })
     used.add(a.persona.name.toLowerCase())
   }
 }

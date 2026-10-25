@@ -67,7 +67,8 @@ export function useCompanySetup(companyId: Id): CompanySetup {
     return () => void (alive.current = false)
   }, [])
 
-  const loadConnections = useCallback(() => void hive.gateway.list().then((c) => alive.current && setConnections(c), () => alive.current && setConnections((x) => x ?? [])), [])
+  // five doors A1: this company's connections only (shared ones plus its own)
+  const loadConnections = useCallback(() => void hive.gateway.list({ companyId }).then((c) => alive.current && setConnections(c), () => alive.current && setConnections((x) => x ?? [])), [companyId])
   const loadKeys = useCallback(() => {
     // `{ companyId: null }` is Shared only; no argument would list every company's keys
     void Promise.all([hive.secrets.list({ companyId }), hive.secrets.list({ companyId: null })]).then(

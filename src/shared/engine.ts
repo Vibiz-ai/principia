@@ -208,6 +208,11 @@ export interface CompanyBridge {
   workspaceDir(companyId: Id): string | null
   /** Ids of the repos this company owns (Personal: every unowned repo). */
   repoIds(companyId: Id): Id[]
+  /**
+   * Five doors A4: the company's name while it is paused (a paused company starts nothing: no run, no schedule, no
+   * retry), else null. Absent = no company pause (older main). Must not throw.
+   */
+  pausedName?(companyId: Id): string | null
   /** DEPARTMENTS.md §4.3: the board's view of task runs. Absent = no board (tests, older main). */
   tasks?: TaskRunBridge
   /** DEPARTMENTS.md §8: the board side of task-mode schedules and Slack triggers (company/recurring.ts). Absent = no board. */

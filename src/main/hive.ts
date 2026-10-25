@@ -302,13 +302,25 @@ export class Hive {
   status(): StatusSnapshot {
     const active = this.store.listRuns({ status: ['queued', 'running'], limit: 1000 })
     const s = this.settings()
-    const next: NextFire | null = s.schedulesPaused ? null : (this.safe(() => this.engine.scheduler.nextRuns(1), [])[0] ?? null)
+    // five doors: "Next" is per company, and a paused company has none (its schedules hold until it resumes)
+    const byCompany: Record<Id, NextFire> = {}
+    let next: NextFire | null = null
+    if (!s.schedulesPaused) {
+      const companyOf = new Map(this.safe(() => this.store.listSchedules(), []).map((x) => [x.id, (x as { companyId?: Id | null }).companyId || PERSONAL_COMPANY_ID]))
+      for (const n of this.safe(() => this.engine.scheduler.nextRuns(500), [])) {
+        const co = companyOf.get(n.scheduleId) ?? PERSONAL_COMPANY_ID
+        if (this.safe(() => this.company.isPaused(co), false)) continue
+        next ??= n
+        byCompany[co] ??= n
+      }
+    }
     return {
       runningSessions: this.sessions.runningCount(),
       runningRuns: active.filter((r) => r.status === 'running').length,
       queuedRuns: active.filter((r) => r.status === 'queued').length,
       schedulesPaused: s.schedulesPaused,
       nextFire: next,
+      nextFireByCompany: byCompany,
       last24h: this.store.countEndedSince(new Date(Date.now() - 86400_000).toISOString()),
       last24hByCompany: this.safe(() => this.store.countEndedSinceByCompany(new Date(Date.now() - 86400_000).toISOString()), {}),
       activeByCompany: this.safe(() => activeByCompany(active, this.sessions.liveCountByCompany()), {}),

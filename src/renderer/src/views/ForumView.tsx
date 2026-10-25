@@ -173,6 +173,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
       },
       openChannel,
       openRef,
+      knowsTask: (ident: string) => tasks.some((x) => x.companyId === companyId && x.identifier.toUpperCase() === ident.toUpperCase()),
       react: (m, emoji) => void attempt(() => hive.forum.react({ messageId: m.id, emoji }), 'React'),
       edit: (m) => setSheet({ kind: 'edit', m }),
       remove: (m) =>
@@ -548,7 +549,8 @@ function ForumNav({
   return (
     <nav className="fm-nav" aria-label="Forum channels">
       <div className="fm-nav__brand">
-        <span className="fm-nav__forum">FORUM</span>
+        {/* the view's title (every door has one h1); the wordmark is the same word in capitals */}
+        <h1 className="fm-nav__forum">Forum</h1>
         <span className="fm-nav__co">{companyName}</span>
       </div>
       <div className="fm-nav__search">

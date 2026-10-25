@@ -13,11 +13,12 @@ import type {
   Repo,
   Session,
   Settings,
+  SidebarPrefs,
   StatusSnapshot
 } from '@shared/types'
 import type { MemoryOverview } from '@shared/memory'
 import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, Department, DepartmentPresetKey } from '@shared/company'
-import { PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
+import { DEPARTMENT_PRESETS, PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
 import type { CompanyProposal } from '@shared/chatCompany'
 import type { AgentNode as LiveAgent, Ask } from '@shared/live'
 import type { AuthorDraft } from '@shared/authoring'
@@ -43,7 +44,8 @@ import {
   type OnboardingMode,
   type PlanInputContext
 } from './onboarding'
-import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
+import { isPinned, prefsFor, prefsKey, resolveView, togglePin, viewFor, type NavTarget } from '../lib/nav'
+import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, pauseToastText, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
 
 export interface ScheduleSeed {
   workflowId?: Id
@@ -66,8 +68,13 @@ export type ViewState =
   | { name: 'portfolio' }
   /** COMPANY.md C6: company settings (the old Passport form: name, colour, vault location, repos, export/import). */
   | { name: 'company'; companyId?: Id; create?: boolean; nonce?: number }
+  /** Old Agents hub: an alias of Chats on Live (lib/nav resolveView). */
   | { name: 'agents' }
   | { name: 'home' }
+  /** Five doors: departments and the agents in them. */
+  | { name: 'team' }
+  /** Five doors: live agents (Live) and every conversation in this company (All). */
+  | { name: 'chats'; filter?: ChatsFilter }
   | { name: 'session'; missing?: { adapter: AdapterId; repoId: Id | null } | null; missingRepoId?: Id | null }
   | { name: 'canvas'; focusRunId?: Id }
   | { name: 'workflows' }
@@ -76,12 +83,14 @@ export type ViewState =
   | { name: 'run'; runId: Id; stepId?: Id; agentId?: Id }
   | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }
   | { name: 'artifacts'; runId?: Id; sessionId?: Id }
+  /** Alias: Settings → Keys & secrets */
   | { name: 'keys' }
-  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees' }
+  /** `companyId`/`create`/`nonce`: the Company section (was the `company` route) */
+  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number }
   | { name: 'slack'; channelId?: string; threadTs?: string; search?: boolean; nonce?: number }
   /** FORUM.md §8: the company Forum (companyId absent = the active company) */
   | { name: 'forum'; companyId?: Id; channelId?: Id; threadId?: Id; nonce?: number }
-  /** CLOUD.md §13.1: the Principia Cloud pane */
+  /** CLOUD.md §13.1: the Principia Cloud pane. Alias: Settings → Cloud sync */
   | { name: 'cloud' }
   /** USAGE.md: tokens and cost per day, company, department and agent; disk and Clean Up… */
   | { name: 'usage' }
@@ -91,7 +100,9 @@ export type ViewState =
 export type MemoryPageScope = { repoId: Id } | 'global' | 'all'
 export type PassportMode = 'notes' | 'graph' | 'inbox'
 
-export type SettingsSection = 'general' | 'agents' | 'connections' | 'notifications' | 'data' | 'about'
+/** 'company', 'keys' and 'cloud' were nav items or their own routes before the five doors. */
+export type SettingsSection = 'company' | 'keys' | 'general' | 'agents' | 'connections' | 'notifications' | 'cloud' | 'data' | 'about'
+export type ChatsFilter = 'live' | 'all'
 
 export interface Toast {
   id: number
@@ -99,6 +110,8 @@ export interface Toast {
   kind: 'info' | 'error'
   /** VOICE.md §2: a Latin line shown beside the text (playful only, aria-hidden, with its translation) */
   latin?: { la: string; en: string }
+  /** one button on the toast (Undo); running it dismisses the toast */
+  action?: { label: string; run: () => void }
 }
 
 /** 'companies': the ⇧⌘O company switcher (COMPANY.md §8.2). */
@@ -287,11 +300,14 @@ export function useStore<T>(sel: (s: State) => T): T {
 
 // ---------- toasts ----------
 let toastSeq = 0
-export function toast(text: string, kind: Toast['kind'] = 'info', opts: { latin?: Toast['latin'] } = {}): void {
+export function toast(text: string, kind: Toast['kind'] = 'info', opts: { latin?: Toast['latin']; action?: Toast['action'] } = {}): void {
   const id = ++toastSeq
-  setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind, ...(opts.latin ? { latin: opts.latin } : {}) }] }))
-  // long sentences stay up long enough to read
-  setTimeout(() => setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), Math.max(kind === 'error' ? 6000 : 2200, text.length * 55))
+  setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind, ...(opts.latin ? { latin: opts.latin } : {}), ...(opts.action ? { action: opts.action } : {}) }] }))
+  // long sentences stay up long enough to read; one with an Undo stays long enough to reach it
+  setTimeout(() => dismissToast(id), Math.max(kind === 'error' ? 6000 : opts.action ? 7000 : 2200, text.length * 55))
+}
+export function dismissToast(id: number): void {
+  setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
 }
 export function toastError(e: unknown, prefix?: string): void {
   toast(prefix ? `${prefix}: ${errorMessage(e)}` : errorMessage(e), 'error')
@@ -323,8 +339,9 @@ async function passLeaveGuard(view: ViewState): Promise<boolean> {
   return true
 }
 
-/** Resolves false when the editor's leave guard kept the user where they were. */
-export async function navigate(view: ViewState, opts: { back?: boolean } = {}): Promise<boolean> {
+/** Resolves false when the editor's leave guard kept the user where they were. Old route names resolve (lib/nav). */
+export async function navigate(target: NavTarget, opts: { back?: boolean } = {}): Promise<boolean> {
+  const view = resolveView(target)
   if (!(await passLeaveGuard(view))) return false
   if (!opts.back) {
     backStack.push(state.view)
@@ -344,6 +361,12 @@ export function goBack(fallback: ViewState = { name: 'home' }): void {
 
 export function goView(v: View): void {
   switch (v) {
+    case 'team':
+    case 'board':
+    case 'chats':
+    case 'knowledge':
+      void navigate(viewFor(v))
+      return
     case 'chat':
       void openChat(false)
       return
@@ -575,6 +598,17 @@ export async function updateSettings(patch: Partial<Settings>): Promise<void> {
   const res = await attempt(() => hive.settings.update(patch), 'Settings')
   if (res) setState({ settings: res })
   if (departmentsOn() !== was) void refreshDepartments()
+}
+
+/** Five doors: this company's sidebar pins and More visibility (settings.sidebarNav), saved like any setting. */
+export function updateSidebarPrefs(fn: (p: SidebarPrefs) => SidebarPrefs, companyId?: Id): void {
+  // a company's own pins (a department) go to that company, except in All companies, which keeps its own list
+  const key = !multiCompany() ? prefsKey('all', false) : companyId && activeCompany() !== 'all' ? companyId : activeCompany()
+  const all = { ...(state.settings?.sidebarNav ?? {}) }
+  const next = fn(all[key] ?? {})
+  if (Object.keys(next).length) all[key] = next
+  else delete all[key]
+  void updateSettings({ sidebarNav: all })
 }
 
 export function toggleSidebar(): void {
@@ -974,6 +1008,22 @@ export async function pauseAll(paused: boolean): Promise<void> {
   if (res) setState((s) => ({ status: res, settings: s.settings ? { ...s.settings, schedulesPaused: paused } : s.settings }))
 }
 
+/** Pause or resume schedules everywhere. With more than one company it names them and asks first (principle 1). */
+export async function pauseAllSchedulesAsked(paused: boolean): Promise<void> {
+  const multi = multiCompany()
+  if (multi) {
+    const n = state.companies.length
+    const ok = await confirmNative({
+      message: paused ? `Pause schedules in all ${n} companies?` : `Resume schedules in all ${n} companies?`,
+      detail: paused ? 'No schedule starts in any company until you resume. To pause only one company, use its header menu.' : 'Schedules start again on time in every company.',
+      confirmLabel: paused ? 'Pause All' : 'Resume All'
+    }).catch(() => false)
+    if (!ok) return
+  }
+  await pauseAll(paused)
+  if (state.status?.schedulesPaused === paused) toast(paused ? `Schedules paused${multi ? ' in every company' : ''}. Resume from ⌘K or Settings.` : `Schedules resumed${multi ? ' in every company' : ''}.`)
+}
+
 export function setStatusHint(statusHint: string | null): void {
   if (state.statusHint !== statusHint) setState({ statusHint })
 }
@@ -1118,6 +1168,44 @@ export async function setDepartmentPaused(departmentId: Id, paused: boolean): Pr
   if (failed) toastError(failed.reason, paused ? 'Pause agents' : 'Resume agents')
   else toast(`${paused ? 'Paused' : 'Resumed'} ${seats.length} agent${seats.length === 1 ? '' : 's'}`)
 }
+/**
+ * Five doors A4: pause or resume ONE company (header menu, rail menu, ⌘K, Automations, All companies cards, the status
+ * bar). Main pauses its agents, holds its schedules and autopilot, and saves the work in flight; the toast names what
+ * was saved and that other companies keep running. Undo resumes it again.
+ */
+export async function setCompanyPaused(companyId: Id, paused: boolean, opts: { undo?: boolean } = {}): Promise<void> {
+  const res = await attempt(() => hive.company.pause({ id: companyId, paused }), paused ? 'Pause company' : 'Resume company')
+  if (!res) return
+  setState((s) => ({ companies: s.companies.map((c) => (c.id === companyId ? { ...c, ...res.company } : c)) }))
+  await Promise.all([refreshDepartments(), refreshTasks(), refreshCompanies().catch(() => undefined)])
+  const others = state.companies.filter((c) => c.id !== companyId && !isPersonal(c)).length > 0
+  toast(pauseToastText(companyName(companyId), res.checkpoints, paused, others), 'info', opts.undo === false ? {} : {
+    action: { label: 'Undo', run: () => void setCompanyPaused(companyId, !paused, { undo: false }) }
+  })
+}
+/** The status bar's Resume and other one-click resumes: no question, the action is the company's own. */
+export async function resumeCompanyAsked(companyId: Id): Promise<void> {
+  await setCompanyPaused(companyId, false)
+}
+/** @deprecated step 1's name: the company menu now pauses the whole company. */
+export const setCompanyAgentsPaused = setCompanyPaused
+/** Company menu / Team "Add Department": the presets this company does not have yet, as a native menu. */
+export async function addDepartmentMenu(companyId: Id): Promise<void> {
+  const have = new Set(state.departments.filter((d) => d.companyId === companyId && !d.archivedAt).map((d) => d.key))
+  const left = DEPARTMENT_PRESETS.filter((p) => !have.has(p.key))
+  if (!left.length) return toast(`${companyName(companyId)} already has every department`)
+  const id = await nativeMenu(left.map((p) => ({ id: p.key, label: p.name })))
+  if (id) await createDepartmentPresets(companyId, [id as DepartmentPresetKey])
+}
+/** Company menu "Autopilot": assignment wakes this company's auto agents (DEPARTMENTS.md §1.1). One company only. */
+export async function setCompanyAutopilot(companyId: Id, on: boolean): Promise<void> {
+  if (on && state.companies.find((c) => c.id === companyId)?.pausedAt) return toast(`Autopilot is off while ${companyName(companyId)} is paused. Resume it first.`)
+  const res = await attempt(() => hive.board.autopilot({ companyId, on }), 'Autopilot')
+  if (!res) return
+  setState((s) => ({ companies: s.companies.map((c) => (c.id === companyId ? { ...c, autopilot: on } : c)) }))
+  void refreshCompanies().catch(() => undefined)
+  toast(on ? `Autopilot is on in ${companyName(companyId)}` : `Autopilot is off in ${companyName(companyId)}`)
+}
 export async function setAgentPaused(agent: CompanyAgent, paused: boolean): Promise<void> {
   const res = await attempt(() => (paused ? hive.companyAgents.pause({ id: agent.id }) : hive.companyAgents.resume({ id: agent.id })), paused ? 'Pause agent' : 'Resume agent')
   if (res) setState((s) => ({ companyAgents: s.companyAgents.map((a) => (a.id === res.id ? res : a)) }))
@@ -1179,11 +1267,14 @@ export async function departmentContextMenu(d: Department): Promise<void> {
     { type: 'separator' },
     allPaused ? { id: 'resume', label: 'Resume agents' } : { id: 'pause', label: 'Pause', enabled: seats.length > 0 },
     { id: 'charter', label: 'Edit Charter…' },
-    { id: 'passport', label: 'Open Passport Section' },
+    { id: 'passport', label: 'Open Knowledge Section' },
+    { type: 'separator' },
+    { id: 'pin', label: isPinned(prefsFor(state.settings?.sidebarNav, activeCompany() === 'all' ? 'all' : d.companyId, multiCompany()), `dept:${d.id}`) ? 'Unpin from Sidebar' : 'Pin to Sidebar' },
     { type: 'separator' },
     { id: 'archive', label: 'Archive…' }
   ])
   if (!id) return
+  if (id === 'pin') return updateSidebarPrefs((p) => togglePin(p, `dept:${d.id}`), d.companyId)
   if (id === 'chat') return void openDepartmentChat(d)
   if (id.startsWith('chat|')) return void openDepartmentChat(d, id.slice(5) as AdapterId)
   if (id === 'open') return openDepartment(d)
@@ -1198,6 +1289,13 @@ export async function departmentContextMenu(d: Department): Promise<void> {
  * Runs already in flight finish their turn; nothing new starts on its own.
  */
 export async function pauseAllAgents(): Promise<void> {
+  // principle 1: it touches every company, so it says so and asks first
+  const ok = await confirmNative({
+    message: `Turn autopilot off in all ${state.companies.filter((c) => !isPersonal(c)).length} companies?`,
+    detail: 'Agents stop picking up tasks on their own everywhere. To pause one company only, use its menu.',
+    confirmLabel: 'Turn Off Everywhere'
+  }).catch(() => false)
+  if (!ok) return
   // archived companies too: archiving keeps the row's autopilot, and turning it off is always allowed
   const listAll = (): Promise<CompanyPassport[]> => hive.company.list({ includeArchived: true })
   const targets = await listAll().catch(() => state.companies)
@@ -1264,8 +1362,8 @@ function setScope(id: ActiveCompany): void {
  * §8.6 `enterCompany`: focus a company (or All), clear the back stack, re-run scoped loaders and go Home (or `view`).
  * The session grid and focused pane are kept: a pane may belong to any company and shows its chip.
  */
-export async function enterCompany(id: ActiveCompany, opts: { view?: ViewState } = {}): Promise<boolean> {
-  const view = opts.view ?? { name: 'home' }
+export async function enterCompany(id: ActiveCompany, opts: { view?: NavTarget } = {}): Promise<boolean> {
+  const view = resolveView(opts.view ?? { name: 'home' })
   if (!(await passLeaveGuard(view))) return false
   setScope(id)
   setState({ view, companyUndo: null })
@@ -1358,7 +1456,7 @@ export async function updateCompany(id: Id, patch: { name?: string; color?: stri
 }
 
 export async function archiveCompany(c: CompanyPassport): Promise<void> {
-  if (isPersonal(c)) return toast('Personal / Unassigned can’t be archived.')
+  if (isPersonal(c)) return toast('Personal can’t be archived.')
   const ok = await confirmNative({
     message: `Archive ${c.name}?`,
     detail: 'It leaves the rail and the sidebar. Its repositories, sessions, runs, keys and Passport stay, and you can unarchive it in Settings › Companies.',
@@ -1403,15 +1501,16 @@ export async function companyContextMenu(c: CompanyPassport): Promise<void> {
     { label: 'Colour', submenu: COMPANY_COLORS.map((x) => ({ id: `color:${x.value}`, label: x.label, enabled: x.value !== c.color })) },
     { id: 'settings', label: 'Company Settings…' },
     { type: 'separator' },
-    { id: 'passport', label: 'Open Passport' },
+    { id: 'passport', label: 'Open Knowledge' },
     { id: 'reveal', label: 'Open Vault in Finder' },
     { id: 'obsidian', label: 'Open Vault in Obsidian' },
-    ...(departmentsOn() ? ([{ type: 'separator' }, { id: 'pauseAgents', label: 'Pause all agents' }] as NativeMenuItem[]) : []),
+    // A4: this company only (agents, schedules, autopilot); the all-companies version lives on the All tile and asks first
+    ...(departmentsOn() && !personal ? ([{ type: 'separator' }, c.pausedAt ? { id: 'resume', label: `Resume ${c.name}` } : { id: 'pause', label: `Pause ${c.name}` }] as NativeMenuItem[]) : []),
     { type: 'separator' },
     { id: 'archive', label: personal ? 'Archive (Personal can’t be archived)' : 'Archive…', enabled: !personal }
   ])
   if (!id) return
-  if (id === 'pauseAgents') return pauseAllAgents()
+  if (id === 'pause' || id === 'resume') return setCompanyPaused(c.id, id === 'pause')
   if (id === 'enter') return void enterCompany(c.id)
   if (id === 'new') return void newSessionMenu(c.id)
   if (id === 'rename') return void window.dispatchEvent(new CustomEvent('hive:renameCompany', { detail: c.id }))

@@ -1,5 +1,5 @@
 /**
- * FORUM.md §8: one message row. Plain text (grouped by author), asks (an amber status tessera: the Needs-you meaning),
+ * FORUM.md §8: one message row. Plain text (grouped by author), asks (an accent status tessera: the Needs-you meaning),
  * proposals (the double-rule frame with corner lozenges, VOICE.md §5.2) and system lines. Inline tokens open what they
  * name; hover actions: react, reply in thread, make task, copy ref, edit/delete own.
  */
@@ -61,6 +61,7 @@ function RichTextPlain({ text, from }: { text: string; from?: ForumMessage }): R
             )
           }
           case 'task':
+            if (ctx.knowsTask && !ctx.knowsTask(t.v)) return <Fragment key={i}>{t.v}</Fragment>
             return (
               <span key={i} className="fm-inline-ref" onClick={() => from && ctx.openRef({ kind: 'task', id: t.v, label: t.v }, from)}>
                 {t.v}

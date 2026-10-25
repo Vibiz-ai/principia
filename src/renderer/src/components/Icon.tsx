@@ -56,6 +56,13 @@ const P: Record<string, string> = {
   /** two figures: the Agents hub */
   agents: 'M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.5 3.5-3.5S9 11 9 13M11 7.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM10.2 9.7c.3-.1.5-.1.8-.1 1.7 0 3 1.3 3 3.2',
   reply: 'M6.5 4 3 7.5 6.5 11M3 7.5h6.5a3.5 3.5 0 0 1 3.5 3.5v1',
+  /** Five doors: Board (three columns), Knowledge (open book), Activity (a pulse), Add-ons (grid + plus), a repo branch */
+  board: 'M2.5 3h11v10h-11zM6.2 3v10M9.8 3v10',
+  knowledge: 'M8 4.5C6.5 3.3 4.3 3 2.5 3.3v9.4c1.8-.3 4 0 5.5 1.3 1.5-1.3 3.7-1.6 5.5-1.3V3.3C11.7 3 9.5 3.3 8 4.5v9.5',
+  activity: 'M1.5 8.5h3l1.8-4 3.2 8 1.8-4h3.2',
+  addons: 'M3 3h4v4H3zM9 9h4v4H9zM3 9h4v4H3zM11 3v4M9 5h4',
+  branch: 'M5 2.5v8M5 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 6.5c0 3-6 2-6 4',
+  department: 'M2.5 6 8 3l5.5 3zM3.5 6.5v5M6.5 6.5v5M9.5 6.5v5M12.5 6.5v5M2.5 13h11',
   /** hash in a speech bubble: the Slack page (generic glyph, not the Slack logo) */
   // FORUM.md §8: a pediment over a speech bubble
   forum: 'M2.5 5.5 8 2l5.5 3.5zM3 7.5h10a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5H7.5L5 14.5v-2H3a.5.5 0 0 1-.5-.5V8a.5.5 0 0 1 .5-.5z',

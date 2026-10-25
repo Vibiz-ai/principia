@@ -343,13 +343,14 @@ export function draftInputsHash(d: OnboardingDraft, ctx: PlanInputContext = {}):
 }
 
 /** What the renderer can say is available for the starter plan; main recomputes the real one. */
-export function availableFor(input: PlanInput, installed: readonly string[], sharedKeys: Partial<Record<WorkflowKeyName, boolean>> = {}): OnboardingAvailable {
+export function availableFor(input: PlanInput, installed: readonly string[], sharedKeys: Partial<Record<WorkflowKeyName, boolean>> = {}, personasElsewhere: readonly string[] = []): OnboardingAvailable {
   const profileAdapters = PLAN_ADAPTERS.filter((a) => installed.includes(a)) as PlanAdapter[]
   return {
     workflows: workflowsForKeys({ FAL_KEY: input.keys.fal, OPENAI_API_KEY: input.keys.openai, FIRECRAWL_API_KEY: !!sharedKeys.FIRECRAWL_API_KEY }),
     profileAdapters: profileAdapters.length ? profileAdapters : ['claude'],
     hasCode: input.hasCode,
-    departmentsOn: input.departmentsOn
+    departmentsOn: input.departmentsOn,
+    ...(personasElsewhere.length ? { personasElsewhere: [...personasElsewhere] } : {})
   }
 }
 

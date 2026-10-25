@@ -220,7 +220,20 @@ const settingsPatch = z
     autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
     // PROACTIVE.md
     proactiveAgents: z.boolean(),
-    trackTasks: z.enum(['off', 'auto', 'always'])
+    trackTasks: z.enum(['off', 'auto', 'always']),
+    // Five doors: the sidebar's pins and More visibility per company ('all' = All companies). UI state only.
+    sidebarNav: z
+      .record(
+        z.union([z.literal('all'), id]),
+        z
+          .object({
+            pins: z.array(z.string().regex(/^(dept:)?[A-Za-z0-9_-]{1,64}$/)).max(50),
+            visibility: z.record(z.string().regex(/^[a-z]{1,32}$/), z.enum(['always', 'active', 'hidden'])).refine((r) => Object.keys(r).length <= 50, 'Too many items')
+          })
+          .partial()
+          .strict()
+      )
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
   })
   .partial()
   .strict()
@@ -428,7 +441,7 @@ const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNot
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
-  'gateway:list': none,
+  'gateway:list': optObj({ companyId: id.optional() }),
   'gateway:remove': z.object({ id: slug }),
   'gateway:test': z.object({ id: slug }),
   // COMPANY.md §6: companyIds limits a connection to those companies' spawns; absent = all companies
@@ -504,6 +517,7 @@ export const REQUEST_SCHEMAS = {
   'company:reorder': z.object({ ids: companyReorderSchema }).strict(),
   'company:assignRepo': assignRepoSchema,
   'company:overview': none,
+  'company:pause': z.object({ id, paused: z.boolean() }).strict(),
   'company:logos': none,
   'company:logoCandidates': z.object({ id }).strict(),
   'company:setLogo': z.object({

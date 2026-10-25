@@ -9,10 +9,12 @@ import { SiblingOffer, Toasts } from './shell/Overlays'
 import { DiagramOverlays } from './components/diagrams/DiagramOverlays'
 import { Sidebar } from './shell/Sidebar'
 import { StatusBar } from './shell/StatusBar'
-import { activeCompany, boot, departmentsOn, multiCompany, useStore, type ViewState } from './state/store'
+import { activeCompany, boot, departmentsOn, multiCompany, useStore, type SettingsSection, type ViewState } from './state/store'
+import { resolveView, VIEW_TITLES } from './lib/nav'
+import { TeamView } from './views/TeamView'
+import { ChatsView } from './views/ChatsView'
 import { windowTitle } from './lib/company'
 import { reportVisibleOwner } from './state/live'
-import { AgentsView } from './views/AgentsView'
 import { ArtifactsView } from './views/ArtifactsView'
 import { CanvasView } from './views/CanvasView'
 import { TasksView } from './views/TasksView'
@@ -21,7 +23,6 @@ import { plansEnabled, PLANS_OFF } from '@shared/plans'
 import { AgentSeatView } from './views/AgentSeatView'
 import { DepartmentView } from './views/DepartmentView'
 import { EmptyState } from './components/ui'
-import { PassportView } from './views/PassportView'
 import './styles/company.css'
 import './styles/shell.css'
 import './styles/rail.css'
@@ -30,7 +31,6 @@ import './styles/cloud.css'
 import { OnboardingFlow } from './views/onboarding/OnboardingFlow'
 import { HomeView } from './views/HomeView'
 import { MilestoneWatcher } from './components/home/MilestoneStrip'
-import { KeysView } from './views/KeysView'
 import { MemoryView } from './views/MemoryView'
 import { RunInputsSheet } from './views/RunInputsSheet'
 import { RunView } from './views/RunView'
@@ -39,7 +39,6 @@ import { SessionView } from './views/SessionView'
 import { SettingsView } from './views/SettingsView'
 import { SlackView } from './views/SlackView'
 import { ForumView } from './views/ForumView'
-import { CloudView } from './views/CloudView'
 import { WorkflowEditor } from './views/WorkflowEditor'
 import { MarketplaceView } from './views/MarketplaceView'
 import { WorkflowsView } from './views/WorkflowsView'
@@ -54,32 +53,8 @@ const lateViews = import.meta.glob(['./views/PortfolioView.tsx', './views/Passpo
 const PortfolioView = lateViews['./views/PortfolioView.tsx']?.PortfolioView as (() => React.JSX.Element) | undefined
 const PassportVaultView = lateViews['./views/PassportVaultView.tsx']?.PassportVaultView as ((p: { view: PassportViewState }) => React.JSX.Element) | undefined
 
-const TITLES: Record<ViewState['name'], string> = {
-  tasks: 'Tasks',
-  plans: 'Plans',
-  passport: 'Passport',
-  portfolio: 'Portfolio',
-  company: 'Company Settings',
-  agents: 'Agents',
-  home: 'Home',
-  session: 'Session',
-  canvas: 'Canvas',
-  workflows: 'Workflows',
-  marketplace: 'Marketplace',
-  editor: 'Workflow',
-  run: 'Run',
-  schedules: 'Schedules',
-  artifacts: 'Artifacts',
-  keys: 'Keys',
-  settings: 'Settings',
-  memory: 'Memory',
-  slack: 'Slack',
-  forum: 'Forum',
-  cloud: 'Cloud',
-  usage: 'Usage',
-  department: 'Department',
-  agentSeat: 'Agent'
-}
+/** Window titles in nav words: one table (lib/nav), so the sidebar, palette and title never disagree. */
+const TITLES = VIEW_TITLES
 
 export function App(): React.JSX.Element {
   const ready = useStore((s) => s.ready)
@@ -96,8 +71,8 @@ export function App(): React.JSX.Element {
     void boot()
     return installKeyboard()
   }, [])
-  const board = useStore((s) => departmentsOn(s))
-  const viewTitle = view.name === 'home' && multi && active === 'all' && PortfolioView ? TITLES.portfolio : view.name === 'tasks' && board ? 'Board' : TITLES[view.name]
+  // All companies Home is the Portfolio; the window already says "All companies", so the view part stays "Home"
+  const viewTitle = view.name === 'settings' && view.section ? (SETTINGS_TITLES[view.section] ?? TITLES.settings) : TITLES[view.name]
   const title = windowTitle(viewTitle, active === 'all' ? 'all' : company, multi)
   useEffect(() => {
     document.title = title
@@ -152,7 +127,12 @@ export function App(): React.JSX.Element {
   )
 }
 
-function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
+/** Settings sections that used to be pages keep their own window title. */
+const SETTINGS_TITLES: Partial<Record<SettingsSection, string>> = { company: TITLES.company, keys: TITLES.keys, cloud: TITLES.cloud }
+
+function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
+  // old routes (Agents, Keys, Cloud, Company Settings) render as what they resolve to, even if set directly
+  const view = resolveView(raw)
   const portfolioHome = useStore((s) => multiCompany(s) && activeCompany(s) === 'all')
   const plansOn = useStore((s) => plansEnabled(s.settings?.experimental))
   const departments = useStore((s) => departmentsOn(s))
@@ -175,12 +155,12 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       ) : (
         <MemoryView view={{ name: 'memory', runId: view.runId, sessionId: view.sessionId, search: !!view.search, nonce: view.nonce }} />
       )
-    case 'company':
-      return <PassportView />
+    case 'team':
+      return <TeamView />
+    case 'chats':
+      return <ChatsView filter={view.filter} />
     case 'portfolio':
       return PortfolioView ? <PortfolioView /> : <HomeView />
-    case 'agents':
-      return <AgentsView />
     case 'home':
       return portfolioHome && PortfolioView ? <PortfolioView /> : <HomeView />
     case 'session':
@@ -199,20 +179,19 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       return <SchedulesView selectedId={view.selectedId} seed={view.seed} nonce={view.nonce} tab={view.tab} />
     case 'artifacts':
       return <ArtifactsView runId={view.runId} sessionId={view.sessionId} />
-    case 'keys':
-      return <KeysView />
     case 'settings':
-      return <SettingsView section={view.section} />
+      return <SettingsView section={view.section} nonce={view.nonce} />
     case 'memory':
       return <MemoryView view={view} />
     case 'slack':
       return <SlackView channelId={view.channelId} threadTs={view.threadTs} search={view.search} nonce={view.nonce} />
-    case 'cloud':
-      return <CloudView />
     case 'usage':
       return <UsageView />
     case 'forum':
       return <ForumView companyId={view.companyId} channelId={view.channelId} threadId={view.threadId} nonce={view.nonce} />
+    default:
+      // agents, keys, cloud and company never reach here: resolveView turned them into chats and settings
+      return <HomeView />
   }
 }
 

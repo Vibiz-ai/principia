@@ -271,6 +271,8 @@ export interface OnboardingAvailable {
   profileAdapters: PlanAdapter[]
   hasCode: boolean
   departmentsOn: boolean
+  /** persona names other companies' agents already have (lowercase): new agents pick others while any are free */
+  personasElsewhere?: string[]
 }
 
 // ---------- steps ----------

@@ -7,7 +7,7 @@ import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { taskLane, type LaneContext } from './departments'
 import type { AgentNode, Ask } from '@shared/live'
 import type { Id, Repo, Session, Workflow } from '@shared/types'
-import { isLive, isUnseenIdle } from './live'
+import { liveTruth, needsIn, truthResolver, workingIn, type LiveTruth, type TruthInput } from './liveTruth'
 
 export type ActiveCompany = Id | 'all'
 
@@ -32,9 +32,12 @@ export function isMultiCompany(companies: readonly Pick<CompanyPassport, 'id'>[]
   return companies.length >= 2
 }
 
-/** The label the UI uses: Personal reads "Personal / Unassigned" in lists (§2.2). */
-export function companyLabel(c: Pick<CompanyPassport, 'id' | 'system' | 'name'>, long = false): string {
-  return long && isPersonal(c) && c.name === 'Personal' ? 'Personal / Unassigned' : c.name
+/**
+ * The label the UI uses. Five doors §2.7: "Personal / Unassigned" is just **Personal** everywhere now (rail, palette,
+ * menus); `long` is kept for callers that used to ask for the long form.
+ */
+export function companyLabel(c: Pick<CompanyPassport, 'id' | 'system' | 'name'>, _long = false): string {
+  return c.name
 }
 
 export function companyInitials(name: string): string {
@@ -42,6 +45,46 @@ export function companyInitials(name: string): string {
   if (!words.length) return '?'
   if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase()
   return (words[0]![0]! + words[1]![0]!).toUpperCase()
+}
+
+/**
+ * "13 agents · 3 companies": the same company count as the sidebar header (Personal is not a company you run), with
+ * Personal named only when it has agents of its own.
+ */
+export function teamMeta(seats: { companyId: string }[], companies: Pick<CompanyPassport, 'id' | 'system'>[], grouped: boolean): string {
+  const agents = `${seats.length} agent${seats.length === 1 ? '' : 's'}`
+  if (!grouped) return agents
+  const real = companies.filter((c) => !isPersonal(c))
+  const personalSeats = companies.some((c) => isPersonal(c) && seats.some((a) => a.companyId === c.id))
+  return `${agents} · ${real.length} compan${real.length === 1 ? 'y' : 'ies'}${personalSeats ? ' and Personal' : ''}`
+}
+
+/**
+ * A4: the pause / resume toast. Pausing says what was saved ("Pliny's work on “Competitor research” is saved; Pliny
+ * continues when you resume.") and, with other companies, "Other companies keep running." (never one company's name);
+ * resuming says what continues.
+ */
+export function pauseToastText(company: string, saved: readonly { agentName: string | null; title: string }[], paused: boolean, others = true): string {
+  const one = saved.length === 1 ? saved[0]! : null
+  if (!paused) {
+    const cont = one ? ` ${one.agentName ?? 'Its agent'} continues “${one.title}”.` : saved.length ? ` ${saved.length} saved tasks continue.` : ''
+    return `Resumed ${company}.${cont}`
+  }
+  const work = one
+    ? ` ${one.agentName ? `${one.agentName}’s` : 'The'} work on “${one.title}” is saved; ${one.agentName ?? 'it'} continues when you resume.`
+    : saved.length
+      ? ` Work on ${saved.length} tasks is saved; it continues when you resume.`
+      : ''
+  return `Paused ${company}.${work}${others ? ' Other companies keep running.' : ''}`
+}
+/** A4: a company is paused when its row says so (company:pause), the one rule every surface reads. */
+export function isCompanyPaused(c: Pick<CompanyPassport, 'pausedAt'> | null | undefined): boolean {
+  return !!c?.pausedAt
+}
+/** A company reads "paused" when it has agents and every one of them is paused (header, rail card, rail title). */
+export function companyPaused(seats: readonly { companyId: Id; pausedAt: string | null; archivedAt?: string | null }[], companyId: Id): boolean {
+  const own = seats.filter((a) => a.companyId === companyId && !a.archivedAt)
+  return own.length > 0 && own.every((a) => !!a.pausedAt)
 }
 
 /** ⌃1…⌃9: the Nth company in rail order (1-based). */
@@ -99,46 +142,29 @@ export interface BadgeInput {
 }
 
 /**
- * Resolves an agent's company: its own stamp, else its root's, else the session it runs in, else Personal. Older
- * mains (before C3) send no stamps; the session fallback keeps badges right for interactive work in that case.
+ * Resolves an agent's company: its own stamp, else its root's, else the session it runs in, else (with `tasks`) the
+ * task its run works on, else Personal. One implementation with the live source (liveTruth.truthResolver).
  */
-export function agentCompanyResolver(agents: Iterable<StampedAgent>, sessions: Session[]): (a: StampedAgent | undefined, sessionId?: Id | null) => Id {
-  const byId = new Map<Id, StampedAgent>()
-  for (const a of agents) byId.set(a.id, a)
-  const sessionCo = new Map(sessions.map((s) => [s.id, companyOf(s)]))
-  // `sessionId`: an ask whose agent is not loaded (yet) still lands in its session's company, not Personal
-  return (a, sessionId) => {
-    if (!a) return (sessionId && sessionCo.get(sessionId)) || PERSONAL_COMPANY_ID
-    if (a.companyId) return a.companyId
-    const root = a.rootId !== a.id ? byId.get(a.rootId) : undefined
-    if (root?.companyId) return root.companyId
-    const sid = a.sessionId ?? root?.sessionId
-    return (sid && sessionCo.get(sid)) || PERSONAL_COMPANY_ID
-  }
+export function agentCompanyResolver(agents: Iterable<StampedAgent>, sessions: Session[], tasks?: TruthInput['tasks']): (a: StampedAgent | undefined, sessionId?: Id | null) => Id {
+  const r = truthResolver({ agents, sessions, tasks })
+  return (a, sessionId) => r(a, sessionId)
 }
 
-export function companyBadges(input: BadgeInput): { byCompany: Record<Id, CompanyBadge>; total: CompanyBadge } {
-  const agents = [...input.agents]
-  const resolve = agentCompanyResolver(agents, input.sessions)
-  const byId = new Map(agents.map((a) => [a.id, a]))
+/**
+ * Per-company badges, a slice of the one live source (lib/liveTruth.ts): needs you (live items, plus board tasks when
+ * `taskNeeds` is given), working roots, and the failed-in-24 h flag from company:overview. The overview's own working
+ * count is not mixed in any more: it lagged run ends, so a finished run kept its working ring (five doors A2).
+ */
+export function companyBadges(input: BadgeInput & { tasks?: TruthInput['tasks']; taskNeeds?: Record<Id, number> }): { byCompany: Record<Id, CompanyBadge>; total: CompanyBadge } {
+  const truth = liveTruth({ agents: input.agents, asks: input.asks, seen: input.seen, sessions: input.sessions, tasks: input.tasks, taskNeeds: input.taskNeeds })
+  return badgesFromTruth(truth, input.companies, input.overview)
+}
+export function badgesFromTruth(truth: LiveTruth, companies: readonly Pick<CompanyPassport, 'id'>[], overview?: BadgeInput['overview']): { byCompany: Record<Id, CompanyBadge>; total: CompanyBadge } {
   const byCompany: Record<Id, CompanyBadge> = {}
   const slot = (id: Id): CompanyBadge => (byCompany[id] ??= { needsYou: 0, working: 0, failed: false })
-  for (const c of input.companies) slot(c.id).failed = (input.overview?.[c.id]?.failed24h ?? 0) > 0
-  for (const ask of input.asks) {
-    if (ask.status !== 'open') continue
-    slot(ask.companyId || resolve(byId.get(ask.agentId) ?? byId.get(ask.rootId), ask.sessionId)).needsYou++
-  }
-  for (const a of agents) {
-    if (a.kind === 'subagent') continue
-    if (isUnseenIdle(a, input.seen)) slot(resolve(a)).needsYou++
-    else if (a.status === 'working' || a.status === 'starting') slot(resolve(a)).working++
-  }
-  // §8.2: queued/running runs count too (a shell-only run has no agent); main's overview counts root agents plus runs,
-  // so the larger of the two never double counts and stays live between overview refreshes
-  for (const c of input.companies) {
-    const w = input.overview?.[c.id]?.working ?? 0
-    if (w > (byCompany[c.id]?.working ?? 0)) slot(c.id).working = w
-  }
+  for (const c of companies) slot(c.id).failed = (overview?.[c.id]?.failed24h ?? 0) > 0
+  for (const [id, n] of Object.entries(needsIn(truth, 'all').byCompany)) slot(id).needsYou = n
+  for (const [id, n] of Object.entries(workingIn(truth, 'all').byCompany)) slot(id).working = n
   const total: CompanyBadge = { needsYou: 0, working: 0, failed: false }
   for (const b of Object.values(byCompany)) {
     total.needsYou += b.needsYou
@@ -168,41 +194,13 @@ export interface LiveItem {
  * Every open ask plus every unseen idle session root, oldest first, each with its company (All-mode "Needs you",
  * rail popovers). With `working`, live working roots follow (rail popover only).
  */
-export function liveItems(input: Omit<BadgeInput, 'companies' | 'overview'> & { working?: boolean; companyId?: Id }): LiveItem[] {
-  const agents = [...input.agents]
-  const resolve = agentCompanyResolver(agents, input.sessions)
-  const byId = new Map(agents.map((a) => [a.id, a]))
-  const out: LiveItem[] = []
-  const withAsk = new Set<Id>()
-  for (const ask of input.asks) {
-    if (ask.status !== 'open') continue
-    const agent = byId.get(ask.agentId)
-    const root = byId.get(ask.rootId) ?? agent
-    withAsk.add(ask.rootId)
-    out.push({
-      key: `ask:${ask.id}`,
-      companyId: ask.companyId || resolve(agent ?? root, ask.sessionId),
-      kind: 'ask',
-      agentId: ask.agentId,
-      askId: ask.id,
-      title: ask.kind === 'question' ? (ask.question ?? ask.title) : ask.title,
-      detail: root?.title ?? null,
-      sessionId: ask.sessionId,
-      runId: ask.runId,
-      at: ask.createdAt
-    })
-  }
-  const working: LiveItem[] = []
-  for (const a of agents) {
-    if (a.kind === 'subagent' || withAsk.has(a.id)) continue
-    const base = { companyId: resolve(a), agentId: a.id, askId: null, title: a.title, sessionId: a.sessionId, runId: a.runId, at: a.updatedAt }
-    if (isUnseenIdle(a, input.seen)) out.push({ ...base, key: `idle:${a.id}`, kind: 'idle', detail: 'Finished, your turn' })
-    else if (input.working && isLive(a) && (a.status === 'working' || a.status === 'starting')) working.push({ ...base, key: `work:${a.id}`, kind: 'working', detail: a.activity })
-  }
-  out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-  working.sort((a, b) => (a.at < b.at ? 1 : -1))
-  const all = [...out, ...working]
-  return input.companyId ? all.filter((i) => i.companyId === input.companyId) : all
+export function liveItems(input: Omit<BadgeInput, 'companies' | 'overview'> & { working?: boolean; companyId?: Id; tasks?: TruthInput['tasks'] }): LiveItem[] {
+  return itemsFromTruth(liveTruth({ agents: input.agents, asks: input.asks, seen: input.seen, sessions: input.sessions, tasks: input.tasks }), input)
+}
+/** Needs-you rows (oldest first), then with `working` the working roots (newest first), of one company or all. */
+export function itemsFromTruth(truth: LiveTruth, opts: { working?: boolean; companyId?: Id }): LiveItem[] {
+  const scope = opts.companyId ?? 'all'
+  return [...needsIn(truth, scope).items, ...(opts.working ? workingIn(truth, scope).items : [])]
 }
 
 /** The company a cross-company open should focus, or null when no switch is needed (All mode or the same company). */
@@ -248,6 +246,16 @@ export interface TaskCounts {
   doneToday: number
   /** of needsYou, running tasks there only because their run has an open live ask (that ask is listed on its own) */
   liveAsks?: number
+}
+/**
+ * Board tasks waiting on you in a scope (undefined = every company), the part of Home's Needs you that is not a live
+ * ask: a running task waiting on a live ask is already counted as that ask. Home's header and the sidebar Home badge
+ * both add it, so they show the same number.
+ */
+export function taskNeedsIn(counts: Record<Id, TaskCounts>, scope?: Id): number {
+  let n = 0
+  for (const [id, c] of Object.entries(counts)) if (!scope || id === scope) n += Math.max(0, c.needsYou - (c.liveAsks ?? 0))
+  return n
 }
 export const EMPTY_TASK_COUNTS: TaskCounts = Object.freeze({ working: 0, needsYou: 0, doneToday: 0 }) as TaskCounts
 

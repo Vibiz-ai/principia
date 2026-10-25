@@ -46,7 +46,7 @@ export const CHAT_TASK_SERVER_INSTRUCTIONS =
   'task_update moves it (in_progress when you start, in_review once built and checked, blocked with why) and rewrites its brief; task_comment {id} notes on a task you track or filed. Only the founder marks tasks done.'
 
 const ro = { readOnlyHint: true }
-const TASK_ID = { type: 'string', minLength: 1, maxLength: 64, description: 'Task id (task_…) or identifier (PRN-12) of a task of this company. Omit for your current task.' }
+const TASK_ID = { type: 'string', minLength: 1, maxLength: 64, description: 'Task id (task_…) or identifier (like NC-12) of a task of this company. Omit for your current task.' }
 export const TASK_TOOL_DEFS: Record<TaskTool | SessionTaskTool, ToolDef> = {
   task_get: {
     name: 'task_get',
@@ -127,7 +127,7 @@ export const TASK_TOOL_DEFS: Record<TaskTool | SessionTaskTool, ToolDef> = {
     inputSchema: {
       type: 'object',
       properties: {
-        id: { ...TASK_ID, description: 'A task this chat tracks (PRN-12).' },
+        id: { ...TASK_ID, description: 'A task this chat tracks (like NC-12).' },
         status: { type: 'string', enum: ['in_progress', 'in_review', 'blocked'] },
         note: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.summary },
         title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title },

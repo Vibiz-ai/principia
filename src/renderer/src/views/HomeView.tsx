@@ -13,8 +13,8 @@ import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
 import { CloudNeedsYou } from '../components/cloud/NeedsYou'
 import { ClaudeHistorySection } from '../components/home/ClaudeHistory'
 import { isNothingToDo } from '../lib/authoring'
-import { homeWindowLabel, hubGroups, isLive, isSeen, isUnseenIdle } from '../lib/live'
-import { focusAgent, mergeAgents, mergeAsks, useSeenSet } from '../state/live'
+import { homeWindowLabel, hubGroups, isSeen, isUnseenIdle } from '../lib/live'
+import { focusAgent, mergeAgents, mergeAsks, useNeeds, useSeenSet, useWorking } from '../state/live'
 import { useScope, useScopedLive } from '../components/CompanyChip'
 import { inScope } from '../lib/scope'
 import { reposOf } from '../lib/companyModel'
@@ -26,7 +26,6 @@ import { runVisual } from '../lib/graph'
 import { firstLine, runTitle } from '../lib/format'
 import { age, clock, duration } from '../lib/time'
 import { useCoalesced } from '../lib/useThrottled'
-import { useTaskCounts } from '../lib/company'
 import '../styles/board.css'
 
 import { cancelRun, rerun, runContextMenu } from '../lib/runActions'
@@ -34,6 +33,8 @@ import { ProviderSwitcher } from '../shell/ProviderSwitcher'
 import {
   attempt,
   closeSession,
+  companyName,
+  setCompanyPaused,
   focusSession,
   navigate,
   openPalette,
@@ -153,17 +154,17 @@ export function HomeView(): React.JSX.Element {
   }
 
   const leftovers = useLeftovers()
-  const taskCounts = useTaskCounts()
   // VOICE.md §3.5: a focused company with departments on gets the briefing card (it carries the greeting); the
   // milestone strip shows for any focused business (not Personal)
   const briefing = useStore((s) => !!scope && departmentsOn(s))
   const milestones = useStore((s) => !!scope && s.companies.some((c) => c.id === scope && !c.system))
   const groups = useMemo(() => hubGroups(idx.roots, asks, seen), [idx, asks, seen])
-  // Live now leaves out what is already listed under Needs you
-  const liveRoots = useMemo(() => {
-    const needIds = new Set(groups.needs.map((g) => g.root.id))
-    return idx.roots.filter((r) => isLive(r) && !needIds.has(r.id)).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
-  }, [idx, groups])
+  // five doors A2: Working now and the Needs you count are the one live source's, like the sidebar, rail and status bar
+  const workingNow = useWorking(scope ?? 'all')
+  const needsNow = useNeeds(scope ?? 'all')
+  const liveRoots = useMemo(() => workingNow.items.map((i) => idx.byId.get(i.agentId)).filter((a): a is NonNullable<typeof a> => !!a), [workingNow, idx])
+  // A4: a paused company starts nothing; what it raised before the pause stays, waiting for the resume
+  const pausedAt = useStore((s) => (scope ? (s.companies.find((c) => c.id === scope)?.pausedAt ?? null) : null))
   const unpriced = useMemo(() => !!data?.activity.days.some((d) => d.byModel.some((m) => m.costUsd == null && m.tokens > 0)), [data])
   // focused mode: runs carry their company; schedules and learned facts are matched through the company's ids
   const own = scope && owned?.scope === scope ? owned : null
@@ -194,11 +195,10 @@ export function HomeView(): React.JSX.Element {
       load(id)
     }
   }
-  const needsCount = groups.needs.reduce((n, g) => n + (g.asks.length || 1), 0)
   const leftoverCount = leftovers.items?.length ?? 0
   // board tasks waiting on you (a running task waiting on a live ask is already one of the live rows: counted once)
-  const taskNeeds = Object.entries(taskCounts).reduce((n, [id, c]) => (!scope || id === scope ? n + c.needsYou - (c.liveAsks ?? 0) : n), 0)
-  const needsTotal = needsCount + taskNeeds + (leftoverCount ? 1 : 0)
+  const taskNeeds = needsNow.tasks
+  const needsTotal = needsNow.count
 
   return (
     <div className="view">
@@ -228,13 +228,24 @@ export function HomeView(): React.JSX.Element {
           ) : (
             <>
               {!briefing && <HomeGreeting className="home__greet" />}
-              {needsTotal > 0 ? (
+              {pausedAt && scope && (
+                <div className="banner banner--bar home__paused" role="status">
+                  <span className="glyph" aria-hidden>‖</span> {companyName(scope)} is paused. Nothing starts until you resume it; other companies keep running.
+                  <span className="flex1" />
+                  <Button size="sm" variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
+                    Resume
+                  </Button>
+                </div>
+              )}
+              {needsTotal > 0 || leftoverCount > 0 ? (
                 <>
-                  <NeedsYouHeader count={<span className="text-needs">{needsTotal}</span>}>
-                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'agents' })}>
-                      Agents →
+                  <NeedsYouHeader count={needsTotal > 0 ? <span className="text-needs">{needsTotal}</span> : undefined}>
+                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} title="Open Chats on Live">
+                      Chats →
                     </Button>
                   </NeedsYouHeader>
+                  {/* A4: what was raised before the pause stays, and says it waits for the resume */}
+                  {pausedAt && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
                   {groups.needs.length > 0 && <div className="group-list hub__list">
                     {groups.needs.map(({ root, asks: ra }, i) => (
                       <AgentRow key={root.id} idx={idx} root={root} asks={ra} seen={isSeen(root, seen)}>
@@ -332,16 +343,18 @@ export function HomeView(): React.JSX.Element {
                 </>
               )}
 
-              <SectionHeader title="Live now" count={liveRoots.length || undefined}>
-                <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'agents' })} kbd="⇧⌘A">
-                  Agents
+              <SectionHeader title="Working now" count={liveRoots.length || undefined}>
+                <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">
+                  Chats
                 </Button>
               </SectionHeader>
               <div className="group-list hub__list">
                 {liveRoots.length === 0 ? (
-                  groups.needs.length > 0 ? (
+                  pausedAt ? (
+                    <div className="home__quiet text-tertiary">Nothing working while {companyName(scope!)} is paused.</div>
+                  ) : needsTotal > 0 ? (
                     <div className="home__quiet text-tertiary">
-                      Nothing working · {groups.needs.length} waiting on you above.
+                      Nothing working · {needsTotal} waiting on you above.
                     </div>
                   ) : (
                     <EmptyState compact text="Nothing running.">
@@ -351,7 +364,7 @@ export function HomeView(): React.JSX.Element {
                     </EmptyState>
                   )
                 ) : (
-                  liveRoots.map((r) => <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen={isSeen(r, seen)} compact dim={r.status === 'idle' || r.needs === 'idle'} />)
+                  liveRoots.map((r) => <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen={isSeen(r, seen)} compact />)
                 )}
               </div>
 

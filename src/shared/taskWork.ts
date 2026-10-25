@@ -122,12 +122,14 @@ export const GH_TEXT: Record<Exclude<GhState, 'ok'>, string> = {
 /**
  * What the task should do after a PR check. Pure, so every rule is tested once:
  * - merged → done ('Merged #N'); never while a run holds the task (the run end comes first)
+ * - approved on GitHub (a human reviewer: GitHub never lets the PR's author approve it) on a task in review → done
+ *   ('Approved #N'), PM A3; the PR stays open for the founder to merge, so the worktree stays too
  * - open and ready (not a draft) for the first time (readySeen), and the task is not in flight or in review → in_review.
  *   Edge-triggered: a task the founder sent back while its PR stays open is not bounced back to review.
  * - changes requested (a review not handled yet) on a task in review → back to work with the reviewer's note
  */
 export type WorkMove =
-  | { kind: 'done'; note: string }
+  | { kind: 'done'; note: string; approved?: true }
   | { kind: 'review' }
   | { kind: 'changes'; reviewAt: string | null }
   | { kind: 'none' }
@@ -140,6 +142,7 @@ export function nextMove(task: { status: string }, pr: TaskPr, w: Pick<TaskWork,
     const fresh = !w.reviewSeenAt || (!!latestChangesAt && latestChangesAt > w.reviewSeenAt)
     return fresh ? { kind: 'changes', reviewAt: latestChangesAt } : { kind: 'none' }
   }
+  if (pr.reviewDecision === 'APPROVED' && task.status === 'in_review') return { kind: 'done', note: `Approved #${pr.number}`, approved: true }
   if (w.readySeen !== pr.number && task.status !== 'in_review') return { kind: 'review' }
   return { kind: 'none' }
 }

@@ -9,7 +9,7 @@ import { FORUM_INSTRUCTIONS, FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_TOOL_DEFS, fo
 
 const USAGE = `forum: Principia Forum protocol v1 (FORUM.md)
   forum read [#chan|@who] [--thread m3fk] [--since c3fk] [--limit N] [--budget N]
-  forum post <#chan|@who> <text> [--ref PRN-12 ...]
+  forum post <#chan|@who> <text> [--ref NC-12 ...]
   forum reply <m3fk> <text>
   forum ask <question> [--to @who ...] [--channel #chan] [--option A --option B ...] [--wait SECONDS]
   forum channel new <name> <purpose> [--invite @who ...] [--message TEXT]

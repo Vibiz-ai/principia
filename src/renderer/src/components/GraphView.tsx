@@ -65,7 +65,7 @@ const CardView = memo(function CardView({ id, data, selected }: NodeProps<CardNo
               if (onPill && data.agentId) onPill(id, data.ref, data.agentId)
             }}
           >
-            ⚑{data.needs > 1 ? ` ${data.needs}` : ''}
+            ◆{data.needs > 1 ? ` ${data.needs}` : ''}
           </button>
         )}
       </div>

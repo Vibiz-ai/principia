@@ -10,6 +10,8 @@ import { BrowserWindow, dialog, nativeImage } from 'electron'
 import type { CompanyPassport } from '../../shared/company'
 import { CompanyLogoStore, type Shrink } from '../company/logoStore'
 import { planBoardStart } from '../company/planBoard'
+import { setCompanyPaused } from '../company/pauseCompany'
+import { log } from '../log'
 /** The departments store the handlers write through (one per Hive; stateless over the same db as h.company). */
 const deptStores=new WeakMap<Hive,DepartmentStore>()
 export function departmentStoreFor(h: Hive): DepartmentStore {
@@ -87,6 +89,20 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('company:reorder',({ids})=>{const list=c.reorder(ids);changed('company');return list})
   handle('company:assignRepo',({repoId,companyId})=>{const p=c.assignRepo(repoId,companyId);changed('company');emit('data:changed',{domain:'repos'});return p})
   handle('company:overview',()=>c.overview())
+  // five doors A4: one company only. The starter is the same human start as tasks:start (dispatcher, else the engine)
+  handle('company:pause',async({id,paused})=>{
+    const res=await setCompanyPaused({
+      company:c,
+      cancelRun:(runId)=>h.engine.runs.cancel(runId),
+      startTask:(taskId)=>{ if(h.dispatcher) h.dispatcher.runNow(taskId); else c.startTask(taskId,undefined,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId})) },
+      schedules:(companyId)=>h.store.listSchedules(companyId).filter(s=>s.enabled).length,
+      log
+    },id,paused)
+    changed('company');changed('departments');changed('tasks');h.statusChanged()
+    // the resumed company's queue may move again (autopilot), and nothing else's
+    if(!paused) void h.dispatcher?.pump(id)
+    return res
+  })
   const logos=logoStoreFor(h)
   handle('company:logos',()=>logos.list(c.listPassports()))
   handle('company:logoCandidates',({id})=>logos.candidates(c.passport(id)))

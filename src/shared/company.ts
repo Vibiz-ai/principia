@@ -36,6 +36,33 @@ export interface CompanyPassport extends CompanyPassportInput {
   autopilot?: boolean
   /** DEPARTMENTS.md §3: tasks in flight at once across the company's agents. Absent = DEFAULT_MAX_IN_FLIGHT. */
   maxInFlight?: number
+  /**
+   * Five doors A4: when this company was paused (company:pause). While set nothing of this company starts: no agent
+   * turn, no schedule, no autopilot. Absent / null = running.
+   */
+  pausedAt?: string | null
+  /** Five doors step 2: this company's task prefix ("NC" in NC-12). Personal keeps PRN. */
+  taskPrefix?: string
+}
+/** Work that was in flight when its company was paused: saved, and started again on resume. */
+export interface CompanyPauseCheckpoint {
+  taskId: string
+  identifier: string
+  title: string
+  agentId: string | null
+  /** the agent's persona name ("Pliny"), else its role name; null for a task without an agent */
+  agentName: string | null
+}
+/** company:pause's answer: what this one company's pause or resume touched (nothing of any other company). */
+export interface CompanyPauseResult {
+  company: CompanyPassport
+  paused: boolean
+  /** agent seats this click paused (pause) or resumed (resume) */
+  agents: number
+  /** this company's enabled schedules, which hold while it is paused */
+  schedules: number
+  /** pause: the in-flight work saved; resume: the saved work started again */
+  checkpoints: CompanyPauseCheckpoint[]
 }
 /**
  * The company's logo on the rail coin and the sidebar chips. Detected from the company's repositories (public/,
@@ -77,7 +104,7 @@ export interface PassportExport { format: 'principia-passport'; version: 1; pass
 /** company:create. Profile fields default to empty. */
 export type CompanyCreateInput = { name: string; color?: string; vaultPath?: string | null; repoIds?: string[] } & Partial<Record<typeof PROFILE_FIELDS[number], string>>
 /** company:update (name, colour, sort, vault path). */
-export interface CompanyUpdateInput { name?: string; color?: string; sortOrder?: number; vaultPath?: string | null }
+export interface CompanyUpdateInput { name?: string; color?: string; sortOrder?: number; vaultPath?: string | null; /** five doors step 2: NC → NW (tasks keep their numbers) */ taskPrefix?: string }
 /** company:overview, one per listed company. Memory counts come from the passport index (0 until it exists). */
 export interface CompanyOverview {
   companyId: string
@@ -110,7 +137,9 @@ export const TASK_ACTIVITY_KINDS = ['created', 'routed', 'assigned', 'woke', 'co
   /** pre-departments edits ("Status: todo → blocked"); still written for plain field edits */
   'updated',
   /** WORKTREE.md: the task's worktree, branch and PR (created, PR opened, review, merged, removed) */
-  'work'] as const
+  'work',
+  /** Five doors A4: its company was paused mid-turn (work saved) or resumed */
+  'paused'] as const
 export type TaskActivityKind = typeof TASK_ACTIVITY_KINDS[number]
 export const ACTIVITY_BY = ['human', 'agent', 'system'] as const
 export type ActivityBy = typeof ACTIVITY_BY[number]

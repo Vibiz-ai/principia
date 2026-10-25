@@ -2,10 +2,11 @@
 import { useMemo, useState } from 'react'
 import type { ClaudeHistorySession } from '@shared/authoring'
 import { Button, RelativeTime, SectionHeader, Sheet } from '../ui'
-import { historyMeta, historyPlace, matchHistory, recentOutside } from '../../lib/authoring'
+import { historyInScope, historyMeta, historyPlace, matchHistory, recentOutside } from '../../lib/authoring'
+import { companyOf, isPersonal } from '../../lib/company'
 import { useClaudeHistory } from '../../state/history'
 import { TranscriptSheet } from '../history/TranscriptSheet'
-import { useStore } from '../../state/store'
+import { scopeCompanyId, useStore } from '../../state/store'
 
 const WEEK = 7 * 86_400_000
 
@@ -13,16 +14,20 @@ export function ClaudeHistorySection(): React.JSX.Element | null {
   const since = useMemo(() => new Date(Date.now() - WEEK).toISOString(), [])
   const h = useClaudeHistory({ since, limit: 200 })
   const repos = useStore((s) => s.repos)
+  const scope = useStore((s) => scopeCompanyId(s))
+  const personal = useStore((s) => !!scope && s.companies.some((c) => c.id === scope && isPersonal(c)))
   const [open, setOpen] = useState<ClaudeHistorySession | null>(null)
   const [all, setAll] = useState(false)
+  // only this company's folders (A1: never another client's session on this Home)
+  const items = useMemo(() => historyInScope(h.items, scope, repos, companyOf, personal), [h.items, scope, repos, personal])
   if (h.available === false) return null
-  const rows = recentOutside(h.items, Date.now())
+  const rows = recentOutside(items, Date.now())
   if (h.available === null || (!rows.length && !h.indexing)) return null
   return (
     <>
-      <SectionHeader title="Recent Claude sessions outside Principia" count={h.total > rows.length ? h.total : rows.length || undefined}>
+      <SectionHeader title="Recent Claude sessions outside Principia" count={scope ? rows.length || undefined : h.total > rows.length ? h.total : rows.length || undefined}>
         {h.indexing && <span className="text-tertiary">indexing…</span>}
-        {h.items.length > rows.length && (
+        {items.filter((x) => !x.inHive).length > rows.length && (
           <Button size="sm" variant="ghost" onClick={() => setAll(true)}>
             Show all
           </Button>
@@ -34,7 +39,7 @@ export function ClaudeHistorySection(): React.JSX.Element | null {
         ))}
       </div>
       {open && <TranscriptSheet session={open} onClose={() => setOpen(null)} />}
-      {all && !open && <AllHistorySheet items={h.items.filter((x) => !x.inHive)} onOpen={setOpen} onClose={() => setAll(false)} />}
+      {all && !open && <AllHistorySheet items={items.filter((x) => !x.inHive)} onOpen={setOpen} onClose={() => setAll(false)} />}
     </>
   )
 }
