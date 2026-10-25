@@ -294,7 +294,7 @@ export function Sidebar(): React.JSX.Element {
 
   /** LIVE (design §2.6): name + time, then the full activity sentence. A click opens that agent's own chat. */
   const liveRow = (it: LiveItem): React.JSX.Element => (
-    <button key={it.key} type="button" className="live-row" title={`${it.title}${it.detail ? `\n${it.detail}` : ''}`} onClick={() => void openLiveItem(it)}>
+    <button key={it.key} type="button" className="live-row is-shimmering" title={`${it.title}${it.detail ? `\n${it.detail}` : ''}`} onClick={() => void openLiveItem(it)}>
       <span className="live-row__dot" aria-hidden />
       <span className="live-row__text">
         <span className="live-row__l1">
@@ -303,7 +303,7 @@ export function Sidebar(): React.JSX.Element {
         </span>
         {/* All companies: the company leads line 2, so the title keeps the width (design §2.6: the full sentence) */}
         {(it.detail || mode === 'all') && (
-          <span className="live-row__l2">
+          <span className="live-row__l2 shimmer-text">
             {mode === 'all' && <span className="live-row__co">{companyName(it.companyId)}{it.detail ? ' · ' : ''}</span>}
             {it.detail}
           </span>

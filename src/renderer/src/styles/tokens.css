@@ -216,3 +216,43 @@ code, pre, kbd, .mono { font-family: var(--font-mono); }
 
 @keyframes hive-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 .status-dot--running { animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }
+
+/* Working shimmer: anything an agent is working on right now catches a slow cool light (Live rows, Chats rows,
+   the open chat). Text shimmers through white; rows get a faint sweep; a pane gets a moving edge under its header.
+   Cool only (VOICE.md: no warm colours). Reduced motion: static, no sweep. */
+.shimmer-text {
+  background: linear-gradient(100deg, var(--text-secondary) 35%, #ffffff 50%, var(--text-secondary) 65%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: hive-shimmer 2.4s linear infinite;
+}
+.is-shimmering { position: relative; overflow: hidden; isolation: isolate; }
+.is-shimmering::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(110, 160, 255, 0.11) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: hive-shimmer 2.4s linear infinite;
+}
+.working-edge { position: absolute; left: 0; right: 0; height: 2px; overflow: hidden; pointer-events: none; z-index: 4; }
+.working-edge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, var(--status-running) 45%, #ffffff 50%, var(--status-running) 55%, transparent 100%);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: hive-edge 1.8s ease-in-out infinite;
+}
+@keyframes hive-shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes hive-edge { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text { animation: none; background: none; color: var(--text-primary); }
+  .is-shimmering::after { animation: none; background: none; }
+  .working-edge::before { animation: none; background: var(--status-running-soft); }
+}

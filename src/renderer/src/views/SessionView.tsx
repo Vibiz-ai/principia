@@ -276,6 +276,8 @@ function SessionPane({
   const asks = useOpenAsks()
   const seen = useSeenSet()
   const root = idx.roots.find((r) => r.kind === 'session' && r.sessionId === s.id) ?? null
+  // the open chat's agent is working: a light runs along the edge under the pane header (tokens.css)
+  const paneWorking = !exited && (root?.status === 'working' || root?.status === 'starting')
   const tree = root ? new Set([root.id, ...descendants(idx, root.id).map((d) => d.agent.id)]) : null
   // agent-authored drafts are pinned from the drafts slice; their approval asks would only duplicate the card
   const paneDrafts = useSessionDrafts(s.id)
@@ -334,7 +336,8 @@ function SessionPane({
   const newCompanyFromChat = (): Promise<unknown> => attempt(() => hive.chatCompany.open({ sessionId: s.id }), 'New company')
 
   return (
-    <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
+    <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''} ${paneWorking ? 'is-working' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
+      {paneWorking && <div className="working-edge pane__working" aria-hidden />}
       <div className="pane__header mono">
         {/* §8.6: a pane may belong to any company, whatever the focus */}
         <CompanyChip companyId={s.companyId} always className="pane__company" />

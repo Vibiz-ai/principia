@@ -84,13 +84,15 @@ function AllChats(): React.JSX.Element {
     const visual = a ? agentVisual(a, !!seen[a.id]) : node?.status === 'done' ? 'passed' : null
     const custom = !!s.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(s.title)
     const title = custom ? s.title : (node?.title ?? sessionTitle(s))
+    // an agent working right now catches the shimmer (tokens.css), like its LIVE row
+    const working = visual === 'running' || visual === 'queued'
     const word = visual === 'passed' ? 'Done' : visual === 'idle' ? 'Your turn' : visual === 'needs' ? 'Needs you' : null
     return (
     <CompanyTagged key={s.id} companyId={s.companyId} chips={chips}>
-      <button type="button" className={`chats-row ${s.status === 'running' ? '' : 'is-dim'}`} onClick={() => focusSession(s.id)}>
+      <button type="button" className={`chats-row ${s.status === 'running' ? '' : 'is-dim'} ${working ? 'is-shimmering' : ''}`} onClick={() => focusSession(s.id)}>
         {visual ? <AgentGlyph visual={visual} /> : <StatusGlyph status={s.status === 'running' ? 'running' : 'exited'} />}
         <span className="chats-row__main">
-          <span className="chats-row__title">{title}</span>
+          <span className={`chats-row__title ${working ? 'shimmer-text' : ''}`}>{title}</span>
           <span className="chats-row__place">
             <Icon name={s.repoId ? 'branch' : s.departmentId ? 'department' : 'chat'} size={12} />
             {place(s)} · {startedHint(s.startedAt)}
