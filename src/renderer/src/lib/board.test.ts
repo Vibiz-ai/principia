@@ -60,7 +60,7 @@ describe('board lanes', () => {
   })
   it('describes the lane and reason for the list view', () => {
     expect(laneText(task('1', { status: 'blocked', blockReason: 'needs_input' }), ctx)).toBe('Needs you · Question')
-    expect(laneText(task('2', { status: 'blocked', blockReason: 'deps' }), ctx)).toBe('Queued · Waiting on dependencies')
+    expect(laneText(task('2', { status: 'blocked', blockReason: 'deps' }), ctx)).toBe('To do · Waiting on dependencies')
     expect(laneText(task('3', { status: 'in_progress' }), ctx)).toBe('Working')
   })
 })

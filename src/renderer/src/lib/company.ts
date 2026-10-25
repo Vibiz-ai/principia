@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react'
+import { shortCompanyName } from '@shared/spend'
 import type { CompanyPassport, CompanyTask, TaskSource, TaskStatus } from '@shared/company'
 import type { Id } from '@shared/types'
 import { activeCompany, departmentsOn, refreshCompanies, refreshTasks, useStore } from '../state/store'
@@ -78,3 +79,16 @@ export function useTaskCounts(): Record<Id, TaskCounts> {
 }
 
 export * from './companyModel'
+
+/**
+ * A company's short name for buttons ("Pause Northwind"): its first word, or as many words as it takes when another
+ * company starts the same way ("Pause Harbor Dental Kids" beside Harbor Dental Group). shared/spend.shortCompanyName.
+ */
+export function useCompanyShortName(companyId: Id | null | undefined, fallback = 'company'): string {
+  const companies = useStore((s) => s.companies)
+  return useMemo(() => {
+    const c = companies.find((x) => x.id === companyId)
+    if (!c) return fallback
+    return shortCompanyName(c.name, companies.filter((x) => !x.archivedAt).map((x) => x.name)) || fallback
+  }, [companies, companyId, fallback])
+}

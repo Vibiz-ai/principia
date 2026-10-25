@@ -1,561 +1,177 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { HomeData, Run } from '@shared/types'
-import type { DashboardData } from '@shared/live'
+/**
+ * Home (five doors step 3, design §4.1): the 5-second answer. "Good morning, Maya. Northwind Coffee · 3 things need
+ * you, 1 agent is working." Then, in this order:
+ * 1. Ask your team… (AskBox): a real input that routes to an agent ("→ Marcus · Content Writer") and opens its desk.
+ * 2. Needs you: everything that waits on you in this company, from the one live source (useNeeds): live asks and
+ *    finished turns (with their buttons), drafts to approve, board tasks (Approve / Send back / Answer / Try again /
+ *    Assign, all in place), cloud asks and leftover processes. It absorbs the old Agents hub and NeedsYouTasks.
+ * 3. Working now: one row per working agent (useWorking), Open opens that exact chat, Pause this task (C9).
+ * 4. The Setup chip, with only the steps that fit this company ("Setup 4 of 6").
+ * 5. This week: three tiles (C10): tasks done, drafts approved (pull requests in a code company), plan use, which
+ *    Claude doesn't report yet, so it says so (never a fake number).
+ * All companies mode shows the Portfolio (App.tsx). The provider switcher left Home (design §5 #36): it lives in New
+ * chat and Settings › AI providers.
+ */
+import { useMemo, useState } from 'react'
+import type { CompanyTask } from '@shared/company'
+import type { Id } from '@shared/types'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { AgentRow } from '../components/agents/AgentTree'
 import { AskCard } from '../components/agents/AskCard'
 import { ReplyBox } from '../components/agents/ReplyBox'
 import { LeftoverList, useLeftovers } from '../components/agents/LimitBits'
-import { ActivityCharts } from '../components/home/ActivityCharts'
-import { ComingUpList, HomeGreeting, LearnedList, MorningBrief, NeedsYouEmpty, NeedsYouHeader, RunCardView, SenateBriefing } from '../components/home/DashboardParts'
-import { MilestoneStrip } from '../components/home/MilestoneStrip'
-import { SetupChecklist } from '../components/home/SetupChecklist'
-import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
+import { ApprovalCard } from '../components/author/ApprovalCard'
+import { AgentFace, useAgentDisplay } from '../components/board/NeedsYouTasks'
+import { AskForm } from '../components/board/AskForm'
 import { CloudNeedsYou } from '../components/cloud/NeedsYou'
-import { ClaudeHistorySection } from '../components/home/ClaudeHistory'
-import { isNothingToDo } from '../lib/authoring'
-import { homeWindowLabel, hubGroups, isSeen, isUnseenIdle } from '../lib/live'
-import { focusAgent, mergeAgents, mergeAsks, useNeeds, useSeenSet, useWorking } from '../state/live'
+import { SetupChecklist } from '../components/home/SetupChecklist'
+import { ArchFrame } from '../components/roman'
+import { AskBox, DraftCard, pauseTask, useIsCode } from '../components/desk/Desk'
+import { Button, Kbd, SectionHeader, Toolbar, useTick } from '../components/ui'
 import { useScope, useScopedLive } from '../components/CompanyChip'
+import { AgentBust } from '../shell/DepartmentGroup'
+import { finishedLine, greeting, homeHeadline, waitsOnOther, weekTiles } from '../lib/desk'
+import { hubGroups, isSeen, isUnseenIdle } from '../lib/live'
+import { needsYouTasks, REASON_LABEL, BLOCK_REASON_TEXT, type NeedsYouItem } from '../lib/board'
+import { useCompanyShortName, useLaneContext } from '../lib/company'
 import { inScope } from '../lib/scope'
-import { reposOf } from '../lib/companyModel'
-import type { Id } from '@shared/types'
-import { nativeMenu } from '../lib/hive'
-import { Button, EmptyState, ErrorState, Loading, Pill, RelativeTime, SectionHeader, StatusGlyph, Toolbar, useTick } from '../components/ui'
-import { errorMessage, hive, useHiveEvent } from '../lib/hive'
-import { runVisual } from '../lib/graph'
-import { firstLine, runTitle } from '../lib/format'
-import { age, clock, duration } from '../lib/time'
-import { useCoalesced } from '../lib/useThrottled'
+import { firstLine } from '../lib/format'
+import { age } from '../lib/time'
+import { attempt, closeSession, companyName, departmentsOn, getState, navigate, openBoard, providerLabel, refreshTasks, setCompanyPaused, toast, useStore } from '../state/store'
+import { focusAgent, goNextNeedsYou, useNeeds, useSeenSet, useWorking } from '../state/live'
+import { usePendingDrafts } from '../state/authoring'
+import { deskAgents } from '../state/desk'
+import { hive, nativeMenu } from '../lib/hive'
+import type { LiveItem } from '../lib/companyModel'
+import { claudeSignedOut, useClaudeAuth } from '../state/claudeAuth'
+import { Icon } from '../components/Icon'
+import { FirstWeekCard, ThingsMovedCard } from '../components/home/FirstRunCards'
+import { useThingsMoved } from '../components/home/useThingsMoved'
 import '../styles/board.css'
+import '../styles/desk.css'
 
-import { cancelRun, rerun, runContextMenu } from '../lib/runActions'
-import { ProviderSwitcher } from '../shell/ProviderSwitcher'
-import {
-  attempt,
-  closeSession,
-  companyName,
-  setCompanyPaused,
-  focusSession,
-  navigate,
-  openPalette,
-  providerLabel,
-  sessionContextMenu,
-  sessionTitle,
-  departmentsOn,
-  toast,
-  useStore
-} from '../state/store'
-
-type SinceMode = 'last' | '24h' | '7d'
-const SEEN_DWELL_MS = 8000
-
-/**
- * Home: "since you were last here" (LIVE.md §8, F5). Needs you · What got done · What agents learned · Activity ·
- * Live now · Coming up · Morning brief. Real data only, from one app:dashboard call, then live via events.
- * Falls back to the classic Home when main doesn't serve app:dashboard.
- * COMPANY.md §8.4: in a focused company every section shows that company's rows only (All mode with several
- * companies shows the Portfolio instead). DEPARTMENTS.md §9: a focused company with departments on gets the Overnight
- * digest (tasks done, parked or awaiting review since the last visit). VOICE.md §3.5: the digest is the "Senate
- * briefing" card (plain: "Overnight"), grouped by agent; the Needs you header stays plain, its board items name the
- * agent, and an empty Needs you shows the laurel mosaic. A focused business also gets the Milestones strip (§7).
- */
 export function HomeView(): React.JSX.Element {
   useTick()
-  const [data, setData] = useState<DashboardData | null>(null)
-  const [unsupported, setUnsupported] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [mode, setMode] = useState<SinceMode>('last')
-  const repos = useStore((s) => s.repos)
-  const settings = useStore((s) => s.settings)
-  const winFocused = useStore((s) => s.window.focused)
-  const { scope, nonce } = useScope()
-  const { idx, asks } = useScopedLive(scope)
-  const seen = useSeenSet()
-  // focused mode: the company's run and schedule ids, to narrow the (global) dashboard payload
-  const [owned, setOwned] = useState<{ scope: Id; runs: Set<Id>; schedules: Set<Id> } | null>(null)
-
-  // The window this visit shows. Pinned on the first load so a markSeen during the visit (blur, another window)
-  // never empties "What got done" under the user; only "Mark all seen" or changing the window moves it.
-  const pinnedSince = useRef<string | null>(null)
-  // this visit's window started with no last-seen mark (first visit): it is the default last 24 hours
-  const neverSeen = useRef(false)
-  const [earlier, setEarlier] = useState<DashboardData['done']>([])
-  const [showEarlier, setShowEarlier] = useState(false)
-  const sinceArg = (m: SinceMode): string | undefined =>
-    m === '24h' ? new Date(Date.now() - 864e5).toISOString() : m === '7d' ? new Date(Date.now() - 7 * 864e5).toISOString() : (pinnedSince.current ?? undefined)
-  const load = (m: SinceMode = mode): void => {
-    const since = sinceArg(m)
-    if (scope) {
-      const forScope = scope
-      void Promise.all([hive.runs.list({ companyId: forScope, limit: 500 }), hive.schedules.list({ companyId: forScope })]).then(
-        ([runs, schedules]) => setOwned({ scope: forScope, runs: new Set(runs.map((r) => r.id)), schedules: new Set(schedules.map((x) => x.id)) }),
-        () => setOwned({ scope: forScope, runs: new Set(), schedules: new Set() })
-      )
-    } else setOwned(null)
-    // COMPANY.md §8.3: focused mode asks main for that company's done runs, learned facts and activity
-    const co = scope ? { companyId: scope } : {}
-    hive.app.dashboard(since || scope ? { ...(since ? { since } : {}), ...co } : undefined).then(
-      (d) => {
-        if (m === 'last' && !pinnedSince.current) {
-          pinnedSince.current = d.since
-          neverSeen.current = d.lastSeenAt === null
-        }
-        setData(d)
-        setError(null)
-        mergeAgents([...d.needsYou.idle, ...d.live])
-        mergeAsks(d.needsYou.asks)
-        // nothing new in this window: fetch the last 7 days once for a collapsed "Earlier (n)"
-        if (d.done.length === 0 && m === 'last') {
-          void hive.app.dashboard({ since: new Date(Date.now() - 7 * 864e5).toISOString(), ...co }).then((e) => setEarlier(e.done), () => setEarlier([]))
-        } else setEarlier([])
-      },
-      (e) => {
-        if (/not implemented/i.test(errorMessage(e))) setUnsupported(true)
-        else setError(errorMessage(e))
-      }
-    )
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => load(), [nonce])
-  const refetch = useCoalesced(() => load(), 1000)
-  useHiveEvent('run:updated', (r) => r.status !== 'running' && r.status !== 'queued' && refetch())
-  useHiveEvent('schedule:updated', refetch)
-  useHiveEvent('artifact:added', refetch)
-  useHiveEvent('memory:changed', refetch)
-  useHiveEvent('data:changed', ({ domain }) => domain === 'schedules' && refetch())
-
-  // "last seen" moves only after the user actually looked: >= 8 s on Home with the window focused, counted across
-  // focus changes. Marked when leaving Home or when the window blurs; a quick pass through Home marks nothing.
-  const dwell = useRef(0)
-  const focusedSince = useRef<number | null>(winFocused ? Date.now() : null)
-  const looked = (): boolean => dwell.current + (focusedSince.current ? Date.now() - focusedSince.current : 0) >= SEEN_DWELL_MS
-  useEffect(() => {
-    if (winFocused) {
-      focusedSince.current = Date.now()
-      return
-    }
-    if (focusedSince.current) dwell.current += Date.now() - focusedSince.current
-    focusedSince.current = null
-    if (data && looked()) void hive.app.markSeen().catch(() => undefined)
-  }, [winFocused, !!data])
-  const hasData = useRef(false)
-  hasData.current = !!data
-  useEffect(() => () => void (hasData.current && looked() && hive.app.markSeen().catch(() => undefined)), [])
-  const markAllSeen = (): void => {
-    void hive.app.markSeen().then(
-      () => {
-        pinnedSince.current = null
-        setShowEarlier(false)
-        load('last')
-        setMode('last')
-      },
-      () => undefined
-    )
-  }
-
-  const leftovers = useLeftovers()
-  // VOICE.md §3.5: a focused company with departments on gets the briefing card (it carries the greeting); the
-  // milestone strip shows for any focused business (not Personal)
-  const briefing = useStore((s) => !!scope && departmentsOn(s))
-  const milestones = useStore((s) => !!scope && s.companies.some((c) => c.id === scope && !c.system))
-  const groups = useMemo(() => hubGroups(idx.roots, asks, seen), [idx, asks, seen])
-  // five doors A2: Working now and the Needs you count are the one live source's, like the sidebar, rail and status bar
-  const workingNow = useWorking(scope ?? 'all')
-  const needsNow = useNeeds(scope ?? 'all')
-  const liveRoots = useMemo(() => workingNow.items.map((i) => idx.byId.get(i.agentId)).filter((a): a is NonNullable<typeof a> => !!a), [workingNow, idx])
-  // A4: a paused company starts nothing; what it raised before the pause stays, waiting for the resume
-  const pausedAt = useStore((s) => (scope ? (s.companies.find((c) => c.id === scope)?.pausedAt ?? null) : null))
-  const unpriced = useMemo(() => !!data?.activity.days.some((d) => d.byModel.some((m) => m.costUsd == null && m.tokens > 0)), [data])
-  // focused mode: runs carry their company; schedules and learned facts are matched through the company's ids
-  const own = scope && owned?.scope === scope ? owned : null
-  const view = useMemo(() => {
-    if (!data || !scope) return data ? { ...data, earlier } : null
-    const ownRun = (id: Id | null | undefined): boolean => !!id && !!own?.runs.has(id)
-    // a fact learned in a session has no run: its repository decides (never a fact of an unknown origin)
-    const ownRepos = new Set(reposOf(repos, scope).map((r) => r.id))
-    return {
-      ...data,
-      done: data.done.filter((c) => inScope(c.run, scope)),
-      earlier: earlier.filter((c) => inScope(c.run, scope)),
-      learned: data.learned.filter((f) => (f.runId ? ownRun(f.runId) : !!f.fact.repoId && ownRepos.has(f.fact.repoId))),
-      comingUp: own ? data.comingUp.filter((c) => own.schedules.has(c.scheduleId)) : [],
-      morningBrief: data.morningBrief && inScope(data.morningBrief, scope) ? data.morningBrief : null
-    }
-  }, [data, earlier, scope, own, repos])
-
-  if (unsupported) return <ClassicHome />
-  const pickSince = async (): Promise<void> => {
-    const id = await nativeMenu([
-      { id: 'last', label: 'Since my last visit', type: 'checkbox', checked: mode === 'last' },
-      { id: '24h', label: 'Last 24 hours', type: 'checkbox', checked: mode === '24h' },
-      { id: '7d', label: 'Last 7 days', type: 'checkbox', checked: mode === '7d' }
-    ])
-    if (id === 'last' || id === '24h' || id === '7d') {
-      setMode(id)
-      load(id)
-    }
-  }
-  const leftoverCount = leftovers.items?.length ?? 0
-  // board tasks waiting on you (a running task waiting on a live ask is already one of the live rows: counted once)
-  const taskNeeds = needsNow.tasks
-  const needsTotal = needsNow.count
+  const { scope: scoped, company } = useScope()
+  const scope: Id = scoped ?? PERSONAL_COMPANY_ID
+  const name = company?.name ?? 'Personal'
+  const userName = useStore((s) => s.info?.userName ?? null)
+  const pausedAt = useStore((s) => s.companies.find((c) => c.id === scope)?.pausedAt ?? null)
+  const code = useIsCode(scope)
+  const agentCount = useStore((s) => (departmentsOn(s) ? s.companyAgents.filter((a) => a.companyId === scope && !a.archivedAt).length : 0))
+  const needs = useNeeds(scope)
+  const working = useWorking(scope)
+  const drafts = useScopedDrafts(scope)
+  const tasks = useStore((s) => s.tasks)
+  const own = useMemo(() => tasks.filter((t) => t.companyId === scope), [tasks, scope])
+  const ctx = useLaneContext()
+  const reviews = useMemo(() => needsYouTasks(own, ctx, scope, { skipLiveAsks: true }).filter((i) => i.group === 'review').length, [own, ctx, scope])
+  const needsTotal = needs.count + drafts.length
+  const short = useCompanyShortName(scope, name)
+  const personal = scope === PERSONAL_COMPANY_ID
+  const tiles = useMemo(() => weekTiles(own, { now: new Date(), code, waitingReview: reviews, paused: !!pausedAt }), [own, code, reviews, pausedAt])
+  // E12: with Claude signed out (or not installed) agents can't start: Home says so, and offers no Start
+  const { auth } = useClaudeAuth()
+  const noClaude = auth?.state === 'signedOut' || auth?.state === 'missing' ? auth.state : null
+  // design §6.7: a company just set up asks "Start the first week?" first; Needs you and Working now wait for the answer
+  const firstWeek = useStore((s) => !!s.settings?.firstWeek?.[scope])
+  const moved = useThingsMoved()
 
   return (
     <div className="view">
-      <Toolbar
-        title="Home"
-        sub={
-          data && (
-            <button type="button" className="since-btn no-drag" onClick={() => void pickSince()} title="Change the window">
-              {homeWindowLabel(mode, data.since, neverSeen.current)} <span className="text-tertiary">▾</span>
-            </button>
-          )
-        }
-      >
-        {view && mode === 'last' && (view.done.length > 0 || view.learned.length > 0) && (
-          <Button size="sm" variant="ghost" onClick={markAllSeen} title="Start “since you were last here” from now">
-            Mark all seen
-          </Button>
-        )}
-        <ProviderSwitcher />
-      </Toolbar>
-      <div className="scroll view__body">
-        <div className="home home--dash">
-          {error && !data ? (
-            <ErrorState error={error} onRetry={() => load()} />
-          ) : !data || !view ? (
-            <Loading />
+      <Toolbar title="Home" sub={<span className="company-toolbar-meta">{name}</span>}>
+        {!personal &&
+          (pausedAt ? (
+            <Button variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
+              Resume {short}
+            </Button>
           ) : (
-            <>
-              {!briefing && <HomeGreeting className="home__greet" />}
-              {pausedAt && scope && (
-                <div className="banner banner--bar home__paused" role="status">
-                  <span className="glyph" aria-hidden>‖</span> {companyName(scope)} is paused. Nothing starts until you resume it; other companies keep running.
-                  <span className="flex1" />
-                  <Button size="sm" variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
-                    Resume
-                  </Button>
-                </div>
-              )}
-              {needsTotal > 0 || leftoverCount > 0 ? (
-                <>
-                  <NeedsYouHeader count={needsTotal > 0 ? <span className="text-needs">{needsTotal}</span> : undefined}>
-                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} title="Open Chats on Live">
-                      Chats →
-                    </Button>
-                  </NeedsYouHeader>
-                  {/* A4: what was raised before the pause stays, and says it waits for the resume */}
-                  {pausedAt && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
-                  {groups.needs.length > 0 && <div className="group-list hub__list">
-                    {groups.needs.map(({ root, asks: ra }, i) => (
-                      <AgentRow key={root.id} idx={idx} root={root} asks={ra} seen={isSeen(root, seen)}>
-                        {ra.length > 0 && (
-                          <div className="arow__asks">
-                            {ra.map((a, j) => (
-                              <AskCard key={a.id} ask={a} hotkeys={i === 0 && j === 0} onOpen={() => void focusAgent(a.agentId, a.id)} />
-                            ))}
-                          </div>
-                        )}
-                        {ra.length === 0 && isUnseenIdle(root, seen) && <ReplyBox agent={root} onOpen={() => void focusAgent(root.id)} />}
-                      </AgentRow>
-                    ))}
-                  </div>}
-                  {taskNeeds > 0 && (
-                    <div className="group-list home__tasks">
-                      <NeedsYouTasks companyId={scope ?? undefined} skipLiveAsks playfulTop={groups.needs.length === 0} />
-                    </div>
-                  )}
-                  {leftoverCount > 0 && (
-                    <div className="home__leftovers">
-                      <div className="hub__sub">Leftover processes</div>
-                      <LeftoverList items={leftovers.items!} onChanged={leftovers.reload} />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <NeedsYouHeader />
-                  <NeedsYouEmpty />
-                </>
-              )}
-              {/* CLOUD.md §0.1: one inbox. Cloud asks and passport facts; nothing when this Mac has no cloud */}
-              <CloudNeedsYou companyId={scope ?? undefined} />
-
-              {/* AUTOPILOT.md §2: the setup checklist of a focused business, from real state; leads to the autopilots */}
-              {milestones && scope && <SetupChecklist companyId={scope} />}
-
-              {/* one Latin phrase per screen (VOICE.md §1): with Otium on the empty Needs you above, the digest stays plain */}
-              {briefing && scope && <SenateBriefing companyId={scope} since={pinnedSince.current ?? data.lastSeenAt ?? data.since} latin={needsTotal > 0} />}
-
-              {view.morningBrief && <MorningBrief artifact={view.morningBrief} />}
-
-              {milestones && scope && <MilestoneStrip companyId={scope} />}
-
-              {view.done.length > 0 && (
-                <>
-                  <SectionHeader title="What got done" count={<DoneTally cards={view.done} />}>
-                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'canvas' })}>
-                      Canvas →
-                    </Button>
-                  </SectionHeader>
-                  <div className="rcards">
-                    {view.done
-                      .filter((c) => !isNothingToDo(c.run))
-                      .map((c) => (
-                        <RunCardView key={c.run.id} card={c} />
-                      ))}
-                  </div>
-                  <NothingToDoLine cards={view.done} />
-                </>
-              )}
-
-              {view.done.length === 0 && view.earlier.length > 0 && (
-                <>
-                  <SectionHeader title="What got done" count={<span className="text-tertiary">nothing new</span>} />
-                  <button type="button" className="home__earlier link-btn" aria-expanded={showEarlier} onClick={() => setShowEarlier((v) => !v)}>
-                    {showEarlier ? '▾' : '▸'} Earlier ({view.earlier.length})
-                  </button>
-                  {showEarlier && (
-                    <div className="rcards">
-                      {view.earlier.map((c) => (
-                        <RunCardView key={c.run.id} card={c} />
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {view.learned.length > 0 && (
-                <>
-                  <SectionHeader title="What agents learned" count={view.learned.length}>
-                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'memory' })}>
-                      Memory →
-                    </Button>
-                  </SectionHeader>
-                  <LearnedList facts={view.learned} />
-                </>
-              )}
-
-              {data.activity.days.some((d) => d.runs > 0 || d.tokens > 0) && (
-                <>
-                  <SectionHeader title="Activity" />
-                  <ActivityCharts days={data.activity.days} successRate={data.activity.successRate} providers={{ unpricedTokens: unpriced }} />
-                </>
-              )}
-
-              <SectionHeader title="Working now" count={liveRoots.length || undefined}>
-                <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">
-                  Chats
-                </Button>
-              </SectionHeader>
-              <div className="group-list hub__list">
-                {liveRoots.length === 0 ? (
-                  pausedAt ? (
-                    <div className="home__quiet text-tertiary">Nothing working while {companyName(scope!)} is paused.</div>
-                  ) : needsTotal > 0 ? (
-                    <div className="home__quiet text-tertiary">
-                      Nothing working · {needsTotal} waiting on you above.
-                    </div>
-                  ) : (
-                    <EmptyState compact text="Nothing running.">
-                      <Button size="sm" onClick={() => openPalette('newSession')} kbd="⌘N">
-                        Start {providerLabel(settings?.defaultAdapter ?? 'claude')} session
-                      </Button>
-                    </EmptyState>
-                  )
-                ) : (
-                  liveRoots.map((r) => <AgentRow key={r.id} idx={idx} root={r} asks={[]} seen={isSeen(r, seen)} compact />)
-                )}
-              </div>
-
-              {view.comingUp.length > 0 && (
-                <>
-                  <SectionHeader title="Coming up">
-                    <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'schedules' })}>
-                      Schedules →
-                    </Button>
-                  </SectionHeader>
-                  <ComingUpList items={view.comingUp} paused={data.status.schedulesPaused} onChanged={() => load()} />
-                </>
-              )}
-              <ClaudeHistorySection />
-              {view.done.length === 0 && view.earlier.length === 0 && view.learned.length === 0 && needsTotal === 0 && (
-                <div className="home__quiet text-tertiary">Nothing new {mode === 'last' ? 'since your last visit' : 'in this window'}.</div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** "3 runs had nothing to do" (AUTHORING.md §5): one muted line instead of a card each; click to list them. */
-function NothingToDoLine({ cards }: { cards: DashboardData['done'] }): React.JSX.Element | null {
-  const [open, setOpen] = useState(false)
-  const quiet = cards.filter((c) => isNothingToDo(c.run))
-  if (!quiet.length) return null
-  return (
-    <div className="home__nothing">
-      <button type="button" className="link-btn text-tertiary" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        {open ? '▾' : '▸'} {quiet.length} run{quiet.length === 1 ? '' : 's'} had nothing to do
-      </button>
-      {open && (
-        <div className="home__nothing-list">
-          {quiet.map((c) => (
-            <button key={c.run.id} type="button" className="home__nothing-row" onClick={() => void navigate({ name: 'run', runId: c.run.id })} title={c.run.reason ?? undefined}>
-              <span className="glyph glyph--quiet">–</span>
-              <span>{runTitle(c.run, 48)}</span>
-              {c.run.reason && <span className="text-tertiary"> · {firstLine(c.run.reason, 60)}</span>}
-              <span className="flex1" />
-              <span className="text-tertiary">
-                <RelativeTime iso={c.run.endedAt ?? c.run.createdAt} />
-              </span>
-            </button>
+            <Button icon="pause" onClick={() => void setCompanyPaused(scope, true)} title={`Pause ${name} only. Other companies keep running.`}>
+              Pause {short}
+            </Button>
           ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function DoneTally({ cards }: { cards: DashboardData['done'] }): React.JSX.Element {
-  return <RunTally runs={cards.map((c) => c.run)} />
-}
-
-/** The pre-live Home (main without app:dashboard): Running now, Last 24 hours, Next fires. */
-function ClassicHome(): React.JSX.Element {
-  useTick()
-  const [data, setData] = useState<HomeData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const settings = useStore((s) => s.settings)
-
-  const { scope, nonce } = useScope()
-  const load = (): void => {
-    hive.app.home().then(
-      (d) => {
-        // focused company (§8.4): its sessions and runs only
-        setData(scope ? { ...d, runningSessions: d.runningSessions.filter((x) => inScope(x, scope)), activeRuns: d.activeRuns.filter((x) => inScope(x, scope)), recentRuns: d.recentRuns.filter((x) => inScope(x, scope)) } : d)
-        setError(null)
-      },
-      (e) => setError(errorMessage(e))
-    )
-  }
-  useEffect(load, [nonce])
-  const refetch = useCoalesced(load, 300)
-  useHiveEvent('run:updated', refetch)
-  useHiveEvent('session:updated', refetch)
-  useHiveEvent('schedule:updated', refetch)
-  useHiveEvent('status:changed', refetch)
-
-  return (
-    <div className="view">
-      <Toolbar title="Home">
-        <ProviderSwitcher />
       </Toolbar>
       <div className="scroll view__body">
-        <div className="home">
-          {error && !data ? (
-            <ErrorState error={error} onRetry={load} />
-          ) : !data ? (
-            <Loading />
-          ) : (
+        <div className="home home5">
+          <header className="home5__hero">
+            <ArchFrame className="home5__arch" opacity={0.1} />
+            <h1 className="home5__greet">{greeting(new Date(), userName)}</h1>
+            <p className="home5__line">{homeHeadline({ company: name, needs: needsTotal, working: working.agents, chats: working.chats, paused: !!pausedAt, agents: personal ? 1 : agentCount })}</p>
+          </header>
+
+          {firstWeek && <FirstWeekCard companyId={scope} />}
+          {moved && <ThingsMovedCard />}
+
+          {!firstWeek && <AskBox companyId={scope} />}
+
+          {pausedAt && (
+            <div className="banner banner--bar home__paused" role="status">
+              <span className="glyph" aria-hidden>
+                ‖
+              </span>
+              <span>
+                {name} is paused. Agents start nothing and its schedules wait; other companies keep running. Chats you open yourself still work.
+              </span>
+              <span className="flex1" />
+              <Button size="sm" variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
+                Resume
+              </Button>
+            </div>
+          )}
+
+          {noClaude && (
+            <div className="banner banner--bar home__paused" role="alert">
+              <Icon name="warning" size={14} />
+              <span>{noClaude === 'missing' ? 'Claude Code isn’t installed on this Mac' : 'Claude isn’t signed in on this Mac'}, so agents can’t start. Sign in, or get a Claude plan.</span>
+              <span className="flex1" />
+              <Button size="sm" variant="primary" onClick={() => void navigate({ name: 'settings', section: 'providers', nonce: Date.now() })}>
+                Sign in to Claude
+              </Button>
+            </div>
+          )}
+
+          {!firstWeek && <>
+          <SectionHeader title="Needs you" count={needsTotal > 0 ? <span className="text-needs">{needsTotal}</span> : undefined}>
+            {needsTotal > 0 && (
+              <button type="button" className="link-btn text-tertiary home5__keys" onClick={goNextNeedsYou}>
+                <Kbd>⌘J</Kbd> next
+              </button>
+            )}
+          </SectionHeader>
+          {pausedAt && needsTotal > 0 && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
+          <NeedsList scope={scope} code={code} drafts={drafts} empty={needsTotal === 0} paused={!!pausedAt} />
+
+          <SectionHeader title="Working now" count={working.count || undefined}>
+            <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">
+              All live chats →
+            </Button>
+          </SectionHeader>
+          <WorkingList items={working.items} scope={scope} paused={!!pausedAt} code={code} noClaude={!!noClaude} />
+          </>}
+
+          {!personal && agentCount > 0 && (
+            <div className="home5__setup">
+              <SetupChecklist companyId={scope} chip />
+            </div>
+          )}
+
+          {!personal && (
             <>
-              <SectionHeader title="Running now" count={data.runningSessions.length + data.activeRuns.length || undefined} />
-              <div className="group-list">
-                {data.runningSessions.length + data.activeRuns.length === 0 ? (
-                  <EmptyState compact text="Nothing running.">
-                    <Button size="sm" onClick={() => openPalette('newSession')} kbd="⌘N">
-                      Start {providerLabel(settings?.defaultAdapter ?? 'claude')} session
-                    </Button>
-                  </EmptyState>
-                ) : (
-                  <>
-                    {data.runningSessions.map((s) => (
-                      <div
-                        key={s.id}
-                        className="list-row"
-                        onClick={() => focusSession(s.id)}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          void sessionContextMenu(s)
-                        }}
-                      >
-                        <StatusGlyph status="running" />
-                        <span className="list-row__main">{sessionTitle(s)}</span>
-                        <span className="list-row__meta">session · {age(s.startedAt)}</span>
-                        <span className="list-row__actions">
-                          <Button size="sm" onClick={(e) => (e.stopPropagation(), focusSession(s.id))}>
-                            Open
-                          </Button>
-                          <Button size="sm" icon="stop" title="Kill" onClick={(e) => (e.stopPropagation(), void closeSession(s.id))} />
-                        </span>
-                      </div>
-                    ))}
-                    {data.activeRuns.map((r) => (
-                      <RunRowItem key={r.id} run={r} />
-                    ))}
-                  </>
-                )}
-              </div>
-
-              <SectionHeader
-                title="Last 24 hours"
-                count={
-                  data.recentRuns.length ? <RunTally runs={data.recentRuns} /> : undefined
-                }
-              >
-                <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'canvas' })}>
-                  Show all
-                </Button>
-              </SectionHeader>
-              <div className="group-list">
-                {data.recentRuns.length === 0 ? (
-                  <EmptyState compact text="No runs in the last 24 hours.">
-                    <Button size="sm" onClick={() => openPalette('runWorkflow')}>
-                      Run a Workflow
-                    </Button>
-                  </EmptyState>
-                ) : (
-                  data.recentRuns.map((r) => <RunRowItem key={r.id} run={r} />)
-                )}
-              </div>
-
-              <SectionHeader title="Next fires">
-                <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'schedules' })}>
-                  Schedules →
-                </Button>
-              </SectionHeader>
-              <div className="group-list">
-                {data.status.schedulesPaused && <div className="banner banner--warning">Schedules are paused — nothing will fire.</div>}
-                {data.nextFires.length === 0 ? (
-                  <EmptyState compact text="Nothing scheduled.">
-                    <Button size="sm" onClick={() => void navigate({ name: 'schedules', seed: {}, nonce: Date.now() })}>
-                      New Schedule
-                    </Button>
-                  </EmptyState>
-                ) : (
-                  data.nextFires.map((f) => (
-                    <div key={f.scheduleId} className="list-row" onClick={() => void navigate({ name: 'schedules', selectedId: f.scheduleId })}>
-                      <StatusGlyph status="scheduled" />
-                      <span className="list-row__main">{f.name}</span>
-                      <span className="list-row__meta">
-                        <RelativeTime iso={f.at} />
-                      </span>
-                      <span className="list-row__actions">
-                        <Button
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void attempt(() => hive.schedules.runNow({ id: f.scheduleId }), 'Run now').then((r) => r && toast(`Started ${f.name}`))
-                          }}
-                        >
-                          Run Now
-                        </Button>
-                      </span>
-                    </div>
-                  ))
-                )}
+              <SectionHeader title="This week" />
+              <div className="week-tiles">
+                {tiles.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    className="week-tile"
+                    onClick={() => void navigate(t.key === 'plan' ? { name: 'usage' } : t.key === 'done' ? { name: 'canvas' } : { name: 'tasks' })}
+                    title={t.key === 'plan' ? 'Open Spend' : t.key === 'done' ? 'Open Activity' : 'Open the Board'}
+                  >
+                    <span className="week-tile__label">{t.label}</span>
+                    <span className={`week-tile__value ${t.value === '—' ? 'is-unknown' : ''}`}>{t.value}</span>
+                    <span className="week-tile__detail">{t.key === 'plan' && noClaude ? 'Claude isn’t signed in' : t.detail}</span>
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -565,53 +181,267 @@ function ClassicHome(): React.JSX.Element {
   )
 }
 
-/** "3 ✓ 1 ✕" — zero counts are left out. */
-function RunTally({ runs }: { runs: Run[] }): React.JSX.Element | null {
-  const passed = runs.filter((r) => r.status === 'passed').length
-  const failed = runs.filter((r) => r.status === 'failed').length
-  if (!passed && !failed) return null
+/** Authoring drafts (Approvals) of this company: a draft belongs to its authoring session's company. */
+function useScopedDrafts(scope: Id): ReturnType<typeof usePendingDrafts> {
+  const all = usePendingDrafts()
+  const sessions = useStore((s) => s.sessions)
+  return useMemo(() => all.filter((d) => inScope(d.sessionId ? sessions.find((s) => s.id === d.sessionId) : null, scope)), [all, sessions, scope])
+}
+
+function NeedsList({ scope, code, drafts, empty, paused }: { scope: Id; code: boolean; drafts: ReturnType<typeof usePendingDrafts>; empty: boolean; paused: boolean }): React.JSX.Element {
+  const { idx, asks: allAsks } = useScopedLive(scope)
+  const asks = useMemo(() => allAsks.filter((a) => a.kind !== 'approval'), [allAsks])
+  const seen = useSeenSet()
+  const groups = useMemo(() => hubGroups(idx.roots, asks, seen), [idx, asks, seen])
+  const tasks = useStore((s) => s.tasks)
+  const on = useStore((s) => departmentsOn(s))
+  const ctx = useLaneContext()
+  const items = useMemo(() => (on ? needsYouTasks(tasks, ctx, scope, { skipLiveAsks: true }) : []), [on, tasks, ctx, scope])
+  const leftovers = useLeftovers()
   return (
     <>
-      {passed > 0 && <span className="text-success">{passed} ✓</span>}
-      {passed > 0 && failed > 0 && ' '}
-      {failed > 0 && <span className="text-failed">{failed} ✕</span>}
+      {empty ? (
+        <div className="group-list home5__list">
+          <div className="home5-row">
+            <span className="home5-row__glyph home5-row__glyph--ok" aria-hidden>
+              ✓
+            </span>
+            <div className="home5-row__body">
+              <div className="home5-row__title">Nothing needs you</div>
+              <div className="home5-row__desc">{paused ? 'A paused company asks for nothing new.' : 'Your team asks here when they need a decision.'}</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="home5__needs">
+          {(groups.needs.length > 0 || items.length > 0 || drafts.length > 0) && (
+            <div className="group-list home5__list">
+              {groups.needs.map(({ root, asks: ra }, i) => (
+                <AgentRow key={root.id} idx={idx} root={root} asks={ra} seen={isSeen(root, seen)}>
+                  {ra.length > 0 && (
+                    <div className="arow__asks">
+                      {ra.map((a, j) => (
+                        <AskCard key={a.id} ask={a} hotkeys={i === 0 && j === 0} onOpen={() => void focusAgent(a.agentId, a.id)} />
+                      ))}
+                    </div>
+                  )}
+                  {ra.length === 0 && isUnseenIdle(root, seen) && <ReplyBox agent={root} onOpen={() => void focusAgent(root.id)} />}
+                </AgentRow>
+              ))}
+              {items.map((item) => (
+                <TaskNeedsRow key={item.task.id} item={item} code={code} />
+              ))}
+            </div>
+          )}
+          {drafts.length > 0 && (
+            <div className="hub__approvals home5__drafts">
+              {drafts.map((d, i) => (
+                <ApprovalCard key={d.id} draft={d} hotkeys={i === 0 && !groups.needs.length} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <CloudNeedsYou companyId={scope} />
+      {(leftovers.items?.length ?? 0) > 0 && (
+        <div className="home__leftovers">
+          <div className="hub__sub">Leftover processes</div>
+          <LeftoverList items={leftovers.items!} onChanged={leftovers.reload} />
+        </div>
+      )}
     </>
   )
 }
 
-function RunRowItem({ run: r }: { run: Run }): React.JSX.Element {
-  const vs = runVisual(r.status)
-  const active = r.status === 'running' || r.status === 'queued'
+/**
+ * One board task that waits on you, with its action right here: a review gets Approve (and Review, which opens the
+ * draft with its pictures and Send back); a question gets Answer; a stopped task gets Try again; an unassigned one gets
+ * Assign. Non-code companies never see task codes (C7).
+ */
+function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): React.JSX.Element {
+  const { task, reason, group } = item
+  const agent = useStore((s) => (task.agentId ? s.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined))
+  const color = useStore((s) => s.departments.find((d) => d.id === (agent?.departmentId ?? task.departmentId))?.color ?? null)
+  const who = useAgentDisplay()(agent)
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const run = async (f: () => Promise<unknown>, label: string, done: string): Promise<void> => {
+    setBusy(true)
+    const ok = await attempt(f, label)
+    setBusy(false)
+    if (ok !== undefined) {
+      await refreshTasks()
+      toast(done)
+    }
+  }
+  const approve = (): Promise<void> => run(() => hive.tasks.approve({ id: task.id, doneNote: `Approved: ${firstLine(task.report?.summary ?? task.title, 200)}` }), 'Approve', `Approved ${task.title}`)
+  const assign = async (): Promise<void> => {
+    const list = deskAgents(task.companyId, getState()).filter((a) => !a.paused)
+    if (!list.length) return toast('Nobody can take it: hire or resume an agent first.')
+    const id = await nativeMenu(list.map((a) => ({ id: a.id, label: `${a.name} · ${a.role}` })))
+    const a = id ? getState().companyAgents.find((x) => x.id === id) : undefined
+    if (a) await run(() => hive.tasks.assign({ id: task.id, agentId: a.id, departmentId: a.departmentId }), 'Assign', `${task.title} is with ${list.find((x) => x.id === a.id)?.name}`)
+  }
+  const desc =
+    group === 'review'
+      ? task.report?.summary
+        ? firstLine(task.report.summary, 160)
+        : finishedLine(task.title)
+      : reason === 'needs_input' && task.ask
+        ? task.ask.prompt
+        : group === 'unassigned'
+          ? `${task.title} has no agent yet`
+          : `${task.title}: ${task.status === 'blocked' && task.blockReason ? BLOCK_REASON_TEXT[task.blockReason] : REASON_LABEL[reason]}`
+  const answerable = reason === 'needs_input' && !!task.ask && !task.ask.answer
   return (
-    <div
-      className={`list-row ${r.status === 'failed' ? 'list-row--failed' : ''}`}
-      onClick={() => void navigate({ name: 'run', runId: r.id })}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        void runContextMenu(r)
-      }}
-      title={r.reason ?? undefined}
-    >
-      <StatusGlyph status={vs} />
-      <span className="list-row__main">
-        <span title={r.kind === 'prompt' && r.target.kind === 'prompt' ? r.target.prompt : undefined}>{runTitle(r, 60)}</span>
-        {r.scheduleId && <Pill tone="scheduled">◷ scheduled</Pill>}
-        {r.status === 'failed' && r.reason && <span className="list-row__reason">{firstLine(r.reason, 80)}</span>}
+    <div className={`home5-row home5-row--needs ${reason === 'run_failed' ? 'home5-row--failed' : ''}`}>
+      <span className="home5-row__face" aria-hidden>
+        {who ? <AgentFace persona={who.persona} label={who.name} color={color} size={28} /> : <span className="home5-row__glyph">◆</span>}
       </span>
-      <span className="list-row__meta">
-        {[r.startedAt ? clock(new Date(r.startedAt)) : 'queued', duration(r.startedAt, r.endedAt), r.artifactCount ? `▣ ${r.artifactCount}` : null].filter(Boolean).join(' · ')}
-      </span>
-      <span className="list-row__actions">
-        {active ? (
-          <Button size="sm" icon="stop" onClick={(e) => (e.stopPropagation(), void cancelRun(r))}>
-            Cancel
-          </Button>
-        ) : (
-          <Button size="sm" onClick={(e) => (e.stopPropagation(), void rerun(r))}>
-            Re-run
+      <div className="home5-row__body">
+        <div className="home5-row__title">
+          {who ? who.name : 'Board'} {who?.role && <span className="home5-row__role">· {who.role}</span>}
+          {group === 'review' && <span className="home5-row__what"> · {code ? `${task.identifier} ` : ''}{task.title}</span>}
+          {group !== 'review' && code && <span className="home5-row__what"> · {task.identifier}</span>}
+        </div>
+        <div className="home5-row__desc selectable">{desc}</div>
+        {open && group === 'review' && <DraftCard task={task} code={code} onHome />}
+        {open && answerable && (
+          <div className="home5-row__inline">
+            <AskForm task={task} compact onAnswered={() => setOpen(false)} />
+          </div>
+        )}
+      </div>
+      <div className="home5-row__acts">
+        {group === 'review' && (
+          <>
+            {/* open, the draft card below carries Approve and Send back: one Approve on screen */}
+            {!open && (
+              <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => void approve()}>
+                Approve
+              </Button>
+            )}
+            <Button size="sm" disabled={busy} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+              {open ? 'Close' : 'Review'}
+            </Button>
+          </>
+        )}
+        {answerable && (
+          <Button size="sm" variant="primary" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+            {open ? 'Close' : 'Answer'}
           </Button>
         )}
-      </span>
+        {group === 'parked' && !answerable && (
+          <Button size="sm" variant="primary" icon="refresh" disabled={busy} onClick={() => void run(() => hive.tasks.unpark({ id: task.id }), 'Try again', `${task.title} is back in the queue`)}>
+            Try again
+          </Button>
+        )}
+        {group === 'unassigned' && (
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void assign()}>
+            Assign…
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => openBoard(task.companyId, { taskId: task.id })}>
+          Open
+        </Button>
+      </div>
+      <span className="home5-row__age">{age(task.updatedAt)}</span>
     </div>
   )
 }
+
+function WorkingList({ items, scope, paused, code, noClaude = false }: { items: LiveItem[]; scope: Id; paused: boolean; code: boolean; noClaude?: boolean }): React.JSX.Element {
+  const tasks = useStore((s) => s.tasks)
+  const agents = useStore((s) => s.companyAgents)
+  const who = useAgentDisplay()
+  const sessions = useStore((s) => s.sessions)
+  // ready = has a To do task that can start now (not one waiting on another task)
+  const ready = useMemo(() => agents.filter((a) => a.companyId === scope && !a.archivedAt && !a.pausedAt && tasks.some((t) => t.agentId === a.id && t.status === 'todo' && !waitsOnOther(t, tasks)) && !tasks.some((t) => t.agentId === a.id && t.status === 'in_progress')), [agents, tasks, scope])
+  if (!items.length)
+    return (
+      <div className="group-list home5__list">
+        <div className="home5-row">
+          <span className="home5-row__glyph" aria-hidden>
+            {paused ? '‖' : '○'}
+          </span>
+          <div className="home5-row__body">
+            <div className="home5-row__title">{paused ? 'Paused' : 'No one is working right now'}</div>
+            <div className="home5-row__desc">
+              {paused ? 'Resume to let agents pick up their tasks.' : ready.length ? `${ready.length} agent${ready.length === 1 ? ' is' : 's are'} ready with a task${noClaude ? '. They start once Claude is signed in.' : '.'}` : 'Give someone a task from the box above.'}
+            </div>
+          </div>
+          {!paused && !noClaude && ready.length > 0 && (
+            <div className="home5-row__acts">
+              <Button size="sm" variant="primary" icon="play" onClick={() => void startReady(ready.map((a) => a.id))}>
+                Start {ready.length === 1 ? 'it' : 'them'}
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  return (
+    <div className="group-list home5__list">
+      {items.map((i) => {
+        const task = (i.taskId ? tasks.find((t) => t.id === i.taskId && t.status === 'in_progress') : undefined) ?? tasks.find((t) => !!t.runId && (t.runId === i.runId || t.runId === i.sessionId) && t.status === 'in_progress')
+        const agent = task?.agentId ? agents.find((a) => a.id === task.agentId) : undefined
+        const w = who(agent)
+        const chat = i.chat && i.sessionId ? sessions.find((x) => x.id === i.sessionId) : undefined
+        return (
+          <div key={i.key} className="home5-row">
+            <span className="home5-row__face" aria-hidden>
+              {agent ? <AgentBust agent={agent} size={28} /> : <span className="home5-row__glyph home5-row__glyph--run">●</span>}
+            </span>
+            <div className="home5-row__body">
+              <div className="home5-row__title">
+                {w ? w.name : chat ? `Your chat · ${providerLabel(chat.adapter)}` : i.title} {w?.role && <span className="home5-row__role">· {w.role}</span>}
+              </div>
+              <div className="home5-row__desc">
+                <span className="desk-status__glyph desk-status--working" aria-hidden>
+                  ●
+                </span>{' '}
+                {task ? `${code ? `${task.identifier} ` : ''}${task.title}` : i.title}
+                {i.detail ? ` · ${i.detail}` : ''} · {age(i.startedAt ?? i.at)}
+              </div>
+            </div>
+            <div className="home5-row__acts">
+              <Button size="sm" onClick={() => (agent ? void navigate({ name: 'chats', filter: 'live', chat: `agent:${agent.id}` }) : i.agentId ? void focusAgent(i.agentId) : undefined)}>
+                Open
+              </Button>
+              {task ? (
+                <Button size="sm" variant="ghost" icon="pause" onClick={() => void pauseTask(task)}>
+                  Pause this task
+                </Button>
+              ) : i.sessionId ? (
+                <Button size="sm" variant="ghost" onClick={() => void closeSession(i.sessionId!)}>
+                  Stop
+                </Button>
+              ) : i.runId ? (
+                <Button size="sm" variant="ghost" onClick={() => void attempt(() => hive.runs.cancel({ id: i.runId! }), 'Stop')}>
+                  Stop
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** "Start them": each ready agent's first queued task (one per agent, highest priority first). */
+async function startReady(agentIds: Id[]): Promise<void> {
+  if (claudeSignedOut()) return void toast('Sign in to Claude first (Settings › AI providers): agents can’t start without it.', 'error')
+  const s = getState()
+  let n = 0
+  for (const id of agentIds) {
+    const next: CompanyTask | undefined = s.tasks.filter((t) => t.agentId === id && t.status === 'todo' && !waitsOnOther(t, s.tasks)).sort((a, b) => (a.priority || 9) - (b.priority || 9) || (a.createdAt < b.createdAt ? -1 : 1))[0]
+    if (!next) continue
+    const ok = await attempt(() => hive.tasks.start({ id: next.id }), 'Start')
+    if (ok) n++
+  }
+  await refreshTasks()
+  if (n) toast(`${n} agent${n === 1 ? '' : 's'} started. They ask in Needs you before anything goes out.`)
+}
+
+export { companyName }

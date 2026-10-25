@@ -135,8 +135,25 @@ describe('reducer: §3 transitions', () => {
     expect(r(g, { type: 'toggleGoal', goal: 'ship' })).toBe(g)
     const t = run(g, { type: 'toggleGoal', goal: 'social' }, { type: 'toggleGoal', goal: 'customers' })
     expect(t.answers.goals).toEqual(['website', 'customers'])
-    // a 4th pick is allowed (soft cap is a note)
-    expect(run(t, { type: 'toggleGoal', goal: 'ads' }, { type: 'toggleGoal', goal: 'seo' }).answers.goals).toHaveLength(4)
+    // five doors step 5 (design §6.3): a hard maximum of 3; the 4th pick is refused, unpicking frees a place
+    const three = r(t, { type: 'toggleGoal', goal: 'ads' })
+    expect(three.answers.goals).toEqual(['website', 'customers', 'ads'])
+    expect(r(three, { type: 'toggleGoal', goal: 'seo' })).toBe(three)
+    expect(run(three, { type: 'toggleGoal', goal: 'website' }, { type: 'toggleGoal', goal: 'seo' }).answers.goals).toEqual(['customers', 'ads', 'seo'])
+    // a patch can never carry more than 3 either
+    expect(r(three, { type: 'setAnswers', patch: { goals: ['website', 'social', 'customers', 'ads'] } }).answers.goals).toHaveLength(3)
+  })
+
+  it('five doors step 5: step 1 answers where the business lives; code goes to Connect, a running business or an idea to Name', () => {
+    expect(run(fresh(), { type: 'chooseLives', lives: 'code' }, { type: 'next' }).step).toBe('connect')
+    const running = run(fresh(), { type: 'chooseLives', lives: 'running' })
+    expect(running).toMatchObject({ lives: 'running', hasCode: false })
+    expect(r(running, { type: 'next' }).step).toBe('name')
+    expect(run(fresh(), { type: 'chooseLives', lives: 'idea' }, { type: 'next' }).step).toBe('name')
+    // nothing from Connect rides along after switching to "a business running"
+    const c = run(fresh(), { type: 'chooseLives', lives: 'code' }, { type: 'next' }, { type: 'setRepos', repos: [{ kind: 'local', path: '/a' }] }, { type: 'back' }, { type: 'chooseLives', lives: 'running' })
+    expect(c.repos).toEqual([])
+    expect(c.hasCode).toBe(false)
   })
 
   it('Content is shown with a content goal and skipped without one', () => {
@@ -160,6 +177,13 @@ describe('reducer: §3 transitions', () => {
     expect(stepIndex(r(g, { type: 'next' }))).toEqual({ index: 5, total: 6 })
     const p = run(g, { type: 'setAnswers', patch: { goals: ['customers'] } }, { type: 'next' })
     expect(stepIndex(p)).toEqual({ index: 5, total: 5 })
+  })
+
+  it('About is prefilled from Name: the one line becomes What you sell (never asked twice), and an answer stays', () => {
+    const n = run(fresh(), { type: 'chooseCode', hasCode: false }, { type: 'setAnswers', patch: { name: 'Saltwater Skin', oneLiner: 'Clean, reef-safe skincare made with sea minerals' } }, { type: 'applyPrefill' })
+    expect(n.answers.products).toBe('Clean, reef-safe skincare made with sea minerals')
+    const kept = run(fresh(), { type: 'chooseCode', hasCode: false }, { type: 'setAnswers', patch: { oneLiner: 'Skincare', products: 'Sunscreen, €24' } }, { type: 'applyPrefill' })
+    expect(kept.answers.products).toBe('Sunscreen, €24')
   })
 
   it('Back pops the history stack step by step', () => {

@@ -64,3 +64,19 @@
 .rail-pop__detail { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); font-size: var(--text-xs); }
 .rail-pop--rename { width: 200px; padding: 6px; }
 .rail-pop--rename .input { width: 100%; }
+
+/* Five doors E14 (design §2.5): monogram tiles. The company's own label or initials in Geist on its colour at a 16%
+   tint, inside a white line ring; the selected one gets the brighter ring. No warm colours: tints come from --series. */
+.rail-mark { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 9px; box-sizing: border-box; background: color-mix(in srgb, var(--co) 34%, transparent); border: 1px solid rgba(255, 255, 255, 0.28); color: rgba(255, 255, 255, 0.92); font-family: var(--font-sans); font-weight: 600; letter-spacing: 0.02em; line-height: 1; pointer-events: none; overflow: visible; }
+.rail-mark--personal { background: transparent; color: var(--text-secondary); border-radius: 50%; }
+.rail-mark--logo { background: var(--surface-0); overflow: hidden; }
+.rail-mark--logo img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
+.rail-mark--light img { object-fit: contain; padding: 3px; box-sizing: border-box; }
+.rail-mark--dark { background: #fff; }
+.rail__tile:hover .rail-mark { border-color: rgba(255, 255, 255, 0.5); }
+.rail__tile.is-active .rail-mark { border-color: rgba(255, 255, 255, 0.92); box-shadow: 0 0 0 2px var(--sidebar-bg), 0 0 0 3px rgba(255, 255, 255, 0.22); }
+.rail-mark.is-working::after { content: ''; position: absolute; inset: -4px; border-radius: 12px; border: 1.5px solid transparent; border-top-color: var(--status-running); border-right-color: var(--status-running); opacity: 0.9; }
+.rail-mark__failed { position: absolute; right: -2px; bottom: -2px; width: 6px; height: 6px; background: var(--status-failed); box-shadow: 0 0 0 2px var(--sidebar-bg); }
+.rail-pop__tag { font-size: 10px; color: var(--text-tertiary); border: 1px solid var(--border-strong); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+/* E14: a 3-letter rail label ("HDG") widens the chip a little instead of overflowing it */
+.co-avatar--wide { padding: 0 2px; box-sizing: border-box; letter-spacing: 0; }

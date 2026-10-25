@@ -13,7 +13,8 @@ import { Button, EmptyState, Loading } from '../ui'
 import { hasDiagram } from '@shared/diagram'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 
-export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }: { agentId: Id; emptyText?: string; note?: string | null }): React.JSX.Element {
+/** `emptyText` null: nothing at all when there are no events (the pane above already shows the message). */
+export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }: { agentId: Id; emptyText?: string | null; note?: string | null }): React.JSX.Element {
   const { events, loading, error, loadOlder, hasOlder } = useAgentEvents(agentId)
   const durs = useMemo(() => eventDurations(events), [events])
   const box = useRef<HTMLDivElement>(null)
@@ -43,7 +44,7 @@ export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }:
         </div>
       )}
       {events.length === 0 ? (
-        loading ? <Loading /> : error ? <EmptyState compact text={<span className="text-failed">{error}</span>} /> : <EmptyState compact text={emptyText} />
+        loading ? <Loading /> : error ? <EmptyState compact text={<span className="text-failed">{error}</span>} /> : emptyText === null ? null : <EmptyState compact text={emptyText} />
       ) : (
         events.map((e) => <EventRow key={e.seq} e={e} dur={durs.get(e.seq)} />)
       )}

@@ -12,7 +12,8 @@ import { companiesHealth } from '../lib/agentHealth'
 import { t } from '../lib/voice'
 import { nativeMenu } from '../lib/hive'
 import { useCompanyLogoUrl, useLogoFit } from '../lib/logo'
-import { companyInitials, companyLabel, isCompanyPaused, isPersonal, useCompanyBadges, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
+import { companyLabel, isCompanyPaused, isPersonal, railName, railText, useCompanyBadges, useLaneContext, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
+import { needsYouTasks, REASON_LABEL } from '../lib/board'
 import {
   activeCompany,
   closeNewCompany,
@@ -23,6 +24,7 @@ import {
   enterCompany,
   multiCompany,
   openLiveItem,
+  openBoard,
   openNewCompany,
   pauseAllAgents,
   reorderCompanies,
@@ -37,7 +39,7 @@ const COMPANY_DRAG_TYPE = 'application/x-principia-company'
  * The company's square chip (sidebar group header, chips, settings). With a logo (company:logos) the logo fills the
  * chip: cropped when it paints its own ground, inset on the dark surface when it is light, on white when it is dark.
  */
-export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'> & { id?: Id }; size?: number; className?: string }): React.JSX.Element {
+export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'> & { id?: Id; railLabel?: string }; size?: number; className?: string }): React.JSX.Element {
   const logo = useCompanyLogoUrl(company.id)
   const fit = useLogoFit(logo)
   if (logo)
@@ -46,13 +48,16 @@ export function CompanyAvatar({ company, size = 32, className = '' }: { company:
         <img src={logo} alt="" draggable={false} />
       </span>
     )
+  // E14: the company's own rail label ("HDG", "HDK") wherever its chip shows, so look-alike clients differ everywhere
+  const text = railText(company)
+  const wide = text.length > 2
   return (
     <span
-      className={`co-avatar ${className}`}
-      style={{ width: size, height: size, background: company.color || 'var(--series-other)', fontSize: Math.max(9, Math.round(size * 0.38)) }}
+      className={`co-avatar ${wide ? 'co-avatar--wide' : ''} ${className}`}
+      style={{ width: wide ? undefined : size, minWidth: size, height: size, background: company.color || 'var(--series-other)', fontSize: Math.max(wide ? 7 : 9, Math.round(size * (wide ? 0.32 : 0.38))) }}
       aria-hidden
     >
-      {companyInitials(company.name)}
+      {text}
     </span>
   )
 }
@@ -119,6 +124,25 @@ export function RailCoin({ company, badge, healthy, size = 32 }: { company: Pick
   )
 }
 
+/**
+ * Five doors E14 (design §2.5): a company on the rail as a monogram tile, so five clients that share initials can be
+ * told apart: its own short label (or its initials) in Geist on its colour at a 34% tint, inside a white line ring.
+ * A logo fills the tile instead. Personal is the person glyph. Working: a thin blue arc; a failed run: the red square.
+ */
+export function RailMark({ company, badge, size = 32 }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system' | 'railLabel'>; badge?: CompanyBadge; size?: number }): React.JSX.Element {
+  const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
+  const text = personal ? '' : railText(company)
+  const working = !!badge?.working && !badge.needsYou
+  return (
+    <span className={`rail-mark ${working ? 'is-working' : ''} ${personal ? 'rail-mark--personal' : ''} ${logo ? `rail-mark--logo rail-mark--${fit ?? 'plain'}` : ''}`} style={{ width: size, height: size, '--co': company.color || 'var(--series-other)', fontSize: Math.max(9, Math.round(size * (text.length > 2 ? 0.3 : 0.36))) } as React.CSSProperties} aria-hidden>
+      {logo ? <img src={logo} alt="" draggable={false} /> : personal ? <Icon name="user" size={Math.round(size * 0.5)} /> : text}
+      {badge?.failed && <i className="rail-mark__failed" />}
+    </span>
+  )
+}
+
 /** The laurel rule of the rail: healthy, nothing needs you, no failed run, and never on Personal. */
 export function railLaurel(company: Pick<CompanyPassport, 'id' | 'system'>, badge: CompanyBadge | undefined, healthy: boolean): boolean {
   return healthy && !isPersonal(company) && !badge?.needsYou && !badge?.failed
@@ -168,7 +192,7 @@ export function CompanyRail(): React.JSX.Element | null {
   const armHover = (id: Id, el: HTMLElement): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
     const top = el.getBoundingClientRect().top
-    hoverTimer.current = setTimeout(() => setHover({ id, top }), 350)
+    hoverTimer.current = setTimeout(() => setHover({ id, top }), 120)
   }
   const disarmHover = (): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
@@ -180,14 +204,14 @@ export function CompanyRail(): React.JSX.Element | null {
     const draggable = !isPersonal(c)
     const healthy = !!health[c.id]
     const paused = isCompanyPaused(c)
-    const title = `${badgeTitle(companyLabel(c, true), b, railLaurel(c, b, healthy))}${paused ? ' · paused' : ''}`
+    // E14: the accessible name carries the state; the visible name is the styled hover label (never a native tooltip)
+    const title = `${badgeTitle(railName(c), b, railLaurel(c, b, healthy))}${paused ? ' · paused' : ''}`
     return (
       <button
         key={c.id}
         type="button"
         data-company={c.id}
         className={`rail__tile ${active === c.id ? 'is-active' : ''} ${paused ? 'is-paused' : ''} ${b?.working && !b.needsYou ? 'is-working' : ''} ${dragged === c.id ? 'is-dragging' : ''} ${dropAt?.id === c.id ? `rail-drop--${dropAt.placement}` : ''}`}
-        title={title}
         aria-label={title}
         aria-current={active === c.id ? 'true' : undefined}
         draggable={draggable}
@@ -202,6 +226,8 @@ export function CompanyRail(): React.JSX.Element | null {
         }}
         onMouseEnter={(e) => armHover(c.id, e.currentTarget)}
         onMouseLeave={disarmHover}
+        onFocus={(e) => armHover(c.id, e.currentTarget)}
+        onBlur={disarmHover}
         onDragStart={(e) => {
           e.dataTransfer.setData(COMPANY_DRAG_TYPE, c.id)
           e.dataTransfer.effectAllowed = 'move'
@@ -229,7 +255,7 @@ export function CompanyRail(): React.JSX.Element | null {
           if (id && id !== c.id) void reorderCompanies(id, c.id, e.clientY < r.top + r.height / 2 ? 'before' : 'after')
         }}
       >
-        <RailCoin company={c} badge={b} healthy={healthy} />
+        <RailMark company={c} badge={b} />
         {b && b.needsYou > 0 && <span className="rail__count">{b.needsYou > 99 ? '99+' : b.needsYou}</span>}
         {/* A4: the paused mark, grey line art; needs-you items raised before the pause still count */}
         {paused && <span className="rail__paused" aria-hidden>‖</span>}
@@ -295,11 +321,17 @@ async function allTileMenu(): Promise<void> {
 }
 
 /** Hover: that company's needs-you and working sessions and runs; a click opens the row and enters the company. */
-function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: CompanyPassport | undefined; top: number; onEnter: () => void; onLeave: () => void; onClose: () => void }): React.JSX.Element | null {
+export function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: CompanyPassport | undefined; top: number; onEnter: () => void; onLeave: () => void; onClose: () => void }): React.JSX.Element | null {
   const items = useLiveItems({ working: true, companyId: company?.id })
+  // A2: the badge counts the Board's tasks that wait on you too, so the label lists them (live asks are items already)
+  const tasks = useStore((s) => s.tasks)
+  const ctx = useLaneContext()
+  const taskRows = useMemo(() => (company ? needsYouTasks(tasks, ctx, company.id, { skipLiveAsks: true }) : []), [tasks, ctx, company])
   const paused = isCompanyPaused(company)
   if (!company) return null
   const shown = items.slice(0, 8)
+  const shownTasks = taskRows.slice(0, Math.max(0, 8 - shown.length))
+  const more = items.length - shown.length + taskRows.length - shownTasks.length
   const open = (it: LiveItem): void => {
     onClose()
     void openLiveItem(it, { enter: true })
@@ -307,24 +339,40 @@ function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: Com
   return (
     <div className="rail-pop" style={{ top: Math.min(top, window.innerHeight - 260) }} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={company.name}>
       <div className="rail-pop__head">
-        <span className="rail__coin" aria-hidden>
-          <CompanyCoin company={company} />
-        </span>
+        <RailMark company={company} size={20} />
         <span className="rail-pop__name">{companyLabel(company, true)}</span>
+        {company.client && <span className="rail-pop__tag">client</span>}
         {paused && <span className="rail-pop__state" title="Nothing in this company starts until you resume it">‖ Paused</span>}
       </div>
-      {shown.length === 0 ? (
+      {shown.length + shownTasks.length === 0 ? (
         <div className="rail-pop__empty">{paused ? 'Paused. Click to enter and resume.' : 'Nothing running. Click to enter.'}</div>
       ) : (
-        shown.map((it) => (
-          <button key={it.key} type="button" className="rail-pop__row" onClick={() => open(it)}>
-            <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '◆'}</span>
-            <span className="rail-pop__label">{it.title}</span>
-            {it.detail && <span className="rail-pop__detail">{it.detail}</span>}
-          </button>
-        ))
+        <>
+          {shownTasks.map(({ task, reason }) => (
+            <button
+              key={task.id}
+              type="button"
+              className="rail-pop__row"
+              onClick={() => {
+                onClose()
+                openBoard(company.id, { taskId: task.id })
+              }}
+            >
+              <span className="rail-pop__glyph rail-pop__glyph--needs">◆</span>
+              <span className="rail-pop__label">{task.title}</span>
+              <span className="rail-pop__detail">{REASON_LABEL[reason]}</span>
+            </button>
+          ))}
+          {shown.map((it) => (
+            <button key={it.key} type="button" className="rail-pop__row" onClick={() => open(it)}>
+              <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '◆'}</span>
+              <span className="rail-pop__label">{it.title}</span>
+              {it.detail && <span className="rail-pop__detail">{it.detail}</span>}
+            </button>
+          ))}
+        </>
       )}
-      {items.length > shown.length && <div className="rail-pop__more">{items.length - shown.length} more</div>}
+      {more > 0 && <div className="rail-pop__more">{more} more</div>}
     </div>
   )
 }

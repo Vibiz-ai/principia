@@ -28,6 +28,9 @@ import {
   PLAN_ADAPTERS,
   VIBES,
   workflowsForKeys,
+  GOAL_MAX,
+  LIVES,
+  type Lives,
   type DraftGithub,
   type DraftRepo,
   type GoalKey,
@@ -431,6 +434,8 @@ export type OnboardingAction =
   | { type: 'chooseStart'; start: StartMode }
   /** Start: "Yes, connect it" / "Not yet, it's an idea". */
   | { type: 'chooseCode'; hasCode: boolean }
+  /** Five doors step 5, Start: "I have a business running" / "I have code" / "It's an idea" (the guided questions). */
+  | { type: 'chooseLives'; lives: Lives }
   /** Brief: the textarea. */
   | { type: 'setBrief'; brief: string }
   /**
@@ -543,7 +548,7 @@ function mergeAnswers(a: OnboardingAnswers, patch: Partial<OnboardingAnswers>, h
 function cleanGoals(goals: readonly GoalKey[], hasCode: boolean): GoalKey[] {
   const out: GoalKey[] = []
   for (const g of goals) if (GOALS.includes(g) && !out.includes(g) && (hasCode || !GOAL_INFO[g].codeOnly)) out.push(g)
-  return out
+  return out.slice(0, GOAL_MAX)
 }
 
 function withPlan(d: OnboardingDraft, plan: OnboardingPlan, source: 'agent' | 'template', edited: boolean, hash: string): OnboardingDraft {
@@ -594,6 +599,16 @@ export function reduceOnboarding(d: OnboardingDraft, a: OnboardingAction): Onboa
       const next = { ...d, answers }
       return forward(next, a.source === 'agent' && answers.name.trim() ? 'plan' : 'name')
     }
+    case 'chooseLives': {
+      if (d.step !== 'start' || !LIVES.includes(a.lives)) return d
+      const guided = d.mode === 'new' ? { start: 'guided' as const } : {}
+      if (a.lives === 'code') return { ...d, ...guided, lives: 'code', hasCode: true }
+      // a business running or an idea: no code, nothing picked on Connect rides along (as "Not yet, it's an idea")
+      const { github: _g, scan: _s, ...rest } = d
+      void _g
+      void _s
+      return { ...rest, ...guided, lives: a.lives, hasCode: false, repos: [], answers: { ...d.answers, goals: cleanGoals(d.answers.goals, false) } }
+    }
     case 'chooseCode': {
       if (d.step !== 'start') return d
       if (a.hasCode) return d.hasCode === true ? d : { ...d, hasCode: true }
@@ -640,12 +655,18 @@ export function reduceOnboarding(d: OnboardingDraft, a: OnboardingAction): Onboa
         const v = p[k]
         if (typeof v === 'string' && v && !d.answers[k].trim()) patch[k] = v
       }
+      // design §6.2 "never ask twice": the one line you gave on Name ("Clean, reef-safe skincare…") is what you sell
+      // until you say otherwise; a scan or site read that knows better still fills it first
+      const line = d.answers.oneLiner.trim()
+      if (!d.hasCode && line && !d.answers.products.trim() && !patch.products) patch.products = line
       return Object.keys(patch).length ? { ...d, answers: mergeAnswers(d.answers, patch, !!d.hasCode) } : d
     }
     case 'toggleGoal': {
       if (launching || !GOALS.includes(a.goal)) return d
       if (GOAL_INFO[a.goal].codeOnly && !d.hasCode) return d
       const has = d.answers.goals.includes(a.goal)
+      // design §6.3: a hard maximum of 3; the 4th pick is refused (the step says "Pick up to 3. Unpick one first.")
+      if (!has && d.answers.goals.length >= GOAL_MAX) return d
       const goals = has ? d.answers.goals.filter((g) => g !== a.goal) : [...d.answers.goals, a.goal]
       return { ...d, answers: { ...d.answers, goals } }
     }

@@ -4,7 +4,8 @@
  */
 import type { ISODate, Id } from './types'
 
-export const USAGE_RANGES = ['7d', '30d', '90d'] as const
+/** Rolling days, or the calendar: 'week' = since Monday, 'month' = since the 1st (five doors §4.9, local time). */
+export const USAGE_RANGES = ['7d', '30d', '90d', 'week', 'month'] as const
 export type UsageRange = (typeof USAGE_RANGES)[number]
 
 /** One money figure. usd null = no price known (tokens only, shown as "—"); estimated = from the price table ("~"). */

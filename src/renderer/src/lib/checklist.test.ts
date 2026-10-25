@@ -139,3 +139,18 @@ describe('parseChecklistPrefs', () => {
     expect(parseChecklistPrefs({ co_a: { collapsed: true, dismissedAt: 'T', x: 1 }, co_b: 'nope', co_c: { collapsed: 'yes' } })).toEqual({ co_a: { collapsed: true, dismissedAt: 'T' }, co_c: {} })
   })
 })
+
+describe('typed (five doors step 3): only the steps that fit this company', () => {
+  it('a shop never sees Connect a repository; Stripe only with Finance, Search Console only with Marketing', () => {
+    const shop = checklistItems(fresh({ typed: true, repoCount: 0, departmentsOn: true, departments: [marketing] })).map((x) => x.id)
+    expect(shop).not.toContain('repo')
+    expect(shop).not.toContain('financeDashboards')
+    expect(shop).toContain('marketingDashboards')
+    const code = checklistItems(fresh({ typed: true, repoCount: 1, departmentsOn: true, departments: [finance] })).map((x) => x.id)
+    expect(code).toContain('repo')
+    expect(code).toContain('financeDashboards')
+    expect(code).not.toContain('marketingDashboards')
+    // untyped (the old card) keeps every step
+    expect(checklistItems(fresh({ repoCount: 0 })).map((x) => x.id)).toContain('repo')
+  })
+})

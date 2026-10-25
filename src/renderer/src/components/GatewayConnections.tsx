@@ -12,7 +12,12 @@ type Auth = 'oauth' | 'token' | 'none'
 type Draft = { id: string; name: string; transport: 'http' | 'stdio'; url: string; command: string; args: string; auth: Auth; token: string; header: string; env: string; roots: string[]; scope: 'projects' | 'global'; enabled: boolean; importedCredentials?: Record<string, string> }
 const blank = (): Draft => ({ id: '', name: '', transport: 'http', url: '', command: '', args: '', auth: 'oauth', token: '', header: 'Authorization', env: '', roots: [], scope: 'projects', enabled: true })
 
-export function GatewayConnections(): React.JSX.Element {
+/**
+ * The MCP connection list and editor. Five doors step 4: Settings › Connections is the catalog (ConnectionsPage); it
+ * opens this as `editorOnly` for Custom (MCP) and Edit details, and a new connection belongs to the company it was
+ * made in (`companyIds`), never to every company.
+ */
+export function GatewayConnections({ editorOnly, onClose }: { editorOnly?: { connectionId: string | null }; onClose?: () => void } = {}): React.JSX.Element {
   // five doors A1: inside a company only what its agents get (shared + its own), never another client's connection
   const scope = useStore((s) => scopeCompanyId(s))
   const listArg = scope ? { companyId: scope } : undefined
@@ -33,7 +38,11 @@ export function GatewayConnections(): React.JSX.Element {
     mounted.current = true
     const current = ++revision.current
     void Promise.all([hive.gateway.list(listArg), hive.repos.list()]).then(([items, projects]) => {
-      if (mounted.current) { setRepos(projects); if (revision.current === current) setConnections(items) }
+      if (mounted.current) {
+        setRepos(projects)
+        if (revision.current === current) setConnections(items)
+        if (editorOnly) { const c = editorOnly.connectionId ? items.find((x) => x.id === editorOnly.connectionId) : undefined; openRef.current(c) }
+      }
     }).catch(() => { if (mounted.current) setMessage('Could not load connections. Try reopening Settings.') })
     return () => { mounted.current = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,6 +70,8 @@ export function GatewayConnections(): React.JSX.Element {
     setImportText(''); setMessage('')
     setDraft(connection ? { ...blank(), id: connection.id, name: connection.name, transport: connection.transport, url: connection.url ?? '', command: connection.command ?? '', args: (connection.args ?? []).join('\n'), auth: connection.authentication === 'oauth' ? 'oauth' : connection.hasCredentials ? 'token' : 'none', roots: [...connection.roots], scope: connection.scope ?? 'projects', enabled: connection.enabled } : blank())
   }
+  const openRef = useRef(open)
+  openRef.current = open
   const update = (patch: Partial<Draft>): void => setDraft(current => current ? { ...current, ...patch } : current)
   const needsSignIn = !!draft && draft.transport === 'http' && draft.auth === 'oauth' && !connections.some(c => c.id === draft.id && c.url === draft.url.trim() && c.authentication === 'oauth' && c.authStatus === 'connected')
   const save = async (connect: boolean): Promise<string> => {
@@ -79,11 +90,18 @@ export function GatewayConnections(): React.JSX.Element {
         credentials[line.slice(0, at).trim()] = line.slice(at + 1)
       }
     }
-    const input: GatewayConnectionInput = { id: draft.id || `connection-${crypto.randomUUID()}`, name: draft.name.trim(), transport: draft.transport, ...(draft.transport === 'http' ? { url: draft.url.trim() } : { command: draft.command.trim(), args: draft.args.split('\n').filter(a => a.length > 0) }), authentication: draft.transport === 'http' && draft.auth === 'oauth' ? 'oauth' : 'none', enabled: draft.enabled, roots: draft.roots, scope: draft.scope, ...(credentials !== undefined ? { credentials } : {}) }
+    const input: GatewayConnectionInput = { id: draft.id || `connection-${crypto.randomUUID()}`, name: draft.name.trim(), transport: draft.transport, ...(draft.transport === 'http' ? { url: draft.url.trim() } : { command: draft.command.trim(), args: draft.args.split('\n').filter(a => a.length > 0) }), authentication: draft.transport === 'http' && draft.auth === 'oauth' ? 'oauth' : 'none', enabled: draft.enabled, roots: draft.roots, scope: draft.scope, ...(credentials !== undefined ? { credentials } : {}), ...companyIdsFor(draft.id) }
     await hive.gateway.save(input)
+    if (editorOnly) onClose?.()
     if (mounted.current) { setDraft(null); setImportText(''); setTested(previous => { const next = { ...previous }; delete next[input.id]; return next }) }
     if (connect) { await hive.gateway.connect({ id: input.id }); return 'Finish signing in in your browser. Principia will update this connection automatically.' }
     return 'Connection saved. Start a new session to use it in Claude or Codex.'
+  }
+  /** An edited connection keeps its companies; a new one belongs to this company only (all companies outside one). */
+  const companyIdsFor = (id: string): { companyIds?: string[] } => {
+    const old = connections.find((c) => c.id === id)
+    if (old) return old.companyIds ? { companyIds: old.companyIds } : {}
+    return scope ? { companyIds: [scope] } : {}
   }
   const applyImport = (): void => {
     try {
@@ -93,17 +111,17 @@ export function GatewayConnections(): React.JSX.Element {
     } catch (error) { setMessage(errorMessage(error)) }
   }
   return <section className="gateway" aria-labelledby="gateway-title" aria-busy={busy}>
-    <div className="gateway__heading"><div><h2 id="gateway-title">Company connections</h2><p>Connect once. Use your tools in Claude, Codex, and workflows.</p></div><Button size="sm" disabled={busy} onClick={() => { setDraft(null); setCatalogOpen(true); requestAnimationFrame(() => { catalogRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); catalogRef.current?.querySelector('input')?.focus({ preventScroll: true }) }) }}>Add connection</Button></div>
-    <div className="gateway__cards">{connections.map(c => <article key={c.id} className="gateway__card">
+    {!editorOnly && <div className="gateway__heading"><div><h2 id="gateway-title">Company connections</h2><p>Connect once. Use your tools in Claude, Codex, and workflows.</p></div><Button size="sm" disabled={busy} onClick={() => { setDraft(null); setCatalogOpen(true); requestAnimationFrame(() => { catalogRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); catalogRef.current?.querySelector('input')?.focus({ preventScroll: true }) }) }}>Add connection</Button></div>}
+    {!editorOnly && <div className="gateway__cards">{connections.map(c => <article key={c.id} className="gateway__card">
       <div className="gateway__card-top"><div className="gateway__card-name"><strong>{c.name}</strong><span className={`gateway__state ${c.enabled && c.authStatus !== 'error' && (c.authStatus === 'connected' || tested[c.id] !== undefined) ? 'gateway__state--ready' : ''}`}>{!c.enabled ? 'Disabled' : c.authStatus === 'connecting' ? 'Waiting for sign-in' : c.authStatus === 'error' ? 'Sign-in needed' : c.authStatus === 'connected' || tested[c.id] !== undefined ? 'Connected' : c.authentication === 'oauth' ? 'Not signed in' : 'Saved'}</span></div><Switch checked={c.enabled} disabled={busy} label={`Enable ${c.name}`} onChange={enabled => void action(async () => { const { hasCredentials: _, authStatus: _s, authError: _e, ...config } = c; await hive.gateway.save({ ...config, enabled }); return enabled ? `${c.name} enabled.` : `${c.name} disabled.` })} /></div>
       <p className="gateway__endpoint">{c.url ?? [c.command, ...(c.args ?? [])].join(' ')}</p>
       <div className="gateway__meta">{c.scope === 'global' ? 'All projects' : `${c.roots.length} ${c.roots.length === 1 ? 'project' : 'projects'}`} · Claude + Codex{tested[c.id] !== undefined ? ` · ${tested[c.id]} tools` : ''}</div>
       {c.authError && <p className="gateway__error">{c.authError}</p>}
       <div className="gateway__actions">{c.authentication === 'oauth' && c.authStatus !== 'connected' && <Button size="sm" variant="primary" disabled={busy || !c.enabled || c.authStatus === 'connecting'} onClick={() => void action(async () => { await hive.gateway.connect({ id: c.id }); return 'Continue in your browser to finish connecting.' })}>{c.authStatus === 'connecting' ? 'Signing in…' : 'Sign in'}</Button>}<Button size="sm" disabled={busy || !c.enabled || c.authStatus === 'connecting'} aria-label={`Test ${c.name}`} onClick={() => void action(async () => { const result = await hive.gateway.test({ id: c.id }) as { tools?: unknown[] }; if (mounted.current) setTested(previous => ({ ...previous, [c.id]: result.tools?.length ?? 0 })); return `${c.name} connected · ${result.tools?.length ?? 0} tools available.` })}>Test</Button><Button size="sm" disabled={busy} aria-label={`Edit ${c.name}`} onClick={() => open(c)}>Edit</Button><Button size="sm" variant="ghost" disabled={busy} aria-label={`Remove ${c.name}`} onClick={() => void action(async () => { if (!await confirmNative({ message: `Remove ${c.name}?`, detail: 'Agents will lose access to this connection.', confirmLabel: 'Remove connection', destructive: true })) return ''; await hive.gateway.remove({ id: c.id }); return 'Connection removed.' })}>Remove</Button></div>
-    </article>)}</div>
-    {catalogOpen && <div ref={catalogRef}><ConnectionCatalog busy={busy} savedUrls={connections.map(c => c.url ?? '')} onSelect={choosePreset} onCustom={() => open()}/></div>}
+    </article>)}</div>}
+    {catalogOpen && !editorOnly && <div ref={catalogRef}><ConnectionCatalog busy={busy} savedUrls={connections.map(c => c.url ?? '')} onSelect={choosePreset} onCustom={() => open()}/></div>}
     {draft && <form ref={editorRef} className="gateway__editor" onSubmit={e => { e.preventDefault(); void action(() => save(needsSignIn)) }}>
-      <div className="gateway__editor-heading"><h3>{draft.id ? 'Edit connection' : 'New connection'}</h3><Button size="sm" variant="ghost" disabled={busy} onClick={() => { setDraft(null); setCatalogOpen(true); setImportText(''); setMessage('') }}>Back to tools</Button></div>
+      <div className="gateway__editor-heading"><h3>{draft.id ? 'Edit connection' : 'New connection'}</h3><Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (editorOnly) return onClose?.(); setDraft(null); setCatalogOpen(true); setImportText(''); setMessage('') }}>{editorOnly ? 'Cancel' : 'Back to tools'}</Button></div>
       {presetForUrl(draft.url)?.note && <p className="gateway__hint gateway__preset-note">{presetForUrl(draft.url)?.note}</p>}
       {presetForUrl(draft.url) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => { const preset = presetForUrl(draft.url); if (preset) void hive.app.openExternal({ url: preset.docs }).catch(() => setMessage('Could not open the service setup guide.')) }}>Service setup guide ↗</Button>}
       <fieldset disabled={busy}><div className="gateway__fields"><label>Name<input className="input" value={draft.name} onChange={e => update({ name: e.target.value })} placeholder="e.g. Mobbin" autoFocus /></label><label>Connection type<select className="input" value={draft.transport} onChange={e => update({ transport: e.target.value as 'http' | 'stdio' })}><option value="http">Remote server</option><option value="stdio">Local server (advanced)</option></select></label></div>

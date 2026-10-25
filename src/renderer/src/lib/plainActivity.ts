@@ -30,11 +30,22 @@ const TOOLS: Record<string, (rest: string) => string> = {
   TodoWrite: () => 'Planning the next steps'
 }
 
-export function plainActivity(line: string | null | undefined): string | null {
+/** pm-review C7: a company with no code never reads "command" or "file" (Maya's agents are working, not running bash). */
+const PLAIN: Record<string, string> = {
+  Bash: 'Working on it',
+  BashOutput: 'Working on it',
+  KillShell: 'Working on it',
+  Grep: 'Looking through its notes',
+  Glob: 'Looking through its notes',
+  LS: 'Looking through its notes'
+}
+
+export function plainActivity(line: string | null | undefined, opts: { code?: boolean } = {}): string | null {
   if (!line) return null
   const one = line.replace(/\s+/g, ' ').trim()
   if (!one) return null
   const m = /^([A-Z][A-Za-z]+)(?:\s+(.*))?$/.exec(one)
+  if (m && opts.code === false && PLAIN[m[1]!]) return PLAIN[m[1]!]!
   const fn = m ? TOOLS[m[1]] : undefined
   if (fn) return fn(m![2] ?? '')
   // an MCP tool: mcp__server__tool → "Using server"

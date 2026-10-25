@@ -362,7 +362,7 @@ describe('task schema and IPC contract', () => {
   })
   it('declares and validates every §10 channel', () => {
     const channels = ['departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets', 'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
-      'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'board:autopilot'] as const
+      'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'tasks:pause', 'board:autopilot'] as const
     for (const ch of channels) { expect(INVOKE_CHANNELS).toContain(ch); expect(REQUEST_SCHEMAS[ch]).toBeDefined() }
     expect(REQUEST_SCHEMAS['tasks:approve'].safeParse({ id: 'task_1', doneNote: '  ' }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:assign'].safeParse({ id: 'task_1' }).success).toBe(false)

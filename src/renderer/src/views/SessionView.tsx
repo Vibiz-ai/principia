@@ -176,8 +176,8 @@ export function SessionView(): React.JSX.Element {
           Split
         </Button>
         {cur?.status === 'running' && (
-          <Button icon="stop" onClick={() => void closeSession(cur.id)} title="Kill session (⌘W)">
-            Kill
+          <Button icon="stop" onClick={() => void closeSession(cur.id)} title="Stop this chat (⌘W)">
+            Stop
           </Button>
         )}
         <ProviderSwitcher />
@@ -314,7 +314,7 @@ function SessionPane({
 
   const menu = async (): Promise<void> => {
     const id = await nativeMenu([
-      exited ? { id: 'restart', label: 'Restart (resume conversation)' } : { id: 'kill', label: 'Kill' },
+      exited ? { id: 'restart', label: 'Restart (resume conversation)' } : { id: 'kill', label: 'Stop' },
       { id: 'copy', label: 'Copy Output' },
       { id: 'reveal', label: 'Reveal cwd in Finder' },
       { id: 'dir', label: 'Open ARTIFACTS_DIR' },

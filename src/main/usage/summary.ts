@@ -12,8 +12,11 @@ import type { PlanLimits, UsageBucket, UsageDay, UsageMoney, UsageRange, UsageRo
 import type { DB } from '../db'
 import { PRICE_SOURCE, costOf } from '../forum/pricing'
 
-export const RANGE_DAYS: Record<UsageRange, number> = { '7d': 7, '30d': 30, '90d': 90 }
+export const RANGE_DAYS: Record<'7d' | '30d' | '90d', number> = { '7d': 7, '30d': 30, '90d': 90 }
 export const NO_DEPARTMENT = 'No department'
+/** Five doors §4.9: chats you had yourself (no agent seat) read as yours, not as a missing seat. */
+export const OWN_CHATS = 'Your own chats'
+export const OTHER_RUNS = 'Other runs'
 
 interface RootRow {
   id: string
@@ -77,8 +80,17 @@ export function localDay(d: Date): string {
 /** Local midnight `days - 1` days before `now`: the first day of the range. */
 export function rangeStart(range: UsageRange, now: Date): Date {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  d.setDate(d.getDate() - (RANGE_DAYS[range] - 1))
+  if (range === 'month') return new Date(now.getFullYear(), now.getMonth(), 1)
+  // weeks start on Monday (getDay: Sunday 0)
+  if (range === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  else d.setDate(d.getDate() - (RANGE_DAYS[range] - 1))
   return d
+}
+/** Days in the range up to and including today. */
+export function rangeDays(range: UsageRange, now: Date): number {
+  const start = rangeStart(range, now)
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1
 }
 
 const tryAll = <T>(db: DB, sql: string, args: unknown[]): T[] => {
@@ -121,6 +133,8 @@ export interface SummaryDeps {
   db: DB
   companyName(id: Id): string
   now?: () => Date
+  /** VOICE.md §4: agent rows read "Marcus · Content Writer" unless personas are off */
+  personas?: boolean
 }
 
 export function usageSummary(d: SummaryDeps, q: { range: UsageRange; companyId?: Id | null }): UsageSummary {
@@ -132,20 +146,20 @@ export function usageSummary(d: SummaryDeps, q: { range: UsageRange; companyId?:
     d.db,
     `SELECT a.id, a.kind, a.provider, a.model, a.tokens_in, a.tokens_out, a.cost_usd, a.model_usage_json, a.started_at,
        COALESCE(a.company_id, '${PERSONAL_COMPANY_ID}') AS company_id,
-       ca.id AS seat_id, ca.name AS seat_name, ca.department_id AS seat_dep,
+       ca.id AS seat_id, ${d.personas === false ? 'ca.name' : "CASE WHEN json_extract(ca.data, '$.persona.name') IS NOT NULL THEN json_extract(ca.data, '$.persona.name') || ' · ' || ca.name ELSE ca.name END"} AS seat_name, ca.department_id AS seat_dep,
        COALESCE((SELECT t.department_id FROM company_tasks t WHERE t.id = r.task_id), (SELECT t.department_id FROM company_tasks t WHERE t.id = s.task_id)) AS task_dep,
        s.department_id AS sess_dep
      FROM agents a
      LEFT JOIN runs r ON r.id = a.run_id
      LEFT JOIN sessions s ON s.id = a.session_id
-     LEFT JOIN company_agents ca ON ca.id = r.agent_id
+     LEFT JOIN company_agents ca ON ca.id = COALESCE(r.agent_id, (SELECT t.agent_id FROM company_tasks t WHERE t.id = s.task_id))
      WHERE a.parent_id IS NULL AND a.started_at >= ? ${companyId ? `AND COALESCE(a.company_id, '${PERSONAL_COMPANY_ID}') = ?` : ''}`,
     companyId ? [since, companyId] : [since]
   )
   const deps = new Map(tryAll<{ id: string; name: string; company_id: string }>(d.db, 'SELECT id, name, company_id FROM company_departments', []).map((x) => [x.id, x]))
 
   const days = new Map<string, UsageDay>()
-  for (let i = 0; i < RANGE_DAYS[q.range]; i++) {
+  for (let i = 0, n = rangeDays(q.range, now); i < n; i++) {
     const day = new Date(start)
     day.setDate(start.getDate() + i)
     const key = localDay(day)
@@ -171,7 +185,7 @@ export function usageSummary(d: SummaryDeps, q: { range: UsageRange; companyId?:
     const depKey = dep ? dep.id : `none:${r.company_id}`
     add(row(byDep, depKey, dep?.name ?? NO_DEPARTMENT, r.company_id), r, money)
     const agentKey = r.seat_id ?? `none:${r.kind === 'session' ? 'session' : 'run'}:${r.company_id}`
-    const agentLabel = r.seat_name ?? (r.kind === 'session' ? 'Chats (no agent seat)' : 'Runs (no agent seat)')
+    const agentLabel = r.seat_name ?? (r.kind === 'session' ? OWN_CHATS : OTHER_RUNS)
     add(row(byAgent, agentKey, agentLabel, r.company_id), r, money)
   }
   const rank = (m: Map<string, UsageRow>): UsageRow[] =>

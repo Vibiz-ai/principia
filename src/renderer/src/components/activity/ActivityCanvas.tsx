@@ -38,7 +38,7 @@ const FrameView = memo(function FrameView({ data }: NodeProps<AFrame>) {
     <div className="aframe" style={{ width: data.width, height: data.height }}>
       <div className="aframe__head">
         {data.companyId ? (
-          <CompanyAvatar company={{ id: c?.id, name: data.label, color: c?.color ?? 'var(--series-other)' }} size={20} className="aframe__coin" />
+          <CompanyAvatar company={{ id: c?.id, name: data.label, color: c?.color ?? 'var(--series-other)', railLabel: c?.railLabel }} size={20} className="aframe__coin" />
         ) : (
           <span className="aframe__coin aframe__coin--elsewhere" aria-hidden>
             <Icon name="folder" size={12} />

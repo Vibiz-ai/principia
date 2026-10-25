@@ -4,7 +4,8 @@
  * - a navigation row whose label or one of its old names IS the query ("schedules", "canvas", "passport") ranks first;
  * - an action that touches every company ranks below every other match, so it is never the Enter default by accident
  *   (it still lists, and it asks before it runs);
- * - hidden keywords only match as a substring, so long synonym lists add no noise.
+ * - hidden keywords only match as a substring, so long synonym lists add no noise;
+ * - a query of several words matches a row that has every word, in any order ("openai key", "gh login").
  * Pure: no store, no DOM.
  */
 import { fuzzyScore } from '@shared/fuzzy'
@@ -31,7 +32,13 @@ export function paletteScore(query: string, it: Rankable): number | null {
   // "crm pipeline marketing deals customers". The label and group keep the loose subsequence match.
   const head = `${it.label} ${it.group}`
   const full = it.keywords ? `${head} ${it.keywords}` : head
-  const s = full.toLowerCase().includes(q) ? fuzzyScore(q, full) : fuzzyScore(q, head)
+  const low = full.toLowerCase()
+  let s = low.includes(q) ? fuzzyScore(q, full) : fuzzyScore(q, head)
+  // several words ("openai key", "gh login"): every word must be in the row's text, in any order
+  if (s < 0) {
+    const words = q.split(/\s+/).filter(Boolean)
+    if (words.length > 1 && words.every((w) => low.includes(w))) s = Math.min(...words.map((w) => fuzzyScore(w, full)))
+  }
   if (s < 0) return null
   const exact = it.label.toLowerCase() === q || !!it.exact?.some((w) => w.toLowerCase() === q)
   return s + (exact ? EXACT_BOOST : 0) - (it.global ? GLOBAL_PENALTY : 0)

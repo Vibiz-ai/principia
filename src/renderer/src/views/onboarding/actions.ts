@@ -18,7 +18,9 @@ import {
   onboardingDispatch,
   onboardingPlanContext,
   requestOnboardingPlan,
+  refreshOnboardingStatus,
   setState,
+  updateSettings,
   toast
 } from '../../state/store'
 import { useSyncExternalStore } from 'react'
@@ -374,6 +376,37 @@ export async function start(opts: { autopilot: boolean; scheduleRefs: string[]; 
   }
   setLocal({ result: null, ceremony: null })
   await finishOnboarding(companyId, opts.autopilot ? 'home' : 'board')
+  return true
+}
+
+/** The company of this launch's journal, or null when the journal on hand belongs to another setup. */
+function journalCompany(journalId: string | undefined, j = getState().onboardingStatus?.journal): string | null {
+  return journalId && j && j.id === journalId ? (j.companyId ?? null) : null
+}
+
+/**
+ * Five doors step 5 (design §6.7): the Ready step's one action. Nothing starts here: the new company opens on Home,
+ * whose first card asks "Your team is ready. Start the first week?" (components/home/FirstRunCards). The journal and
+ * the schedules ticked on Ready wait in settings.firstWeek until that question is answered.
+ */
+export async function landOnHome(opts: { scheduleRefs: string[] }): Promise<boolean> {
+  const d = getState().onboardingDraft
+  const res = local.result
+  const journalId = d?.journalId ?? res?.journalId
+  // the launch result, else the journal of THIS launch only (a stale journal from another setup never names the company)
+  let companyId = res && res.journalId === journalId ? res.companyId : journalCompany(journalId)
+  if (!companyId && journalId) companyId = journalCompany(journalId, (await refreshOnboardingStatus().catch(() => null))?.journal)
+  if (!journalId || !companyId) {
+    toast('Couldn’t find the new company. Open it from the rail.', 'error')
+    return false
+  }
+  try {
+    await updateSettings({ firstWeek: { ...(getState().settings?.firstWeek ?? {}), [companyId]: { journalId, scheduleRefs: opts.scheduleRefs.slice(0, 8) } } })
+  } catch {
+    /* Home then shows no first-week card; each task still waits in To do with Start */
+  }
+  setLocal({ result: null, ceremony: null })
+  await finishOnboarding(companyId, 'home')
   return true
 }
 

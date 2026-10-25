@@ -1,21 +1,25 @@
 /**
- * Team (five doors, ⌘2): "who works for me and what are they doing?". Step 1 mounts the existing department roster
- * under the new name: one section per department with its agent seat cards (the Department page's), company-level
- * agents first. All companies mode groups by company, and each row opens in its own company. The agent cards with
- * status sentences, Message and Start/Pause land in step 3.
+ * Team (five doors ⌘2, design §4.2): "who works for me and what are they doing?". One section per department (its
+ * name in Cinzel and its charter line), each agent a card: bust, NAME, role, a status sentence in plain words (the
+ * same one the agent page shows), the agent's ONE autonomy phrase (the same string as on its page and in onboarding),
+ * and two buttons: Message (opens the agent's desk with the composer focused) and the one next action (Start, Pause
+ * this task, Resume, See what's needed). All companies mode groups by company; every card opens in its own company.
  */
 import { useMemo } from 'react'
-import type { CompanyPassport } from '@shared/company'
+import type { CompanyAgent, CompanyPassport } from '@shared/company'
 import { Button, EmptyState, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { useScope } from '../components/CompanyChip'
+import { AgentAction, StatusLine, useAgentStatus } from '../components/desk/Desk'
 import { CompanyAvatar } from '../shell/CompanyRail'
-import { DepartmentIcon } from '../shell/DepartmentGroup'
+import { AgentBust } from '../shell/DepartmentGroup'
 import { agentsOf, departmentsOf } from '../lib/departments'
-import { companyLabel, isPersonal, teamMeta } from '../lib/company'
-import { addDepartmentMenu, departmentContextMenu, departmentsOn, enterCompany, navigate, openDepartment, openNewCompany, updateSettings, useStore } from '../state/store'
-import { SeatCard } from './DepartmentView'
+import { companyLabel, isPersonal } from '../lib/company'
+import { useWorking } from '../state/live'
+import { agentAutonomy, useDeskWho } from '../state/desk'
+import { addDepartmentMenu, departmentContextMenu, departmentsOn, enterCompany, navigate, openAgentSeat, openDepartment, openNewCompany, setCompanyPaused, updateSettings, useStore } from '../state/store'
 import '../styles/departments.css'
+import '../styles/desk.css'
 
 export function TeamView(): React.JSX.Element {
   const { scope, companies, company } = useScope()
@@ -23,7 +27,7 @@ export function TeamView(): React.JSX.Element {
   const agents = useStore((s) => s.companyAgents)
   const shown = useMemo(() => (scope ? companies.filter((c) => c.id === scope) : companies), [companies, scope])
   const seats = agents.filter((a) => !a.archivedAt && shown.some((c) => c.id === a.companyId))
-  const meta = teamMeta(seats, shown, !scope)
+  const working = useWorking(scope ?? 'all')
   if (!on)
     return (
       <div className="view">
@@ -36,11 +40,30 @@ export function TeamView(): React.JSX.Element {
         </EmptyState>
       </div>
     )
+  const meta = `${seats.length} agent${seats.length === 1 ? '' : 's'} · ${working.agents} working${scope ? '' : ' · all companies'}`
+  const short = company?.name.split(/\s+/)[0] ?? ''
   return (
     <div className="view">
-      <Toolbar title="Team" sub={<span className="company-toolbar-meta">{meta}</span>} />
+      <Toolbar title="Team" sub={<span className="company-toolbar-meta">{meta}</span>}>
+        {company && !isPersonal(company) && (
+          <>
+            {company.pausedAt ? (
+              <Button variant="primary" icon="play" onClick={() => void setCompanyPaused(company.id, false)}>
+                Resume {short}
+              </Button>
+            ) : (
+              <Button icon="pause" onClick={() => void setCompanyPaused(company.id, true)} title={`Pause ${company.name} only. Other companies keep running.`}>
+                Pause {short}
+              </Button>
+            )}
+            <Button icon="plus" onClick={() => void addDepartmentMenu(company.id)} title="Add a department with its agents">
+              Hire
+            </Button>
+          </>
+        )}
+      </Toolbar>
       <div className="scroll view__body">
-        <div className="team-page">
+        <div className="team5">
           {shown.map((c) => (
             <CompanyTeam key={c.id} company={c} grouped={!scope} />
           ))}
@@ -63,6 +86,7 @@ function CompanyTeam({ company, grouped }: { company: CompanyPassport; grouped: 
         <header className="team-co__head">
           <CompanyAvatar company={company} size={18} />
           <span className="team-co__name">{companyLabel(company, true)}</span>
+          {company.pausedAt && <span className="text-tertiary">‖ Paused</span>}
           <span className="flex1" />
           <button type="button" className="link-btn" onClick={() => void enterCompany(company.id, { view: { name: 'team' } })}>
             Open in {company.name} <Icon name="chevronRight" size={11} />
@@ -80,42 +104,45 @@ function CompanyTeam({ company, grouped }: { company: CompanyPassport; grouped: 
           </EmptyState>
         ))}
       {top.length > 0 && (
-        <div className="team-dep">
-          <div className="team-dep__head">
-            <span className="team-dep__name">Company-wide</span>
-            <span className="team-dep__count">{top.length}</span>
+        <div className="team5-dep">
+          <div className="team5-dep__head">
+            <span className="team5-dep__name">Company-wide</span>
           </div>
-          <div className="dep-seats">
+          <div className="team5-cards">
             {top.map((a) => (
-              <SeatCard key={a.id} agentId={a.id} color={company.color} />
+              <AgentCard key={a.id} agent={a} />
             ))}
           </div>
         </div>
       )}
       {deps.map((d) => {
         const seats = agentsOf(agents, company.id, d.id)
+        const charter = d.data.charter?.does?.split(/[.\n]/)[0]?.trim()
         return (
-          <div key={d.id} className="team-dep">
-            <button
-              type="button"
-              className="team-dep__head team-dep__head--link"
-              onClick={() => openDepartment(d)}
-              // design §3: right-click any department to pin it (and the rest of its menu)
-              onContextMenu={(e) => {
-                e.preventDefault()
-                void departmentContextMenu(d)
-              }}
-              title={`Open ${d.name}: charter, dashboards, board · right-click to pin it to the sidebar`}
-            >
-              <DepartmentIcon department={d} size={14} />
-              <span className="team-dep__name">{d.name}</span>
-              <span className="team-dep__count">{seats.length}</span>
-              <Icon name="chevronRight" size={11} />
-            </button>
+          <div key={d.id} className="team5-dep">
+            <div className="team5-dep__head">
+              <button
+                type="button"
+                className="team5-dep__name"
+                onClick={() => openDepartment(d)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  void departmentContextMenu(d)
+                }}
+                title={`Open ${d.name}: its agents, its board, dashboards and charter · right-click to pin it`}
+              >
+                {d.name}
+              </button>
+              {charter && <span className="team5-dep__charter">{charter}</span>}
+              <span className="flex1" />
+              <Button size="sm" variant="ghost" onClick={() => openDepartment(d)}>
+                Open department
+              </Button>
+            </div>
             {seats.length ? (
-              <div className="dep-seats">
+              <div className="team5-cards">
                 {seats.map((a) => (
-                  <SeatCard key={a.id} agentId={a.id} color={d.color} />
+                  <AgentCard key={a.id} agent={a} />
                 ))}
               </div>
             ) : (
@@ -125,5 +152,45 @@ function CompanyTeam({ company, grouped }: { company: CompanyPassport; grouped: 
         )
       })}
     </section>
+  )
+}
+
+/** One agent: face, name, role, the status sentence, the autonomy phrase, Message and the next action. */
+export function AgentCard({ agent }: { agent: CompanyAgent }): React.JSX.Element {
+  const who = useDeskWho(agent)
+  const autonomy = useStore((s) => agentAutonomy(agent, s))
+  const color = useStore((s) => s.departments.find((d) => d.id === agent.departmentId)?.color ?? null)
+  const status = useAgentStatus(agent)
+  return (
+    <div
+      className={`team5-card ${status.kind === 'paused' ? 'is-paused' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${who.name}, ${who.role}: ${status.text}`}
+      onClick={() => openAgentSeat(agent)}
+      onKeyDown={(e) => e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), openAgentSeat(agent))}
+    >
+      <div className="team5-card__top">
+        <span className="team5-card__bust">
+          <AgentBust agent={agent} color={color} size={48} />
+        </span>
+        <div>
+          <div className="team5-card__name">{who.name}</div>
+          <div className="team5-card__role">{who.role}</div>
+        </div>
+      </div>
+      <div className="team5-card__status">
+        <StatusLine status={status} />
+      </div>
+      <span className="team5-chip" title={`Change it on ${who.name}’s page`}>
+        {autonomy}
+      </span>
+      <div className="team5-card__acts" onClick={(e) => e.stopPropagation()}>
+        <Button size="sm" icon="chat" onClick={() => openAgentSeat(agent, { focus: true })}>
+          Message
+        </Button>
+        <AgentAction agent={agent} status={status} />
+      </div>
+    </div>
   )
 }

@@ -15,7 +15,8 @@
 .board-autopilot__pill .pill { margin-left: 0; }
 
 .board-main { overflow: auto; }
-.board-columns { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px; padding: 16px 20px; align-items: start; min-width: min-content; }
+/* four columns fit at 1100 wide with the sidebar open (rail 56 + sidebar ~232 leaves ~810) */
+.board-columns { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px; padding: 14px 16px; align-items: start; min-width: min-content; }
 .board-col { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; min-height: 120px; transition: border-color var(--dur-fast), background var(--dur-fast); }
 .board-col.is-over { border-color: var(--accent); background: var(--accent-soft); }
 .board-col.is-refusing { border-color: var(--status-failed); background: var(--status-failed-soft); cursor: no-drop; }
@@ -151,3 +152,32 @@
 .board-empty .btn { margin-top: 6px; }
 .board--embedded .board-empty { padding: 20px 16px; }
 .board-review-first { margin-bottom: 16px; }
+
+/* Five doors step 5 (design §4.5): column glyphs (glyph + word, never colour alone) and the quick create row */
+.board-col__glyph { font-size: 10px; width: 12px; text-align: center; color: var(--text-tertiary); }
+.board-col__head span.board-col__glyph--working { color: var(--status-running); }
+.board-col__head span.board-col__glyph--needs_you { color: var(--status-needs); }
+.board-col__head span.board-col__glyph--done { color: var(--status-success); }
+.qc { border: 1px dashed var(--border-strong); border-radius: 7px; background: transparent; transition: border-color var(--dur-fast), background var(--dur-fast); }
+.qc.is-open { border-style: solid; border-color: var(--accent); background: var(--surface-0); }
+.qc__row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text-tertiary); cursor: text; }
+.qc__input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 12.5px; outline: none; padding: 0; box-shadow: none; }
+.qc__input:focus, .qc__input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.qc__input::placeholder { color: var(--text-tertiary); }
+.qc__kbd { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; line-height: 16px; }
+.qc__chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px; }
+.qc__chip { appearance: none; -webkit-appearance: none; font-size: 11px; color: var(--text-secondary); background: var(--surface-2, var(--surface-1)); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; max-width: 100%; cursor: pointer; }
+.qc__chip:hover, .qc__chip:focus-visible { border-color: var(--border-strong); color: var(--text-primary); outline: none; }
+.qc__chip--mono { font-family: var(--font-mono); }
+.qc__branch { padding: 0 10px 8px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); line-height: 1.5; overflow-wrap: anywhere; }
+.qc__hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 8px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--text-tertiary); }
+.qc__hint .link-btn { font-size: 10.5px; }
+.board-card__branch { display: block; box-sizing: border-box; max-width: 100%; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); background: var(--surface-1); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-card__pr { font-size: 10.5px; color: var(--accent); }
+.board-card__pr.is-merged { color: var(--status-success); }
+.board-inspector__id { display: inline-flex; align-items: center; gap: 8px; }
+.board-inspector__id .pill { margin-left: 0; }
+/* the inspector is a column beside the board (design §4.5): with it open, the four columns narrow instead of hiding Done */
+.task-workspace.has-detail .board-columns { grid-template-columns: repeat(4, minmax(150px, 1fr)); padding: 16px 14px; gap: 10px; }
+@media (max-width: 1500px) { .task-workspace.has-detail .board-inspector { width: 360px; min-width: 320px; } }
+.board-card__branch .work-branch-glyph { vertical-align: -1px; }

@@ -8,14 +8,13 @@ import {
   AGENT_DATA_DEFAULTS,
   AGENT_LIMITS,
   DEPARTMENT_LIMITS,
-  LANE_LABELS,
-  TASK_LANES,
   type AgentAutonomy,
   type CompanyAgentKind,
   type Department,
   type TaskSource
 } from '@shared/company'
 import type { Id } from '@shared/types'
+import { COLUMN_LABEL, columnOfLane } from '../lib/boardFlow'
 import type { SlackChannel } from '@shared/slack'
 import { Button, EmptyState, IconButton, Pill, Segmented, Sheet, Stepper, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
@@ -470,13 +469,14 @@ function DepartmentTasks({ dep }: { dep: Department }): React.JSX.Element {
   if (!mine.length) return <p className="dep-card__empty">No tasks in {dep.name} yet.</p>
   return (
     <div className="dep-lanes">
-      {TASK_LANES.filter((l) => l !== 'done').map((lane) => {
-        const items = mine.filter((t) => taskLane(t, ctx) === lane)
+      {(['todo', 'working', 'needs_you'] as const).map((lane) => {
+        // five doors step 5: the Board's words (Inbox and Queued are both To do)
+        const items = mine.filter((t) => columnOfLane(taskLane(t, ctx)) === lane)
         if (!items.length) return null
         return (
-          <div key={lane} className={`dep-lane dep-lane--${lane}`}>
+          <div key={lane} className={`dep-lane dep-lane--${lane === 'todo' ? 'queued' : lane}`}>
             <div className="dep-lane__head">
-              {LANE_LABELS[lane]} <span>{items.length}</span>
+              {COLUMN_LABEL[lane]} <span>{items.length}</span>
             </div>
             {items.map((t) => (
               <button key={t.id} type="button" className="dep-list__row dep-task" onClick={() => openBoard(t.companyId, { taskId: t.id, departmentId: dep.id })}>

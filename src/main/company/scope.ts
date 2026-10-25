@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { PERSONAL_COMPANY_ID, PERSONAL_SLUG, PROFILE_FIELDS, type CompanyPassport } from '../../shared/company'
+import { PERSONAL_COMPANY_ID, PERSONAL_SLUG, PROFILE_FIELDS, type CompanyAccounts, type CompanyPassport } from '../../shared/company'
 import type { PassportDepartment } from '../../shared/passport'
 import type { Repo } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
@@ -120,7 +120,14 @@ export class CompanyScope {
       ...(typeof data.maxInFlight === 'number' && Number.isInteger(data.maxInFlight) && data.maxInFlight >= 1 ? { maxInFlight: data.maxInFlight } : {}),
       // Five doors A4: the company pause (`pause.at`) and step 2's task prefix share the row JSON too
       pausedAt: pauseAt(data.pause),
-      ...(typeof data.taskPrefix === 'string' && data.taskPrefix ? { taskPrefix: data.taskPrefix } : {})
+      ...(typeof data.taskPrefix === 'string' && data.taskPrefix ? { taskPrefix: data.taskPrefix } : {}),
+      // Five doors step 4: this company's own connected accounts and its monthly cap
+      ...(accountsOf(data.accounts) ? { accounts: accountsOf(data.accounts)! } : {}),
+      ...(typeof data.monthlyCap === 'number' && Number.isFinite(data.monthlyCap) && data.monthlyCap > 0 ? { monthlyCap: data.monthlyCap } : {}),
+      // Five doors step 5: the task counter (the Board's branch preview) and E14's rail label and client tag
+      ...(typeof data.taskSeq === 'number' && Number.isInteger(data.taskSeq) && data.taskSeq >= 0 ? { taskSeq: data.taskSeq } : {}),
+      ...(typeof data.railLabel === 'string' && data.railLabel ? { railLabel: data.railLabel } : {}),
+      ...(data.client === true ? { client: true } : {})
     }
   }
 
@@ -305,4 +312,15 @@ export class CompanyScope {
 function pauseAt(v: unknown): string | null {
   const at = v && typeof v === 'object' ? (v as { at?: unknown }).at : null
   return typeof at === 'string' && at ? at : null
+}
+
+/** The row JSON's `accounts`, keeping only well-formed entries (a hand-edited row never breaks the passport). */
+function accountsOf(v: unknown): CompanyAccounts | null {
+  if (!v || typeof v !== 'object') return null
+  const out: CompanyAccounts = {}
+  for (const k of ['instagram', 'github'] as const) {
+    const a = (v as Record<string, unknown>)[k] as { handle?: unknown; connectedAt?: unknown } | undefined
+    if (a && typeof a.handle === 'string' && a.handle && typeof a.connectedAt === 'string') out[k] = { handle: a.handle, connectedAt: a.connectedAt }
+  }
+  return Object.keys(out).length ? out : null
 }

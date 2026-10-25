@@ -64,7 +64,8 @@ describe('TaskCard', () => {
 describe('NeedsYouTasks', () => {
   beforeEach(() => vi.resetModules())
   it('lists the company’s asks, reviews and parked tasks; nothing while departments are off', async () => {
-    await withState(true)
+    // a company with code (a repository) shows task codes; pm-review C7: one without code shows titles only
+    await withState(true, { repos: [{ id: 'repo_a', companyId: 'co_a' }] })
     const { NeedsYouTasks } = await import('./NeedsYouTasks')
     const html = renderToStaticMarkup(createElement(NeedsYouTasks, { companyId: 'co_a' }))
     expect(html).toContain('PRN-1')
@@ -112,20 +113,27 @@ describe('BoardView', () => {
     await withState(true, { activeCompanyId: 'all', tasks: [legacy('8', 'blocked'), legacy('9', 'in_review'), { ...legacy('10', 'todo'), companyId: 'co_personal' }], asks: {} })
     const { TasksView } = await import('../../views/TasksView')
     const html = renderToStaticMarkup(createElement(TasksView))
-    for (const id of ['PRN-8', 'PRN-9', 'PRN-10']) expect(html).toContain(id)
+    for (const title of ['Task 8', 'Task 9', 'Task 10']) expect(html).toContain(title)
+    // pm-review C7: companies with no code show titles, never task codes
+    for (const id of ['PRN-8', 'PRN-9', 'PRN-10']) expect(html).not.toContain(id)
     // All mode: no single company, so no Autopilot switch
     expect(html).not.toContain('role="switch"')
     const { NeedsYouTasks } = await import('./NeedsYouTasks')
-    expect(renderToStaticMarkup(createElement(NeedsYouTasks, {}))).toContain('PRN-8')
+    // no repository: titles, never codes (C7), in the All companies list too
+    const all = renderToStaticMarkup(createElement(NeedsYouTasks, {}))
+    expect(all).toContain('Task 8')
+    expect(all).not.toContain('PRN-8')
   })
-  it('renders the five lanes, the Autopilot switch and agent drop targets with departments on', async () => {
+  it('renders the four columns, the quick create row and agent drop targets with departments on, and no Autopilot copy', async () => {
     await withState(true)
     const { TasksView } = await import('../../views/TasksView')
     const html = renderToStaticMarkup(createElement(TasksView))
     expect(html).toContain('>Board<')
-    for (const lane of ['Inbox', 'Queued', 'Working', 'Needs you', 'Done']) expect(html).toContain(`aria-label="${lane}"`)
-    expect(html).toContain('role="switch" aria-checked="true"')
-    expect(html).toContain('Autopilot on')
+    for (const lane of ['To do', 'Working', 'Needs you', 'Done']) expect(html).toContain(`aria-label="${lane}"`)
+    // design §5 row 10: the switch lives in Automations › Autopilots only; the Board carries no copy of it
+    expect(html).not.toContain('role="switch"')
+    expect(html).not.toContain('Autopilot on')
+    expect(html).toContain('aria-label="New task title"')
     expect(html).toContain('drop a card to assign')
   })
 })
@@ -139,7 +147,8 @@ describe('Sidebar Needs you task items', () => {
     // PRN-1 (question) and PRN-4 (review) wait on you
     expect(html).toContain('Needs you')
     expect(html).toContain('◆ 2')
-    expect(html).toContain('PRN-1')
+    expect(html).toContain('Task 1')
+    expect(html).not.toContain('PRN-1')
     // All mode keeps the Sidebar's own header: no second one from the slot
     expect(renderToStaticMarkup(createElement(NeedsYouTasksSlot, { limit: 8 }))).not.toContain('sidebar__section')
     let count = -1
@@ -218,7 +227,7 @@ describe('Board empty state', () => {
     expect(html).toContain('lang="la"')
     expect(html).toMatch(/board-empty[\s\S]*New task/)
     // no lanes over an empty board
-    expect(html).not.toContain('aria-label="Inbox"')
+    expect(html).not.toContain('aria-label="To do"')
   })
   it('drops the Latin in plain and keeps the mosaic', async () => {
     await withState(true, { tasks: [], settings: { experimental: { companies: true, departments: true }, tone: 'plain' } })
@@ -253,23 +262,25 @@ describe('Department and agent pages with personas', () => {
     expect(html).toContain('rm-mosaic--column')
     expect(html).toContain('No agents in Marketing yet.')
   })
-  it('agent page: Bust 64, persona name with Rename, role, personality and About; personas off keeps the old header', async () => {
+  it('agent page = the desk (five doors step 3): the plinth in plain lettering, status sentence, conversation, Queue; personas off names the role', async () => {
     await withDefaults({ view: { name: 'agentSeat', id: 'agt_copy' } })
     const { AgentSeatView } = await import('../../views/AgentSeatView')
     const html = renderToStaticMarkup(createElement(AgentSeatView, { id: 'agt_copy' }))
-    expect(html).toContain('agent-hero')
-    expect(html).toContain('agent-hero__name-text">Marcus<')
-    expect(html).toContain('aria-label="Rename Marcus"')
-    expect(html).toContain('agent-hero__role">Copywriter<')
-    expect(html).toContain('>About<')
-    expect(html).toContain('Turns your one-liner into posts people finish reading.')
-    expect(html).toContain('width="64"')
-    expect(html).toContain('Idle. One task at a time')
+    expect(html).toContain('rm-plinth__carving">MARCUS<')
+    expect(html).toContain('rm-plinth__role">Copywriter<')
+    expect(html).toContain('Nothing assigned')
+    expect(html).toContain('Conversation with Marcus')
+    expect(html).toContain('aria-label="Message Marcus"')
+    expect(html).toMatch(/>Queue<span class="desk-tab__n">0</)
+    expect(html).toContain('>Instructions<')
+    // C9: Archive is not next to Pause (it lives in Instructions)
+    expect(html).toContain('Pause Marcus')
+    expect(html).not.toContain('Archive')
     await withDefaults({ view: { name: 'agentSeat', id: 'agt_copy' }, settings: { experimental: { companies: true, departments: true }, personas: false } })
     const off = renderToStaticMarkup(createElement(AgentSeatView, { id: 'agt_copy' }))
-    expect(off).not.toContain('agent-hero')
-    expect(off).toContain('seat-avatar')
+    expect(off).not.toContain('rm-plinth__carving')
     expect(off).not.toContain('Marcus')
+    expect(off).toContain('Conversation with Copywriter')
   })
   it('sidebar seat rows: Bust 16, the persona and the tertiary role label', async () => {
     await withDefaults({ companyAgents: [{ ...copywriter, departmentId: null }] })
@@ -282,39 +293,39 @@ describe('Department and agent pages with personas', () => {
   })
 })
 
-describe('Company rail coins', () => {
+describe('Company rail tiles (five doors E14)', () => {
   beforeEach(() => vi.resetModules())
   const healthy = { tasks: [task('2', { status: 'in_progress', agentId: 'agt_copy', departmentId: 'dep_m' })], asks: {} }
-  it('wears the laurel only when every agent is healthy, with “all agents healthy” in the tooltip and the label', async () => {
+  it('a monogram tile per company; health is in the accessible name, never a native tooltip', async () => {
     await withState(true, healthy)
     const { CompanyRail } = await import('../../shell/CompanyRail')
     const html = renderToStaticMarkup(createElement(CompanyRail))
     expect(html).toContain('aria-label="Acme, all agents healthy"')
-    expect(html).toContain('title="Acme, all agents healthy"')
-    expect(html).toContain('rm-medallion--laurel')
-    // Personal: a plain bronze coin, never a laurel
-    expect(html.match(/rm-medallion--laurel/g)).toHaveLength(1)
+    expect(html).not.toContain('title="Acme')
+    expect(html).toMatch(/class="rail-mark[^"]*"[^>]*>AC</)
+    // Personal is the person glyph, never letters
+    expect(html).toContain('rail-mark--personal')
   })
-  it('keeps the badges: the needs-you pill and the failed dot hide the laurel', async () => {
+  it('keeps the badges: the needs-you pill hides the health line, a failed run shows the red square', async () => {
     await withState(true, { ...healthy, tasks: [...healthy.tasks, task('4', { status: 'in_review', agentId: 'agt_copy' })] })
     let { CompanyRail } = await import('../../shell/CompanyRail')
     let html = renderToStaticMarkup(createElement(CompanyRail))
-    expect(html).not.toContain('rm-medallion--laurel')
     expect(html).not.toContain('all agents healthy')
+    expect(html).toContain('rail__count')
     vi.resetModules()
     await withState(true, { ...healthy, companyOverview: { co_a: { failed24h: 1 } } })
     ;({ CompanyRail } = await import('../../shell/CompanyRail'))
     html = renderToStaticMarkup(createElement(CompanyRail))
-    expect(html).toContain('rail__failed')
-    expect(html).not.toContain('rm-medallion--laurel')
+    expect(html).toContain('rail-mark__failed')
     expect(html).toContain('Acme · a run failed in the last 24 h')
   })
-  it('no laurel with departments off (no agents to be healthy)', async () => {
+  it('the company’s own rail label replaces the initials, and a client says so in its name', async () => {
     await withState(false, healthy)
+    const st = await import('../../state/store')
+    st.setState((x) => ({ companies: x.companies.map((c) => (c.id === 'co_a' ? { ...c, railLabel: 'AX2', client: true } : c)) }))
     const { CompanyRail } = await import('../../shell/CompanyRail')
     const html = renderToStaticMarkup(createElement(CompanyRail))
-    expect(html).toContain('rm-medallion')
-    expect(html).not.toContain('rm-medallion--laurel')
-    expect(html).toContain('aria-label="Acme"')
+    expect(html).toMatch(/class="rail-mark[^"]*"[^>]*>AX2</)
+    expect(html).toContain('aria-label="Acme · client"')
   })
 })

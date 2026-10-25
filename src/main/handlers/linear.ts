@@ -14,6 +14,7 @@ export function registerLinearHandlers(h: Hive): void {
   }
   handle('linear:status', ({ companyId }) => svc().status(companyId))
   handle('linear:checkKey', ({ companyId, key }) => svc().checkKey(companyId, key))
+  handle('linear:preview', ({ companyId, teamId, key }) => svc().preview(companyId, teamId, key))
   handle('linear:connect', (q) => svc().connect(q))
   handle('linear:sync', ({ companyId }) => svc().syncNow(companyId))
   handle('linear:setAutosync', ({ companyId, on }) => svc().setAutosync(companyId, on))

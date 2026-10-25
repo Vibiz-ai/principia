@@ -9,8 +9,32 @@ import { emit, handle, onSend } from '../ipc'
 import { loginEnvState } from '../loginEnv'
 import { isInsideAny } from '../pathGuard'
 import { dashboard, markSeen } from '../live/dashboard'
+import { execFileSync } from 'node:child_process'
+import { userInfo } from 'node:os'
 
 const DAY = 86400_000
+
+/** Five doors E12: the Mac account's full name ("Maya Torres"), for Home's greeting. Read once; null when unknown. */
+let userNameMemo: string | null | undefined
+export function macUserName(): string | null {
+  if (userNameMemo !== undefined) return userNameMemo
+  let name: string | null = null
+  try {
+    if (process.platform === 'darwin') name = execFileSync('/usr/bin/id', ['-F'], { encoding: 'utf8', timeout: 1500 }).trim() || null
+  } catch {
+    /* no full name on this account */
+  }
+  if (!name) {
+    try {
+      const u = userInfo().username
+      name = u ? u.charAt(0).toUpperCase() + u.slice(1) : null
+    } catch {
+      name = null
+    }
+  }
+  userNameMemo = name
+  return name
+}
 
 export function registerAppHandlers(h: Hive): void {
   handle('app:info', (): AppInfo => ({
@@ -27,7 +51,8 @@ export function registerAppHandlers(h: Hive): void {
     logsDir: h.paths.logsDir,
     dbPath: h.paths.dbPath,
     safeStorageAvailable: safeStorage.isEncryptionAvailable(),
-    loginShellPath: loginEnvState().loginPath
+    loginShellPath: loginEnvState().loginPath,
+    userName: macUserName()
   }))
   handle('app:status', () => h.status())
   handle('app:home', (): HomeData => {

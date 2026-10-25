@@ -565,6 +565,8 @@ export interface Settings {
   slackAlertUserId?: string | null
   /** SLACK.md §10.3: mirror Needs-you alerts to the alert user's Slack DM. Default false. */
   slackMirrorNeedsYou?: boolean
+  /** Settings › Notifications: a Mac notification when something needs you (an ask, a finished turn). Absent = true. */
+  notifyNeedsYou?: boolean
   /** SLACK.md §6.2: backfill window in days. Default 7, 0..90. */
   slackBackfillDays?: number
   /** SLACK.md §6.3: gap-filled messages newer than this still trigger. Default 10, 0..120. */
@@ -611,6 +613,13 @@ export interface Settings {
   sidebarNav?: Record<string, SidebarPrefs>
   /** CHAT-UI.md §4.4: Claude sessions open as a chat or a terminal. auto: chats as Chat, repo/worktree sessions as Terminal. Absent = 'auto'. */
   openChatsAs?: import('./chat').OpenChatsAs
+  /** Five doors step 5: one-time notices the person dismissed, by id ("things-moved"), with when. UI state only. */
+  notices?: Record<string, string>
+  /**
+   * Five doors step 5: a company just set up whose first week waits for "Your team is ready. Start the first week?" on
+   * its Home: the onboarding journal and the schedules the Ready step ticked. Removed once answered. UI state only.
+   */
+  firstWeek?: Record<Id, { journalId: string; scheduleRefs: string[] }>
 }
 export type TrackTasks = 'off' | 'auto' | 'always'
 /** A More item's place in the sidebar: always in PINNED, in PINNED only while it has something for you, or in More. */
@@ -666,6 +675,8 @@ export interface AppInfo {
   dbPath: string
   safeStorageAvailable: boolean
   loginShellPath: string | null // resolved $PATH, null if resolution failed
+  /** five doors E12: the account's full name for the greeting (absent from older mains) */
+  userName?: string | null
 }
 export interface StatusSnapshot {
   runningSessions: number

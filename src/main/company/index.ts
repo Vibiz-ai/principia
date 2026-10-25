@@ -12,7 +12,7 @@ import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpd
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
 import { briefPromptBlock, contextFromDescription, planStartRefusal } from './brief'
 import { planBlockerMet } from '../../shared/plans'
-import { assertEditable, assertReassignable, assertTransition, runEndState } from './taskState'
+import { assertEditable, assertReassignable, assertTransition, runEndState, type StopReason } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
 export { buildPassportContext, CompanyScope } from './scope'
@@ -53,7 +53,7 @@ export class CompanyStore {
   /** experimental.departments (§0.8); off, plain tasks keep today's statuses (no dependency lock, no auto heal) */
   private boardOn: () => boolean = ()=>true
   /** why main canceled a task's run (time or wake cap); consumed at its run end */
-  private readonly stopReasons = new Map<string, 'limit'|'interrupted'|'handoff_cap'|'paused'>()
+  private readonly stopReasons = new Map<string, StopReason>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
   private readonly runLinks: boolean
   /** LINEAR.md: told after every task write (sync schedules a push); never fails the write */
@@ -182,6 +182,25 @@ export class CompanyStore {
       if (p.vaultPath && p.vaultPath !== c.vaultPath) this.scope.checkVaultPath(id, p.vaultPath)
       if (p.vaultPath !== undefined) this.store.db.prepare('UPDATE company_passports SET vault_path=? WHERE id=?').run(p.vaultPath, id)
       if (p.taskPrefix !== undefined) this.setTaskPrefix(id, p.taskPrefix)
+      if (p.account !== undefined || p.monthlyCap !== undefined) {
+        if (c.system === 'personal' && p.account) fail('Personal has no connections of its own. Connect it inside a company.')
+        const data = this.companyJson(id)
+        const accounts = { ...((data.accounts as Record<string, unknown> | undefined) ?? {}) }
+        if (p.account) {
+          if (p.account.handle) accounts[p.account.kind] = { handle: p.account.handle, connectedAt: new Date().toISOString() }
+          else delete accounts[p.account.kind]
+        }
+        const next: Record<string, unknown> = { ...data, accounts }
+        if (p.monthlyCap !== undefined) next.monthlyCap = p.monthlyCap
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(next), id)
+      }
+      // five doors E14: the rail label and the client tag (UI only: nothing in main decides on them)
+      if (p.railLabel !== undefined || p.client !== undefined) {
+        const next: Record<string, unknown> = { ...this.companyJson(id) }
+        if (p.railLabel !== undefined) { if (p.railLabel) next.railLabel = p.railLabel.toUpperCase(); else delete next.railLabel }
+        if (p.client !== undefined) { if (p.client) next.client = true; else delete next.client }
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(next), id)
+      }
     })()
     return this.passport(id)
   }
@@ -656,7 +675,7 @@ export class CompanyStore {
     })()
   }
   /** The next run end of this task parks with `reason` instead of no_report (a time or wake cap canceled it). */
-  expectStop(taskId: string, reason: 'limit'|'interrupted'|'handoff_cap'|'paused'): void { this.stopReasons.set(taskId,reason) }
+  expectStop(taskId: string, reason: StopReason): void { this.stopReasons.set(taskId,reason) }
   /** Parks an in-flight task whose run or session is gone (no live run to cancel). */
   park(id: string, reason: 'no_report'|'interrupted'|'limit'|'run_failed', message: string): BoardTask {
     return this.store.db.transaction(()=> {
@@ -929,7 +948,7 @@ export class CompanyStore {
       } else {
         selected=profileId ?? (agent?.kind==='profile' ? agent.refId : null) ?? task.assigneeProfileId
         const profile=selected ? this.store.getProfile(selected) : null
-        if(!profile) fail('Choose an agent profile')
+        if(!profile) fail(agent ? `${agent.name} has no AI tool to work with. Choose one on the agent's page.` : 'Assign an agent first')
         if(profile!.adapter==='shell') fail('Choose Claude, Codex, Cursor, or Gemini to work on this task')
         // only the profile that held the conversation resumes it (assigneeProfileId is the last turn's profile)
         resumeSessionId=profile!.adapter==='claude'&&task.agentSessionId&&selected===task.assigneeProfileId ? task.agentSessionId : null
@@ -1011,12 +1030,12 @@ export class CompanyStore {
   }
 }
 /**
- * The row JSON a profile save keeps: the board switch (§1.1), the company pause (five doors A4) and the task prefix and
- * counter (five doors step 2). Everything else in the JSON is the profile, rewritten by the save.
+ * The row JSON a profile save keeps: the board switch (§1.1), the company pause (five doors A4), the task prefix and
+ * counter (five doors step 2), and the connected accounts and monthly cap (five doors step 4). Everything else in the JSON is the profile, rewritten by the save.
  */
 function keepRowState(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const k of ['autopilot', 'maxInFlight', 'pause', 'taskPrefix', 'taskSeq']) if (data[k] !== undefined) out[k] = data[k]
+  for (const k of ['autopilot', 'maxInFlight', 'pause', 'taskPrefix', 'taskSeq', 'accounts', 'monthlyCap', 'railLabel', 'client']) if (data[k] !== undefined) out[k] = data[k]
   return out
 }
 /** Older rows lack the §1.3 fields; a bad JSON field never hides the task. */

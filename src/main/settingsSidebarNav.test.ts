@@ -15,3 +15,18 @@ describe('settings:update sidebarNav (five doors: pins per company)', () => {
     expect(ok({ sidebarNav: { 'not an id': { pins: [] } } })).toBe(false)
   })
 })
+
+describe('settings:update notices and firstWeek (five doors step 5)', () => {
+  it('accepts a dismissed notice and a first week waiting per company', () => {
+    expect(ok({ notices: { 'things-moved': '2026-10-25T21:00:00.000Z' } })).toBe(true)
+    expect(ok({ firstWeek: { co_abc123: { journalId: 'j_x1-2', scheduleRefs: ['weekly-review'] } } })).toBe(true)
+    expect(ok({ firstWeek: {} })).toBe(true)
+  })
+  it('rejects malformed ids, refs and extra fields', () => {
+    expect(ok({ notices: { 'Things Moved': 'x' } })).toBe(false)
+    expect(ok({ firstWeek: { co_abc123: { journalId: '../x', scheduleRefs: [] } } })).toBe(false)
+    expect(ok({ firstWeek: { co_abc123: { journalId: 'j1', scheduleRefs: ['Bad Ref'] } } })).toBe(false)
+    expect(ok({ firstWeek: { co_abc123: { journalId: 'j1', scheduleRefs: [], extra: true } } })).toBe(false)
+    expect(ok({ firstWeek: { 'not an id': { journalId: 'j1', scheduleRefs: [] } } })).toBe(false)
+  })
+})

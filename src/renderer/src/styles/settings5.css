@@ -1,0 +1,128 @@
+/* Five doors step 4: Settings pages (Connections, Team & autonomy, AI providers, Storage), Spend and the All companies
+   cards. White line art on dark, cool accents only: green = connected, accent = needs you / primary, blue = working. */
+
+.s5 { max-width: 960px; }
+.s5__title { font-size: 18px; font-weight: var(--weight-semibold); color: var(--text-primary); margin: 2px 0 4px; }
+.s5__lede { color: var(--text-secondary); margin: 0 0 16px; max-width: 680px; line-height: 1.5; }
+.s5__foot { margin: 18px 2px 4px; font-size: var(--text-sm); }
+.s5__loading { padding: 12px 2px; }
+
+.s5-search { display: flex; align-items: center; gap: 8px; max-width: 380px; padding: 0 10px; height: 32px; border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.12)); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-tertiary); margin-bottom: 6px; }
+.s5-search .input { flex: 1; border: 0; background: transparent; padding: 0; height: 30px; box-shadow: none; }
+.s5-search .input:focus { outline: none; }
+.s5-search:focus-within { border-color: var(--accent); }
+
+.s5-group { margin-top: 18px; }
+.s5-group__title { font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--text-tertiary); margin: 0 2px 8px; }
+.s5-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.s5-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); min-height: 132px; }
+.s5-card.is-soon { opacity: 0.62; }
+.s5-card__head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.s5-card__logo { flex: none; width: 30px; height: 30px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, 0.28); display: grid; place-items: center; font-size: 11.5px; font-weight: var(--weight-semibold); letter-spacing: 0.02em; color: var(--text-primary); background: rgba(255, 255, 255, 0.03); }
+.s5-card__name { font-weight: var(--weight-semibold); color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s5-card__blurb { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.45; }
+.s5-card__note { margin: 0; color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.4; }
+.s5-card__foot { margin-top: auto; display: flex; justify-content: flex-end; gap: 6px; }
+
+.s5-chip { flex: none; font-size: 11.5px; line-height: 1; padding: 4px 8px; border-radius: 999px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+.s5-chip--ok { color: var(--status-success); background: var(--status-success-soft); }
+.s5-chip--needs { color: var(--accent); background: var(--accent-soft); }
+.s5-chip--run { color: var(--status-running); background: var(--status-running-soft); }
+.s5-chip--grey { color: var(--text-tertiary); background: rgba(255, 255, 255, 0.05); }
+
+/* sheets */
+.s5-sheet { display: flex; flex-direction: column; gap: 12px; }
+.s5-sheet__lead { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--text-primary); }
+.s5-sheet__lead .icon { color: var(--status-success); }
+.s5-sheet__p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.s5-sheet__warn { margin: 0; color: var(--accent); line-height: 1.45; }
+.s5-sheet__note { margin: 4px 0 0; color: var(--text-secondary); font-size: var(--text-sm); }
+.s5-sheet__row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.s5-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; color: var(--text-secondary); line-height: 1.45; }
+.s5-steps b { color: var(--text-primary); margin-right: 4px; }
+.s5-box { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.025); color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; }
+.s5-box > .icon { flex: none; margin-top: 2px; color: var(--text-primary); }
+.s5-box b { color: var(--text-primary); }
+.s5-field { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: var(--text-sm); }
+.s5-field .input { max-width: 320px; }
+.s5-field__err { color: var(--accent); }
+.s5-choice { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.s5-choice.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.s5-choice > .icon { flex: none; color: var(--text-primary); }
+.s5-opt { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.s5-opt:last-of-type { border-bottom: 0; }
+.s5-opt__text { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.s5-opt__text small { color: var(--text-tertiary); font-size: var(--text-sm); line-height: 1.4; }
+.s5-inline { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.s5-inline .input { width: 280px; }
+.s5-editor { width: 680px; max-height: 80vh; overflow: auto; }
+
+/* AI providers: the Claude row */
+.s5-claude__mark { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.3); display: grid; place-items: center; font-size: 12px; color: var(--text-tertiary); }
+.s5-claude__mark.is-ok { color: var(--status-success); border-color: var(--status-success); }
+
+/* Linear: the preview before Connect */
+.linear-preview { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.14); color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; }
+.linear-preview .icon { flex: none; margin-top: 3px; color: var(--text-primary); }
+
+/* company General: the task prefix */
+.cs-prefix { width: 96px; text-transform: uppercase; letter-spacing: 0.06em; }
+.cs-prefix__err { color: var(--accent) !important; }
+
+/* Storage: the disk table inside a settings group */
+.usage__disk--settings { padding: 0; }
+.usage__disk--settings .usage-table { margin: 0; }
+.usage__disk-total { margin-left: 8px; text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
+
+/* the scope headings wrap ("This company · Northwind Coffee") instead of cutting the company name */
+.settings__nav { width: 200px; }
+.settings__nav .settings__group { white-space: normal; line-height: 1.4; }
+
+/* ---------- Spend (design §4.9): plan first, $ behind a toggle ---------- */
+.spend5 { max-width: 960px; margin: 0 auto; padding: 20px 24px 40px; }
+.spend5-usd { display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--text-sm); -webkit-app-region: no-drag; }
+.spend5-hero { padding: 20px 22px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: var(--radius-lg); background: var(--surface-1); }
+.spend5-hero__kicker { font-size: 11.5px; letter-spacing: 0.08em; color: var(--text-tertiary); }
+.spend5-hero__big { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 12px; flex-wrap: wrap; }
+.spend5-hero__n { font-size: 40px; font-weight: var(--weight-semibold); color: var(--text-primary); line-height: 1; }
+.spend5-hero__of { color: var(--text-secondary); }
+.spend5-hero__line { display: flex; align-items: center; gap: 6px; color: var(--text-primary); flex-wrap: wrap; }
+.spend5-hero__line > .icon { color: var(--status-success); }
+.spend5-hero__limits { margin-top: 10px; font-size: var(--text-sm); line-height: 1.5; }
+.spend5-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0 6px; }
+.spend5-tile { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.spend5-tile__l { font-size: var(--text-sm); color: var(--text-tertiary); }
+.spend5-tile__v { font-size: 22px; font-weight: var(--weight-semibold); color: var(--text-primary); }
+.spend5-tile__d { font-size: var(--text-sm); color: var(--text-secondary); }
+.spend5-cap { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.spend5-cap .input { width: 80px; }
+.spend5-cap__dollar { color: var(--text-secondary); }
+.spend5-cap { flex-wrap: wrap; }
+.spend5-cap__err { flex-basis: 100%; font-size: 12px; color: var(--text-secondary); }
+.spend5-explain { font-size: var(--text-sm); margin: 6px 4px 18px; line-height: 1.5; }
+.spend5-table { margin-top: 20px; }
+.spend5-table .usage-table { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; width: 100%; }
+.spend5-total td { border-top: 1px solid rgba(255, 255, 255, 0.14); font-weight: var(--weight-semibold); color: var(--text-primary); }
+.spend5-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.spend5-bar > i { display: block; height: 100%; background: var(--status-running); border-radius: 3px; }
+.spend5-empty { padding: 14px; border: 1px dashed var(--border); border-radius: var(--radius-lg); }
+@media (max-width: 1180px) { .spend5-tiles { grid-template-columns: 1fr 1fr; } }
+.spend5-table .usage-table { table-layout: fixed; }
+.spend5-table th.num { width: 96px; }
+
+/* ---------- All companies (design §4.8): month, week and cap on every card; Spend by company ---------- */
+.pcard__money { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; }
+.pcard__money-row { display: flex; align-items: baseline; gap: 8px; }
+.pcard__money-v { font-size: 22px; font-weight: var(--weight-semibold); color: var(--text-primary); }
+.pcard__money-week { margin-left: auto; font-size: var(--text-sm); }
+.pcard__cap { font-size: 11.5px; }
+.pcard__cap-bar { margin-top: 2px; }
+.pcard__stat-link { cursor: pointer; }
+.pcard__stat-link:hover dd { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; }
+.portfolio__spend { margin-top: 28px; }
+.portfolio__spend .spend5-table { margin-top: 8px; }
+.s5-card__name { min-width: 64px; }
+/* five doors E14: Company settings › On the rail */
+.cs-rail__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cs-rail__row .cs-prefix { width: 72px; }
+.cs-rail__client { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-secondary); flex: none; white-space: nowrap; }

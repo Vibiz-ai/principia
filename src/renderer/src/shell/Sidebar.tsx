@@ -7,7 +7,7 @@
  * gone: their contents live behind the doors (Chats, Team, Forum in More, Home, the rail).
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Repo, Session } from '@shared/types'
+import type { Id, Repo, Session } from '@shared/types'
 import type { AgentNode } from '@shared/live'
 import { Icon } from '../components/Icon'
 import { IconButton, Kbd, StatusGlyph, useTick } from '../components/ui'
@@ -62,8 +62,9 @@ import {
   updateSidebarPrefs,
   companyName
 } from '../state/store'
-import { DepartmentIcon } from './DepartmentGroup'
+import { DepartmentIcon, agentNameNow } from './DepartmentGroup'
 import { CompanyHeader } from './CompanyHeader'
+import { CUSTOMIZE_EVENT, CustomizeSidebarSheet, openCustomizeSidebar } from './CustomizeSidebar'
 import { useForumBadge } from '../components/forum/SidebarSection'
 import { useCloudBadge } from '../state/cloud'
 import { plansEnabled } from '@shared/plans'
@@ -113,7 +114,8 @@ export function Sidebar(): React.JSX.Element {
   const memoryPaused = useStore((s) => !!s.memory?.agentWritesPaused)
   // the Home badge counts what Home lists under Needs you: open asks and finished turns, plus board tasks waiting on you
   const needsYou = needsSlice.count
-  const workingCount = workingSlice.count
+  // the Team dot counts the team's agents; your own chats are live (LIVE lists them) but they are not agents
+  const workingCount = workingSlice.agents
   const slackDrafts = usePendingSlackDrafts().filter((d) => d.status === 'pending' || d.status === 'failed').length
   const slackError = useSlack((s) => (s.available === false ? false : s.status?.state === 'error'))
   // FORUM.md §8: mentions and unread DMs of the focused company's Forum (its "Show when active" signal)
@@ -129,6 +131,7 @@ export function Sidebar(): React.JSX.Element {
     return { sessions: allNeedsOwners.sessions, runs }
   }, [mode, active, allNeedsOwners, liveRows])
   const allTasks = useStore((s) => s.tasks)
+  const liveSeats = useStore((s) => s.companyAgents)
   const agentCompany = useMemo(() => agentCompanyResolver(Object.values(agentsMap), allSessions, allTasks), [agentsMap, allSessions, allTasks])
   // "Stalled?" (no output for Settings.stallMinutes): sessions keyed by session id for their repo rows
   const stalled = useMemo(() => {
@@ -153,6 +156,12 @@ export function Sidebar(): React.JSX.Element {
   const [showEnded, setShowEnded] = useState<Record<string, boolean>>({})
   const [renaming, setRenaming] = useState<{ kind: 'repo' | 'session'; id: string } | null>(null)
   const [more, setMore] = useState<DOMRect | null>(null)
+  const [customizing, setCustomizing] = useState(false)
+  useEffect(() => {
+    const open = (): void => (setMore(null), setCustomizing(true))
+    window.addEventListener(CUSTOMIZE_EVENT, open)
+    return () => window.removeEventListener(CUSTOMIZE_EVENT, open)
+  }, [])
   const filterRef = useRef<HTMLInputElement>(null)
   const moreRef = useRef<HTMLDivElement>(null)
 
@@ -292,25 +301,39 @@ export function Sidebar(): React.JSX.Element {
     return null
   }
 
-  /** LIVE (design §2.6): name + time, then the full activity sentence. A click opens that agent's own chat. */
-  const liveRow = (it: LiveItem): React.JSX.Element => (
-    <button key={it.key} type="button" className="live-row is-shimmering" title={`${it.title}${it.detail ? `\n${it.detail}` : ''}`} onClick={() => void openLiveItem(it)}>
+  /**
+   * LIVE (design §2.6): name + time, then the full activity sentence. A click opens that agent's own chat. Step 3: a
+   * board task's run reads as its agent ("Pliny", then what it is doing) and opens that agent's thread in Chats; a
+   * company with no code never sees a task code (C7).
+   */
+  const liveWho = (it: LiveItem): { name: string; detail: string | null; agentId: Id | null } => {
+    const t = allTasks.find((x) => x.status === 'in_progress' && !!x.runId && (x.runId === it.runId || x.runId === it.sessionId))
+    const a = t?.agentId ? liveSeats.find((x) => x.id === t.agentId && x.companyId === t.companyId) : undefined
+    const code = allRepos.some((r) => r.companyId === it.companyId)
+    if (a && t) return { name: agentNameNow(a).name, detail: it.detail ?? t.title, agentId: a.id }
+    return { name: code ? it.title : it.title.replace(/^[A-Z][A-Z0-9]{0,5}-\d+ · /, ''), detail: it.detail, agentId: null }
+  }
+  const liveRow = (it: LiveItem): React.JSX.Element => {
+    const w = liveWho(it)
+    return (
+    <button key={it.key} type="button" className="live-row is-shimmering" title={`${w.name}${w.detail ? `\n${w.detail}` : ''}`} onClick={() => void (w.agentId ? navigate({ name: 'chats', filter: 'live', chat: `agent:${w.agentId}` }) : openLiveItem(it))}>
       <span className="live-row__dot" aria-hidden />
       <span className="live-row__text">
         <span className="live-row__l1">
-          <span className="live-row__name">{it.title}</span>
-          <span className="live-row__age">{age(agentsMap[it.agentId]?.startedAt ?? it.at)}</span>
+          <span className="live-row__name">{w.name}</span>
+          <span className="live-row__age">{age(it.startedAt ?? agentsMap[it.agentId]?.startedAt ?? it.at)}</span>
         </span>
         {/* All companies: the company leads line 2, so the title keeps the width (design §2.6: the full sentence) */}
-        {(it.detail || mode === 'all') && (
+        {(w.detail || mode === 'all') && (
           <span className="live-row__l2 shimmer-text">
-            {mode === 'all' && <span className="live-row__co">{companyName(it.companyId)}{it.detail ? ' · ' : ''}</span>}
-            {it.detail}
+            {mode === 'all' && <span className="live-row__co">{companyName(it.companyId)}{w.detail ? ' · ' : ''}</span>}
+            {w.detail}
           </span>
         )}
       </span>
     </button>
-  )
+    )
+  }
 
   const sessionGlyph = (s: Session): React.JSX.Element => {
     if (sessionNeeds(s)) return <AgentGlyph visual="needs" />
@@ -530,7 +553,15 @@ export function Sidebar(): React.JSX.Element {
           popup: { expanded: !!more }
         })}
       </nav>
-      <div className="sidebar__body">
+      <div
+        className="sidebar__body"
+        onContextMenu={(e) => {
+          // design §3: right-click the empty sidebar to customize it (rows keep their own menus)
+          if ((e.target as HTMLElement).closest('.side-row, .live-row, button, input')) return
+          e.preventDefault()
+          void nativeMenu([{ id: 'customize', label: 'Customize Sidebar…' }]).then((id) => id === 'customize' && openCustomizeSidebar())
+        }}
+      >
         {working.length > 0 && (
           <section className="side-sec" aria-label="Live">
             <div className="sidebar__section">
@@ -616,6 +647,7 @@ export function Sidebar(): React.JSX.Element {
         })}
       </div>
       <div className="sidebar__resizer" onMouseDown={startResize} />
+      {customizing && <CustomizeSidebarSheet onClose={() => setCustomizing(false)} />}
       {more && (
         <MorePopover
           anchor={more}
@@ -739,7 +771,12 @@ function MorePopover({
           })}
         </div>
       ))}
-      <div className="more-pop__foot">Pins are saved for this company. Everything is also in ⌘K.</div>
+      <div className="more-pop__foot">
+        <span>Pins are saved for this company. Everything is also in ⌘K.</span>
+        <button type="button" className="link-btn more-pop__customize" onClick={() => (onClose(), openCustomizeSidebar())}>
+          Customize sidebar…
+        </button>
+      </div>
     </div>
   )
 }

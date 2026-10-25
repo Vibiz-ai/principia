@@ -55,7 +55,11 @@ const P: Record<string, string> = {
   edit: 'M10.5 3 13 5.5 6 12.5H3.5V10z',
   /** two figures: the Agents hub */
   agents: 'M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.5 3.5-3.5S9 11 9 13M11 7.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM10.2 9.7c.3-.1.5-.1.8-.1 1.7 0 3 1.3 3 3.2',
+  /** five doors §2.5: Personal on the rail, a person rather than a letter */
+  user: 'M8 7.5a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5zM3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5',
   reply: 'M6.5 4 3 7.5 6.5 11M3 7.5h6.5a3.5 3.5 0 0 1 3.5 3.5v1',
+  /** five doors: the Ask box's send (an arrow to the right) */
+  send: 'M3 8h10M9 4l4 4-4 4',
   /** Five doors: Board (three columns), Knowledge (open book), Activity (a pulse), Add-ons (grid + plus), a repo branch */
   board: 'M2.5 3h11v10h-11zM6.2 3v10M9.8 3v10',
   knowledge: 'M8 4.5C6.5 3.3 4.3 3 2.5 3.3v9.4c1.8-.3 4 0 5.5 1.3 1.5-1.3 3.7-1.6 5.5-1.3V3.3C11.7 3 9.5 3.3 8 4.5v9.5',

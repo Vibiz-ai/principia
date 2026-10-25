@@ -43,7 +43,24 @@ export interface CompanyPassport extends CompanyPassportInput {
   pausedAt?: string | null
   /** Five doors step 2: this company's task prefix ("NC" in NC-12). Personal keeps PRN. */
   taskPrefix?: string
+  /**
+   * Five doors step 4: accounts connected to this company only, by the Connections page (never shared with another
+   * company). Instagram is drafts only: Principia keeps the handle, agents get each post ready, the founder posts it.
+   * GitHub records the founder's OK to use the gh login on this Mac for this company, with the login it saw.
+   */
+  accounts?: CompanyAccounts
+  /** Five doors §4.8: pay-as-you-go value cap per calendar month, in dollars. Reaching it pauses the company. */
+  monthlyCap?: number | null
+  /** Five doors step 5: the last task number handed out in this company (NC-12 → 12); the Board previews the next branch. */
+  taskSeq?: number
+  /** Five doors E14: a short rail label (1-3 letters or digits) replacing the initials, so look-alike clients differ. */
+  railLabel?: string
+  /** Five doors E14: this company is a client (any company can be tagged; agencies tell clients apart on the rail). */
+  client?: boolean
 }
+export interface CompanyAccount { handle: string; connectedAt: string }
+export interface CompanyAccounts { instagram?: CompanyAccount | null; github?: CompanyAccount | null }
+export const MONTHLY_CAP_MAX = 100_000
 /** Work that was in flight when its company was paused: saved, and started again on resume. */
 export interface CompanyPauseCheckpoint {
   taskId: string
@@ -104,7 +121,18 @@ export interface PassportExport { format: 'principia-passport'; version: 1; pass
 /** company:create. Profile fields default to empty. */
 export type CompanyCreateInput = { name: string; color?: string; vaultPath?: string | null; repoIds?: string[] } & Partial<Record<typeof PROFILE_FIELDS[number], string>>
 /** company:update (name, colour, sort, vault path). */
-export interface CompanyUpdateInput { name?: string; color?: string; sortOrder?: number; vaultPath?: string | null; /** five doors step 2: NC → NW (tasks keep their numbers) */ taskPrefix?: string }
+export interface CompanyUpdateInput {
+  name?: string; color?: string; sortOrder?: number; vaultPath?: string | null
+  /** five doors step 2: NC → NW (tasks keep their numbers) */ taskPrefix?: string
+  /** five doors step 4: connect (an account) or disconnect (null) one of this company's own accounts */
+  account?: { kind: keyof CompanyAccounts; handle: string | null }
+  /** five doors step 4: dollars per month; null removes the cap */
+  monthlyCap?: number | null
+  /** five doors E14: the rail's short label (1-3 letters or digits); null goes back to the initials */
+  railLabel?: string | null
+  /** five doors E14: tag (or untag) this company as a client */
+  client?: boolean
+}
 /** company:overview, one per listed company. Memory counts come from the passport index (0 until it exists). */
 export interface CompanyOverview {
   companyId: string

@@ -12,6 +12,9 @@ import { CompanyLogoStore, type Shrink } from '../company/logoStore'
 import { planBoardStart } from '../company/planBoard'
 import { setCompanyPaused } from '../company/pauseCompany'
 import { log } from '../log'
+import { notify } from '../notify'
+import { usageSummary } from '../usage/summary'
+import { capReached } from '../../shared/spend'
 /** The departments store the handlers write through (one per Hive; stateless over the same db as h.company). */
 const deptStores=new WeakMap<Hive,DepartmentStore>()
 export function departmentStoreFor(h: Hive): DepartmentStore {
@@ -90,7 +93,7 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('company:assignRepo',({repoId,companyId})=>{const p=c.assignRepo(repoId,companyId);changed('company');emit('data:changed',{domain:'repos'});return p})
   handle('company:overview',()=>c.overview())
   // five doors A4: one company only. The starter is the same human start as tasks:start (dispatcher, else the engine)
-  handle('company:pause',async({id,paused})=>{
+  const pauseOne=async(id:string,paused:boolean)=>{
     const res=await setCompanyPaused({
       company:c,
       cancelRun:(runId)=>h.engine.runs.cancel(runId),
@@ -102,6 +105,19 @@ export function registerCompanyHandlers(h: Hive): void {
     // the resumed company's queue may move again (autopilot), and nothing else's
     if(!paused) void h.dispatcher?.pump(id)
     return res
+  }
+  handle('company:pause',({id,paused})=>pauseOne(id,paused))
+  // five doors §4.8: a company that reaches its monthly cap pauses (this company only), checked when a run ends
+  h.runHooks.push(run=>{
+    if(!run.companyId||!['passed','failed','canceled'].includes(run.status)) return
+    const co=c.listPassports().find(x=>x.id===run.companyId)
+    if(!co?.monthlyCap||co.pausedAt) return
+    const month=usageSummary({db:h.db,companyName:(id)=>c.listPassports({includeArchived:true}).find(x=>x.id===id)?.name??id},{range:'month',companyId:co.id})
+    if(!capReached(month.total.usd,co.monthlyCap)) return
+    void pauseOne(co.id,true).then(()=>{
+      log.info('company paused at its monthly cap',{companyId:co.id,cap:co.monthlyCap,usd:month.total.usd})
+      notify({title:`${co.name} paused at its monthly cap`,body:`This month's pay-as-you-go value reached $${co.monthlyCap}. Other companies keep running. Raise the cap or resume in Spend.`,sound:false})
+    },(e)=>log.warn('cap pause failed',{companyId:co.id,error:String(e)}))
   })
   const logos=logoStoreFor(h)
   handle('company:logos',()=>logos.list(c.listPassports()))
@@ -135,7 +151,7 @@ export function registerCompanyHandlers(h: Hive): void {
   // §3.4: a board Run goes through the dispatcher (task link, seat, time cap, task tools, session capture, wake reset)
   handle('tasks:start',async({id,profileId})=>{if(c.task(id).plan){const pt=await planBoardStart(id);changed('tasks');h.statusChanged();return pt};const t=h.dispatcher?h.dispatcher.runNow(id,profileId):c.startTask(id,profileId,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId}));changed('tasks');h.statusChanged();return t})
   // a human comment: by 'human' so its wake resets the guard (§3.5)
-  handle('tasks:comment',({id,message})=>{const a=c.activity(id,'comment',h.vault.redact(message),'human');changed('tasks');return a})
+  handle('tasks:comment',({id,message,by})=>{const a=c.activity(id,'comment',h.vault.redact(message),by??'human');changed('tasks');return a})
   // DEPARTMENTS.md §10: departments and agent seats. tasks:assign … board:autopilot are registered by the board handlers.
   handle('departments:list',q=>{gate();return d.list(q?.companyId,{includeArchived:!!q?.includeArchived})})
   handle('departments:save',input=>{const dep=actions.save(input);changed('departments');return dep})

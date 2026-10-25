@@ -9,8 +9,12 @@ const items = [pauseAll, newSch, ...goTo]
 
 describe('palette ranking', () => {
   it('an old nav word lands on its new door, never on a global action ("schedules" → Automations)', () => {
-    expect(rankPalette(items, 'schedules')[0]!.id).toBe('v:automations')
-    expect(rankPalette(items, 'Schedules')[0]!.id).toBe('v:automations')
+    // an old name lands on its own tab of Automations ("Schedules" ↵ never opens Autopilots)
+    expect(rankPalette(items, 'schedules')[0]!.id).toBe('v:schedules')
+    expect(rankPalette(items, 'Schedules')[0]!.id).toBe('v:schedules')
+    expect(rankPalette(items, 'Workflows')[0]!.id).toBe('v:workflows')
+    expect(rankPalette(items, 'autopilot')[0]!.id).toBe('v:autopilots')
+    expect(rankPalette(items, 'automations')[0]!.id).toBe('v:automations')
     expect(rankPalette(items, 'canvas')[0]!.id).toBe('v:activity')
     expect(rankPalette(items, 'passport')[0]!.id).toBe('v:knowledge')
     expect(rankPalette(items, 'usage')[0]!.id).toBe('v:spend')
@@ -33,11 +37,24 @@ describe('palette ranking', () => {
 describe('palette synonyms (design §9)', () => {
   it('"api key" finds both Keys & secrets and AI providers; "connections" and "linear" find their pages', () => {
     const top = (q: string, n = 2): string[] => rankPalette(goTo, q).slice(0, n).map((x) => x.id)
-    expect(top('api key')).toEqual(['v:set:keys', 'v:set:agents'])
+    expect(top('api key')).toEqual(['v:set:keys', 'v:set:providers'])
     expect(top('connections', 1)).toEqual(['v:set:connections'])
-    expect(top('linear', 1)).toEqual(['v:set:company'])
-    // not in the catalog yet (step 4): no row pretends it is; the empty state offers Look in Connections
-    expect(top('instagram', 1)).toEqual([])
+    // step 4: Linear and Instagram are cards in Connections
+    expect(top('linear', 1)).toEqual(['v:set:connections'])
+    expect(top('instagram', 1)).toEqual(['v:set:connections'])
+    expect(top('disk', 1)).toEqual(['v:set:storage'])
+    expect(top('task prefix', 1)).toEqual(['v:set:company'])
+  })
+  it('several words, Danger zone and archive are found (QA round 4)', () => {
+    const top = (q: string, n = 1): string[] => rankPalette(goTo, q).slice(0, n).map((x) => x.id)
+    expect(top('openai key')).toEqual(['v:set:providers'])
+    expect(top('key openai')).toEqual(['v:set:providers'])
+    expect(top('danger')).toEqual(['v:set:danger'])
+    expect(top('archive')).toEqual(['v:set:danger'])
+    expect(top('unarchive')).toEqual(['v:set:storage'])
+    expect(top('notifications')).toEqual(['v:set:notifications'])
+    expect(rankPalette([{ id: 'gh', label: 'Connect GitHub…', group: 'Connections', keywords: 'github gh login' }], 'gh login').length).toBe(1)
+    expect(rankPalette(goTo, 'openai zebra')).toEqual([])
   })
 })
 
@@ -49,5 +66,15 @@ describe('keywords add no noise', () => {
     expect(rankPalette([hubspot], 'deals').map((x) => x.id)).toEqual(['conn:hubspot'])
     // the label still matches loosely ("hbspt")
     expect(rankPalette([hubspot], 'hbspt').map((x) => x.id)).toEqual(['conn:hubspot'])
+  })
+})
+
+describe('Automations tabs in ⌘K', () => {
+  it('each old name opens its own tab', () => {
+    const by = Object.fromEntries(goToEntries(() => true).map((g) => [g.id, g.target]))
+    expect(by['v:schedules']).toEqual({ view: { name: 'schedules', tab: 'schedules' } })
+    expect(by['v:workflows']).toEqual({ view: { name: 'workflows' } })
+    expect(by['v:autopilots']).toEqual({ view: { name: 'schedules', tab: 'autopilots' } })
+    expect(goToEntries((k) => k !== 'automations').some((g) => g.id === 'v:schedules')).toBe(false)
   })
 })

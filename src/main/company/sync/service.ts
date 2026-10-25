@@ -6,7 +6,7 @@
  */
 import type { BoardTask } from '../../../shared/company'
 import { HiveError } from '../../../shared/errors'
-import { LINEAR_REJECTED, LINEAR_REJECTED_AUTOSYNC_OFF, type LinearConnectInput, type LinearKeyCheck, type LinearStatusView } from '../../../shared/linear'
+import { LINEAR_REJECTED, LINEAR_REJECTED_AUTOSYNC_OFF, type LinearConnectInput, type LinearKeyCheck, type LinearPreview, type LinearStatusView } from '../../../shared/linear'
 import type { DB } from '../../db'
 import { PassAborted, TaskSyncEngine, type SyncResult, type SyncTaskHost } from './engine'
 import { SYNC_FIELDS, fingerprint, fingerprints, localValues } from './fields'
@@ -214,6 +214,30 @@ export class LinearSyncService {
       return { ok: false, workspace: null, teams: [], message: e instanceof SyncError ? e.message : 'Could not reach Linear.' }
     } finally {
       this.providers.delete(`check:${companyId}`)
+    }
+  }
+
+  /** Five doors E13: the first pull's issues, counted, without saving the key or linking anything. */
+  async preview(companyId: string, teamId: string, key?: string): Promise<LinearPreview> {
+    this.assertCompany(companyId)
+    const k = (key ?? this.d.keys.reveal(companyId) ?? '').trim()
+    const problem = linearKeyProblem(k)
+    if (problem) throw new HiveError('bad_request', problem)
+    const p = this.makeProvider(`preview:${companyId}`, k)
+    try {
+      const teams = await p.teams()
+      const team = teams.teams.find((t) => t.id === teamId)
+      if (!team) throw new HiveError('bad_request', 'Pick one of the teams this key can see.')
+      const page = await p.changedSince(team.id, null)
+      const open = page.issues.filter((i) => !i.closed).length
+      const openTasksHere = this.d.board.tasks(companyId).filter((t) => t.status !== 'done' && t.status !== 'canceled' && !this.store.link(t.id)).length
+      return { teamKey: team.key, teamName: team.name, open, recentlyClosed: page.issues.length - open, more: page.truncated, openTasksHere }
+    } catch (e) {
+      if (e instanceof HiveError) throw e
+      if (e instanceof SyncError && e.code === 'auth') throw new HiveError('bad_request', LINEAR_REJECTED)
+      throw new HiveError('bad_request', e instanceof SyncError ? e.message : 'Could not reach Linear.')
+    } finally {
+      this.providers.delete(`preview:${companyId}`)
     }
   }
 

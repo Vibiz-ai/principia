@@ -40,7 +40,7 @@ export function registerUsageHandlers(h: Hive): void {
       }
     }))
 
-  handle('usage:summary', ({ range, companyId }) => usageSummary({ db: h.db, companyName }, { range, companyId }))
+  handle('usage:summary', ({ range, companyId }) => usageSummary({ db: h.db, companyName, personas: h.settings().personas !== false }, { range, companyId }))
   handle('usage:disk', (q) => diskSvc().measure(!!q?.fresh))
   handle('usage:cleanupList', () => diskSvc().cleanupItems())
   handle('usage:cleanup', ({ ids }) => diskSvc().cleanup(ids))

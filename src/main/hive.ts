@@ -335,6 +335,8 @@ export class Hive {
   initLive(): void {
     this.notifier = new NeedsYouNotifier({
       notify: (n) =>
+        // Settings › Notifications › "Tell me when something needs me" (Needs you still lists it either way)
+        this.settings().notifyNeedsYou !== false &&
         notify({
           title: n.title,
           body: n.body,

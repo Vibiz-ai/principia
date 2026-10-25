@@ -567,3 +567,14 @@
 @media (max-width: 720px) {
   .ob-two, .ob-keys, .ob-choices, .ob-choices--3 { grid-template-columns: 1fr; }
 }
+
+/* five doors step 5: the 4th goal pick is refused with one small shake (none with reduced motion) */
+@keyframes ob-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(3px); } }
+.ob-shake { animation: ob-shake 320ms ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .ob-shake { animation: none; } }
+.ob-claude { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); margin-top: 12px; }
+.ob-claude.is-out { border-color: rgba(110, 140, 255, 0.45); background: var(--accent-soft); color: var(--text-primary); }
+.ob-claude__mark { color: var(--status-success); flex: none; }
+.ob-claude.is-out .ob-claude__mark { color: var(--accent); }
+.ob-claude__text { flex: 1; min-width: 240px; }
+.ob-claude__acts { display: inline-flex; gap: 6px; }

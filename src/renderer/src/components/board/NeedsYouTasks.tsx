@@ -8,7 +8,7 @@ import { seatInitials } from '../../lib/departments'
 import { displayName, personasOf } from '../../lib/personaView'
 import { firstLine } from '../../lib/format'
 import { t, usePersonasOn, useTone, type Tone } from '../../lib/voice'
-import { departmentsOn, openBoard, useStore } from '../../state/store'
+import { companyName, departmentsOn, openBoard, useStore } from '../../state/store'
 import { Bust } from '../roman'
 import { CompanyChip } from '../CompanyChip'
 import { AskForm } from './AskForm'
@@ -100,6 +100,8 @@ function NeedsTaskRow({ item, tone, chip, open, onToggle }: { item: NeedsYouItem
     return depId ? (s.departments.find((d) => d.id === depId)?.color ?? null) : null
   })
   const who = useAgentDisplay()(agent)
+  // C7: a company with no code reads without task codes (in a mixed list too)
+  const code = useStore((s) => s.repos.some((r) => r.companyId === task.companyId))
   const persona = who?.name ?? NO_AGENT
   const role = who?.role ?? ''
   const unassigned = item.group === 'unassigned'
@@ -107,7 +109,7 @@ function NeedsTaskRow({ item, tone, chip, open, onToggle }: { item: NeedsYouItem
   const answerable = reason === 'needs_input' && !!task.ask && !task.ask.answer
   const why = task.status === 'blocked' && task.blockReason ? BLOCK_REASON_TEXT[task.blockReason] : undefined
   // screen readers hear the plain line, whatever the tone: "Marcus, Copywriter, needs you: Approve 3 post drafts"
-  const sr = `${t.sr('ny.item.sr', { persona: unassigned || !who ? NO_AGENT : persona, role: unassigned ? '' : role, task: task.title }).replace(/,\s*,/g, ',')} · ${REASON_LABEL[reason]} · ${task.identifier}`
+  const sr = `${t.sr('ny.item.sr', { persona: unassigned || !who ? NO_AGENT : persona, role: unassigned ? '' : role, task: task.title }).replace(/,\s*,/g, ',')} · ${REASON_LABEL[reason]}${code ? ` · ${task.identifier}` : ''}`
   return <div className={`needs-task ${open ? 'is-open' : ''}`}>
     <button type="button" className="needs-task__row ny-row" onClick={answerable ? onToggle : () => openBoard(task.companyId, { taskId: task.id })} title={why ?? (answerable ? 'Answer the question' : 'Open the card')} aria-label={sr} aria-expanded={answerable ? open : undefined}>
       <span className="ny-row__face" aria-hidden>
@@ -122,13 +124,13 @@ function NeedsTaskRow({ item, tone, chip, open, onToggle }: { item: NeedsYouItem
         <span className="ny-row__detail">
           <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}</span>
           {chip && <CompanyChip companyId={task.companyId} avatarOnly size={14} />}
-          <span className="task-identifier">{task.identifier}</span>
+          {code && <span className="task-identifier">{task.identifier}</span>}
           <span className="needs-task__title">{task.title}</span>
         </span>
       </span>
     </button>
     {answerable && open && <div className="needs-task__ask">
-      <AskForm task={task} compact onAnswered={onToggle} />
+      <AskForm task={task} compact onAnswered={onToggle} mixedCompany={chip ? companyName(task.companyId) : undefined} />
       <button type="button" className="link-btn needs-task__open" onClick={() => openBoard(task.companyId, { taskId: task.id })}>Open the card</button>
     </div>}
   </div>

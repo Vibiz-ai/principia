@@ -10,7 +10,7 @@ import { companyLabel } from '../lib/companyModel'
 import { isWriteOnlyKey } from '@shared/linear'
 import { keyId, keySections, overriddenShared, type KeySection } from '../lib/scope'
 import { CompanyAvatar } from '../shell/CompanyRail'
-import { attempt, companyName, enterCompany, toast, useStore } from '../state/store'
+import { attempt, companyName, enterCompany, navigate, toast, useStore } from '../state/store'
 
 /** COMPANY.md §4: where a key lives. null = Shared (every company's agents); an id = that company only. */
 type Space = Id | null
@@ -247,6 +247,14 @@ export function KeysView(): React.JSX.Element {
       <div className="keys-note">
         <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys never leave this Mac. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s, never another company’s.' : '.'}
       </div>
+      {/* design §4.10: each page says what goes where (Diego picks Keys or AI providers on the first try) */}
+      <div className="keys-note keys-note--where">
+        Secrets {company && home ? `${company.name}’s` : 'your'} agents use while they work, like STRIPE_SECRET_KEY or DATABASE_URL. Your Claude or OpenAI keys don’t go here: they’re in{' '}
+        <button type="button" className="link-btn" onClick={() => void navigate({ name: 'settings', section: 'providers', nonce: Date.now() })}>
+          AI providers
+        </button>
+        .
+      </div>
       {error && !list ? (
         <ErrorState error={error} onRetry={load} />
       ) : !list ? (
@@ -271,7 +279,8 @@ export function KeysView(): React.JSX.Element {
           {sections.map((section) => (
             <section key={section.key} className="keys-group" aria-label={section.title ?? 'Keys'}>
               {sectionHead(section)}
-              {section.keys.map((s) => row(s, section))}
+              {/* five doors step 5: All companies never lists one client's key names beside another's; enter it to see them */}
+              {section.companyId === null || section.companyId === scope ? section.keys.map((s) => row(s, section)) : section.keys.length > 0 && <div className="keys-section__empty text-tertiary">{section.keys.length} key{section.keys.length === 1 ? '' : 's'} only {section.company?.name ?? 'this company'}’s agents get. Enter the company to see {section.keys.length === 1 ? 'it' : 'them'}.</div>}
               {section.title !== null && section.keys.length === 0 && (
                 <div className="keys-section__empty text-tertiary">{section.companyId ? 'No keys only this company gets yet.' : 'No shared keys.'}</div>
               )}

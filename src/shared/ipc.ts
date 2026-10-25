@@ -191,7 +191,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap {
   'tasks:update': [{id: string; patch: Partial<CompanyTaskInput>}, CompanyTask]
   'tasks:get': [{id: string}, TaskDetail]
   'tasks:start': [{id: string; profileId?: string}, CompanyTask]
-  'tasks:comment': [{id: string; message: string}, TaskActivity]
+  'tasks:comment': [{id: string; message: string; by?: 'human' | 'agent'}, TaskActivity]
   // DEPARTMENTS.md §10. Every channel below refuses (forbidden) unless experimental.companies and .departments are on.
   /** companyId absent = every company. Sidebar order; archived only with includeArchived. */
   'departments:list': [{ companyId?: Id; includeArchived?: boolean } | V, Department[]]
@@ -227,6 +227,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap {
   'tasks:takeover': [{ id: Id; cols: number; rows: number }, { task: CompanyTask; session: Session }]
   /** Cancels the task's run or session; the task parks per §1.4. */
   'tasks:stop': [{ id: Id }, CompanyTask]
+  /** Five doors C9: "Pause this task". The run ends; the task goes back to To do with its work kept, held until Start. */
+  'tasks:pause': [{ id: Id }, CompanyTask]
   /** The company's Autopilot switch (default off); maxInFlight optional (default 3). */
   'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number }, BoardSettings]
   // WORKTREE.md: a code task's own worktree, branch and PR
@@ -289,6 +291,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap {
   'settings:update': [Partial<Settings>, Settings]
   // providers
   'providers:list': [{ refresh?: boolean } | V, ProviderInfo[]]
+  /** Five doors E12: is Claude Code signed in, and on which plan (`claude auth status`). Never a guess. */
+  'providers:claudeAuth': [{ refresh?: boolean } | V, import('./providerAuth').ClaudeAuthStatus]
   // repos
   'repos:list': [CompanyFilter | V, Repo[]] // with companyId: that company's repos in its repo_order:<companyId>
   /** Native folder picker (multi), returns newly added. companyId: new repos are assigned to that company (§3). */
@@ -348,6 +352,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap {
   // LINEAR.md §6: optional Linear sync per company. A key goes in (checkKey, connect), never comes back out.
   'linear:status': [{ companyId: Id }, LinearStatusView]
   'linear:checkKey': [{ companyId: Id; key?: string }, LinearKeyCheck]
+  /** Five doors E13: how many issues connecting would bring in (the first pull), before connecting. */
+  'linear:preview': [{ companyId: Id; teamId: string; key?: string }, import('./linear').LinearPreview]
   'linear:connect': [LinearConnectInput, LinearStatusView]
   'linear:sync': [{ companyId: Id }, LinearStatusView]
   'linear:setAutosync': [{ companyId: Id; on: boolean }, LinearStatusView]
@@ -696,7 +702,8 @@ export interface SessionCreateRequest {
    * DEPARTMENTS.md §9: "New Chat in <Department>". A chat (repoId and cwd are ignored) of the department's company, with
    * the department's context; its cwd is the department's repo, else the company's single repo, else the workspace.
    */
-  departmentId?: Id
+  departmentId?: Id  /** Five doors C7: "New chat" with a first message (a company with no code reads the chat as a conversation). */
+  initialPrompt?: string
 }
 export interface RunListQuery {
   status?: RunStatus[]
@@ -778,7 +785,7 @@ export const INVOKE_CHANNELS = [
   'tasks:previewGithub', 'tasks:list', 'tasks:create', 'tasks:update', 'tasks:get', 'tasks:start', 'tasks:comment',
   'departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets',
   'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
-  'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop',
+  'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'tasks:pause',
   'board:autopilot',
   'taskWork:start', 'taskWork:merge', 'taskWork:remove', 'taskWork:resolveGone', 'taskWork:refresh', 'taskWork:openEditor',
   'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
@@ -788,7 +795,7 @@ export const INVOKE_CHANNELS = [
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',
   'settings:get', 'settings:update',
-  'providers:list',
+  'providers:list', 'providers:claudeAuth',
   'repos:list', 'repos:pick', 'repos:add', 'repos:update', 'repos:move', 'repos:remove', 'repos:siblings',
   'profiles:list', 'profiles:create', 'profiles:update', 'profiles:remove',
   'sessions:list', 'sessions:create', 'sessions:attach', 'sessions:kill', 'sessions:remove', 'sessions:rename',
@@ -797,7 +804,7 @@ export const INVOKE_CHANNELS = [
   'workflows:duplicate', 'workflows:validate', 'workflows:export', 'workflows:import',
   'marketplace:list', 'marketplace:preview', 'marketplace:install',
   'dashboards:list', 'dashboards:keys', 'dashboards:install', 'dashboards:update', 'dashboards:refresh', 'dashboards:remove', 'dashboards:sample',
-  'linear:status', 'linear:checkKey', 'linear:connect', 'linear:sync', 'linear:setAutosync', 'linear:disconnect',
+  'linear:status', 'linear:checkKey', 'linear:preview', 'linear:connect', 'linear:sync', 'linear:setAutosync', 'linear:disconnect',
   'runs:start', 'runs:list', 'runs:get', 'runs:cancel', 'runs:rerun', 'runs:stepLog', 'runs:openAsSession',
   'schedules:list', 'schedules:create', 'schedules:update', 'schedules:remove', 'schedules:setEnabled',
   'schedules:runNow', 'schedules:preview', 'schedules:events', 'schedules:pauseAll',

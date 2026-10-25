@@ -228,6 +228,9 @@ d_('A1: three companies, nothing of one reaches another', () => {
     ['Keys (secrets:list)', (co) => invoke('secrets:list', { companyId: co.id })],
     ['Connections (gateway:list)', (co) => invoke('gateway:list', { companyId: co.id })],
     ['Spend (usage:summary)', (co) => invoke('usage:summary', { range: '30d', companyId: co.id })],
+    // step 4: Spend's plan-first week and month
+    ['Spend this week (usage:summary week)', (co) => invoke('usage:summary', { range: 'week', companyId: co.id })],
+    ['Spend this month (usage:summary month)', (co) => invoke('usage:summary', { range: 'month', companyId: co.id })],
     ['Forum (forum:state, composer @-suggestions)', (co) => invoke('forum:state', { companyId: co.id })],
     ['Forum (forum:messages)', async (co) => invoke('forum:messages', { companyId: co.id, channelId: w.forum.store.channelByName(co.id, 'general')!.id })],
     // searching another company's word inside this company finds nothing

@@ -22,6 +22,11 @@ export interface LinearStatusView {
   links: Record<string, LinearTaskLink>
 }
 export interface LinearKeyCheck { ok: boolean; workspace: string | null; teams: LinearTeamView[]; message: string | null }
+/**
+ * Five doors E13: what connecting would bring in, before anything is saved. Exactly the first pull's set: the team's
+ * open issues plus those closed in the last 14 days (capped; `more` when Linear has more than the cap).
+ */
+export interface LinearPreview { teamKey: string; teamName: string; open: number; recentlyClosed: number; more: boolean; openTasksHere: number }
 export interface LinearConnectInput { companyId: string; key?: string; teamId: string; autosync: boolean; sendOpen: boolean }
 /** The company key Linear sync keeps its key in. Write-only: the Keys page lists and replaces it, never reveals it. */
 export const LINEAR_KEY_NAME = 'LINEAR_API_KEY'

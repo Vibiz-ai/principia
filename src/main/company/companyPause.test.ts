@@ -11,6 +11,7 @@ import { openDatabase, type DB } from '../db'
 import { Store } from '../db/store'
 import { Dispatcher, HookedCompanyStore } from './dispatcher'
 import { setCompanyPaused } from './pauseCompany'
+import { boardActions } from '../handlers/board'
 import { pickPrefix, prefixCandidates } from './prefix'
 import { createCompanyBridge } from '../companyBridge'
 import type { StartRunOptions } from '../../shared/engine'
@@ -204,5 +205,88 @@ d_('pause one company (A4)', () => {
     c.savePassport({ name: p.name, mission: 'New mission', brandVoice: '', audience: '', products: '', goals: '', context: '', constraints: '', repoIds: [] }, hd.co.id)
     expect(c.passport(hd.co.id).pausedAt).toBe(p.pausedAt)
     expect(c.passport(hd.co.id).taskPrefix).toBe('HD')
+  })
+})
+
+d_('Pause this task (C9)', () => {
+  const host = () => boardActions({ company: c as never, settings: () => ({ experimental: { companies: true, departments: true } }), engine: { runs: { cancel: async (id: string) => end(id, 'canceled') } }, dispatcher: d })
+  it('the task goes back to To do with its work saved, never parked as a failure, and autopilot leaves it there', async () => {
+    const la = company('Ledgerly App')
+    const t = la.task()
+    await d.pump(); await settle()
+    expect(c.task(t.id).status).toBe('in_progress')
+    const out = await host().pause({ id: t.id })
+    await settle()
+    expect(out.status).toBe('todo')
+    expect(out.blockReason).toBeNull()
+    expect(c.task(t.id).pendingWake?.reasons.at(-1)).toMatch(/Paused by the founder mid-turn/)
+    const last = c.detail(t.id).activity.at(-1)!
+    expect(last.kind).toBe('paused')
+    expect(last.by).toBe('human')
+    expect(last.message).toMatch(/^Paused by you/)
+    expect(last.message).not.toMatch(/Unpark|no report/i)
+    // the agent acts on its own and autopilot is on: still, a task you paused waits for your Start
+    const before = started.length
+    await d.pump(la.co.id); await settle()
+    expect(c.task(t.id).status).toBe('todo')
+    expect(started.length).toBe(before)
+    // Start picks it up again
+    d.runNow(t.id)
+    expect(c.task(t.id).status).toBe('in_progress')
+  })
+  it('a task that is not running cannot be paused', async () => {
+    const la = company('Ledgerly App')
+    const t = la.task({ status: 'backlog' })
+    await expect(host().pause({ id: t.id })).rejects.toThrow(/not running/)
+  })
+})
+
+d_('five doors step 4: a company’s own accounts and monthly cap', () => {
+  it('connects and disconnects one company’s Instagram and GitHub; another company never gets them', () => {
+    const nw = company('Northwind Coffee').co
+    const la = company('Ledgerly App').co
+    const a = c.update(nw.id, { account: { kind: 'instagram', handle: '@northwindcoffee' } })
+    expect(a.accounts?.instagram?.handle).toBe('@northwindcoffee')
+    c.update(nw.id, { account: { kind: 'github', handle: 'diego-ledgerly' } })
+    expect(c.passport(nw.id).accounts).toMatchObject({ instagram: { handle: '@northwindcoffee' }, github: { handle: 'diego-ledgerly' } })
+    expect(c.passport(la.id).accounts).toBeUndefined()
+    // a profile save (Company settings) keeps them, and the cap
+    c.update(nw.id, { monthlyCap: 60 })
+    c.savePassport({ name: 'Northwind Coffee', mission: 'Coffee', brandVoice: '', audience: '', products: '', goals: '', context: '', constraints: '', repoIds: [] }, nw.id)
+    expect(c.passport(nw.id)).toMatchObject({ monthlyCap: 60, accounts: { instagram: { handle: '@northwindcoffee' } } })
+    c.update(nw.id, { account: { kind: 'instagram', handle: null }, monthlyCap: null })
+    expect(c.passport(nw.id).accounts).toEqual({ github: expect.objectContaining({ handle: 'diego-ledgerly' }) })
+    expect(c.passport(nw.id).monthlyCap).toBeUndefined()
+  })
+  it('refuses a handle that is not one, a cap under $1, and accounts on Personal', () => {
+    const nw = company('Northwind Coffee').co
+    expect(() => c.update(nw.id, { account: { kind: 'instagram', handle: 'north wind' } })).toThrow()
+    expect(() => c.update(nw.id, { monthlyCap: 0 })).toThrow()
+    if (c.listPassports().some((p) => p.id === PERSONAL_COMPANY_ID)) expect(() => c.update(PERSONAL_COMPANY_ID, { account: { kind: 'github', handle: 'me' } })).toThrow(/Personal/)
+  })
+})
+
+d_('five doors step 5: the task counter, the rail label and the client tag', () => {
+  it('hands the Board the last task number, so the next branch can be named before Start', () => {
+    const nw = company('Northwind Coffee')
+    expect(c.passport(nw.co.id).taskSeq ?? 0).toBe(0)
+    const t1 = nw.task()
+    const t2 = nw.task({ title: 'Second' })
+    expect(c.passport(nw.co.id).taskSeq).toBe(Number(t2.identifier.split('-')[1]))
+    expect(Number(t1.identifier.split('-')[1]) + 1).toBe(c.passport(nw.co.id).taskSeq)
+  })
+  it('sets and clears a rail label and the client tag on any company, and a profile save keeps them', () => {
+    const nw = company('Northwind Coffee').co
+    const la = company('Ledgerly App').co
+    expect(c.update(nw.id, { railLabel: 'nw2', client: true })).toMatchObject({ railLabel: 'NW2', client: true })
+    c.savePassport({ name: 'Northwind Coffee', mission: 'Coffee', brandVoice: '', audience: '', products: '', goals: '', context: '', constraints: '', repoIds: [] }, nw.id)
+    expect(c.passport(nw.id)).toMatchObject({ railLabel: 'NW2', client: true })
+    expect(c.passport(la.id).railLabel).toBeUndefined()
+    expect(c.passport(la.id).client).toBeUndefined()
+    const cleared = c.update(nw.id, { railLabel: null, client: false })
+    expect(cleared.railLabel).toBeUndefined()
+    expect(cleared.client).toBeUndefined()
+    expect(() => c.update(nw.id, { railLabel: 'ABCD' })).toThrow()
+    expect(() => c.update(nw.id, { railLabel: 'a b' })).toThrow()
   })
 })

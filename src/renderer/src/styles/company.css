@@ -199,7 +199,10 @@
 .cs-logo-btn { font-size: var(--text-xs); margin-top: 2px; }
 .cs-colors { display: flex; gap: 8px; }
 .cs-color { width: 24px; height: 24px; border-radius: var(--radius-sm); border: 2px solid transparent; padding: 0; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.cs-color { position: relative; }
 .cs-color.is-on { border-color: var(--text-primary); }
+/* the chosen swatch carries a white check, not only a border */
+.cs-color.is-on::after { content: ''; position: absolute; left: 50%; top: 45%; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: translate(-50%, -50%) rotate(45deg); }
 .cs-color:focus-visible { outline: none; box-shadow: var(--focus); }
 .cs-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .cs-actions--start { justify-content: flex-start; }
@@ -221,6 +224,8 @@
 .op-connect-tabs button:focus-visible, .op-connect-apps button:focus-visible { outline: 2px solid var(--focus, var(--text-primary)); outline-offset: 1px; }
 .op-connect-snippet { display: grid; gap: 8px; margin-bottom: 10px; }
 .op-connect-snippet pre { margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; border: 1px solid var(--border); border-radius: 7px; color: var(--text-secondary); }
+.op-connect-raw summary { cursor: pointer; font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: 6px; }
+.op-connect-raw[open] summary { margin-bottom: 8px; }
 .op-import-kind { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; font-size: 12px; }
 .op-import-kind input { margin-top: 3px; }
 .op-import-kind small { display: block; color: var(--text-tertiary); margin-top: 2px; }

@@ -22,4 +22,11 @@ describe('plainActivity: LIVE says what the agent does in words, never a raw too
     expect(plainActivity(null)).toBeNull()
     expect(plainActivity('  ')).toBeNull()
   })
+
+  it('a company with no code never reads "command" (C7)', () => {
+    expect(plainActivity('Bash npm test', { code: false })).toBe('Working on it')
+    expect(plainActivity('Grep vat', { code: false })).toBe('Looking through its notes')
+    expect(plainActivity('Bash npm test', { code: true })).toBe('Running a command')
+    expect(plainActivity('Bash npm test')).toBe('Running a command')
+  })
 })

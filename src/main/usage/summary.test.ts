@@ -96,6 +96,28 @@ describe('usageSummary', () => {
     expect(s.byDepartment.every((r) => r.companyId === 'co_acme')).toBe(true)
   })
 
+  it('five doors §4.9: the calendar week (since Monday) and month (since the 1st), and chats read as your own', () => {
+    // NOW is Sunday Oct 25: the week is Mon 19 to Sun 25, the month Oct 1 to 25
+    const w = usageSummary({ db, companyName: names, now: () => NOW }, { range: 'week' })
+    expect(w.days).toHaveLength(7)
+    expect(w.days[0]!.date).toBe('2026-10-19')
+    expect(w.total.agents).toBe(4)
+    const m = usageSummary({ db, companyName: names, now: () => NOW }, { range: 'month' })
+    expect(m.days).toHaveLength(25)
+    expect(m.days[0]!.date).toBe('2026-10-01')
+    expect(m.total.agents).toBe(5)
+    expect(m.total.usd).toBeCloseTo(4.75 + 9)
+    // a chat with no agent seat is "Your own chats", a run with none "Other runs"
+    expect(w.byAgent.map((r) => r.label)).toEqual(expect.arrayContaining(['Your own chats', 'Other runs', 'Copywriter']))
+    expect(w.byAgent.some((r) => /no agent seat/.test(r.label))).toBe(false)
+  })
+
+  it('an agent row reads "Persona · Role" unless personas are off', () => {
+    db.prepare("UPDATE company_agents SET data = ? WHERE id = 'agt_copy'").run(JSON.stringify({ persona: { name: 'Marcus', bust: 1 } }))
+    expect(usageSummary({ db, companyName: names, now: () => NOW }, { range: '7d' }).byAgent.find((r) => r.key === 'agt_copy')?.label).toBe('Marcus · Copywriter')
+    expect(usageSummary({ db, companyName: names, now: () => NOW, personas: false }, { range: '7d' }).byAgent.find((r) => r.key === 'agt_copy')?.label).toBe('Copywriter')
+  })
+
   it('plan limits: unknown until a run hit one, then its reset time', () => {
     expect(planLimits(db)).toEqual({ state: 'unknown', lastHitAt: null, resetAt: null, source: null })
     const reset = new Date(NOW.getTime() + 3600_000).toISOString()

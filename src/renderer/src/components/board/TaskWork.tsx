@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react'
 import type { CompanyPassport, CompanyTask } from '@shared/company'
 import type { Repo } from '@shared/types'
 import { GH_TEXT, canStartWork, prChip, workGone, workQueued, workStarted } from '@shared/taskWork'
-import { Button } from '../ui'
+import { Button, IconButton } from '../ui'
 import { errorMessage, hive } from '../../lib/hive'
 import { reposOf } from '../../lib/companyModel'
-import { toast, useStore } from '../../state/store'
+import { branchFor, nextWorkStep, workSteps } from '../../lib/boardFlow'
+import { focusSession, navigate, toast, useStore } from '../../state/store'
 import '../../styles/taskWork.css'
 
 /** WORKTREE.md: a git branch in white line art (the board card, the strip, the Work section). */
@@ -84,7 +85,7 @@ export function mergeTitle(inFlight: boolean, draft: boolean): string {
  * Under the title: the gone banner (Cancel Task · Back to Backlog · Keep As Is), then branch (mono), worktree path,
  * PR chip and gh state, and Open in Editor · Open PR · Merge… · Remove Worktree….
  */
-export function WorkSection({ task, onDone }: { task: CompanyTask; onDone: () => void }): React.JSX.Element | null {
+export function WorkSection({ task, onDone, compact = false }: { task: CompanyTask; onDone: () => void; /** five doors: the WorkFlow block above already shows the branch, the PR and its button */ compact?: boolean }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
   const w = task.work
   // a task that had a worktree keeps its branch line after Keep As Is or Remove Worktree…
@@ -109,11 +110,11 @@ export function WorkSection({ task, onDone }: { task: CompanyTask; onDone: () =>
         <button className="link-btn" disabled={busy} onClick={() => void run(() => hive.taskWork.resolveGone({ id: task.id, choice: 'keep' }), () => null)}>Keep As Is</button>
       </span>
     </div>}
-    <div className="work-section__row">
+    {!compact && <div className="work-section__row">
       <BranchGlyph />
       <code className="work-section__branch selectable" title={w.branch}>{w.branch}</code>
       <PrChip task={task} />
-    </div>
+    </div>}
     {started && !gone && <div className="work-section__path selectable" title={w.worktreePath}>{w.worktreePath}</div>}
     {workQueued(w) && <div className="work-section__note">Queued: it starts when a running task finishes.</div>}
     {w.removedAt && !gone && <div className="work-section__note">{task.status === 'done' || task.status === 'canceled' ? 'Worktree removed.' : `Worktree removed. Start (or Run now) checks out ${w.branch} again.`}</div>}
@@ -123,7 +124,7 @@ export function WorkSection({ task, onDone }: { task: CompanyTask; onDone: () =>
     <div className="work-section__actions">
       {[
         started && !gone && <button key="editor" className="link-btn" disabled={busy} onClick={() => void run(() => hive.taskWork.openEditor({ id: task.id }), (r) => (r as { opened: string }).opened === 'finder' ? 'Opened in Finder' : null)}>Open in Editor</button>,
-        pr && <button key="pr" className="link-btn" disabled={busy} onClick={() => void run(() => hive.app.openExternal({ url: pr.url }))}>Open PR</button>,
+        pr && !compact && <button key="pr" className="link-btn" disabled={busy} onClick={() => void run(() => hive.app.openExternal({ url: pr.url }))}>Open PR</button>,
         // A1: never while an agent works on it (it may still be pushing to the branch). The tooltip sits on a wrapper:
         // a disabled button gets no pointer events
         pr?.state === 'OPEN' && <span key="merge" className="work-section__merge" title={mergeTitle(inFlight, pr.isDraft)}><button className="link-btn" disabled={busy || pr.isDraft || inFlight} title={mergeTitle(inFlight, pr.isDraft)} onClick={() => void run(() => hive.taskWork.merge({ id: task.id }), (r) => (r ? (r as { message: string }).message : null))}>Merge…</button></span>,
@@ -131,5 +132,55 @@ export function WorkSection({ task, onDone }: { task: CompanyTask; onDone: () =>
         started && !gone && <button key="remove" className="link-btn" disabled={busy || inFlight} title={inFlight ? 'Stop the agent first' : 'Lists what would be lost first'} onClick={() => void run(() => hive.taskWork.remove({ id: task.id }), (r) => (r ? 'Worktree removed' : null))}>Remove Worktree…</button>
       ].filter(Boolean).flatMap((el, i) => (i ? [<span key={`sep${i}`} aria-hidden>·</span>, el] : [el]))}
     </div>
+  </section>
+}
+
+/**
+ * Five doors step 5 (design §4.5): a code task's work block in the inspector. Before Start: Repo, the branch it will
+ * create ("(created on start)") and one primary, Start on a new branch, with ▾ for the other ways to start. After:
+ * the stepper Branch → Pull request → Merged and only the next step (Connect GitHub, Open the chat, Open the pull
+ * request). Status follows the PR (main moves it), so there is no Mark merged here.
+ */
+export function WorkFlow({ task, company, repoName, who, inFlight, liveSessionId, blocked = null, busy, onDone, otherStarts }: { task: CompanyTask; company: CompanyPassport | undefined; repoName: string | null; who: string | null; inFlight: boolean; liveSessionId: string | null; /** why Start can't run yet */ blocked?: string | null; busy: boolean; onDone: () => void; /** the ▾ menu next to Start: start in a chat / on my checkout */ otherStarts?: () => void }): React.JSX.Element | null {
+  const [working, setWorking] = useState(false)
+  const repoIds = useCompanyRepoIds(company)
+  const canStart = !!company && canStartWork(task, repoIds)
+  const w = task.work
+  if (!w && !canStart) return null
+  const branch = w?.branch ?? branchFor(task.identifier, task.title)
+  const step = nextWorkStep(task, { canStart, inFlight, liveChat: !!liveSessionId, repoName, branch, who })
+  const start = async (): Promise<void> => {
+    setWorking(true)
+    try {
+      const r = await hive.taskWork.start({ id: task.id })
+      toast(r.message)
+      onDone()
+    } catch (e) { toast(errorMessage(e), 'error') } finally { setWorking(false) }
+  }
+  const act = (): void => {
+    if (step.kind === 'start') void start()
+    else if (step.kind === 'connectGithub') void navigate({ name: 'settings', section: 'connections', connect: 'github', nonce: Date.now() })
+    else if (step.kind === 'openChat' && liveSessionId) focusSession(liveSessionId)
+    else if (step.kind === 'openChat' && task.runId) void navigate({ name: 'run', runId: task.runId })
+    else if (step.kind === 'openPr' && w?.pr) void hive.app.openExternal({ url: w.pr.url }).catch((e: unknown) => toast(errorMessage(e), 'error'))
+  }
+  const started = step.kind !== 'start'
+  return <section className="work-flow" aria-label="Branch and pull request">
+    <dl className="work-flow__props">
+      {repoName && <><dt>Repo</dt><dd className="work-flow__mono">{repoName}</dd></>}
+      <dt>Branch</dt><dd className="work-flow__mono selectable">{branch}{!started && <span className="work-flow__dim"> (created on start)</span>}</dd>
+    </dl>
+    {started && <ol className="work-steps" aria-label="Branch to pull request">
+      {workSteps(w, task.status).map((s) => <li key={s.key} className={`work-steps__step is-${s.state}`}><span className="work-steps__dot" aria-hidden />{s.key === 'pr' && w?.pr ? `#${w.pr.number}` : s.label}<span className="rm-sr"> {s.state === 'done' ? 'done' : s.state === 'current' ? 'next' : 'not yet'}</span></li>)}
+    </ol>}
+    {step.note && <div className={`work-flow__next work-flow__next--${step.kind}`} role="note">
+      <span className="work-flow__glyph" aria-hidden>{step.kind === 'start' ? <BranchGlyph /> : step.kind === 'done' ? '✓' : '◆'}</span>
+      <span>{step.note}</span>
+    </div>}
+    {step.label && <div className="work-flow__actions">
+      <Button variant="primary" icon={step.kind === 'start' ? 'play' : step.kind === 'openPr' ? 'external' : undefined} disabled={busy || working || (step.kind === 'start' && !!blocked)} title={step.kind === 'start' && blocked ? blocked : undefined} onClick={act}>{working ? 'Starting…' : step.label}</Button>
+      {step.kind === 'start' && blocked && <span className="work-flow__blocked">{blocked}</span>}
+      {step.kind === 'start' && otherStarts && !blocked && <IconButton icon="chevronDown" label="Other ways to start" title="Start in a chat, or on my checkout" disabled={busy || working} onClick={otherStarts} />}
+    </div>}
   </section>
 }

@@ -1,36 +1,31 @@
 /**
+ * Five doors step 3: the agent page is the agent's desk (AgentSeatView below). The rest is DEPARTMENTS.md §9's:
  * DEPARTMENTS.md §9 agent page: one seat's current task, queue, what waits for you, run history with outcomes, the
  * instructions editor (plus capabilities, autonomy, mode, limits), a link to the backing profile or workflow, Pause.
  * VOICE.md §4.4: with personas on it opens with the agent's bust, persona name (renamed inline), role label,
  * personality and an editable About; with them off, the old avatar and the role label as the name.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AGENT_LIMITS, LANE_LABELS, type AgentAutonomy, type AgentMode, type CompanyAgent, type CompanyTask } from '@shared/company'
+import { AGENT_LIMITS, type AgentAutonomy, type AgentMode, type CompanyAgent, type CompanyTask } from '@shared/company'
+import { LANE_WORD } from '../lib/board'
 import type { Id, Run } from '@shared/types'
-import { Button, EmptyState, Pill, RelativeTime, Segmented, Stepper, Toolbar } from '../components/ui'
+import { Button, Disclosure, EmptyState, ErrorState, Loading, Pill, RelativeTime, Segmented, Stepper, Switch, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { errorMessage, hive, useHiveEvent } from '../lib/hive'
-import { seatState, taskLane, taskReason } from '../lib/departments'
-import { AgentBust, DepartmentIcon, agentLabel, useAgentName, useLaneContext } from '../shell/DepartmentGroup'
+import { taskLane, taskReason } from '../lib/departments'
+import { AgentBust, useAgentName, useLaneContext } from '../shell/DepartmentGroup'
+import { Plinth } from '../components/roman'
+import { AgentAction, DeskComposer, DeskThread, StatusLine, startTask, useAgentStatus, useIsCode } from '../components/desk/Desk'
+import { agentAutonomy, useDeskWho, useDeskThread } from '../state/desk'
+import { autonomyPhrase } from '../lib/desk'
 import { personasOf } from '../lib/personaView'
 import { editedPersona, personaNameError, personasToFreeze } from '../lib/personaRename'
 import { useCopy, usePersonasOn } from '../lib/voice'
 import { PERSONA_LIMITS, type AgentPersona } from '@shared/personas'
-import {
-  archiveCompanyAgent,
-  companyAgentById,
-  companyName,
-  departmentById,
-  getState,
-  navigate,
-  openBoard,
-  openDepartment,
-  refreshDepartments,
-  setAgentPaused,
-  toast,
-  useStore
-} from '../state/store'
+import { archiveCompanyAgent, attempt, companyAgentById, departmentById, getState, navigate, openBoard, openDepartment, refreshDepartments, setAgentPaused, setCompanyPaused, toast, useStore } from '../state/store'
+import { useCompanyShortName } from '../lib/company'
 import '../styles/departments.css'
+import '../styles/desk.css'
 
 /** Chip text for a Needs-you task (§1.5 reasons). */
 const REASON_LABEL: Record<string, string> = {
@@ -51,156 +46,248 @@ const REASON_LABEL: Record<string, string> = {
 
 const RUN_TONE: Record<string, 'passed' | 'failed' | 'running' | 'canceled' | 'idle'> = { passed: 'passed', failed: 'failed', running: 'running', queued: 'idle', canceled: 'canceled' }
 
-export function AgentSeatView({ id }: { id: Id }): React.JSX.Element {
+type DeskTab = 'queue' | 'history' | 'instructions'
+
+/**
+ * Five doors step 3 (design §4.3): the agent page is the agent's desk, the ONE place to talk to it. Left: the bust on
+ * its plinth, role and department, the status sentence, the one next action and "How {name} works" with the agent's
+ * autonomy phrase as a switch. Centre: the conversation (your requests, its replies, its drafts with Approve) and a
+ * composer; Message on a Team card focuses it. Right: Queue (with Start), History (runs) and Instructions (persona,
+ * instructions, how it runs, and Archive, which never sits next to Pause: C9).
+ */
+export function AgentSeatView({ id, focus = false, nonce }: { id: Id; focus?: boolean; nonce?: number }): React.JSX.Element {
   const agent = useStore((s) => companyAgentById(id, s))
   const dep = useStore((s) => departmentById(agent?.departmentId, s))
-  const tasks = useStore((s) => s.tasks)
-  const profiles = useStore((s) => s.profiles)
-  const ctx = useLaneContext()
-  const st = useMemo(() => (agent ? seatState(agent, tasks, ctx.openRuns) : null), [agent, tasks, ctx])
-  const who = useAgentName(agent)
-  const copy = useCopy()
-  if (!agent || !st)
+  const [tab, setTab] = useState<DeskTab>('queue')
+  if (!agent)
     return (
       <div className="view">
         <Toolbar title="Agent" />
         <EmptyState icon="agents" text="This agent is gone or still loading." />
       </div>
     )
-  const profile = agent.kind === 'profile' ? profiles.find((p) => p.id === agent.refId) : undefined
-  const waiting = [...st.review, ...st.parked]
-  const taskRow = (t: CompanyTask, extra?: React.ReactNode): React.JSX.Element => {
-    const reason = taskReason(t, ctx)
-    return (
-      <button key={t.id} type="button" className="dep-list__row dep-task" onClick={() => openBoard(t.companyId, { taskId: t.id })}>
-        <span className="dep-task__id">{t.identifier}</span>
-        <span className="dep-list__name">{t.title}</span>
-        {reason ? <span className="dep-reason">{REASON_LABEL[reason] ?? reason}</span> : <span className="dep-list__meta">{LANE_LABELS[taskLane(t, ctx)]}</span>}
-        {extra}
-      </button>
-    )
+  return <Desk key={agent.id} agent={agent} dep={dep} tab={tab} setTab={setTab} focus={focus} nonce={nonce} />
+}
+
+function Desk({ agent, dep, tab, setTab, focus, nonce }: { agent: CompanyAgent; dep: ReturnType<typeof departmentById>; tab: DeskTab; setTab: (t: DeskTab) => void; focus: boolean; nonce?: number }): React.JSX.Element {
+  const tasks = useStore((s) => s.tasks)
+  const who = useDeskWho(agent)
+  const autonomy = useStore((s) => agentAutonomy(agent, s))
+  const n = useAgentName(agent)
+  const status = useAgentStatus(agent)
+  const code = useIsCode(agent.companyId)
+  const thread = useDeskThread(agent)
+  const ctx = useLaneContext()
+  const st = status.seat
+  const mine = useMemo(() => tasks.filter((t) => t.agentId === agent.id && t.companyId === agent.companyId), [tasks, agent.id, agent.companyId])
+  const done = useMemo(() => mine.filter((t) => t.status === 'done').sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 5), [mine])
+  const queueRows = [...(st.current ? [st.current] : []), ...st.review, ...st.parked, ...st.queue]
+  const waiting = useMemo(() => new Set(st.queue.filter((t) => t.waiting).map((t) => t.id)), [st.queue])
+  const paused = status.kind === 'paused'
+  const autopilot = useStore((s) => !!s.companies.find((x) => x.id === agent.companyId)?.autopilot)
+  const companyShort = useCompanyShortName(agent.companyId, 'this company')
+  const companyPaused = useStore((s) => {
+    const c = s.companies.find((x) => x.id === agent.companyId)
+    return c?.pausedAt ? c.name : null
+  })
+  // what you added to a queued task from the conversation (a merged request): shown on its Queue row
+  const notes = useMemo(() => {
+    const m = new Map<string, string>()
+    const seen = new Set<string>()
+    for (const it of thread.items ?? []) {
+      if (it.kind !== 'me') continue
+      const desk = !!thread.tasks.find((t) => t.id === it.taskId)?.externalId?.startsWith('desk:')
+      // a desk task's first "me" is the request that made it; anything after it is what you added
+      if (desk && !seen.has(it.taskId)) {
+        seen.add(it.taskId)
+        continue
+      }
+      m.set(it.taskId, it.text)
+    }
+    return m
+  }, [thread.items, thread.tasks])
+  const setAuto = async (auto: boolean): Promise<void> => {
+    const ok = await attempt(() => hive.companyAgents.save({ id: agent.id, companyId: agent.companyId, departmentId: agent.departmentId, kind: agent.kind, refId: agent.refId, name: agent.name, data: { autonomy: auto ? 'auto' : 'manual' } }), 'Autonomy')
+    if (ok) {
+      await refreshDepartments()
+      toast(`${who.name} now: ${autonomyPhrase({ auto, role: agent.name, department: dep?.name })}. Same words on the Team card.`)
+    }
   }
   return (
-    <div className="view dep-view">
+    <div className="view">
       <Toolbar
         title={
           <span className="dep-title">
-            <AgentBust agent={agent} color={dep?.color ?? null} size={20} />
-            {agentLabel(who)}
-            {agent.archivedAt ? <Pill tone="warning">archived</Pill> : agent.pausedAt ? <Pill tone="warning">paused</Pill> : agent.data.autonomy === 'auto' && <Pill tone="accent">auto</Pill>}
+            <button type="button" className="link-btn desk-crumb" onClick={() => void navigate({ name: 'team' })}>
+              Team ›
+            </button>{' '}
+            {who.name}
           </span>
         }
-        sub={
-          <span className="company-toolbar-meta">
-            {companyName(agent.companyId)}
-            {dep ? (
-              <>
-                {' · '}
-                <button type="button" className="dep-link" onClick={() => openDepartment(dep)}>
-                  <DepartmentIcon department={dep} size={12} /> {dep.name}
-                </button>
-              </>
-            ) : (
-              ' · company-level'
-            )}
-          </span>
-        }
+        sub={<span className="company-toolbar-meta">{[who.role, dep?.name ?? 'company-wide'].join(' · ')}{agent.archivedAt ? ' · archived' : ''}</span>}
       >
-        {!agent.archivedAt && (
-          <Button icon={agent.pausedAt ? 'play' : 'pause'} onClick={() => void setAgentPaused(agent, !agent.pausedAt)}>
-            {agent.pausedAt ? 'Resume' : 'Pause'}
+        {!agent.archivedAt && companyPaused && (
+          <Button icon="play" variant="primary" onClick={() => void setCompanyPaused(agent.companyId, false)} title={`${companyPaused} is paused, so ${who.name} is too. Resume the company to let ${who.name} take tasks again.`}>
+            Resume {companyShort}
           </Button>
         )}
-        {!agent.archivedAt && (
-          <Button variant="ghost" onClick={() =>
-              void archiveCompanyAgent(agent).then((ok) => {
-                if (!ok) return
-                if (dep) openDepartment(dep)
-                else void navigate({ name: 'tasks' })
-              })
-            }>
-            Archive
+        {!agent.archivedAt && !companyPaused && (
+          <Button icon={agent.pausedAt ? 'play' : 'pause'} variant={agent.pausedAt ? 'primary' : 'secondary'} onClick={() => void setAgentPaused(agent, !agent.pausedAt)} title={agent.pausedAt ? `Let ${who.name} take tasks again` : `${who.name} takes no new task until you resume; the current one keeps its work`}>
+            {agent.pausedAt ? `Resume ${who.name}` : `Pause ${who.name}`}
           </Button>
         )}
       </Toolbar>
-      <div className="dep-page">
-        {who.persona && <PersonaHeader key={`${agent.id}:${who.persona.name}:${who.persona.bio}`} agent={agent} persona={who.persona} color={dep?.color ?? null} />}
-        <section className="dep-card" aria-label="Current task">
-          <header className="dep-card__head">
-            <h2>Now</h2>
-            <span className={`seat-row__state seat-row__state--${st.kind}`}>{st.label}</span>
-          </header>
-          {st.current ? (
-            <div className="dep-list">
-              {taskRow(
-                st.current,
-                st.current.runId && (
-                  <span
-                    role="link"
-                    tabIndex={0}
-                    className="dep-link"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void navigate({ name: 'run', runId: st.current!.runId! })
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && (e.stopPropagation(), void navigate({ name: 'run', runId: st.current!.runId! }))}
-                  >
-                    Open run
-                  </span>
-                )
-              )}
-            </div>
-          ) : (
-            <p className="dep-card__empty">{agent.pausedAt ? 'Paused. Nothing new starts until you resume it.' : `${copy('agent.idle')}. One task at a time; the next one in the queue starts when you click Run, or on assignment with Autopilot.`}</p>
-          )}
-        </section>
-        {waiting.length > 0 && (
-          <section className="dep-card" aria-label="Waiting for you">
-            <header className="dep-card__head">
-              <h2>Waiting for you</h2>
-              <span className="side-row__badge side-row__badge--needs">◆ {waiting.length}</span>
-            </header>
-            <div className="dep-list">{waiting.map((t) => taskRow(t))}</div>
-          </section>
-        )}
-        <section className="dep-card" aria-label="Queue">
-          <header className="dep-card__head">
-            <h2>Queue</h2>
-            <span className="dep-card__count">{st.queue.length}</span>
-          </header>
-          {st.queue.length ? <div className="dep-list">{st.queue.map((t) => taskRow(t))}</div> : <p className="dep-card__empty">Nothing queued for {who.name}.</p>}
-        </section>
-        <RunHistory agent={agent} tasks={tasks} />
-        {/* reset only when the saved settings change: Pause/Resume also bumps updatedAt and must not drop unsaved edits */}
-        {/* a persona edit (rename, About) is saved on its own and must not reset this form either */}
-        <SeatSettings key={`${agent.id}:${JSON.stringify([agent.name, { ...agent.data, persona: undefined }])}`} agent={agent} />
-        <section className="dep-card" aria-label="Runs on">
-          <header className="dep-card__head">
-            <h2>Runs on</h2>
-          </header>
-          <div className="dep-passport">
-            <Icon name={agent.kind === 'profile' ? 'agents' : 'workflows'} size={14} />
-            <span>{agent.kind === 'profile' ? (profile ? `${profile.name}${profile.model ? ` · ${profile.model}` : ''}` : 'Profile removed: pick another in a new seat') : 'Workflow'}</span>
-            <span className="flex1" />
-            {agent.kind === 'profile' ? (
-              <Button size="sm" icon="external" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>
-                Open profile
-              </Button>
-            ) : (
-              <Button size="sm" icon="external" onClick={() => void navigate({ name: 'editor', workflowId: agent.refId, nonce: Date.now() })}>
-                Open workflow
-              </Button>
-            )}
+      <div className="desk-page">
+        <aside className="desk-left">
+          {/* plain lettering (MARCUS, not MARCVS: design §2.7) */}
+          <Plinth persona={n.persona} role={who.role} size={110} tone="plain" className="desk-left__plinth" />
+          <div className="desk-left__role">{dep?.name ?? 'Company-wide'}</div>
+          <div className={`desk-left__status ${status.kind === 'needs' ? 'is-needs' : ''}`}>
+            <StatusLine status={status} />
           </div>
-          <p className="dep-card__empty">Adapter, model and keys stay on the profile, shared by every seat that uses it.</p>
+          <AgentAction agent={agent} status={status} size="md" wide />
+          <div className="desk-left__how">
+            <h3>How {who.name} works</h3>
+            <div className="desk-opt desk-opt--muted">{autonomy}</div>
+            {/* QA round 4: the switch says exactly what it changes (when tasks start), so turning it off never reads as
+                "replies without asking"; it never changes what waits for your OK */}
+            <label className="desk-opt">
+              <span className="desk-opt__label">Starts its tasks on its own</span>
+              <Switch checked={agent.data.autonomy === 'auto'} disabled={!!agent.archivedAt} onChange={(v) => void setAuto(v)} label="Starts its tasks on its own" />
+            </label>
+            <div className="desk-opt desk-opt--muted">{agent.data.autonomy !== 'auto' ? 'Off: it waits for you to press Start on each task.' : autopilot ? 'On: it picks up its next task when one is ready.' : `On, once Autopilot is on for ${companyShort} (Settings › Team & autonomy). Until then it waits for you.`}</div>
+            <div className="desk-opt desk-opt--muted">One task at a time · up to {agent.data.limits.runMinutes} min each</div>
+          </div>
+        </aside>
+        <section className="desk-center" aria-label={`Conversation with ${who.name}`}>
+          <header className="desk-center__head">
+            <div className="desk-center__title">Conversation with {who.name}</div>
+            <div className="desk-center__sub">Everything you and {who.name} say. It is also listed in Chats.</div>
+          </header>
+          {thread.error ? <ErrorState error={thread.error} /> : thread.items ? <DeskThread agent={agent} items={thread.items} tasks={thread.tasks} code={code} /> : <Loading />}
+          <DeskComposer key={nonce ?? 0} agent={agent} autoFocus={focus} />
         </section>
+        <aside className="desk-right">
+          <div className="desk-tabs" role="tablist">
+            {(['queue', 'history', 'instructions'] as const).map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k} className={`desk-tab ${tab === k ? 'is-on' : ''}`} onClick={() => setTab(k)}>
+                {k === 'queue' ? 'Queue' : k === 'history' ? 'History' : 'Instructions'}
+                {k === 'queue' && <span className="desk-tab__n">{queueRows.length}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="desk-right__body">
+            {tab === 'queue' && (
+              <>
+                {queueRows.length === 0 && <div className="desk-empty">Nothing queued for {who.name}. Ask in the conversation and it lands here.</div>}
+                {queueRows.map((t) => {
+                  const lane = taskLane(t, ctx)
+                  const g = lane === 'working' ? '●' : lane === 'needs_you' ? '◆' : '○'
+                  return (
+                    <div key={t.id} className="desk-q" role="button" tabIndex={0} onClick={() => openBoard(t.companyId, { taskId: t.id })} onKeyDown={(e) => e.key === 'Enter' && openBoard(t.companyId, { taskId: t.id })}>
+                      <span className={`desk-q__glyph ${lane === 'working' ? 'is-working' : lane === 'needs_you' ? 'is-needs' : ''}`} aria-hidden>
+                        {g}
+                      </span>
+                      <div className="desk-q__body">
+                        <div>{t.title}</div>
+                        <div className="desk-q__meta">
+                          {code ? `${t.identifier} · ` : ''}
+                          {waiting.has(t.id) ? 'Waiting on another task' : LANE_WORDS[lane]}
+                        </div>
+                        {notes.get(t.id) && <div className="desk-q__note">Includes your note: “{notes.get(t.id)!.length > 90 ? `${notes.get(t.id)!.slice(0, 90).replace(/\s+\S*$/, '')}…` : notes.get(t.id)}”</div>}
+                      </div>
+                      {lane === 'queued' && t.status === 'todo' && !waiting.has(t.id) && !paused && !st.current && (
+                        <Button size="sm" onClick={(e) => (e.stopPropagation(), void startTask(t))}>
+                          Start
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })}
+                {done.length > 0 && <div className="desk-q__meta" style={{ margin: '14px 6px 2px' }}>Done recently</div>}
+                {done.map((t) => (
+                  <div key={t.id} className="desk-q" role="button" tabIndex={0} onClick={() => openBoard(t.companyId, { taskId: t.id })} onKeyDown={(e) => e.key === 'Enter' && openBoard(t.companyId, { taskId: t.id })}>
+                    <span className="desk-q__glyph is-done" aria-hidden>
+                      ✓
+                    </span>
+                    <div className="desk-q__body">
+                      <div>{t.title}</div>
+                      {code && <div className="desk-q__meta">{t.identifier}</div>}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+            {tab === 'history' && <RunHistory agent={agent} tasks={tasks} code={code} />}
+            {tab === 'instructions' && <Instructions agent={agent} dep={dep} />}
+          </div>
+        </aside>
       </div>
     </div>
   )
 }
 
+const LANE_WORDS: Record<string, string> = { inbox: 'To do', queued: 'To do', working: 'Working', needs_you: 'Needs you', done: 'Done' }
+
+/** Instructions tab: who it is (persona, About), what it is told, how it runs (Advanced), where it runs, Archive. */
+function Instructions({ agent, dep }: { agent: CompanyAgent; dep: ReturnType<typeof departmentById> }): React.JSX.Element {
+  const who = useAgentName(agent)
+  const profiles = useStore((s) => s.profiles)
+  const profile = agent.kind === 'profile' ? profiles.find((p) => p.id === agent.refId) : undefined
+  return (
+    <div className="desk-instructions">
+      {who.persona && <PersonaHeader key={`${agent.id}:${who.persona.name}:${who.persona.bio}`} agent={agent} persona={who.persona} color={dep?.color ?? null} />}
+      {/* reset only when the saved settings change: Pause/Resume also bumps updatedAt and must not drop unsaved edits */}
+      <SeatSettings key={`${agent.id}:${JSON.stringify([agent.name, { ...agent.data, persona: undefined }])}`} agent={agent} department={dep?.name ?? null} />
+      <section className="dep-card" aria-label="Runs on">
+        <header className="dep-card__head">
+          <h2>Runs on</h2>
+        </header>
+        <div className="dep-passport">
+          <Icon name={agent.kind === 'profile' ? 'agents' : 'workflows'} size={14} />
+          <span>{agent.kind === 'profile' ? (profile ? `${profile.name}${profile.model ? ` · ${profile.model}` : ''}` : 'Profile removed: pick another in a new seat') : 'Workflow'}</span>
+          <span className="flex1" />
+          {agent.kind === 'profile' ? (
+            <Button size="sm" icon="external" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>
+              AI providers
+            </Button>
+          ) : (
+            <Button size="sm" icon="external" onClick={() => void navigate({ name: 'editor', workflowId: agent.refId, nonce: Date.now() })}>
+              Open workflow
+            </Button>
+          )}
+        </div>
+      </section>
+      {!agent.archivedAt && (
+        <section className="dep-card" aria-label="Archive">
+          <header className="dep-card__head">
+            <h2>Archive</h2>
+          </header>
+          <p className="dep-card__empty">Archiving takes {who.name} off the team. Finished tasks and history stay; queued tasks wait for another agent.</p>
+          <div className="dep-form__foot">
+            <span className="flex1" />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                void archiveCompanyAgent(agent).then((ok) => {
+                  if (!ok) return
+                  if (dep) openDepartment(dep)
+                  else void navigate({ name: 'team' })
+                })
+              }
+            >
+              Archive {who.name}…
+            </Button>
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
 /** Runs of the seat's tasks, newest first. Outcome = the run's status plus where it left the task. */
-function RunHistory({ agent, tasks }: { agent: CompanyAgent; tasks: CompanyTask[] }): React.JSX.Element {
+function RunHistory({ agent, tasks, code = true }: { agent: CompanyAgent; tasks: CompanyTask[]; code?: boolean }): React.JSX.Element {
   const [runs, setRuns] = useState<Run[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const ctx = useLaneContext()
@@ -253,10 +340,10 @@ function RunHistory({ agent, tasks }: { agent: CompanyAgent; tasks: CompanyTask[
             const reason = t ? taskReason(t, ctx) : null
             return (
               <button key={r.id} type="button" className="dep-list__row dep-task" onClick={() => void navigate({ name: 'run', runId: r.id })}>
-                <span className="dep-task__id">{t?.identifier ?? '—'}</span>
+                {code && <span className="dep-task__id">{t?.identifier ?? '—'}</span>}
                 <span className="dep-list__name">{t?.title ?? r.title}</span>
                 <Pill tone={RUN_TONE[r.status] ?? 'idle'}>{r.status}</Pill>
-                {t && <span className="dep-list__meta">{reason ? (REASON_LABEL[reason] ?? reason) : LANE_LABELS[taskLane(t, ctx)]}</span>}
+                {t && <span className="dep-list__meta">{reason ? (REASON_LABEL[reason] ?? reason) : LANE_WORD[taskLane(t, ctx)]}</span>}
                 <span className="dep-list__meta">
                   <RelativeTime iso={r.startedAt ?? r.createdAt} />
                 </span>
@@ -269,7 +356,7 @@ function RunHistory({ agent, tasks }: { agent: CompanyAgent; tasks: CompanyTask[
   )
 }
 
-function SeatSettings({ agent }: { agent: CompanyAgent }): React.JSX.Element {
+function SeatSettings({ agent, department = null }: { agent: CompanyAgent; department?: string | null }): React.JSX.Element {
   const [name, setName] = useState(agent.name)
   const [instructions, setInstructions] = useState(agent.data.instructions)
   const [capabilities, setCapabilities] = useState(agent.data.capabilities)
@@ -326,10 +413,12 @@ function SeatSettings({ agent }: { agent: CompanyAgent }): React.JSX.Element {
         <div className="dep-field">
           <span>Autonomy</span>
           <span className="dep-field__col">
-            <Segmented size="sm" items={[{ value: 'manual', label: 'Manual' }, { value: 'auto', label: 'Auto' }]} value={autonomy} onChange={setAutonomy} />
+            <Segmented size="sm" items={[{ value: 'manual', label: autonomyPhrase({ auto: false, role: agent.name, department }) }, { value: 'auto', label: autonomyPhrase({ auto: true }) }]} value={autonomy} onChange={setAutonomy} />
             <span className="dep-field__hint">{autonomy === 'auto' ? 'Starts on assignment, but only while the company’s Autopilot is on.' : 'Waits for you to click Run on each task.'}</span>
           </span>
         </div>
+        {/* design §4.3: how it runs is Advanced */}
+        <Disclosure label="Advanced: how it runs">
         <div className="dep-field">
           <span>Runs as</span>
           <Segmented size="sm" items={[{ value: 'headless', label: 'Headless' }, { value: 'session', label: 'Session' }]} value={mode} onChange={setMode} />
@@ -343,6 +432,7 @@ function SeatSettings({ agent }: { agent: CompanyAgent }): React.JSX.Element {
             <span>auto wakes / hour</span>
           </span>
         </div>
+        </Disclosure>
         <div className="dep-form__foot">
           <span className="flex1" />
           <Button size="sm" variant="primary" disabled={busy || !dirty || !valid || !!agent.archivedAt} onClick={() => void save()}>

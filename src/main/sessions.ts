@@ -138,7 +138,7 @@ interface Live {
   reaping: boolean
 }
 
-export interface CreateOptions extends SessionCreateRequest {
+export interface CreateOptions extends Omit<SessionCreateRequest, 'initialPrompt'> {
   fromRunId?: Id | null
   resumeAgentSessionId?: string | null
   freshAgentSessionId?: string | null

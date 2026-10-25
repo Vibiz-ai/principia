@@ -147,3 +147,18 @@
 .home__paused { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 8px 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text-secondary); }
 .home__paused .glyph { color: var(--text-secondary); letter-spacing: -1px; }
 .home__waiting { font-size: var(--text-xs); margin: -4px 0 8px; }
+
+/* Five doors step 5: the Customize sidebar sheet */
+.cust__lede { margin: 0 0 14px; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); }
+.cust__group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.cust__head { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 6px; }
+.cust__doors { display: flex; flex-wrap: wrap; gap: 6px; }
+.cust__door { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
+.cust__row { display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.cust__row:last-child { border-bottom: 0; }
+.cust__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cust__label { font-size: 12.5px; color: var(--text-primary); }
+.cust__desc { font-size: 11px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cust__order { display: inline-flex; }
+.cust__up svg { transform: rotate(180deg); }
+.more-pop__foot { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .more-pop__customize { font-size: var(--text-xs); }

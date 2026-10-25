@@ -1,16 +1,17 @@
-import { useState } from 'react'
-import type { LinearStatusView, LinearTeamView } from '@shared/linear'
+import { useEffect, useState } from 'react'
+import type { LinearPreview, LinearStatusView, LinearTeamView } from '@shared/linear'
 import { Button, Sheet, Switch } from '../ui'
 import { Icon } from '../Icon'
 import { errorMessage, hive } from '../../lib/hive'
-import { toast } from '../../state/store'
-import { defaultTeam } from '../../lib/linear'
+import { toast, useStore } from '../../state/store'
+import { defaultTeam, previewLine } from '../../lib/linear'
 import '../../styles/linear.css'
 
 /**
  * LINEAR.md §6 the connect sheet: three steps on one screen. API key with Check Key, then the team, then Autosync (on)
  * and Also send open tasks, and one primary button, Connect. The key is sent to main and never comes back; a saved
- * one shows as its mask.
+ * one shows as its mask. Five doors E13: before Connect, a preview says what comes in ("14 open LED issues come in as
+ * Ledgerly tasks …"), counted from the same set the first sync pulls.
  */
 export function LinearSheet({ companyId, companyName, status, onClose, onConnected }: { companyId: string; companyName: string; status: LinearStatusView | null; onClose: () => void; onConnected?: (s: LinearStatusView) => void }): React.JSX.Element {
   const [key, setKey] = useState('')
@@ -22,6 +23,19 @@ export function LinearSheet({ companyId, companyName, status, onClose, onConnect
   const [busy, setBusy] = useState<'check' | 'connect' | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const saved = !!status?.keyMasked && status.state !== 'auth'
+  const prefix = useStore((s) => s.companies.find((c) => c.id === companyId)?.taskPrefix ?? null)
+  const [preview, setPreview] = useState<LinearPreview | 'loading' | null>(null)
+  useEffect(() => {
+    if (!teams || !teamId) return setPreview(null)
+    let live = true
+    setPreview('loading')
+    void hive.linear.preview({ companyId, teamId, ...(key.trim() ? { key: key.trim() } : {}) }).then((p) => live && setPreview(p), () => live && setPreview(null))
+    return () => {
+      live = false
+    }
+    // the key only matters once Check Key accepted it (teams set)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, teamId, companyId])
   const check = async (): Promise<void> => {
     setBusy('check'); setProblem(null)
     try {
@@ -52,7 +66,7 @@ export function LinearSheet({ companyId, companyName, status, onClose, onConnect
             <input type="password" autoComplete="off" spellCheck={false} data-autofocus placeholder={saved ? `Saved · ${status!.keyMasked}` : 'lin_api_…'} value={key} onChange={(e) => { setKey(e.target.value); setTeams(null) }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void check() } }} aria-label="Linear API key" />
             <Button disabled={!!busy || (!key.trim() && !saved)} onClick={() => void check()}>{busy === 'check' ? 'Checking…' : 'Check Key'}</Button>
           </div>
-          <small>A personal API key from Linear › Settings › Security &amp; access. It is kept in this company’s Keys and stays on this Mac.</small>
+          <small>A personal API key from Linear › Settings › Security &amp; access (<button type="button" className="link-btn" onClick={() => void hive.app.openExternal({ url: 'https://linear.app/settings/account/security' }).catch(() => undefined)}>open it in Linear</button>). It is kept in this company’s Keys and stays on this Mac.</small>
         </label>
       </div>
       <div className={`linear-step ${teams ? '' : 'is-off'}`}>
@@ -66,9 +80,15 @@ export function LinearSheet({ companyId, companyName, status, onClose, onConnect
         <span className="linear-step__n">3</span>
         <div className="linear-toggles">
           <label className="linear-toggle"><span><strong>Autosync</strong><small>Every minute, and a few seconds after a change here.</small></span><Switch checked={autosync} onChange={setAutosync} disabled={!teams} label="Autosync" /></label>
-          <label className="linear-toggle"><span><strong>Also send open tasks</strong><small>This company’s open tasks go to Linear too. Off: only tasks made from now on.</small></span><Switch checked={sendOpen} onChange={setSendOpen} disabled={!teams} label="Also send open tasks" /></label>
+          <label className="linear-toggle"><span><strong>Also send open tasks</strong><small>{preview && preview !== 'loading' && preview.openTasksHere ? `${companyName}’s ${preview.openTasksHere} open task${preview.openTasksHere === 1 ? '' : 's'} go to Linear too.` : 'This company’s open tasks go to Linear too.'} Off: only tasks made from now on.</small></span><Switch checked={sendOpen} onChange={setSendOpen} disabled={!teams} label="Also send open tasks" /></label>
         </div>
       </div>
+      {teams && teamId && (
+        <div className="linear-preview" role="status" aria-live="polite">
+          <Icon name="link" size={13} />
+          <span>{preview === 'loading' ? 'Counting what comes in…' : preview ? previewLine(preview, { companyName, prefix, sendOpen, autosync }) : 'Couldn’t count the issues. Connecting still works.'}</span>
+        </div>
+      )}
     </div>
   </Sheet>
 }

@@ -11,6 +11,9 @@ export function NameStep(): React.JSX.Element | null {
   const a = d.answers
   const web = a.siteUrl || a.instagram
   const insta = !!instagramHandle(web)
+  // five doors step 5: step 1 shapes this one. A business running is asked where it sells; an idea has no link yet
+  const running = d.lives === 'running'
+  const idea = d.lives === 'idea'
   return (
     <>
       <StepTitle><Voiced k="ob.name.title" /></StepTitle>
@@ -37,9 +40,9 @@ export function NameStep(): React.JSX.Element | null {
           onChange={(e) => onboardingDispatch({ type: 'setAnswers', patch: { oneLiner: e.target.value } })}
         />
       </label>
-      <label className="ob-field">
+      {!idea && <label className="ob-field">
         <span className="ob-field__label">
-          Got a website or Instagram? <span className="ob-optional">(optional)</span>
+          {running ? 'Where do you sell? Your website, shop or Instagram' : 'Got a website or Instagram?'} <span className="ob-optional">(optional)</span>
         </span>
         <input
           className="input"
@@ -50,9 +53,9 @@ export function NameStep(): React.JSX.Element | null {
           onChange={(e) => onboardingDispatch({ type: 'setAnswers', patch: { siteUrl: e.target.value, instagram: '' } })}
         />
         <span className="ob-hint">
-          {insta ? "Saved as a link. Principia can't read Instagram yet." : "We'll read your site's title and description to fill in the next step. Instagram is saved as a link."}
+          {insta ? 'Saved as a link. You can connect Instagram at the end.' : "We'll read your site's title and description to fill in the next step."}
         </span>
-      </label>
+      </label>}
     </>
   )
 }

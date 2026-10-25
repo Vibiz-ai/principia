@@ -88,37 +88,34 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     expect(renderToStaticMarkup(createElement(OnboardingFlow))).toBe('')
   })
 
-  it('S0 first run: welcome, the code question, explore link, agents found, no ✕', async () => {
+  it('S0 first run: welcome, one question with three answers, explore link, no key hints, no "Agents found", no ✕', async () => {
     const html = await render(await draft({ mode: 'first' }), { mode: 'first' })
     const t = text(html)
     expect(t).toContain('Welcome to Principia')
     expect(t).toContain("Let's set up your business. About two minutes.")
-    // playful is the default tone: the question carries the wink
-    expect(t).toContain('Already have code, or are we laying the first stone?')
-    expect(t).toContain('Yes, connect it')
+    // five doors step 5 (design §6.1, §6.8)
+    expect(t).toContain('Where does your business live today?')
+    expect(t).toContain('I have a business running')
+    expect(t).toContain('I have code')
     expect(t).toContain('A folder on this Mac or a GitHub repo')
-    expect(t).toContain("Not yet, it's an idea")
-    expect(t).toContain("We'll start with a name")
+    expect(t).toContain("It's an idea")
     expect(t).toContain("I'll explore on my own")
-    expect(t).toContain('Agents found:')
-    expect(t).toContain('Claude')
-    expect(t).toContain('Step 1 of')
+    expect(t).not.toContain('Agents found')
+    expect(html).not.toContain('ob-choice__kbd')
+    // the opening question has no counter: Step 1 is the page it leads to, so Continue never lands on "Step 1" again
+    expect(t).not.toContain('Step 1 of')
     expect(html).not.toContain('ob-close')
     expect(html).toContain('ob-layer--first')
     expect(html).toContain('aria-live="polite"')
   })
 
-  it('S0 new company: Guided / From a prompt / From a repo first; the code question only under Guided', async () => {
+  it('S0 new company: the same three answers; a prompt and Quick create are links', async () => {
     const t = text(await render(await draft()))
-    expect(t).toContain('How do you want to start?')
-    expect(t).toContain('Guided')
-    expect(t).toContain('From a prompt')
-    expect(t).toContain('Paste a description or brief')
-    expect(t).toContain('From a repo')
+    expect(t).toContain('Where does your business live today?')
+    expect(t).toContain('I have a business running')
+    expect(t).not.toContain('How do you want to start?')
+    expect(t).toContain('Or describe it in a few lines')
     expect(t).toContain('Quick create (just a name)')
-    expect(t).not.toContain('Yes, connect it')
-    expect(text(await render(await draft({ start: 'guided' })))).toContain('Yes, connect it')
-    expect(text(await render(await draft({ start: 'prompt' })))).not.toContain('Yes, connect it')
   })
 
   it('S0b Brief: the textarea, Build my plan (⌘↵) and the way back to the questions', async () => {
@@ -142,12 +139,6 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     expect(t).toContain('New business')
     expect(t).toContain('Quick create (just a name)')
     expect(await render(d, { resumable: true })).toContain('ob-close')
-  })
-
-  it('S0 with no agent CLI shows the install note', async () => {
-    const t = text(await render(await draft(), { status: { providers: [{ adapter: 'claude', installed: false }], claudeCli: false } }))
-    expect(t).toContain('No agent CLI found. You can finish setup, but agents need Claude Code, Codex, Cursor or Gemini to work.')
-    expect(t).toContain('How to install ↗')
   })
 
   it('S1a Connect: segmented control, choose folders, clone line, No code after all', async () => {
@@ -177,7 +168,8 @@ describe('OnboardingFlow screens (§2 copy)', () => {
 
   it('S1b Name: an Instagram handle is saved as a link', async () => {
     const t = text(await render(await draft({ step: 'name', hasCode: false, history: ['start'], answers: { name: 'Sunday Bakery', siteUrl: '@sundaybakery' } as never })))
-    expect(t).toContain("Saved as a link. Principia can't read Instagram yet.")
+    expect(t).toContain('Saved as a link. You can connect Instagram at the end.')
+    expect(t).not.toContain("can't read Instagram")
   })
 
   it('S2 About on the code branch: prefill pills and stack chips', async () => {
@@ -228,13 +220,13 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     const off = text(await render(await draft(base)))
     expect(off).toContain('Want to start posting already?')
     expect(off).toContain('Agents can draft posts and make on-brand images. Nothing is published, sent or paid without your seal.')
-    expect(off).toContain('Image workflows stay off. Add keys later in Keys.')
+    expect(off).toContain('Image workflows stay off. Turn them on any time in Settings › Keys & secrets.')
     const d = await draft({ ...base, content: { wants: true, provider: null, keySource: null, vibizInterest: false } })
     const html = await render(d)
     const t = text(html)
     expect(t).toContain('Images')
-    expect(t).toContain('Carousels, product photos, ad creatives, thumbnails · 9 workflows with fal, 1 with OpenAI')
-    expect(t).toContain('Needs a key')
+    expect(t).toContain('Carousels, product photos, ad creatives, thumbnails · 10 ready-made image workflows')
+    expect(t).toContain('Add a key below')
     expect(t).toContain('Social posting')
     expect(t).toContain('Coming soon. For now, posts are saved as ready-to-copy drafts and land in review.')
     expect(t).toContain('Vibiz key')
@@ -271,8 +263,9 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     expect(t).toContain('Uses your Claude login · about 1 small call')
     expect(t).toContain('Marketing')
     expect(t).toContain('Sales')
-    expect(t).toContain('Works on its own')
-    expect(t).toContain('Asks first')
+    // five doors §2.7: the one autonomy phrase per agent, as Team and the agent page show it
+    expect(t).toContain('Acts on its own')
+    expect(t).toMatch(/Asks before (posting|replying|spending|merging|ordering|acting)/)
     expect(t).toContain('Off until you start')
     expect(t).toContain('Turn on Departments, Board and Passport vault (beta)')
     expect(t).toContain('Costs nothing until you start. Agents use your Claude Code login.')
@@ -311,7 +304,7 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     expect(html).not.toContain('← Back')
   })
 
-  it('S8 Ready: summary, Start now / I\'ll review first, schedule checkboxes, What happens next, Launch at Login on first run', async () => {
+  it('S8 Ready: summary, one Open {name} (Home asks to start the first week), schedule checkboxes, the Claude check, Launch at Login on first run', async () => {
     const { planInput, availableFor } = await import('../../state/onboarding')
     const { setLocal } = await import('./actions')
     const d0 = await draft({ mode: 'first', step: 'ready', journalId: 'jr_1', hasCode: false, history: [], answers: { name: 'Sunday Bakery', goals: ['social'] } as never })
@@ -323,11 +316,11 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     const t = text(html)
     expect(t).toContain('Sunday Bakery is ready.')
     expect(t).toContain('(off)')
-    expect(t).toContain('Start now?')
-    expect(t).toContain('Start now')
-    expect(t).toContain("I'll review first")
+    expect(t).toContain('Next, Home asks whether to start the first week.')
+    expect(t).toContain('Open Sunday Bakery')
+    expect(t).not.toContain("I'll review first")
     expect(t).toContain('Will start on their own:')
-    expect(t).toContain('Also turn on schedules')
+    expect(t).toContain('Turn on with the first week')
     expect(t).toContain('images a week on your fal credits')
     expect(t).toContain('What happens next')
     expect(t).toContain('Everything agents make lands in review. Nothing is posted, sent or paid without you.')
@@ -335,9 +328,7 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     // the paid schedule starts unchecked, free ones checked
     const boxes = [...html.matchAll(/<input type="checkbox" class="ob-cb"( checked="")?/g)].map((m) => !!m[1])
     expect(boxes.filter(Boolean).length).toBe(plan.schedules.length - 1)
-    expect(t).not.toContain('Install Claude Code')
-    // no agent CLI: Start now leaves Autopilot off (main), and Ready says so
-    expect(text(await render(d, { mode: 'first', status: { providers: [], claudeCli: false } }))).toContain('Install Claude Code so agents can work. Until then Autopilot stays off and tasks wait on the board.')
+    expect(t).toContain('Checking Claude on this Mac')
     // not on "+ New company"
     expect(text(await render({ ...d, mode: 'new' }, { mode: 'new' }))).not.toContain('Launch at Login')
     setLocal({ result: null })
@@ -427,7 +418,7 @@ describe('the Roman stage: tone, tesserae, passport tablet', () => {
     const goals = await draft({ step: 'goals', hasCode: false, history: ['start', 'name', 'about', 'voice'], answers: { name: 'B', goals: ['website'] } as never })
     expect(text(await render(goals, { tone: 'plain' }))).toContain("Pick up to 3. We'll build the team around them.")
     const start = text(await render(await draft({ mode: 'first' }), { mode: 'first', tone: 'plain' }))
-    expect(start).toContain('Do you already have code for this business?')
+    expect(start).toContain('Where does your business live today?')
     expect(start).not.toContain('first stone')
   })
 
@@ -592,7 +583,7 @@ describe('Ready: the sealed diploma', () => {
     expect(dip).not.toMatch(/rim-hue-shift/)
     expect(h).toMatch(/<span class="rm-latin" lang="la" aria-hidden="true"[^>]*>Fortes fortuna adiuvat<\/span>/)
     expect(t).toContain('Fortune favors the bold')
-    expect(t).toContain('Start now?')
+    expect(t).toContain('Open Sunday Bakery')
     const [m, v, a] = d.plan!.value.agents.map((x) => x.persona!.name)
     expect(t).toContain(`Will start on their own: ${m} (Copywriter), ${v} (Site builder). Ask first: ${a} (Lead researcher).`)
     // no rail on Ready: the diploma is the passport here

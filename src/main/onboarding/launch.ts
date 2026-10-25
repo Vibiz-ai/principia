@@ -522,6 +522,12 @@ export class LaunchService {
         if (p.id === PERSONAL_COMPANY_ID) throw new HiveError('internal', 'A business can’t be created as Personal')
         j.companyId = p.id
         j.companyName = p.name
+        // pm-review E12: the Instagram the founder named during setup is this company's account (drafts only), so
+        // Connections shows it connected and the Setup chip counts it
+        const ig = prep.input.answers.instagram.trim()
+        if (ig) {
+          try { this.d.company.update(p.id, { account: { kind: 'instagram', handle: ig.startsWith('@') ? ig : `@${ig}` } }) } catch { /* a handle the schema refuses stays a profile line only */ }
+        }
       }
     )
     return 'ok'

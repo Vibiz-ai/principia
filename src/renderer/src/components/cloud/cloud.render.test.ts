@@ -255,7 +255,7 @@ describe("Home's Needs you (one inbox)", () => {
     expect(out).toContain('From your cloud')
     expect(out).toContain('cl-mark')
     expect(out).toContain('>Thursday<')
-    expect(out).toContain('Vibiz Passport')
+    expect(out).toContain('Vibiz Knowledge')
     expect(renderToStaticMarkup(createElement(CloudNeedsYou, { companyId: 'co_cortie' }))).toBe('')
   })
 })

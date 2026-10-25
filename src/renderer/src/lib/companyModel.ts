@@ -48,6 +48,54 @@ export function companyInitials(name: string): string {
 }
 
 /**
+ * Five doors E14: what a company's rail tile says: its own short label (1-3 characters) when set, else its initials.
+ * Personal is the person glyph, never letters.
+ */
+export function railText(c: Pick<CompanyPassport, 'name' | 'railLabel'>): string {
+  return (c.railLabel ?? '').trim().toUpperCase() || companyInitials(c.name)
+}
+/** The rail's hover label: "Harbor Dental Group · client". */
+export function railName(c: Pick<CompanyPassport, 'name' | 'client'>): string {
+  return c.client ? `${c.name} · client` : c.name
+}
+/**
+ * Five doors E14: the other companies whose tile would look the same as this one (same letters and same colour), so
+ * Company settings can say "Harbor Health looks the same on the rail" before an agency mixes up two clients.
+ */
+export function railLookAlikes<C extends Pick<CompanyPassport, 'id' | 'name' | 'railLabel' | 'color' | 'system' | 'archivedAt'>>(c: C, companies: readonly C[], rgbOf?: (color: string) => Rgb | null): C[] {
+  const text = railText(c)
+  const same = (a: string, b: string): boolean => {
+    if (a === b) return true
+    const x = rgbOf?.(a)
+    const y = rgbOf?.(b)
+    return !!x && !!y && colorsNear(x, y)
+  }
+  return companies.filter((o) => o.id !== c.id && !isPersonal(o) && !o.archivedAt && railText(o) === text && same(o.color || '', c.color || ''))
+}
+
+export type Rgb = readonly [number, number, number]
+/** "#3987e5" or "rgb(57, 135, 229)" as [r, g, b]; null for anything else. */
+export function parseRgb(css: string): Rgb | null {
+  const v = css.trim()
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v)
+  if (hex) {
+    const h = hex[1]!.length === 3 ? [...hex[1]!].map((d) => d + d).join('') : hex[1]!
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+  }
+  const rgb = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(v)
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null
+}
+/**
+ * Two colours a person would call the same on a rail tile at a glance: the same hue family and close in brightness
+ * (#6e8cff accent beside #3987e5 Blue reads "the same blue"; Blue beside Cyan or Purple does not). A redmean distance.
+ */
+export function colorsNear(a: Rgb, b: Rgb, max = 100): boolean {
+  const r = (a[0] + b[0]) / 2
+  const [dr, dg, db] = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+  return Math.sqrt((2 + r / 256) * dr * dr + 4 * dg * dg + (2 + (255 - r) / 256) * db * db) <= max
+}
+
+/**
  * "13 agents · 3 companies": the same company count as the sidebar header (Personal is not a company you run), with
  * Personal named only when it has agents of its own.
  */
@@ -188,6 +236,12 @@ export interface LiveItem {
   sessionId: Id | null
   runId: Id | null
   at: string
+  /** when the work began (the agent's start, or its task's start before the agent shows up): every elapsed time reads it */
+  startedAt?: string
+  /** the board task this item works on, when it is one */
+  taskId?: Id
+  /** your own chat (a session with no task): live, but not an agent of the team */
+  chat?: boolean
 }
 
 /**
@@ -223,6 +277,17 @@ export function nextGroupPeek(peek: boolean, prevNeeds: number, needs: number): 
 export function effectiveCompany(active: ActiveCompany, companies: Pick<CompanyPassport, 'id'>[]): ActiveCompany {
   if (!isMultiCompany(companies) || active === 'all') return 'all'
   return companies.some((c) => c.id === active) ? active : 'all'
+}
+
+/**
+ * Rows of the companies the rail lists: an archived company's tasks leave every surface (Board, Home, All companies,
+ * counts) until it is unarchived. Before the company list has loaded (or when it failed) nothing is dropped.
+ */
+export function listedRows<T extends { companyId?: Id | null }>(rows: T[], companies: readonly Pick<CompanyPassport, 'id'>[]): T[] {
+  if (!companies.length) return rows
+  const ids = new Set(companies.map((c) => c.id))
+  const out = rows.filter((r) => ids.has(r.companyId || PERSONAL_COMPANY_ID))
+  return out.length === rows.length ? rows : out
 }
 
 /**

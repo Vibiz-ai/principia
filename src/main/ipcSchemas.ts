@@ -185,6 +185,7 @@ const settingsPatch = z
     // SLACK.md §7.1 (imessageHandle removed, SA3: a patch carrying it is rejected by .strict())
     slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
     slackMirrorNeedsYou: z.boolean(),
+    notifyNeedsYou: z.boolean(),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),
@@ -236,7 +237,13 @@ const settingsPatch = z
           .partial()
           .strict()
       )
-      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Five doors step 5: one-time notices the person dismissed ("things-moved" → when). UI state only.
+    notices: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,40}$/), z.string().max(40)).refine((r) => Object.keys(r).length <= 50, 'Too many notices'),
+    // Five doors step 5: a company just set up whose first week waits for "Start the first week?" on Home. UI state only.
+    firstWeek: z
+      .record(id, z.object({ journalId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), scheduleRefs: z.array(z.string().regex(/^[a-z][a-z0-9-]{1,30}$/)).max(8) }).strict())
+      .refine((r) => Object.keys(r).length <= 100, 'Too many companies')
   })
   .partial()
   .strict()
@@ -460,6 +467,7 @@ export const REQUEST_SCHEMAS = {
   'settings:get': none,
   'settings:update': settingsPatch,
   'providers:list': optObj({ refresh: z.boolean().optional() }),
+  'providers:claudeAuth': optObj({ refresh: z.boolean().optional() }),
   'repos:list': optObj({ companyId }),
   'repos:pick': optObj({ companyId }),
   'repos:add': z.object({ paths: z.array(absPath).min(1).max(200), companyId }),
@@ -490,7 +498,8 @@ export const REQUEST_SCHEMAS = {
     rows: z.number().int().min(1).max(1000),
     title: z.string().max(200).optional(),
     memory: memoryMode.optional(),
-    departmentId: id.optional()
+    departmentId: id.optional(),
+    initialPrompt: z.string().trim().min(1).max(8000).optional()
   }),
   'sessions:attach': z.object({ id }),
   'sessions:kill': z.object({ id }),
@@ -560,7 +569,9 @@ export const REQUEST_SCHEMAS = {
   'tasks:update': z.object({id,patch:taskPatchSchema.omit(TASK_SYSTEM_FIELDS)}),
   'tasks:get': z.object({id}),
   'tasks:start': z.object({id,profileId:id.optional()}),
-  'tasks:comment': z.object({id,message:z.string().trim().min(1).max(10_000)}),
+  'tasks:comment': z.object({id,message:z.string().trim().min(1).max(10_000),
+    /** five doors D11: the agent desk's reply, said in the agent's voice; an agent comment never wakes the task */
+    by:z.enum(['human','agent']).optional()}),
   // DEPARTMENTS.md §10
   'departments:list': optObj({ companyId, includeArchived: z.boolean().optional() }),
   'departments:save': departmentSaveSchema,
@@ -582,6 +593,7 @@ export const REQUEST_SCHEMAS = {
   'tasks:openSession': z.object({ id, ...ptySize }).strict(),
   'tasks:takeover': z.object({ id, ...ptySize }).strict(),
   'tasks:stop': z.object({ id }).strict(),
+  'tasks:pause': z.object({ id }).strict(),
   'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional() }).strict(),
   // WORKTREE.md
   'taskWork:start': z.object({ id, profileId: id.optional() }).strict(),
@@ -647,6 +659,7 @@ export const REQUEST_SCHEMAS = {
   // LINEAR.md §6
   'linear:status': z.object({ companyId: id }).strict(),
   'linear:checkKey': z.object({ companyId: id, key: z.string().max(500).optional() }).strict(),
+  'linear:preview': z.object({ companyId: id, teamId: z.string().min(1).max(200), key: z.string().max(500).optional() }).strict(),
   'linear:connect': z.object({ companyId: id, key: z.string().max(500).optional(), teamId: z.string().min(1).max(100), autosync: z.boolean(), sendOpen: z.boolean() }).strict(),
   'linear:sync': z.object({ companyId: id }).strict(),
   'linear:setAutosync': z.object({ companyId: id, on: z.boolean() }).strict(),

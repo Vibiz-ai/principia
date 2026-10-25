@@ -56,7 +56,7 @@ export function PassportVaultView({ view }: { view: PassportViewState }): React.
         <div className="scroll view__body">
           <CompanyChooser
             title="Pick a company"
-            text="The Passport is one company’s memory: its notes, people, decisions and the links between them, as an Obsidian vault."
+            text="Knowledge is one company’s memory: its notes, people, decisions and the links between them. Open a company to read or edit what its agents know."
             onPick={(id) => void enterCompany(id, { view: { ...view, nonce: Date.now() } })}
           />
         </div>

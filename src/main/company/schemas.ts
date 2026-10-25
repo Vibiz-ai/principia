@@ -13,7 +13,14 @@ const vaultPath = z.string().min(1).max(4096).refine(s=>!s.includes('\0')&&(s.st
 export const passportInputSchema = z.object({ name, mission: context, brandVoice: context, audience: context, products: context, goals: context, context, constraints: context, repoIds: z.array(id).max(500), color: colorSchema.optional(), vaultPath: vaultPath.optional(), taskPrefix: z.string().min(1).max(8).optional() }).strict()
 export const passportExportSchema = z.object({format: z.literal('principia-passport'), version: z.literal(1), passport: passportInputSchema.omit({repoIds:true,vaultPath:true})}).strict()
 export const companyCreateSchema = z.object({ name, color: colorSchema.optional(), vaultPath: vaultPath.optional(), repoIds: z.array(id).max(500).optional(), mission: context.optional(), brandVoice: context.optional(), audience: context.optional(), products: context.optional(), goals: context.optional(), context: context.optional(), constraints: context.optional() }).strict()
-export const companyUpdateSchema = z.object({ name: name.optional(), color: colorSchema.optional(), sortOrder: z.number().int().min(0).max(100_000).optional(), vaultPath: vaultPath.optional(), taskPrefix: z.string().min(1).max(8).optional() }).strict()
+/** "@northwind.coffee", "diego-ledgerly": an account handle as the service shows it (letters, digits, . _ -) */
+const handle = z.string().trim().min(1).max(64).regex(/^@?[A-Za-z0-9._][A-Za-z0-9._-]{0,62}$/, 'Use the account name as the service shows it')
+export const companyUpdateSchema = z.object({ name: name.optional(), color: colorSchema.optional(), sortOrder: z.number().int().min(0).max(100_000).optional(), vaultPath: vaultPath.optional(), taskPrefix: z.string().min(1).max(8).optional(),
+  account: z.object({ kind: z.enum(['instagram', 'github']), handle: handle.nullable() }).strict().optional(),
+  monthlyCap: z.number().finite().min(1).max(100_000).nullable().optional(),
+  // five doors E14: the rail label (1-3 letters or digits) and the client tag
+  railLabel: z.string().trim().min(1).max(3).regex(/^[\p{L}\p{N}]+$/u, 'Use 1 to 3 letters or digits').nullable().optional(),
+  client: z.boolean().optional() }).strict()
 export const companyReorderSchema = z.array(id).max(1000)
 export const assignRepoSchema = z.object({ repoId: id, companyId: id }).strict()
 const iso = z.string().min(1).max(40).refine(s=>!Number.isNaN(Date.parse(s)),'invalid date')

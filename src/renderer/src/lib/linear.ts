@@ -1,6 +1,6 @@
 /** LINEAR.md §6: the renderer's view of a company's Linear sync (the key never reaches here). */
 import { useEffect, useRef, useState } from 'react'
-import type { LinearStatusView } from '@shared/linear'
+import type { LinearPreview, LinearStatusView } from '@shared/linear'
 import { hive, useHiveEvent } from './hive'
 
 /** One company's sync status, refetched when tasks or keys change. null while loading or without a company. */
@@ -21,6 +21,7 @@ export function useLinear(companyId: string | null | undefined): { status: Linea
 export function syncedAgo(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return 'Not synced yet'
   const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
+  if (s < 10) return 'Synced just now'
   if (s < 60) return `Synced ${s} s ago`
   const m = Math.round(s / 60)
   if (m < 60) return `Synced ${m} min ago`
@@ -63,4 +64,20 @@ export function parseLabels(text: string): string[] {
     out.push(l)
   }
   return out.slice(0, 50)
+}
+
+/**
+ * Five doors E13, the preview before Connect: "14 open LED issues (and 3 closed in the last 14 days) come in as
+ * Ledgerly tasks, LA-…, each keeping its LED number. Changes sync both ways; when both sides change a field, the newer
+ * change wins." Every number is the count of what the first sync pulls.
+ */
+export function previewLine(p: LinearPreview, o: { companyName: string; prefix: string | null; sendOpen: boolean; autosync: boolean }): string {
+  const n = (k: number, one: string, many = `${one}s`): string => `${k} ${k === 1 ? one : many}`
+  const open = p.more ? `More than ${p.open} open ${p.teamKey} issues` : p.open ? `${n(p.open, `open ${p.teamKey} issue`)}` : `No open ${p.teamKey} issues`
+  const closed = p.recentlyClosed ? ` (and ${n(p.recentlyClosed, 'issue')} closed in the last 14 days)` : ''
+  const verb = !p.more && p.open === 1 && !p.recentlyClosed ? 'comes' : 'come'
+  const as = p.open || p.recentlyClosed || p.more ? ` ${verb} in as ${o.companyName} tasks. Each gets a number here${o.prefix ? ` like ${o.prefix}-12` : ''} and shows its ${p.teamKey} number beside it, so you can find it in Linear.` : ' to bring in yet.'
+  const out = o.sendOpen && p.openTasksHere ? ` ${n(p.openTasksHere, 'open task')} from here go${p.openTasksHere === 1 ? 'es' : ''} to Linear.` : ''
+  const sync = o.autosync ? ' After that, changes sync both ways every minute; when both sides change the same field, the newer change wins.' : ' Autosync is off: it syncs when you press Sync now.'
+  return `${open}${closed}${as}${out}${sync}`
 }

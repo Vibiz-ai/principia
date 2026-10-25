@@ -97,6 +97,24 @@ export function boardActions(h: BoardHost, onChange: (companyId: string) => void
       }
       return c.task(t.id)
     }),
+    /**
+     * Five doors C9 "Pause this task": like Stop, but the founder chose it. The run (or session) ends with a
+     * task_paused stop, so the task goes back to To do with its work and a wake saying where it stopped, never
+     * parked as a failure, and the dispatcher leaves it there until a human starts it again.
+     */
+    pause: (q: { id: string }) => actAsync(q.id, async t => {
+      if (t.status !== 'in_progress') throw new HiveError('bad_request', 'This task is not running')
+      c.expectStop(t.id, 'task_paused')
+      const run = t.runId ? c.store.getRun(t.runId) : null
+      if (run && (run.status === 'queued' || run.status === 'running')) {
+        await h.engine.runs.cancel(run.id)
+        const ended = c.store.getRun(run.id)
+        if (ended) c.syncRun(ended)
+      } else if (run) c.syncRun(run)
+      else if (h.dispatcher?.stop) await h.dispatcher.stop(t.id)
+      if (c.task(t.id).status === 'in_progress') c.park(t.id, 'no_report', 'Paused by you; nothing was running')
+      return c.task(t.id)
+    }),
     openSession: (q: { id: string } & PtySize) => actAsync(q.id, async () => h.dispatcher?.openSession ? h.dispatcher.openSession(q.id, { cols: q.cols, rows: q.rows }) : notAvailable()),
     takeover: (q: { id: string } & PtySize) => actAsync(q.id, async () => h.dispatcher?.takeover ? h.dispatcher.takeover(q.id, { cols: q.cols, rows: q.rows }) : notAvailable()),
     autopilot: (q: { companyId: string; on: boolean; maxInFlight?: number }): BoardSettings => {
@@ -125,6 +143,7 @@ export function registerBoardHandlers(h: Hive & { dispatcher?: BoardDispatcher |
   handle('tasks:sendBack', a.sendBack)
   handle('tasks:unpark', a.unpark)
   handle('tasks:stop', async q => { const t = await a.stop(q); h.statusChanged(); return t })
+  handle('tasks:pause', async q => { const t = await a.pause(q); h.statusChanged(); return t })
   handle('tasks:openSession', async q => { const out = await a.openSession(q); h.statusChanged(); return out })
   handle('tasks:takeover', async q => { const out = await a.takeover(q); h.statusChanged(); return out })
   handle('board:autopilot', q => { const out = a.autopilot(q); emit('data:changed', { domain: 'company' }); return out })

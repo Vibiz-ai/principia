@@ -6,6 +6,7 @@ import { LogoPickerSheet } from './components/LogoPicker'
 import { ChatCompanyCardHost } from './components/ChatCompanyCard'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
+import { NewChatSheet } from './components/desk/NewChatSheet'
 import { DiagramOverlays } from './components/diagrams/DiagramOverlays'
 import { Sidebar } from './shell/Sidebar'
 import { StatusBar } from './shell/StatusBar'
@@ -114,6 +115,7 @@ export function App(): React.JSX.Element {
       <CommandPalette />
       <RunInputsSheet />
       <SiblingOffer />
+      <NewChatSheet />
       <DiagramOverlays />
       <Toasts />
       {/* VOICE.md §7: one toast per company per newly earned milestone (mounted once, outside the first-run flow) */}
@@ -141,7 +143,7 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'agentSeat':
       // DEPARTMENTS.md §0.8: a stale deep link with the flag off lands on a plain notice, never a half-working page
       if (!departments) return <DepartmentsOff />
-      return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} nonce={view.nonce} /> : <AgentSeatView id={view.id} />
+      return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} nonce={view.nonce} /> : <AgentSeatView id={view.id} focus={view.focus} nonce={view.nonce} />
     case 'tasks':
       return <TasksView />
     case 'plans':
@@ -158,7 +160,7 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'team':
       return <TeamView />
     case 'chats':
-      return <ChatsView filter={view.filter} />
+      return <ChatsView filter={view.filter} chat={view.chat} />
     case 'portfolio':
       return PortfolioView ? <PortfolioView /> : <HomeView />
     case 'home':
@@ -180,13 +182,13 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'artifacts':
       return <ArtifactsView runId={view.runId} sessionId={view.sessionId} />
     case 'settings':
-      return <SettingsView section={view.section} nonce={view.nonce} />
+      return <SettingsView section={view.section} nonce={view.nonce} connect={view.connect} />
     case 'memory':
       return <MemoryView view={view} />
     case 'slack':
       return <SlackView channelId={view.channelId} threadTs={view.threadTs} search={view.search} nonce={view.nonce} />
     case 'usage':
-      return <UsageView />
+      return <UsageView cap={view.cap} />
     case 'forum':
       return <ForumView companyId={view.companyId} channelId={view.channelId} threadId={view.threadId} nonce={view.nonce} />
     default:

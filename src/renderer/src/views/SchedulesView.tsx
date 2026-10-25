@@ -14,14 +14,27 @@ import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
 import { companyOf, reposOf } from '../lib/companyModel'
 import { inScope } from '../lib/scope'
 import { AutomationTabs } from '../components/AutomationTabs'
+import { AutopilotsTab } from '../components/AutopilotsTab'
 import { CloudPlacedMark } from '../components/cloud/bits'
 import { useCloudPlacement } from '../state/cloud'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
 import type { Id } from '@shared/types'
 
-export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }): React.JSX.Element {
-  const [cur, setCur] = useState<'schedules' | 'slack'>(tab ?? 'schedules')
+const ADAPTER_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', shell: 'A script' }
+
+export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: 'autopilots' | 'schedules' | 'slack' }): React.JSX.Element {
+  // a deep link to a schedule (or a seed) opens Schedules; Automations itself opens on Autopilots
+  const [cur, setCur] = useState<'autopilots' | 'schedules' | 'slack'>(tab ?? 'schedules')
   useEffect(() => setCur(tab ?? 'schedules'), [tab, nonce])
+  if (cur === 'autopilots')
+    return (
+      <div className="view">
+        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <div className="scroll view__body">
+          <AutopilotsTab />
+        </div>
+      </div>
+    )
   if (cur === 'slack')
     return (
       <div className="view">
@@ -56,7 +69,7 @@ function ScopedSlackTriggers({ seedWorkflowId, nonce }: { seedWorkflowId?: strin
 }
 
 /** SLACK.md §12.5 + five doors: Automations → Schedules | Workflows | Slack triggers. */
-function ScheduleTabs({ value, onChange }: { value: 'schedules' | 'slack'; onChange: (v: 'schedules' | 'slack') => void }): React.JSX.Element {
+function ScheduleTabs({ value, onChange }: { value: 'autopilots' | 'schedules' | 'slack'; onChange: (v: 'autopilots' | 'schedules' | 'slack') => void }): React.JSX.Element {
   return <AutomationTabs value={value} onChange={(v) => v !== 'workflows' && onChange(v)} />
 }
 
@@ -103,7 +116,9 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
     if (t.kind === 'workflow') return `⇶ ${workflows.find((w) => w.id === t.workflowId)?.name ?? 'workflow'}`
     const p = profiles.find((x) => x.id === t.profileId)
     const r = repos.find((x) => x.id === t.repoId)
-    return `◆ ${p?.adapter ?? 'agent'} · ${r?.name ?? 'Chat'}`
+    // plain words: who runs it, and in which repository when it has one ("◆ Claude", "◆ Claude · ledgerly-app")
+    const who = p?.adapter ? (ADAPTER_NAME[p.adapter] ?? p.adapter) : 'An agent'
+    return r ? `◆ ${who} · ${r.name}` : `◆ ${who}`
   }
 
   // CLOUD.md §8: a schedule placed in the cloud starts there (main answers null: no local run)
@@ -182,7 +197,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
             <div className="tr tr--head sch-cols">
               <span className="th">On</span>
               <span className="th">Name</span>
-              <span className="th">Target</span>
+              <span className="th">Who runs it</span>
               <span className="th">When</span>
               <span className="th">Next</span>
               <span className="th">Last</span>

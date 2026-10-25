@@ -1,0 +1,11 @@
+/* Five doors step 5: Automations › Autopilots (design §2.3) */
+.auto-tab { max-width: 860px; padding: 20px 28px 32px; display: flex; flex-direction: column; gap: 18px; }
+.auto-tab__switch { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 14px 16px; }
+.auto-tab__title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.auto-tab__lede { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); }
+.auto-tab__foot { margin: 0; font-size: 12px; color: var(--text-tertiary); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.auto-tab__pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.auto-tab__co { display: flex; align-items: center; gap: 10px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 10px 12px; color: var(--text-primary); font-size: 12.5px; }
+.auto-tab__co:hover { border-color: var(--border-strong); }
+.auto-tab__co-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-tab__co-state { font-size: 11px; color: var(--text-tertiary); }

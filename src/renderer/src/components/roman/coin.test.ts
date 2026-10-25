@@ -79,14 +79,13 @@ describe('Medallion: the engraved coin (VOICE.md §5.6)', () => {
     expect(render(createElement(Medallion, { name: 'Sunday Bakery', size: 24 }))).toContain('r="15.2"')
   })
 
-  it('the Portfolio card coin marks Personal as "P" with no tessera, like the rail', () => {
-    // the card draws the shared CompanyCoin (logo-aware), which keeps Personal's "P"
+  it('the Portfolio card uses the rail\'s monogram mark, and Personal is the person glyph (five doors E14)', () => {
     const src = readFileSync(join(__dirname, '../../views/PortfolioView.tsx'), 'utf8')
-    expect(src).toMatch(/<CompanyCoin company=\{c\}/)
+    expect(src).toMatch(/<RailMark company=\{c\}/)
     const rail = readFileSync(join(__dirname, '../../shell/CompanyRail.tsx'), 'utf8')
-    const coin = rail.slice(rail.indexOf('export function CompanyCoin'))
-    expect(coin).toMatch(/const personal = isPersonal\(company\)/)
-    expect(coin).toMatch(/<Medallion[^>]*initial=\{personal \? 'P' : undefined\}/)
+    const mark = rail.slice(rail.indexOf('export function RailMark'))
+    expect(mark).toMatch(/const personal = isPersonal\(company\)/)
+    expect(mark).toMatch(/<Icon name="user"/)
   })
 
   it('working renders twelve 2-unit blue tiles on r 13.2 with a staggered index, and no ring', () => {

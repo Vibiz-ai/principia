@@ -292,7 +292,7 @@ export function stepPrompt(def: AutopilotStepDef, ctx: AutopilotContext, publish
       const rules = drafts.map((s) =>
         pub.some((p) => p.id === s.id)
           ? `- ${s.name}: publishing is on. Publish a draft only after the human approves it in a comment on this card, at most 3 posts a week, using the ${s.state === 'mcp' ? `${s.connection} connection` : 'API key in your environment'}. List every published post's link in your report.`
-          : `- ${s.name}: drafts only. Do not publish.`
+          : `- ${s.name}${s.state === 'account' && s.connection ? ` (${s.connection})` : ''}: drafts only. Do not publish.`
       )
       return [
         `Plan next week's social content for ${ctx.companyName} and draft the posts.`,

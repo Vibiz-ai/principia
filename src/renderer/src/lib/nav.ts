@@ -37,6 +37,8 @@ export interface MoreItem {
   aliases: string[]
   /** listed only when this holds (Plans: its experimental flag) */
   requires?: 'plans'
+  /** the old names that, typed exactly, make this the top hit; defaults to `aliases` */
+  exact?: string[]
 }
 
 export const PRIMARY: readonly Door[] = [
@@ -50,7 +52,7 @@ export const PRIMARY: readonly Door[] = [
 export const MORE_GROUPS: readonly MoreGroup[] = ['Automate', 'Work', 'Insight']
 
 export const MORE: readonly MoreItem[] = [
-  { key: 'automations', label: 'Automations', icon: 'refresh', group: 'Automate', desc: 'Schedules, workflows and Slack triggers', defaultVisibility: 'hidden', aliases: ['schedules', 'workflows', 'autopilots', 'cron', 'triggers'] },
+  { key: 'automations', label: 'Automations', icon: 'refresh', group: 'Automate', desc: 'Autopilots, schedules, workflows and Slack triggers', defaultVisibility: 'hidden', aliases: ['schedules', 'workflows', 'autopilots', 'cron', 'triggers'], exact: ['automation', 'triggers'] },
   { key: 'addons', label: 'Add-ons', icon: 'addons', group: 'Automate', desc: 'Workflows and skills to install', defaultVisibility: 'hidden', aliases: ['marketplace', 'skills', 'catalog'] },
   { key: 'files', label: 'Files', icon: 'file', group: 'Work', desc: 'Everything your agents saved', defaultVisibility: 'hidden', aliases: ['artifacts', 'outputs', 'documents'] },
   // pm-review C8: Forum is never pinned by default; it shows in PINNED while a thread has something for you
@@ -69,10 +71,15 @@ export interface SettingsPage {
   aliases: string[]
 }
 export const SETTINGS_PAGES: readonly SettingsPage[] = [
-  { section: 'company', label: 'Company settings', desc: 'Name, colour, logo, repositories, export', aliases: ['company', 'profile', 'rename company', 'linear', 'linear sync', 'repositories'] },
-  { section: 'connections', label: 'Connections', desc: 'Tools this company’s agents can use: Slack, Notion, GitHub, Stripe…', aliases: ['connections', 'connect', 'integrations', 'mcp', 'tools', 'slack', 'notion', 'github', 'stripe'] },
+  { section: 'company', label: 'Company settings', desc: 'Name, colour, logo, task prefix, profile', aliases: ['company', 'profile', 'rename company', 'task prefix', 'prefix', 'logo'] },
+  { section: 'team', label: 'Team & autonomy', desc: 'Pause this company, Autopilot, how many tasks run at once', aliases: ['autonomy', 'autopilot', 'pause company', 'tasks at once'] },
+  { section: 'connections', label: 'Connections', desc: 'Tools this company’s agents can use: Instagram, Stripe, Slack, GitHub, Linear…', aliases: ['connections', 'connect', 'integrations', 'mcp', 'tools', 'slack', 'notion', 'github', 'stripe', 'instagram', 'linear'] },
+  { section: 'repos', label: 'Repositories', desc: 'The code this company’s agents work on', aliases: ['repositories', 'repos'] },
   { section: 'keys', label: 'Keys & secrets', desc: 'Secrets this company’s agents use, like STRIPE_SECRET_KEY', aliases: ['keys', 'api key', 'api keys', 'env', 'environment variables', 'secrets', 'token'] },
-  { section: 'agents', label: 'AI providers', desc: 'Claude, Codex and other CLIs, profiles and their API keys (every company)', aliases: ['ai providers', 'providers', 'api key', 'api keys', 'anthropic', 'openai', 'claude', 'codex', 'model', 'cli'] },
+  { section: 'providers', label: 'AI providers', desc: 'Claude and Codex sign-ins, model API keys, profiles (every company)', aliases: ['ai providers', 'providers', 'api key', 'api keys', 'anthropic', 'openai', 'claude', 'codex', 'model', 'cli', 'sign in', 'plan'] },
+  { section: 'storage', label: 'Storage', desc: 'Disk, agent folders, logs and Clean up (every company)', aliases: ['storage', 'disk', 'clean up', 'cleanup', 'worktrees', 'data folder', 'logs', 'archived companies', 'unarchive'] },
+  { section: 'danger', label: 'Danger zone', desc: 'Export this company’s Knowledge, or archive the company', aliases: ['danger', 'danger zone', 'archive', 'archive company', 'export', 'delete company', 'remove company'] },
+  { section: 'notifications', label: 'Notifications', desc: 'Mac notifications when something needs you, and Slack alerts (every company)', aliases: ['notifications', 'notify', 'alerts', 'mac notification', 'sound'] },
   { section: 'cloud', label: 'Cloud sync', desc: 'Agents online while your Mac sleeps', aliases: ['cloud', 'principia cloud', 'pairing'] }
 ]
 
@@ -103,7 +110,7 @@ export function viewFor(key: DoorKey | MoreKey, nonce = Date.now()): ViewState {
     case 'knowledge':
       return { name: 'passport', nonce }
     case 'automations':
-      return { name: 'schedules' }
+      return { name: 'schedules', tab: 'autopilots', nonce }
     case 'addons':
       return { name: 'marketplace' }
     case 'files':
@@ -348,12 +355,50 @@ export interface GoToEntry {
   keywords: string
   /** old names typed exactly ("schedules", "canvas") make this the top hit (lib/paletteRank) */
   exact: string[]
-  target: { door: DoorKey } | { more: MoreKey } | { settings: SettingsSection }
+  target: { door: DoorKey } | { more: MoreKey } | { settings: SettingsSection } | { view: ViewState }
 }
+/**
+ * Automations' tabs as their own rows, so an old name lands on its tab ("Schedules" ↵ opens Schedules, not the first
+ * tab); the tab the deep links open too.
+ */
+const AUTOMATION_TABS: readonly GoToEntry[] = [
+  { id: 'v:autopilots', label: 'Automations › Autopilots', hint: 'the company Autopilot switch and the autopilot recipes', icon: 'refresh', keywords: 'autopilot autopilots recurring automatic', exact: ['autopilot', 'autopilots'], target: { view: { name: 'schedules', tab: 'autopilots' } } },
+  { id: 'v:schedules', label: 'Automations › Schedules', hint: 'what runs on a timer', icon: 'clock', keywords: 'schedule schedules cron timer recurring', exact: ['schedule', 'schedules', 'cron'], target: { view: { name: 'schedules', tab: 'schedules' } } },
+  { id: 'v:workflows', label: 'Automations › Workflows', hint: 'multi-step agent workflows and scripts', icon: 'workflows', keywords: 'workflow workflows editor scripts', exact: ['workflow', 'workflows'], target: { view: { name: 'workflows' } } }
+]
 export function goToEntries(available: (key: MoreKey) => boolean): GoToEntry[] {
   return [
     ...PRIMARY.map<GoToEntry>((d) => ({ id: `v:${d.key}`, label: d.label, hint: d.desc, icon: d.icon, kbd: d.kbd, keywords: d.aliases.join(' '), exact: d.aliases, target: { door: d.key } })),
-    ...MORE.filter((m) => available(m.key)).map<GoToEntry>((m) => ({ id: `v:${m.key}`, label: m.label, hint: m.desc, icon: m.icon, keywords: m.aliases.join(' '), exact: m.aliases, target: { more: m.key } })),
-    ...SETTINGS_PAGES.map<GoToEntry>((p) => ({ id: `v:set:${p.section}`, label: p.label, hint: `Settings · ${p.desc}`, icon: p.section === 'keys' ? 'keys' : p.section === 'cloud' ? 'globe' : p.section === 'connections' ? 'link' : 'settings', keywords: p.aliases.join(' '), exact: p.aliases, target: { settings: p.section } }))
+    ...MORE.filter((m) => available(m.key)).map<GoToEntry>((m) => ({ id: `v:${m.key}`, label: m.label, hint: m.desc, icon: m.icon, keywords: m.aliases.join(' '), exact: m.exact ?? m.aliases, target: { more: m.key } })),
+    ...(available('automations') ? AUTOMATION_TABS : []),
+    ...SETTINGS_PAGES.map<GoToEntry>((p) => ({ id: `v:set:${p.section}`, label: p.label, hint: `Settings · ${p.desc}`, icon: p.section === 'keys' ? 'keys' : p.section === 'cloud' ? 'globe' : p.section === 'connections' ? 'link' : p.section === 'storage' ? 'folder' : 'settings', keywords: p.aliases.join(' '), exact: p.aliases, target: { settings: p.section } }))
   ]
+}
+
+// ---------- Customize sidebar (five doors step 5, design §3) ----------
+
+/** Move a pinned item one place up (-1) or down (+1) in PINNED; anything else is returned unchanged. */
+export function movePin(prefs: SidebarPrefs, ref: string, dir: -1 | 1): SidebarPrefs {
+  const pins = [...(prefs.pins ?? [])]
+  const i = pins.indexOf(ref)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= pins.length) return prefs
+  ;[pins[i], pins[j]] = [pins[j]!, pins[i]!]
+  return { ...prefs, pins }
+}
+export interface CustomizeRow { key: MoreKey; label: string; icon: string; desc: string; visibility: NavVisibility; isDefault: boolean }
+/**
+ * The Customize sidebar sheet's rows: Always show first (in their PINNED order), then Show when active, then Hidden,
+ * each in registry order. The five doors are not rows: they always show.
+ */
+export function customizeRows(prefs: SidebarPrefs, available: (key: MoreKey) => boolean): CustomizeRow[] {
+  const items = MORE.filter((m) => available(m.key)).map<CustomizeRow>((m) => ({ key: m.key, label: m.label, icon: m.icon, desc: m.desc, visibility: visibilityOf(prefs, m.key), isDefault: visibilityOf(prefs, m.key) === m.defaultVisibility }))
+  const order = (prefs.pins ?? []).filter((p) => !p.startsWith('dept:'))
+  const rank = (r: CustomizeRow): number => (r.visibility === 'always' ? 0 : r.visibility === 'active' ? 1 : 2)
+  const pos = (r: CustomizeRow): number => (order.includes(r.key) ? order.indexOf(r.key) : order.length + MORE.findIndex((m) => m.key === r.key))
+  return items.sort((a, b) => rank(a) - rank(b) || pos(a) - pos(b))
+}
+/** Back to the defaults: the doors, Forum "Show when active", everything else in More (pinned departments stay). */
+export function resetVisibility(prefs: SidebarPrefs): SidebarPrefs {
+  return compact({ pins: (prefs.pins ?? []).filter((p) => p.startsWith('dept:')) })
 }

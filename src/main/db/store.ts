@@ -76,6 +76,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // SLACK.md §7.1 (imessageHandle was removed, SA3)
   slackAlertUserId: null,
   slackMirrorNeedsYou: false,
+  // Settings › Notifications: "Tell me when something needs me" (a Mac notification per ask / finished turn)
+  notifyNeedsYou: true,
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,
@@ -97,7 +99,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // Five doors: sidebar pins and More visibility per company (UI state)
   sidebarNav: {},
   // CHAT-UI.md §4.4
-  openChatsAs: 'auto'
+  openChatsAs: 'auto',
+  // Five doors step 5: dismissed one-time notices, and the first week waiting on Home (UI state)
+  notices: {},
+  firstWeek: {}
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments and plans stay absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
@@ -193,6 +198,8 @@ export class Store {
     s.expandedCompanies = s.expandedCompanies && typeof s.expandedCompanies === 'object' && !Array.isArray(s.expandedCompanies) ? { ...s.expandedCompanies } : {}
     s.autopilots = s.autopilots && typeof s.autopilots === 'object' && !Array.isArray(s.autopilots) ? { ...s.autopilots } : {}
     s.sidebarNav = s.sidebarNav && typeof s.sidebarNav === 'object' && !Array.isArray(s.sidebarNav) ? { ...s.sidebarNav } : {}
+    s.notices = s.notices && typeof s.notices === 'object' && !Array.isArray(s.notices) ? { ...s.notices } : {}
+    s.firstWeek = s.firstWeek && typeof s.firstWeek === 'object' && !Array.isArray(s.firstWeek) ? { ...s.firstWeek } : {}
     return s
   }
   updateSettings(patch: Partial<Settings>): Settings {

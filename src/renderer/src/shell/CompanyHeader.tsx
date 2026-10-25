@@ -59,10 +59,11 @@ async function companyMenu(company: CompanyPassport | null, paused: boolean): Pr
 /** `company` null = All companies. `flat`: Personal only (no rail), the header names Personal and offers New company. */
 export function CompanyHeader({ company, flat = false }: { company: CompanyPassport | null; flat?: boolean }): React.JSX.Element {
   const count = useStore((s) => s.companies.filter((c) => !isPersonal(c)).length)
+  const withPersonal = useStore((s) => s.companies.some(isPersonal))
   const working = useWorking(company ? company.id : 'all').count
   const st = company ? headerState(company, working) : { kind: 'running' as const, working }
   const name = company ? companyLabel(company, true) : 'All companies'
-  const line = flat ? 'Add a company to give agents a business' : company ? headerLine(st) : `${count} compan${count === 1 ? 'y' : 'ies'}${st.kind === 'running' && st.working ? ` · ${st.working} working` : ''}`
+  const line = flat ? 'Add a company to give agents a business' : company ? headerLine(st) : `${count} compan${count === 1 ? 'y' : 'ies'}${withPersonal ? ' + Personal' : ''}${st.kind === 'running' && st.working ? ` · ${st.working} working` : ''}`
   return (
     <button
       type="button"

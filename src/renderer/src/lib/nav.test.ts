@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
 import {
+  customizeRows,
+  movePin,
+  resetVisibility,
   doorForDigit,
   goToEntries,
   isPinned,
@@ -128,7 +131,7 @@ describe('palette labels match the nav', () => {
     const entries = goToEntries(all)
     expect(entries.filter((e) => 'door' in e.target).map((e) => [e.label, e.kbd])).toEqual(PRIMARY.map((d) => [d.label, d.kbd]))
     expect(entries.filter((e) => 'more' in e.target).map((e) => e.label)).toEqual(MORE.map((m) => m.label))
-    expect(entries.filter((e) => 'settings' in e.target).map((e) => e.label)).toEqual(['Company settings', 'Connections', 'Keys & secrets', 'AI providers', 'Cloud sync'])
+    expect(entries.filter((e) => 'settings' in e.target).map((e) => e.label)).toEqual(['Company settings', 'Team & autonomy', 'Connections', 'Repositories', 'Keys & secrets', 'AI providers', 'Storage', 'Danger zone', 'Notifications', 'Cloud sync'])
   })
 
   it('old names are search keywords, never labels', () => {
@@ -217,5 +220,34 @@ describe('More popover placement', () => {
     expect(morePopoverBox(10, 300, 900).top).toBe(8)
     const tall = morePopoverBox(253, 2000, 700)
     expect(tall).toEqual({ top: 8, maxHeight: 684 })
+  })
+})
+
+describe('five doors step 5: Customize sidebar', () => {
+  const all = (): boolean => true
+  it('lists Always show (in pin order), then Show when active, then Hidden; doors are not rows', () => {
+    let p = setVisibility({}, 'spend', 'always')
+    p = setVisibility(p, 'files', 'always')
+    p = setVisibility(p, 'automations', 'active')
+    const rows = customizeRows(p, all)
+    expect(rows.slice(0, 2).map((r) => r.key)).toEqual(['spend', 'files'])
+    expect(rows.filter((r) => r.visibility === 'active').map((r) => r.key)).toEqual(['automations', 'forum'])
+    expect(rows.some((r) => (r.key as string) === 'home')).toBe(false)
+    expect(rows.find((r) => r.key === 'forum')!.isDefault).toBe(true)
+  })
+  it('moves a pin up and down and leaves the ends alone', () => {
+    const p = { pins: ['spend', 'files', 'dept:dep_a'] }
+    expect(movePin(p, 'files', -1).pins).toEqual(['files', 'spend', 'dept:dep_a'])
+    expect(movePin(p, 'spend', -1)).toBe(p)
+    expect(movePin(p, 'nope', 1)).toBe(p)
+  })
+  it('reset goes back to the defaults and keeps pinned departments', () => {
+    const p = setVisibility(setVisibility({ pins: ['dept:dep_a'] }, 'spend', 'always'), 'forum', 'hidden')
+    const r = resetVisibility(p)
+    expect(r).toEqual({ pins: ['dept:dep_a'] })
+    expect(visibilityOf(r, 'forum')).toBe('active')
+  })
+  it('hides an unavailable item (Plans without its flag)', () => {
+    expect(customizeRows({}, (k) => k !== 'plans').some((r) => r.key === 'plans')).toBe(false)
   })
 })

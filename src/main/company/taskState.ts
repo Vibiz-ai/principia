@@ -154,6 +154,9 @@ export function assertReassignable(old: EditSubject, next: { departmentId?: stri
 
 // ---------- run end (§1.4 rows from in_progress, §4.5) ----------
 
+/** Why main canceled a run: a time or wake cap, a restart, its company's pause, or "Pause this task" (task_paused). */
+export type StopReason = 'limit' | 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused'
+
 export interface RunEnd {
   to: TaskState
   kind: 'report' | 'asked' | 'run_finished' | 'parked' | 'paused'
@@ -172,7 +175,7 @@ const clip = (s: string, n = 300) => s.length > n ? `${s.slice(0, n - 1)}…` : 
  * by this run (task_report / task_ask, or the fenced report block of an inject adapter). `stopReason`: why main
  * canceled the run (time or wake cap), when it did.
  */
-export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 'canceled'; reason?: string | null }, depsDone: boolean, stopReason?: 'limit' | 'interrupted' | 'handoff_cap' | 'paused' | null): RunEnd {
+export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 'canceled'; reason?: string | null }, depsDone: boolean, stopReason?: StopReason | null): RunEnd {
   if (t.ask && !t.ask.answer) return { to: { status: 'blocked', blockReason: 'needs_input' }, kind: 'asked', by: 'agent', message: `Agent asked: ${clip(t.ask.prompt)}` }
   if (t.report?.outcome === 'blocked') return { to: { status: 'blocked', blockReason: 'agent' }, kind: 'report', by: 'agent', message: `Agent is blocked: ${clip(t.report.summary)}` }
   // task_create({blocksCurrent}) added a dependency during the run: wait for it, then heal
@@ -181,8 +184,10 @@ export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 
   if (run.status === 'passed') return { to: { status: 'in_review' }, kind: 'run_finished', by: 'system', message: 'Agent finished without a report (no report). Human review required.', noReport: true }
   // five doors A4: its company was paused mid-turn. The work is saved: back to To do, and Resume starts it again
   if (stopReason === 'paused') return { to: { status: 'todo' }, kind: 'paused', by: 'system', message: 'Paused with its company. The work so far is saved; it continues when you resume.' }
+  // five doors C9 "Pause this task": the founder paused this one task. Back to To do, held there until Start (never a failure)
+  if (stopReason === 'task_paused') return { to: { status: 'todo' }, kind: 'paused', by: 'human', message: 'Paused by you. The work so far is saved; Start picks it up again.' }
   const why = run.reason ? `: ${clip(run.reason, 200)}` : ''
-  if (stopReason) return { to: { status: 'blocked', blockReason: stopReason }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
+  if (stopReason) return { to: { status: 'blocked', blockReason: stopReason as 'limit' | 'interrupted' | 'handoff_cap' }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
   if (run.status === 'failed') return { to: { status: 'blocked', blockReason: 'run_failed' }, kind: 'run_finished', by: 'system', message: `Run failed${why}` }
   return { to: { status: 'blocked', blockReason: 'no_report' }, kind: 'run_finished', by: 'system', message: `Run canceled${why} before the agent reported. Review and Unpark or retry.` }
 }

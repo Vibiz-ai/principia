@@ -127,7 +127,7 @@ export function useCompanySetup(companyId: Id): CompanySetup {
     if (polling && vibiz === 'connected') setPolling(false)
   }, [polling, vibiz])
 
-  const socials = useMemo(() => (connections && keyNames ? socialStatuses(companyId, keyNames, connections) : null), [companyId, connections, keyNames])
+  const socials = useMemo(() => (connections && keyNames ? socialStatuses(companyId, keyNames, connections, company?.accounts) : null), [companyId, connections, keyNames, company?.accounts])
   const autopilots = settings?.autopilots?.[companyId]
   const slack: SlackSetup | null = slackAvailable === false ? 'unavailable' : slackAvailable === null ? null : isConnected(slackStatus) ? 'connected' : isSetUp(slackStatus) ? 'set-up' : 'none'
   const repoCount = useMemo(() => reposOf(allRepos, companyId).length, [allRepos, companyId])
@@ -147,7 +147,8 @@ export function useCompanySetup(companyId: Id): CompanySetup {
             vibiz,
             slack,
             scheduleCount: schedules ? schedules.length : null,
-            autopilots
+            autopilots,
+            typed: true
           })
         : [],
     [company, logo, repoCount, depsOn, departments, agents, dashboards, socials, vibiz, slack, schedules, autopilots]

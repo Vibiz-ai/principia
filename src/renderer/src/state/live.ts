@@ -10,9 +10,10 @@ import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
 import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
-import { departmentsOn, focusSession, followCompany, getState, navigate, setState, toast, toastError, useStore, type State } from './store'
+import { departmentsOn, focusSession, followCompany, getState, navigate, openBoard, scopeCompanyId, setState, toast, toastError, useStore, type State } from './store'
+import { needsYouTasks } from '../lib/board'
 import { liveTruth, needsIn, workingIn, type LiveScope, type LiveTruth, type NeedsSlice, type WorkingSlice } from '../lib/liveTruth'
-import { taskCounts, taskNeedsIn } from '../lib/companyModel'
+import { reposOf, taskCounts, taskNeedsIn } from '../lib/companyModel'
 import { laneContext } from '../lib/departments'
 
 const DAY = 24 * 60 * 60_000
@@ -21,13 +22,22 @@ const DAY = 24 * 60 * 60_000
 let pendingAgents: AgentNode[] = []
 let pendingAsks: Ask[] = []
 let frame: number | null = null
+let timer: ReturnType<typeof setTimeout> | null = null
+/**
+ * One flush per animation frame, and never later than a short timer: a window that is hidden or behind another one
+ * gets no animation frames, and its live state must not stall (a run that started or ended would show seconds late).
+ */
 function schedule(): void {
-  if (frame !== null) return
-  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 16) as unknown as number
-  frame = raf(() => {
+  if (frame !== null || timer !== null) return
+  const run = (): void => {
+    if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+    if (timer !== null) clearTimeout(timer)
     frame = null
+    timer = null
     flush()
-  })
+  }
+  if (typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(run)
+  timer = setTimeout(run, 100)
 }
 function flush(): void {
   const ag = pendingAgents
@@ -147,13 +157,16 @@ let truthMemo: { deps: unknown[]; truth: LiveTruth } | null = null
  */
 export function truthOf(s: State): LiveTruth {
   const on = departmentsOn(s)
-  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, on]
+  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, s.companiesLoaded, s.companyError, on, s.repos]
   if (truthMemo && truthMemo.deps.every((d, i) => d === deps[i])) return truthMemo.truth
   const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
   const counts = on ? taskCounts(s.tasks, laneContext(s.asks, s.companyAgents, paused)) : {}
   const taskNeeds: Record<Id, number> = {}
   for (const id of Object.keys(counts)) taskNeeds[id] = taskNeedsIn(counts, id)
-  const truth = liveTruth({ agents: Object.values(s.agents), asks: Object.values(s.asks), seen: new Set(Object.keys(s.seenIdle)), sessions: s.sessions, tasks: s.tasks, taskNeeds })
+  // an archived company's asks and agents leave every count with it (the rail lists only the others)
+  const listed = s.companiesLoaded && !s.companyError ? new Set(s.companies.map((c) => c.id)) : undefined
+  const code = new Set(s.companies.filter((c) => reposOf(s.repos, c.id).length > 0).map((c) => c.id))
+  const truth = liveTruth({ agents: Object.values(s.agents), asks: Object.values(s.asks), seen: new Set(Object.keys(s.seenIdle)), sessions: s.sessions, tasks: s.tasks, taskNeeds, listed, code })
   truthMemo = { deps, truth }
   return truth
 }
@@ -370,11 +383,23 @@ export async function focusAgent(agentId: Id, askId: Id | null = null): Promise<
   void navigate({ name: 'agents' })
 }
 
-/** ⌘J: the oldest open ask anywhere; else the session that waited longest. */
+/**
+ * ⌘J: the next thing that needs you, in the company you are in (every company in All mode), the same list Home
+ * counts: the oldest open ask or finished turn first, then the board tasks waiting on you (a review opens with Approve
+ * on top). "Nothing needs you." only when that list is empty.
+ */
 export function goNextNeedsYou(): void {
   const s = getState()
-  const seen = new Set(Object.keys(s.seenIdle))
-  const next = nextNeedsYou(Object.values(s.agents), Object.values(s.asks), seen)
+  const scope = scopeCompanyId(s)
+  const live = needsIn(truthOf(s), scope ?? 'all').items[0]
+  if (live) return void focusAgent(live.agentId, live.askId)
+  if (departmentsOn(s)) {
+    const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
+    const task = needsYouTasks(s.tasks, laneContext(s.asks, s.companyAgents, paused), scope, { skipLiveAsks: true })[0]
+    if (task) return void openBoard(task.task.companyId, { taskId: task.task.id })
+  }
+  // outside any company scope (Personal sessions): the hub's own order
+  const next = scope ? null : nextNeedsYou(Object.values(s.agents), Object.values(s.asks), new Set(Object.keys(s.seenIdle)))
   if (!next) return void toast('Nothing needs you.')
   void focusAgent(next.agentId, next.askId)
 }

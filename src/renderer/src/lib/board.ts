@@ -9,6 +9,11 @@ import { taskDepartment, taskLane, taskReason, type LaneContext } from './depart
 
 export const BOARD_LANES = TASK_LANES
 export { LANE_LABELS }
+/**
+ * Five doors step 5: one status vocabulary everywhere a lane is named to a person: To do · Working · Needs you · Done
+ * (Inbox and Queued are both To do). LANE_LABELS keeps the internal names for logs and tests.
+ */
+export const LANE_WORD: Record<TaskLane, string> = { inbox: 'To do', queued: 'To do', working: 'Working', needs_you: 'Needs you', done: 'Done' }
 
 /** The short chip on a Needs you card (and the list view's lane/reason column). */
 export const REASON_LABEL: Record<NeedsYouReason, string> = {
@@ -20,13 +25,13 @@ export const REASON_LABEL: Record<NeedsYouReason, string> = {
 export const BLOCK_REASON_TEXT: Record<BlockReason, string> = {
   deps: 'Waiting for its dependencies to be done. It moves back to the queue by itself.',
   needs_input: 'The agent asked a question. Answer it and the same agent picks the task back up.',
-  run_failed: 'The run failed. Check the run, then Unpark or Run now.',
+  run_failed: 'The work stopped with an error. Check what happened, then Try again.',
   interrupted: 'The app quit while the task was running. It is never restarted by itself.',
-  no_report: 'The run stopped without reporting back. Check what it did, then Unpark or Run now.',
-  limit: 'A time or wake limit was reached. Unpark to let it continue.',
-  agent: 'The agent reported it is blocked. Read its report, then Unpark or reassign.',
-  handoff_cap: 'The task was handed off too many times. Pick an agent, then Unpark.',
-  manual: 'Parked by hand. Unpark when it should go back to the queue.'
+  no_report: 'The work stopped before the agent reported back. Check what it did, then Try again.',
+  limit: 'It reached its time limit. Try again to let it continue.',
+  agent: 'The agent is stuck. Read what it said, then Try again or give it to someone else.',
+  handoff_cap: 'The task was passed around too many times. Pick an agent, then Try again.',
+  manual: 'Set aside by hand. Try again when it should go back to the queue.'
 }
 
 /** Lower number is more urgent; 0 = no priority sorts last. */
@@ -90,11 +95,11 @@ export function swimlanes(tasks: CompanyTask[], departments: Department[], ctx: 
 export function laneText(t: CompanyTask, ctx: LaneContext): string {
   const lane = taskLane(t, ctx)
   const reason = taskReason(t, ctx)
-  if (reason) return `${LANE_LABELS[lane]} · ${REASON_LABEL[reason]}`
-  if (t.status === 'blocked' && t.blockReason === 'deps') return `${LANE_LABELS[lane]} · ${REASON_LABEL.deps}`
-  if (t.status === 'backlog') return `${LANE_LABELS[lane]} · Backlog`
-  if (t.status === 'canceled') return `${LANE_LABELS[lane]} · Canceled`
-  return LANE_LABELS[lane]
+  if (reason) return `${LANE_WORD[lane]} · ${REASON_LABEL[reason]}`
+  if (t.status === 'blocked' && t.blockReason === 'deps') return `${LANE_WORD[lane]} · ${REASON_LABEL.deps}`
+  if (t.status === 'backlog') return `${LANE_WORD[lane]} · Backlog`
+  if (t.status === 'canceled') return `${LANE_WORD[lane]} · Canceled`
+  return LANE_WORD[lane]
 }
 
 // ---------- drag and drop ----------

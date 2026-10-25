@@ -162,6 +162,8 @@ export class Dispatcher {
         if (this.autopilotRoom(companyId) <= 0) break
         if (!this.seatEligible(agent) || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
         for (const t of this.queueOf(agent)) {
+          // five doors C9: a task the founder paused waits for their Start (a comment from them wakes it again)
+          if (this.heldByYou(t.id)) continue
           const r = this.claim(t.id, agent)
           if (r !== 'skipped') changed = true
           if (r === 'started') started.push(t.id)
@@ -197,6 +199,11 @@ export class Dispatcher {
   /** §3.2 seat gates (autopilot and room are the company's). Session-mode seats start only from a human click. */
   private seatEligible(a: CompanyAgent): boolean {
     return agentActive(a) && a.data.autonomy === 'auto' && a.data.mode !== 'session'
+  }
+  /** "Pause this task": the task's latest activity is the founder's pause (Start or a comment of theirs comes after it). */
+  private heldByYou(taskId: string): boolean {
+    const last = this.db.prepare('SELECT kind, actor FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(taskId) as { kind: string; actor: string | null } | undefined
+    return last?.kind === 'paused' && last.actor === 'human'
   }
   /** The seat's todo tasks, highest priority first, oldest first. */
   private queueOf(agent: CompanyAgent): BoardTask[] {

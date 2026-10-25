@@ -10,11 +10,11 @@ import { useMemo, useState } from 'react'
 import { AUTOPILOTS, planAutopilot, type AutopilotId } from '@shared/autopilot'
 import { SOCIAL_CHANNELS, type SocialStatus } from '@shared/socials'
 import type { Id } from '@shared/types'
-import { Button, IconButton, Sheet } from '../ui'
+import { Button, Disclosure, IconButton, Sheet } from '../ui'
 import { checklistProgress, nextItem, type ChecklistAction, type ChecklistItem } from '../../lib/checklist'
 import { setChecklistPref, useChecklistPref } from '../../state/checklist'
 import { confirmNative, errorMessage, hive } from '../../lib/hive'
-import { addRepos, attempt, createDepartmentPresets, navigate, openLogoPicker, toast, updateSettings, useStore } from '../../state/store'
+import { addRepos, attempt, createDepartmentPresets, getState, navigate, openLogoPicker, toast, updateSettings, useStore } from '../../state/store'
 import { getSlack, isConnected } from '../../state/slack'
 import { useCompanySetup, type CompanySetup } from './useCompanySetup'
 import { AutopilotSheet } from './AutopilotSheet'
@@ -64,6 +64,9 @@ export async function runChecklistAction(a: ChecklistAction, companyId: Id, setu
     case 'department':
       return void navigate({ name: 'department', id: a.departmentId, focus: a.focus, nonce: Date.now() })
     case 'socials':
+      // five doors step 4: Instagram first, in plain words (Connections), never a developer key form; the per-network
+      // keys sheet stays for the other networks once Instagram is connected
+      if (!getState().companies.find((c) => c.id === companyId)?.accounts?.instagram) return void navigate({ name: 'settings', section: 'connections', connect: 'instagram', nonce: Date.now() })
       return open.socials()
     case 'vibiz':
       if (!a.present) return void navigate({ name: 'settings', section: 'connections' })
@@ -78,7 +81,7 @@ export async function runChecklistAction(a: ChecklistAction, companyId: Id, setu
       return
     case 'slack':
       // the Slack page only helps once Slack is connected; until then the connection lives in Settings
-      return void navigate(isConnected(getSlack().status) ? { name: 'slack', nonce: Date.now() } : { name: 'settings', section: 'connections' })
+      return void navigate(isConnected(getSlack().status) ? { name: 'slack', nonce: Date.now() } : { name: 'settings', section: 'connections', connect: 'slack', nonce: Date.now() })
     case 'schedule':
       return void navigate({ name: 'schedules', seed: {}, nonce: Date.now() })
     case 'autopilot':
@@ -88,9 +91,15 @@ export async function runChecklistAction(a: ChecklistAction, companyId: Id, setu
 
 // ---------- the card ----------
 
-export function SetupChecklist({ companyId }: { companyId: Id }): React.JSX.Element | null {
+/**
+ * `chip` (five doors step 3, Home): a one-line "Setup 4 of 6 · Next: …" chip with the next step's button and Show
+ * steps; the list opens in place, without the autopilot tiles (they live in Automations). Hidden once all is done.
+ */
+export function SetupChecklist({ companyId, chip = false }: { companyId: Id; chip?: boolean }): React.JSX.Element | null {
   const setup = useCompanySetup(companyId)
-  const pref = useChecklistPref(companyId)
+  const stored = useChecklistPref(companyId)
+  const [expanded, setExpanded] = useState(false)
+  const pref = chip ? { ...stored, collapsed: !expanded } : stored
   const [socialsOpen, setSocialsOpen] = useState(false)
   const [autopilot, setAutopilot] = useState<AutopilotId | null>(null)
   const [showDone, setShowDone] = useState(false)
@@ -101,13 +110,52 @@ export function SetupChecklist({ companyId }: { companyId: Id }): React.JSX.Elem
   if (!setup.items.length || pref.dismissedAt) return null
   const todo = setup.items.filter((x) => !x.done)
   const finished = setup.items.filter((x) => x.done)
+  const sheets = (
+    <>
+      {socialsOpen && <SocialsSheet companyId={companyId} socials={setup.socials} onClose={() => setSocialsOpen(false)} />}
+      {autopilot && setup.ctx && (
+        <AutopilotSheet
+          id={autopilot}
+          setup={setup}
+          onClose={() => setAutopilot(null)}
+          onFix={(a) => {
+            setAutopilot(null)
+            void runChecklistAction(a, companyId, setup, open)
+          }}
+        />
+      )}
+    </>
+  )
+  if (chip && done === total) return null
+  if (chip && !expanded)
+    return (
+      <section className="setup-chip" aria-label={`Setup ${done} of ${total}`}>
+        <ProgressRing done={done} total={total} />
+        <div className="setup-chip__text">
+          <div className="setup-chip__title">
+            Setup {done} of {total}
+          </div>
+          {next && <div className="setup-chip__next">Next: {next.title}</div>}
+        </div>
+        <span className="flex1" />
+        {next && (
+          <Button size="sm" variant="primary" onClick={() => act(next)}>
+            {next.actionLabel}
+          </Button>
+        )}
+        <Button size="sm" onClick={() => setExpanded(true)} aria-expanded={false}>
+          Show steps
+        </Button>
+        {sheets}
+      </section>
+    )
 
   return (
     <section className={`ck-card ${pref.collapsed ? 'is-collapsed' : ''}`} aria-label="Get the most out of Principia">
       <header className="ck-card__head">
         <ProgressRing done={done} total={total} />
         <div className="ck-card__titles">
-          <h2 className="ck-card__title">Get the most out of Principia</h2>
+          <h2 className="ck-card__title">{chip ? `Setup ${done} of ${total}` : 'Get the most out of Principia'}</h2>
           <div className="ck-card__sub">
             {done === total ? 'Everything is set up. Your autopilots can use all of it.' : `${done} of ${total} done${next && pref.collapsed ? ` · Next: ${next.title}` : ''}`}
           </div>
@@ -118,7 +166,13 @@ export function SetupChecklist({ companyId }: { companyId: Id }): React.JSX.Elem
             {next.actionLabel}
           </Button>
         )}
-        <IconButton icon={pref.collapsed ? 'chevronRight' : 'chevronDown'} label={pref.collapsed ? 'Expand checklist' : 'Collapse checklist'} onClick={() => setChecklistPref(companyId, { collapsed: !pref.collapsed })} />
+        {chip ? (
+          <Button size="sm" onClick={() => setExpanded(false)} aria-expanded>
+            Hide steps
+          </Button>
+        ) : (
+          <IconButton icon={pref.collapsed ? 'chevronRight' : 'chevronDown'} label={pref.collapsed ? 'Expand checklist' : 'Collapse checklist'} onClick={() => setChecklistPref(companyId, { collapsed: !pref.collapsed })} />
+        )}
         <IconButton
           icon="close"
           label="Dismiss checklist"
@@ -149,21 +203,10 @@ export function SetupChecklist({ companyId }: { companyId: Id }): React.JSX.Elem
               )}
             </>
           )}
-          <AutopilotTiles companyId={companyId} setup={setup} onOpen={(id) => setAutopilot(id)} />
+          {!chip && <AutopilotTiles companyId={companyId} setup={setup} onOpen={(id) => setAutopilot(id)} />}
         </>
       )}
-      {socialsOpen && <SocialsSheet companyId={companyId} socials={setup.socials} onClose={() => setSocialsOpen(false)} />}
-      {autopilot && setup.ctx && (
-        <AutopilotSheet
-          id={autopilot}
-          setup={setup}
-          onClose={() => setAutopilot(null)}
-          onFix={(a) => {
-            setAutopilot(null)
-            void runChecklistAction(a, companyId, setup, open)
-          }}
-        />
-      )}
+      {sheets}
     </section>
   )
 }
@@ -189,7 +232,7 @@ function ChecklistRow({ item, next, onAct }: { item: ChecklistItem; next: boolea
 }
 
 /** The two autopilots, with how many of their steps can run today. */
-function AutopilotTiles({ companyId, setup, onOpen }: { companyId: Id; setup: CompanySetup; onOpen: (id: AutopilotId) => void }): React.JSX.Element | null {
+export function AutopilotTiles({ companyId, setup, onOpen }: { companyId: Id; setup: CompanySetup; onOpen: (id: AutopilotId) => void }): React.JSX.Element | null {
   const plans = useMemo(() => (setup.ctx ? AUTOPILOTS.map((a) => ({ a, steps: planAutopilot(a.id, setup.ctx!) })) : []), [setup.ctx])
   // A4: a paused company's autopilots read "Off while paused" and are greyed out (still openable to look)
   const held = useStore((s) => !!s.companies.find((c) => c.id === companyId)?.pausedAt)
@@ -219,7 +262,7 @@ function AutopilotTiles({ companyId, setup, onOpen }: { companyId: Id; setup: Co
 
 // ---------- socials ----------
 
-const STATE_LABEL: Record<SocialStatus['state'], string> = { mcp: 'Connected', key: 'Key saved', partial: 'Some keys missing', missing: 'Key needed' }
+const STATE_LABEL: Record<SocialStatus['state'], string> = { mcp: 'Connected', key: 'Key saved', account: 'Connected (drafts only)', partial: 'Some keys missing', missing: 'Key needed' }
 
 /** One row per network: its state, the official developer setup link, and fields for the missing keys. */
 export function SocialsSheet({ companyId, socials, onClose }: { companyId: Id; socials: SocialStatus[] | null; onClose: () => void }): React.JSX.Element {
@@ -242,10 +285,17 @@ export function SocialsSheet({ companyId, socials, onClose }: { companyId: Id; s
     if (ok === pasted.length) onClose()
   }
   return (
-    <Sheet title="Social channels" onCancel={onClose} onPrimary={() => void save()} primaryLabel={pasted.length ? `Save ${pasted.length} key${pasted.length === 1 ? '' : 's'}` : 'Done'} primaryDisabled={busy} width={620}>
+    <Sheet title="Your social channels" onCancel={onClose} onPrimary={() => void save()} primaryLabel={pasted.length ? `Save ${pasted.length} key${pasted.length === 1 ? '' : 's'}` : 'Got it'} primaryDisabled={busy} width={620}>
       <p className="ck-sheet__lede">
-        None of these networks offers a sign-in Principia can use directly, so each one connects through its official developer API: create an app there, then paste its keys here. Keys go to this company’s Keys (encrypted with your Keychain) and agents see them as environment variables. Agents only draft posts for your review; publishing is a separate, per-channel switch in the Marketing autopilot.
+        Your agents get every post ready for you: the picture, the caption and the hashtags. It comes to Home › Needs you; you approve it and post it yourself. Nothing posts on its own, and nothing extra to set up.
       </p>
+      <p className="ck-sheet__lede">
+        Instagram and the other networks don’t let apps sign in here yet. When they do, Connect will open each one in your browser, and we’ll ask before anything is posted for you.
+      </p>
+      <Disclosure label="For developers: connect a network with its own API keys">
+        <p className="ck-sheet__lede">
+          Each network’s developer app gives you keys to paste here. They are saved encrypted to {company?.name ?? 'this company'}’s Keys only.
+        </p>
       <ul className="ck-socials">
         {SOCIAL_CHANNELS.map((ch) => {
           const st = socials?.find((s) => s.id === ch.id)
@@ -255,7 +305,7 @@ export function SocialsSheet({ companyId, socials, onClose }: { companyId: Id; s
               <div className="ck-social__head">
                 <CheckMark done={ready} pending={!st} />
                 <b>{ch.name}</b>
-                <span className="ck-social__state">{st ? (st.state === 'mcp' ? `Connected via ${st.connection}` : STATE_LABEL[st.state]) : 'Checking…'}</span>
+                <span className="ck-social__state">{st ? (st.state === 'mcp' ? `Connected via ${st.connection}` : st.state === 'account' ? `Connected · ${st.connection} (drafts only)` : STATE_LABEL[st.state]) : 'Checking…'}</span>
                 {ch.can === 'read' && <span className="ck-social__state">read-only</span>}
                 <span className="flex1" />
                 <Button size="sm" variant="ghost" icon="external" onClick={() => void hive.app.openExternal({ url: ch.docs }).catch(() => toast('Could not open the developer page.', 'error'))}>
@@ -290,6 +340,7 @@ export function SocialsSheet({ companyId, socials, onClose }: { companyId: Id; s
           )
         })}
       </ul>
+      </Disclosure>
     </Sheet>
   )
 }

@@ -100,8 +100,12 @@ export function socialChannel(id: string): SocialChannel | undefined {
   return SOCIAL_CHANNELS.find((c) => c.id === id)
 }
 
-/** How a channel is set up for one company. `mcp`: an enabled MCP connection; `key`: every required key is saved. */
-export type SocialState = 'mcp' | 'key' | 'partial' | 'missing'
+/**
+ * How a channel is set up for one company. `mcp`: an enabled MCP connection; `key`: every required key is saved;
+ * `account`: the account was named in Settings › Connections (five doors step 4: Instagram, drafts only), so agents
+ * draft for it and the founder posts.
+ */
+export type SocialState = 'mcp' | 'key' | 'account' | 'partial' | 'missing'
 export interface SocialStatus {
   id: SocialId
   name: string
@@ -112,7 +116,7 @@ export interface SocialStatus {
   canPost: boolean
   /** required key names not saved yet */
   missingKeys: string[]
-  /** the MCP connection that counts, when state is `mcp` */
+  /** the MCP connection that counts, when state is `mcp`; the account handle when state is `account` */
   connection: string | null
 }
 
@@ -125,7 +129,7 @@ export function connectionReaches(c: Pick<GatewayConnection, 'enabled' | 'compan
  * Every channel's status for one company. `keyNames`: the key names that resolve for it (its own keys plus Shared).
  * A connection counts once it is usable: OAuth signed in, or saved credentials for a token/stdio server.
  */
-export function socialStatuses(companyId: string, keyNames: ReadonlySet<string>, connections: readonly GatewayConnection[]): SocialStatus[] {
+export function socialStatuses(companyId: string, keyNames: ReadonlySet<string>, connections: readonly GatewayConnection[], accounts?: { instagram?: { handle: string } | null } | null): SocialStatus[] {
   return SOCIAL_CHANNELS.map((ch) => {
     const conn = connections.find((c) => {
       if (!connectionReaches(c, companyId)) return false
@@ -136,8 +140,9 @@ export function socialStatuses(companyId: string, keyNames: ReadonlySet<string>,
     })
     const required = ch.keys.filter((k) => k.required)
     const missingKeys = required.filter((k) => !keyNames.has(k.name)).map((k) => k.name)
-    const state: SocialState = conn ? 'mcp' : missingKeys.length === 0 ? 'key' : missingKeys.length < required.length ? 'partial' : 'missing'
-    const ready = state === 'mcp' || state === 'key'
-    return { id: ch.id, name: ch.name, state, ready, canPost: ready && (state === 'mcp' || ch.can === 'post'), missingKeys, connection: conn?.name ?? null }
+    const account = ch.id === 'instagram' ? (accounts?.instagram?.handle ?? null) : null
+    const state: SocialState = conn ? 'mcp' : missingKeys.length === 0 ? 'key' : account ? 'account' : missingKeys.length < required.length ? 'partial' : 'missing'
+    const ready = state === 'mcp' || state === 'key' || state === 'account'
+    return { id: ch.id, name: ch.name, state, ready, canPost: (state === 'mcp' || state === 'key') && (state === 'mcp' || ch.can === 'post'), missingKeys, connection: conn?.name ?? (state === 'account' ? account : null) }
   })
 }

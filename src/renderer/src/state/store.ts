@@ -17,7 +17,7 @@ import type {
   StatusSnapshot
 } from '@shared/types'
 import type { MemoryOverview } from '@shared/memory'
-import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, Department, DepartmentPresetKey } from '@shared/company'
+import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, CompanyUpdateInput, Department, DepartmentPresetKey } from '@shared/company'
 import { DEPARTMENT_PRESETS, PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
 import type { CompanyProposal } from '@shared/chatCompany'
 import type { AgentNode as LiveAgent, Ask } from '@shared/live'
@@ -45,7 +45,7 @@ import {
   type PlanInputContext
 } from './onboarding'
 import { isPinned, prefsFor, prefsKey, resolveView, togglePin, viewFor, type NavTarget } from '../lib/nav'
-import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, pauseToastText, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
+import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, pauseToastText, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, listedRows, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
 
 export interface ScheduleSeed {
   workflowId?: Id
@@ -55,13 +55,14 @@ export interface ScheduleSeed {
 
 export type ViewState =
   /** DEPARTMENTS.md §9: the Board once departments are on. `taskId` selects a card, `departmentId` filters (BoardView). */
-  | { name: 'tasks'; taskId?: Id; departmentId?: Id }
+  | { name: 'tasks'; taskId?: Id; departmentId?: Id; quick?: { title: string; nonce: number } }
   /** PLANS.md §3: the plans list, one plan's page, or the New Plan sheet */
   | { name: 'plans'; planId?: Id; create?: boolean; nonce?: number }
   /** DEPARTMENTS.md §9: department page (charter, passport section, agents, recurring, routing, filtered board). */
   | { name: 'department'; id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }
   /** DEPARTMENTS.md §9: one agent seat (current task, queue, run history, instructions). */
-  | { name: 'agentSeat'; id: Id }
+  /** Five doors step 3: the agent's desk. `focus`: Message was clicked, so the composer takes the keyboard. */
+  | { name: 'agentSeat'; id: Id; focus?: boolean; nonce?: number }
   /** PASSPORT.md §10: the company vault (P7's view; the legacy Memory page until it ships). Always the active company. */
   | { name: 'passport'; notePath?: string; mode?: PassportMode; depth?: number; search?: string; runId?: Id; sessionId?: Id; nonce?: number }
   /** COMPANY.md §8.5: Home in All mode. */
@@ -74,26 +75,28 @@ export type ViewState =
   /** Five doors: departments and the agents in them. */
   | { name: 'team' }
   /** Five doors: live agents (Live) and every conversation in this company (All). */
-  | { name: 'chats'; filter?: ChatsFilter }
+  /** `chat`: the open conversation, `agent:<id>` (an agent's desk thread) or `session:<id>` (a chat or session) */
+  | { name: 'chats'; filter?: ChatsFilter; chat?: string }
   | { name: 'session'; missing?: { adapter: AdapterId; repoId: Id | null } | null; missingRepoId?: Id | null }
   | { name: 'canvas'; focusRunId?: Id }
   | { name: 'workflows' }
   | { name: 'marketplace' }
   | { name: 'editor'; workflowId: Id | null; nonce: number; approvalDraftId?: Id; script?: boolean }
   | { name: 'run'; runId: Id; stepId?: Id; agentId?: Id }
-  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }
+  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'autopilots' | 'schedules' | 'slack' }
   | { name: 'artifacts'; runId?: Id; sessionId?: Id }
   /** Alias: Settings → Keys & secrets */
   | { name: 'keys' }
   /** `companyId`/`create`/`nonce`: the Company section (was the `company` route) */
-  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number }
+  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number; connect?: 'instagram' | 'github' | 'linear' | 'slack' }
   | { name: 'slack'; channelId?: string; threadTs?: string; search?: boolean; nonce?: number }
   /** FORUM.md §8: the company Forum (companyId absent = the active company) */
   | { name: 'forum'; companyId?: Id; channelId?: Id; threadId?: Id; nonce?: number }
   /** CLOUD.md §13.1: the Principia Cloud pane. Alias: Settings → Cloud sync */
   | { name: 'cloud' }
   /** USAGE.md: tokens and cost per day, company, department and agent; disk and Clean Up… */
-  | { name: 'usage' }
+  /** `cap`: arrived from a card's Set a cap: show the value in $ and open the cap editor (a nonce) */
+  | { name: 'usage'; cap?: number }
   | { name: 'memory'; scope?: MemoryPageScope; runId?: Id; sessionId?: Id; entityId?: Id; search?: boolean; nonce?: number }
 
 /** Memory page scope picker: a repo, global rows only, or everything. Absent = the overview's default repo (PO8). */
@@ -101,8 +104,9 @@ export type MemoryPageScope = { repoId: Id } | 'global' | 'all'
 export type PassportMode = 'notes' | 'graph' | 'inbox'
 
 /** 'company', 'keys' and 'cloud' were nav items or their own routes before the five doors. */
-export type SettingsSection = 'company' | 'keys' | 'general' | 'agents' | 'connections' | 'notifications' | 'cloud' | 'data' | 'about'
-export type ChatsFilter = 'live' | 'all'
+export type { SettingsSection } from '../lib/settingsModel'
+import type { SettingsSection } from '../lib/settingsModel'
+export type ChatsFilter = 'live' | 'all' | 'agents' | 'direct'
 
 export interface Toast {
   id: number
@@ -139,6 +143,8 @@ export interface State {
   expandedRepos: Record<string, boolean>
   lastTermSize: { cols: number; rows: number }
   siblingOffer: { repo: Repo; items: { path: string; name: string }[] } | null
+  /** Five doors §4.6: the New chat sheet (With / Where / first message), open for one company */
+  newChat: { companyId: Id; nonce: number } | null
   runInputs: { workflowId: Id } | null
   /** Contextual keyboard hint shown in the status bar (e.g. "Space to preview" for a selected artifact). */
   statusHint: string | null
@@ -228,6 +234,7 @@ const initial: State = {
   expandedRepos: loadJson('hive.expandedRepos', {}),
   lastTermSize: { cols: 120, rows: 36 },
   siblingOffer: null,
+  newChat: null,
   runInputs: null,
   statusHint: null,
   memory: null,
@@ -550,7 +557,7 @@ export function runCommand(cmd: UiCommand): void {
       else openPalette('newSession')
       return
     case 'newChat':
-      void openChat(true)
+      openNewChat()
       return
     case 'newWorkflow':
       void newWorkflowInCompany()
@@ -780,6 +787,11 @@ export interface StartOpts {
   companyId?: Id
   /** DEPARTMENTS.md §9: "New Chat in <Department>" (a chat; `repoId` must be null). */
   departmentId?: Id
+  /** Five doors C7: the chat's first message, and its title */
+  initialPrompt?: string
+  title?: string
+  /** false: create it without opening its terminal (a company with no code reads it in Chats) */
+  focus?: boolean
 }
 
 /** The company a new session is stamped with (sent to main, which validates it against the repo). */
@@ -825,11 +837,13 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
       adapter,
       repoId: o.repoId,
       cols: state.lastTermSize.cols,
-      rows: state.lastTermSize.rows
+      rows: state.lastTermSize.rows,
+      ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
+      ...(o.title ? { title: o.title } : {})
     })
     upsertSession(sess)
     if (o.repoId) void updateSettings({ lastRepoId: o.repoId })
-    focusSession(sess.id, { add: o.addToGrid })
+    if (o.focus !== false) focusSession(sess.id, { add: o.addToGrid })
     return sess
   } catch (e) {
     if (errorCode(e) === 'adapter_unavailable') {
@@ -839,6 +853,21 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
     toastError(e, 'Start session')
     return undefined
   }
+}
+
+/**
+ * Five doors §4.6 "New chat": asks With (an agent, or Claude directly) and Where (code companies: no folder or a
+ * repository). A company with no team and no code has nothing to ask: the chat opens at once.
+ */
+export function openNewChat(companyId?: Id): void {
+  const co = companyId ?? scopeCompanyId() ?? PERSONAL_COMPANY_ID
+  const team = departmentsOn() && state.companyAgents.some((a) => a.companyId === co && !a.archivedAt)
+  const code = state.repos.some((r) => r.companyId === co)
+  if (!team && !code) return void openChat(true, co)
+  setState((s) => ({ newChat: { companyId: co, nonce: (s.newChat?.nonce ?? 0) + 1 } }))
+}
+export function closeNewChat(): void {
+  setState({ newChat: null })
 }
 
 export function openChat(forceNew: boolean, companyId?: Id): Promise<Session | undefined> {
@@ -886,9 +915,9 @@ export async function closeSession(id: Id): Promise<void> {
   if (!s) return
   if (s.status === 'running') {
     const ok = await confirmNative({
-      message: `Kill ${sessionTitle(s)}?`,
-      detail: 'The process stops. You can Restart it later to resume the conversation.',
-      confirmLabel: 'Kill Session',
+      message: `Stop ${sessionTitle(s)}?`,
+      detail: 'The chat stops. You can Restart it later to resume the conversation.',
+      confirmLabel: 'Stop Chat',
       destructive: true,
       suppressKey: 'killSession'
     }).catch((e) => {
@@ -896,7 +925,7 @@ export async function closeSession(id: Id): Promise<void> {
       return false
     })
     if (!ok) return
-    const res = await attempt(() => hive.sessions.kill({ id }), 'Kill session')
+    const res = await attempt(() => hive.sessions.kill({ id }), 'Stop chat')
     if (res) upsertSession(res)
   }
   removeFromGrid(id)
@@ -951,7 +980,7 @@ export async function sessionContextMenu(s: Session): Promise<void> {
     { id: 'artifacts', label: 'Show Artifacts' },
     { id: 'dir', label: 'Open ARTIFACTS_DIR' },
     { type: 'separator' },
-    running ? { id: 'kill', label: 'Kill Session' } : { id: 'restart', label: 'Restart (resume conversation)' },
+    running ? { id: 'kill', label: 'Stop Chat' } : { id: 'restart', label: 'Restart (resume conversation)' },
     ...(running ? [] : [{ id: 'delete', label: 'Delete' } as NativeMenuItem])
   ])
   if (id === 'open') focusSession(s.id)
@@ -1069,7 +1098,8 @@ export function companyName(id: Id | null | undefined, s: State = state): string
 export async function refreshCompanies(): Promise<CompanyPassport[]> {
   try {
     const companies = withPersonal(sortCompanies(await hive.company.list()))
-    setState({ companies, companiesLoaded: true, companyError: null })
+    // archiving / unarchiving a company takes its tasks off (or back onto) every surface in the same render
+    setState({ companies, companiesLoaded: true, companyError: null, tasks: listedRows(rawTasks, companies) })
     return companies
   } catch (e) {
     setState({ companiesLoaded: true, companyError: errorMessage(e) })
@@ -1106,9 +1136,12 @@ export async function setCompanyLogo(companyId: Id, pick: LogoPick): Promise<Com
   setState({ companyLogos: { ...state.companyLogos, [companyId]: res } })
   return res
 }
+/** Every company's tasks as main lists them; `state.tasks` keeps only the listed (not archived) companies' rows. */
+let rawTasks: CompanyTask[] = []
 export async function refreshTasks(): Promise<void> {
   try {
-    setState({ tasks: await hive.tasks.list(), companyError: null })
+    rawTasks = await hive.tasks.list()
+    setState((s) => ({ tasks: listedRows(rawTasks, s.companyError ? [] : s.companies), companyError: null }))
   } catch (e) {
     setState({ companyError: errorMessage(e) })
   }
@@ -1246,12 +1279,12 @@ export function openDepartment(d: Pick<Department, 'id' | 'companyId'>, focus?: 
   if (activeCompany() === d.companyId || !multiCompany()) void navigate(view)
   else void enterCompany(d.companyId, { view })
 }
-export function openAgentSeat(a: Pick<CompanyAgent, 'id' | 'companyId'>): void {
-  const view: ViewState = { name: 'agentSeat', id: a.id }
+export function openAgentSeat(a: Pick<CompanyAgent, 'id' | 'companyId'>, opts: { focus?: boolean } = {}): void {
+  const view: ViewState = { name: 'agentSeat', id: a.id, ...(opts.focus ? { focus: true, nonce: Date.now() } : {}) }
   if (activeCompany() === a.companyId || !multiCompany()) void navigate(view)
   else void enterCompany(a.companyId, { view })
 }
-export function openBoard(companyId: Id, opts: { departmentId?: Id; taskId?: Id } = {}): void {
+export function openBoard(companyId: Id, opts: { departmentId?: Id; taskId?: Id; quick?: { title: string; nonce: number } } = {}): void {
   const view: ViewState = { name: 'tasks', ...opts }
   if (activeCompany() === companyId || !multiCompany()) void navigate(view)
   else void enterCompany(companyId, { view })
@@ -1452,22 +1485,24 @@ export async function createCompany(name: string, color?: string): Promise<Compa
   return created
 }
 
-export async function updateCompany(id: Id, patch: { name?: string; color?: string }): Promise<void> {
+export async function updateCompany(id: Id, patch: CompanyUpdateInput): Promise<CompanyPassport | undefined> {
   const res = await attempt(() => hive.company.update({ id, patch }), 'Update company')
   if (res) setState((s) => ({ companies: sortCompanies(s.companies.map((c) => (c.id === id ? res : c))) }))
+  return res
 }
 
 export async function archiveCompany(c: CompanyPassport): Promise<void> {
   if (isPersonal(c)) return toast('Personal can’t be archived.')
   const ok = await confirmNative({
     message: `Archive ${c.name}?`,
-    detail: 'It leaves the rail and the sidebar. Its repositories, sessions, runs, keys and Passport stay, and you can unarchive it in Settings › Companies.',
+    detail: 'It leaves the rail, the sidebar and All companies, with its tasks and what it needs from you. Its repositories, chats, runs, keys and Knowledge stay. To bring it back: All companies › Settings › Storage › Archived companies › Unarchive.',
     confirmLabel: 'Archive'
   }).catch(() => false)
   if (!ok) return
   if (!(await attempt(() => hive.company.archive({ id: c.id, archived: true }), 'Archive company'))) return
   if (state.activeCompanyId === c.id) await enterCompany('all')
   await refreshCompanies().catch(() => undefined)
+  toast(`${c.name} is archived. Unarchive it in Settings › Storage.`)
 }
 
 /** Rail drag: persists the new order (Personal stays last however it is dropped). */
@@ -1501,6 +1536,8 @@ export async function companyContextMenu(c: CompanyPassport): Promise<void> {
     { id: 'rename', label: 'Rename…' },
     ...(personal ? [] : ([{ id: 'logo', label: 'Change Logo…' }] as NativeMenuItem[])),
     { label: 'Colour', submenu: COMPANY_COLORS.map((x) => ({ id: `color:${x.value}`, label: x.label, enabled: x.value !== c.color })) },
+    // five doors E14: tell look-alike clients apart (a short rail label) and tag any company as a client
+    ...(personal ? [] : ([{ id: 'railLabel', label: 'Rail Label…' }, { id: 'client', label: 'Client', type: 'checkbox', checked: !!c.client }] as NativeMenuItem[])),
     { id: 'settings', label: 'Company Settings…' },
     { type: 'separator' },
     { id: 'passport', label: 'Open Knowledge' },
@@ -1517,7 +1554,9 @@ export async function companyContextMenu(c: CompanyPassport): Promise<void> {
   if (id === 'new') return void newSessionMenu(c.id)
   if (id === 'rename') return void window.dispatchEvent(new CustomEvent('hive:renameCompany', { detail: c.id }))
   if (id === 'logo') return openLogoPicker(c.id)
-  if (id.startsWith('color:')) return updateCompany(c.id, { color: id.slice(6) })
+  if (id.startsWith('color:')) return void updateCompany(c.id, { color: id.slice(6) })
+  if (id === 'client') return void updateCompany(c.id, { client: !c.client })
+  if (id === 'railLabel') return void enterCompany(c.id, { view: { name: 'company', companyId: c.id, nonce: Date.now() } })
   if (id === 'settings') return void enterCompany(c.id, { view: { name: 'company', companyId: c.id, nonce: Date.now() } })
   if (id === 'passport') return openCompanyPassport(c.id)
   if (id === 'reveal') return void attempt(() => hive.memory.vault({ op: 'reveal', companyId: c.id }), 'Open vault')
