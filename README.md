@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="resources/brand/banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="resources/brand/banner-light.png">
+    <img alt="Engraving of a Roman triumphal arch with the sun rising through its central archway" src="resources/brand/banner-light.png" width="100%">
+  </picture>
+</p>
+
 # Principia
 
 [Website](https://principia-vibiz-deployments.vercel.app) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
@@ -24,6 +32,14 @@ This is an early open-source release. The desktop app targets Apple Silicon macO
 The ambition is a workspace for operating one company or a thousand, with agents carrying work from start to finish and people setting the direction. Today’s preview provides the execution foundation: agents, shared MCP connections, workflows, schedules, and project memory. Full multi-company administration and autonomous operation at that scale remain roadmap work.
 
 **Passport** is the name for the portable company memory we’re building toward: company identity, knowledge, decisions, and working context that can be imported into a workspace or selectively shared with compatible services alongside sign-in. Project memory exists today; Passport import/export and sign-in integration are planned.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="resources/brand/scribe-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="resources/brand/scribe-light.png">
+    <img alt="Engraving of a Roman scribe writing on a scroll at a stone desk, columns behind him and the city through an arched window" src="resources/brand/scribe-light.png" width="80%">
+  </picture>
+</p>
 
 The broader company toolbox is intended to cover databases, image generation, web research and scraping, connections, phone, and email. Compatible MCP tools can be connected today; dedicated setup for these categories is on the roadmap.
 
@@ -87,6 +103,14 @@ npm run release:test
 Some native database tests need an appropriate Node/Electron ABI. See the contribution guide and cloud smoke command for verification details.
 
 ## Architecture
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="resources/brand/aqueduct-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="resources/brand/aqueduct-light.png">
+    <img alt="Engraving of a Roman aqueduct carrying its arches across a valley to the horizon" src="resources/brand/aqueduct-light.png" width="80%">
+  </picture>
+</p>
 
 | Directory | Purpose |
 | --- | --- |

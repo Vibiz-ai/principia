@@ -15,6 +15,7 @@ npmRebuild: false # @electron/rebuild already ran in postinstall
 extraResources:
   - from: resources
     to: resources
+    filter: ['**/*', '!brand/**'] # README art, not needed in the app
 mac:
   target:
     - target: dmg

@@ -25,7 +25,7 @@ export function OpenPassport() {
     </div>
     <div className="mt-14 grid gap-1.5 md:grid-cols-[1.15fr_.85fr]">
       <div className="min-w-0 rounded-[18px] border border-white/[.07] bg-[#101416] p-6 sm:p-8" aria-label="Open Passport memory tiers">
-        <div className="mb-8 flex items-center justify-between gap-4 border-b border-white/10 pb-5"><span className="font-serif text-[26px] tracking-[-.03em]">What an agent loads</span><span className="font-mono text-[9px] tracking-[.16em] text-muted">TOKEN BUDGET</span></div>
+        <div className="mb-8 flex items-center justify-between gap-4 border-b border-white/10 pb-5"><span className="display text-[22px]">What an agent loads</span><span className="font-mono text-[9px] tracking-[.16em] text-muted">TOKEN BUDGET</span></div>
         <div className="space-y-6">{tiers.map(t => <div key={t.tier}>
           <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"><span className="flex items-baseline gap-3"><span className="font-mono text-[11px] tracking-[.12em] text-soft">{t.tier}</span><span className="text-sm text-soft">{t.name}</span></span><span className="font-mono text-[11px] text-muted">{t.tokens}</span></div>
           <div className="relative h-[10px] rounded-full border border-white/[.09]"><div className={`absolute inset-y-[-1px] left-[-1px] rounded-full border ${t.tier === 'L2' ? 'border-dashed border-white/25' : 'border-white/60 bg-white/[.06]'}`} style={{ width: t.width }}/></div>
