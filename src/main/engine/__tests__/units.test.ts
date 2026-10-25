@@ -195,7 +195,7 @@ describe('adapters (A3, A7, A8)', () => {
   it('other adapters: bypass flags + artifacts sentence prefixed', () => {
     const c = codexAdapter.headless(req).args
     expect(c.slice(0, 4)).toEqual(['exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox'])
-    expect(c[c.length - 1]).toMatch(/^Save files you create.*\(\/A\/r_1\/\)\.\n\ndo it$/s)
+    expect(c[c.length - 1]).toMatch(/^Save files you create.*\(\/A\/r_1\/\)\.\nDiagrams: [^\n]*\n\ndo it$/s)
     expect(geminiAdapter.headless(req).args).toContain('--yolo')
     expect(cursorAdapter.headless(req).args).toContain('--force')
     expect(shellAdapter.headless({ ...req, prompt: 'npm test' }).args).toEqual(['-lc', 'npm test'])

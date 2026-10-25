@@ -119,6 +119,7 @@ export const SLASH_COMMANDS: readonly { name: string; args: string; detail: stri
   { name: 'ask', args: '@who question', detail: 'Ask someone; it waits in their Needs you' },
   { name: 'propose', args: 'department | agent', detail: 'Propose a new department or a hire' },
   { name: 'task', args: 'title', detail: 'Make a board task from this' },
+  { name: 'visualize', args: '@agent what', detail: 'Ask an agent to draw it as a diagram' },
   { name: 'topic', args: 'text', detail: 'Set the channel topic' },
   { name: 'leave', args: '', detail: 'Leave this channel' }
 ]
@@ -164,6 +165,7 @@ export type SlashCommand =
   | { cmd: 'ask'; handles: string[]; question: string; options: string[] }
   | { cmd: 'propose'; kind: 'department' | 'agent' | null }
   | { cmd: 'task'; title: string }
+  | { cmd: 'visualize'; handles: string[]; what: string }
   | { cmd: 'topic'; text: string }
   | { cmd: 'leave' }
   | { cmd: 'unknown'; name: string }
@@ -189,6 +191,8 @@ export function parseSlash(text: string): SlashCommand | null {
     }
     case 'task':
       return { cmd: 'task', title: rest }
+    case 'visualize':
+      return { cmd: 'visualize', handles, what: rest.replace(/@[a-z0-9][a-z0-9._-]{0,31}/gi, '').replace(/\s+/g, ' ').trim() }
     case 'topic':
       return { cmd: 'topic', text: rest }
     case 'leave':

@@ -110,3 +110,23 @@ describe('run end outcome (§1.4, §4.5)', () => {
       runEndState({}, canceled, true), runEndState({}, canceled, true, 'limit'), runEndState(report('review'), passed, false)]) ok(S('in_progress'), end.to, 'system')
   })
 })
+
+describe('WORKTREE.md: the task follows its PR', () => {
+  it('a ready PR moves a parked or queued task to review, by the system only', () => {
+    for (const from of [S('todo'), S('backlog'), S('blocked', 'no_report'), S('blocked', 'run_failed')]) ok(from, S('in_review'), 'system', { work: 'pr_ready' })
+    no(S('todo'), S('in_review'), 'human', { work: 'pr_ready' })
+    // without the PR the old refusal stands
+    no(S('todo'), S('in_review'), 'human', {}, 'cannot move from To do to In review')
+  })
+  it('changes requested restart a task in review (a start), merged completes it with a note', () => {
+    ok(S('in_review'), S('in_progress'), 'system', { work: 'changes_requested', start: true, depsDone: true })
+    no(S('in_review'), S('in_progress'), 'system', { start: true }); no(S('in_review'), S('in_progress'), 'system', { work: 'changes_requested' })
+    ok(S('in_review'), S('done'), 'system', { work: 'merged', doneNote: 'Merged #42' }); ok(S('blocked', 'agent'), S('done'), 'system', { work: 'merged', doneNote: 'Merged #42' })
+    no(S('in_review'), S('done'), 'system', { work: 'merged', doneNote: ' ' }); no(S('in_progress'), S('done'), 'system', { work: 'merged', doneNote: 'x' })
+    no(S('in_review'), S('done'), 'system', { doneNote: 'x' }, 'Only a human can mark a task done'); no(S('in_review'), S('done'), 'agent', { work: 'merged', doneNote: 'x' }, 'Only a human')
+  })
+  it('Back to Backlog after the worktree went away: human, any open task not in flight', () => {
+    for (const from of [S('in_review'), S('blocked', 'interrupted'), S('todo')]) ok(from, S('backlog'), 'human', { worktreeGone: true })
+    no(S('in_review'), S('backlog'), 'human'); no(S('in_review'), S('backlog'), 'system', { worktreeGone: true })
+  })
+})

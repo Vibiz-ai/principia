@@ -11,8 +11,14 @@ import { useForumCtx } from './context'
 import { QUICK_REACTIONS, timeLabel, tokenize } from '../../lib/forum'
 import { hive } from '../../lib/hive'
 import { useStore } from '../../state/store'
+import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 
+/** DIAGRAMS.md: a principia-graph block in a post is drawn in place; the prose around it renders as before. */
 export function RichText({ text, from }: { text: string; from?: ForumMessage }): React.JSX.Element {
+  return <TextWithDiagrams text={text} renderText={(t) => <RichTextPlain text={t} from={from} />} />
+}
+
+function RichTextPlain({ text, from }: { text: string; from?: ForumMessage }): React.JSX.Element {
   const ctx = useForumCtx()
   const meHandle = ctx.me?.handle
   return (

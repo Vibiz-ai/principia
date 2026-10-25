@@ -27,6 +27,7 @@ import type { SlackDraft, SlackRunContext } from '@shared/slack'
 import { SlackDraftCard } from '../components/slack/SlackDraftCard'
 import { slackCall } from '../lib/slackApi'
 import { useSlack } from '../state/slack'
+import { TaskStrip } from '../components/board/TaskStrip'
 
 type Tab = 'output' | 'activity' | 'result' | 'prompt'
 
@@ -196,6 +197,8 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
           <LimitActions target={runLimitTarget(run)} open />
         </div>
       )}
+      {/* WORKTREE.md: which task this agent is doing */}
+      <TaskStrip taskId={(run as { taskId?: string | null }).taskId} ownerId={run.id} />
       <div className="run">
         <div className="run__left scroll">
           {run.reason && (isNothingToDo(run) ? <div className="callout callout--quiet selectable">Nothing to do · {run.reason}</div> : <div className="callout callout--failed selectable">{run.reason}</div>)}

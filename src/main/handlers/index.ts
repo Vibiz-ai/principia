@@ -23,6 +23,9 @@ import { registerOnboardingHandlers } from './onboarding'
 import { registerForumHandlers } from './forum'
 import { registerCloudHandlers } from './cloud'
 import { registerDashboardHandlers } from './dashboards'
+import { registerTaskWorkHandlers } from './taskWork'
+import { registerUsageHandlers } from './usage'
+import { registerLinearHandlers } from './linear'
 
 export function registerAllHandlers(h: Hive): void {
   registerCompanyHandlers(h)
@@ -47,6 +50,9 @@ export function registerAllHandlers(h: Hive): void {
   registerForumHandlers(h)
   registerCloudHandlers(h)
   registerDashboardHandlers(h)
+  registerTaskWorkHandlers(h)
+  registerUsageHandlers(h)
+  registerLinearHandlers(h)
   const missing = registerMissingAsNotImplemented()
   if (missing.length) log.warn('IPC channels without a handler', { missing })
 }

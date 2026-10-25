@@ -22,6 +22,9 @@ import { CompanyChip } from '../components/CompanyChip'
 import { clock } from '../lib/time'
 import { sessionEndLabel, sessionPlace, tildify } from '../lib/format'
 import { ProviderSwitcher } from '../shell/ProviderSwitcher'
+import { TaskStrip } from '../components/board/TaskStrip'
+import { SessionDiagrams } from '../components/diagrams/SessionDiagrams'
+import { openVisualize } from '../state/diagrams'
 import {
   attempt,
   closeSession,
@@ -174,6 +177,8 @@ export function SessionView(): React.JSX.Element {
         )}
         <ProviderSwitcher />
       </Toolbar>
+      {/* WORKTREE.md: which task this session is doing */}
+      <TaskStrip taskId={(cur as (Session & { taskId?: string | null }) | undefined)?.taskId} ownerId={cur?.id} />
       {panes.length === 0 ? (
         <EmptyState icon="terminal" text="No session open. Click a repository, or press ⌘N.">
           <Button variant="primary" onClick={() => void startSession({ repoId: null })} kbd="⌥⌘N">
@@ -306,6 +311,7 @@ function SessionPane({
       { id: 'dir', label: 'Open ARTIFACTS_DIR' },
       { type: 'separator' },
       { id: 'find', label: 'Find…', accelerator: 'Cmd+F' },
+      ...(s.adapter === 'claude' && !exited ? [{ id: 'visualize', label: 'Visualize…' }] : []),
       ...(s.adapter !== 'shell' ? [{ id: 'newco', label: 'New Company from This Chat…' }] : []),
       ...(multi ? [{ id: 'hide', label: 'Remove from Grid' }] : [])
     ])
@@ -319,6 +325,7 @@ function SessionPane({
     if (id === 'reveal') void attempt(() => hive.app.showItemInFolder({ path: s.cwd }))
     if (id === 'dir') void attempt(() => hive.artifacts.openDir({ sessionId: s.id }))
     if (id === 'find') termRef.current?.openSearch()
+    if (id === 'visualize') openVisualize(s.id)
     if (id === 'newco') void newCompanyFromChat()
     if (id === 'hide') removeFromGrid(s.id)
   }
@@ -386,6 +393,7 @@ function SessionPane({
           {paneAsks.length > 1 && <div className="pane__needs-more text-tertiary">+{paneAsks.length - 1} more waiting — answer this one first</div>}
         </div>
       )}
+      {root && s.adapter !== 'shell' && <SessionDiagrams sessionId={s.id} answer={root.report} />}
       <div className="pane__body">
         <TerminalPane
           ref={(h) => {

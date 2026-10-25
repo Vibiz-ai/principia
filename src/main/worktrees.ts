@@ -18,6 +18,11 @@
  * Run branches (PO14): snapshotRun records refs/heads of every repo a run may touch when it is queued; sweepRun deletes
  * branches created during the run that carry no new unpushed commit; the rest are offered (branches/deleteBranches).
  *
+ * Task worktrees (WORKTREE.md): a board task Started into its own worktree owns one row whose run_id is the task id
+ * (`task_…`), at <userData>/worktrees/task-<identifier> on `hive/<identifier>-<slug>`. The same hooks dir, shims and
+ * worktree-local core.hooksPath guard it; run-only paths (finish, sweepRun, bootRecover) never touch a task row, and a
+ * task row is removed only by removeTask (which refuses to drop uncommitted or unpushed work unless told so).
+ *
  * Keep/remove (PO6) by work done in this run: commits whose committer date is after `ensure` and that are not reachable
  * from the recorded base sha. On a remote-tracking ref -> kept 'pushed'; uncommitted changes or unpushed new commits ->
  * kept 'dirty'; else removed, together with every local branch created during the run that carries no unpushed commit.
@@ -30,6 +35,7 @@ import type { WorktreeBridge } from '../shared/engine'
 import type { Id, Repo, Run, RunBranch, RunStatus, RunWorktree, Workflow, WorkflowDraft } from '../shared/types'
 import { HiveError } from '../shared/errors'
 import { newId } from '../shared/ids'
+import { taskBranchName, taskWorktreeDir } from '../shared/taskWork'
 import type { DB } from './db'
 
 export interface GitResult {
@@ -231,6 +237,9 @@ const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
 /** Default branch globs an isolated node may push to (WorkflowWorktree.pushBranches overrides). */
 export const DEFAULT_PUSH_BRANCHES = ['hive/*']
+/** A row owned by a board task (WORKTREE.md), not a run. */
+export const isTaskOwner = (ownerId: string): boolean => ownerId.startsWith('task_')
+const NOT_TASK = "run_id NOT LIKE 'task\\_%' ESCAPE '\\'"
 const GLOB_RE = /^[A-Za-z0-9._/*-]{1,100}$/
 
 /**
@@ -432,10 +441,11 @@ export class WorktreeManager implements WorktreeBridge {
   sourceRepoFor(cwd: string): string | null {
     const root = this.root + path.sep
     if (!cwd.startsWith(root)) return null
-    const runId = cwd.slice(root.length).split(path.sep)[0]
-    const r = this.rowForRun(runId)
+    const dir = cwd.slice(root.length).split(path.sep)[0]
+    // run rows live at <root>/<runId>, task rows at <root>/task-<identifier>: match the folder, newest row first
+    const r = (this.d.db.prepare('SELECT * FROM worktrees WHERE path = ? ORDER BY created_at DESC LIMIT 1').get(path.join(this.root, dir)) as Row | undefined) ?? this.rowForRun(dir)
     if (!r) return null
-    const rest = cwd.slice(root.length + runId.length)
+    const rest = cwd.slice(root.length + dir.length)
     return r.repo_path + rest
   }
 
@@ -557,6 +567,8 @@ export class WorktreeManager implements WorktreeBridge {
       scopes.push({ repo: wt.repo_path, before: new Set<string>(JSON.parse(wt.heads_json || '[]') as string[]), since: wt.created_at })
     }
     const out: RunBranch[] = []
+    // a board task's branch (WORKTREE.md) is the task's, even when its worktree was made while this run ran
+    const taskBranches = new Set((this.d.db.prepare(`SELECT repo_path, branch FROM worktrees WHERE NOT (${NOT_TASK})`).all() as { repo_path: string; branch: string }[]).map((x) => `${x.repo_path}\0${x.branch}`))
     for (const sc of scopes) {
       if (!fs.existsSync(sc.repo)) continue
       const heads = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: sc.repo })
@@ -564,7 +576,7 @@ export class WorktreeManager implements WorktreeBridge {
       const created = heads.stdout
         .split('\n')
         .map((x) => x.trim())
-        .filter((b) => b && !sc.before.has(b))
+        .filter((b) => b && !sc.before.has(b) && !taskBranches.has(`${sc.repo}\0${b}`))
       if (!created.length) continue
       const wl = await git(['worktree', 'list', '--porcelain'], { cwd: sc.repo })
       const checked = new Set(
@@ -641,8 +653,17 @@ export class WorktreeManager implements WorktreeBridge {
     return job
   }
 
-  private async create(req: { runId: Id; workflowName: string; repo: string; base: string | null; dryRun?: boolean }): Promise<RunWorktree> {
-    if (!/^[a-z]+_[0-9a-z]+$/.test(req.runId)) throw new HiveError('bad_request', 'bad run id')
+  private create(req: { runId: Id; workflowName: string; repo: string; base: string | null; dryRun?: boolean }): Promise<RunWorktree> {
+    return this.createFor({ ownerId: req.runId, repo: req.repo, base: req.base, dryRun: req.dryRun, branch: `hive/${branchSlug(req.workflowName)}-${req.runId}`, wtPath: path.join(this.root, req.runId), snapshot: true })
+  }
+
+  /**
+   * One worktree for an owner (a run, or a board task): the base is the requested branch (remote preferred), else
+   * origin/HEAD, main, master, HEAD. Runs record refs/heads in run_refs (PO14); a task only keeps them on its row.
+   * `reuseBranch`: the branch may already exist (a task Started again): it is checked out instead of created.
+   */
+  private async createFor(req: { ownerId: Id; repo: string; base: string | null; dryRun?: boolean; branch: string; wtPath: string; snapshot: boolean; reuseBranch?: boolean }): Promise<RunWorktree> {
+    if (!/^[a-z]+_[0-9a-z]+$/.test(req.ownerId)) throw new HiveError('bad_request', 'bad run id')
     const git = this.d.git
     let repoPath = req.repo
     try {
@@ -690,17 +711,19 @@ export class WorktreeManager implements WorktreeBridge {
     if (sha.code !== 0) throw new HiveError('validation', `${repoPath} has no commits to branch from`)
     const baseSha = sha.stdout.trim()
     // PO6: branches that existed when the RUN started (non-isolated nodes may have created some before this point)
-    const snap = this.refsRow(req.runId, repoPath)
+    const snap = req.snapshot ? this.refsRow(req.ownerId, repoPath) : null
     let headList: string[]
     if (snap) headList = JSON.parse(snap.heads_json) as string[]
     else {
       const heads = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: repoPath })
       headList = heads.stdout.split('\n').map((s) => s.trim()).filter(Boolean)
-      this.insertRefs(req.runId, repoPath, headList, this.now().toISOString())
+      if (req.snapshot) this.insertRefs(req.ownerId, repoPath, headList, this.now().toISOString())
     }
 
-    const branch = `hive/${branchSlug(req.workflowName)}-${req.runId}`
-    const wtPath = path.join(this.root, req.runId)
+    const branch = req.branch
+    const wtPath = req.wtPath
+    const reuse = !!req.reuseBranch && headList.includes(branch)
+    if (!reuse && headList.includes(branch)) throw new HiveError('conflict', `Branch ${branch} already exists in ${repoPath}`)
     const id = newId('worktree')
     const createdAt = this.now().toISOString()
     const base = `${baseRef} @ ${baseSha.slice(0, 7)}`
@@ -709,18 +732,20 @@ export class WorktreeManager implements WorktreeBridge {
         `INSERT INTO worktrees(id, run_id, repo_id, repo_path, path, branch, base, base_ref, base_sha, heads_json, status, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?, 'creating', ?)`
       )
-      .run(id, req.runId, this.d.repoIdForPath(repoPath), repoPath, wtPath, branch, base, baseRef, baseSha, JSON.stringify(headList), createdAt)
+      .run(id, req.ownerId, this.d.repoIdForPath(repoPath), repoPath, wtPath, branch, base, baseRef, baseSha, JSON.stringify(headList), createdAt)
     try {
       fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
-      const add = await git(['worktree', 'add', '--no-track', '-b', branch, wtPath, baseSha], { cwd: repoPath, timeoutMs: 120_000 })
+      const add = reuse
+        ? await git(['worktree', 'add', wtPath, branch], { cwd: repoPath, timeoutMs: 120_000 })
+        : await git(['worktree', 'add', '--no-track', '-b', branch, wtPath, baseSha], { cwd: repoPath, timeoutMs: 120_000 })
       if (add.code !== 0) throw new Error(add.stderr.trim().split('\n').pop() || 'git worktree add failed')
       const protect = [...new Set([defaultBranch, baseBranch].filter((b): b is string => !!b))]
-      await this.writeHooks(req.runId, repoPath, protect)
-      const marker = path.join(this.hooksDir(req.runId), DRY_RUN_MARKER)
+      await this.writeHooks(req.ownerId, repoPath, protect)
+      const marker = path.join(this.hooksDir(req.ownerId), DRY_RUN_MARKER)
       if (req.dryRun) fs.writeFileSync(marker, 'dry_run = true: every push from this run is refused\n', { mode: 0o644 })
       else fs.rmSync(marker, { force: true })
-      const local = await this.setWorktreeHooksPath(repoPath, wtPath, this.hooksDir(req.runId))
-      this.d.log?.info('worktree created', { runId: req.runId, path: wtPath, branch, base, worktreeHooks: local, dryRun: !!req.dryRun })
+      const local = await this.setWorktreeHooksPath(repoPath, wtPath, this.hooksDir(req.ownerId))
+      this.d.log?.info('worktree created', { owner: req.ownerId, path: wtPath, branch, base, worktreeHooks: local, dryRun: !!req.dryRun })
       return this.update(id, { status: 'active' })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -786,7 +811,7 @@ export class WorktreeManager implements WorktreeBridge {
     try {
       await this.pending.get(runId)?.catch(() => undefined)
       const r = this.rowForRun(runId)
-      if (!r || r.status !== 'active') return r ? toWorktree(r) : null
+      if (!r || r.status !== 'active' || isTaskOwner(r.run_id)) return r ? toWorktree(r) : null
       this.clearDryRun(runId)
       if (outcome.status === 'failed') return this.update(r.id, { status: 'kept', kept_reason: 'failed' })
       if (outcome.status === 'canceled') return this.update(r.id, { status: 'kept', kept_reason: 'canceled' })
@@ -868,10 +893,11 @@ export class WorktreeManager implements WorktreeBridge {
    * user confirmed losing them (keptReason 'dirty' - the dialog says so - or discardWork). Then the PO6 sweep of every
    * other branch created during the run. Branches with new unpushed work stay and are listed by branches().
    */
-  async remove(id: Id, opts: { discardWork?: boolean } = {}): Promise<RunWorktree> {
+  async remove(id: Id, opts: { discardWork?: boolean; /** false: skip the run-wide branch sweep (Usage › Clean Up, long after the run) */ sweep?: boolean } = {}): Promise<RunWorktree> {
     const r = this.row(id)
     if (!r) throw new HiveError('not_found', 'Worktree not found')
     if (r.status === 'removed') return toWorktree(r)
+    if (isTaskOwner(r.run_id) && r.status === 'active') throw new HiveError('conflict', 'This worktree belongs to a task. Remove it from the task (Remove Worktree…).')
     if (r.status === 'active' || r.status === 'creating') throw new HiveError('conflict', 'The run is still using this worktree')
     const git = this.d.git
     if (fs.existsSync(r.path)) {
@@ -887,6 +913,7 @@ export class WorktreeManager implements WorktreeBridge {
     }
     this.removeHooks(r.run_id)
     const wt = this.update(r.id, { status: 'removed', removed_at: this.now().toISOString() })
+    if (opts.sweep === false) return wt
     try {
       await this.sweepRun(r.run_id)
     } catch (e) {
@@ -895,13 +922,139 @@ export class WorktreeManager implements WorktreeBridge {
     return wt
   }
 
+  // ---------- task worktrees (WORKTREE.md) ----------
+  /** The task's newest row (any status). */
+  forTask(taskId: Id): RunWorktree | null {
+    return this.forRun(taskId)
+  }
+  /** The base the task's branch started from (full sha + ref), for its work binding. */
+  taskBase(taskId: Id): { baseSha: string | null; baseRef: string | null } {
+    const r = this.rowForRun(taskId)
+    return { baseSha: r?.base_sha ?? null, baseRef: r?.base_ref ?? null }
+  }
+  /** The branch has a remote-tracking ref (it was pushed): only then is GitHub asked about a PR for it. */
+  async taskPushed(taskId: Id): Promise<boolean> {
+    const r = this.rowForRun(taskId)
+    if (!r) return false
+    const cwd = fs.existsSync(r.path) ? r.path : r.repo_path
+    const refs = await this.d.git(['for-each-ref', '--format=%(refname)', 'refs/remotes/'], { cwd })
+    return refs.code === 0 && refs.stdout.split('\n').some((l) => l.trim().endsWith(`/${r.branch}`))
+  }
+  taskPath(identifier: string): string {
+    return path.join(this.root, taskWorktreeDir(identifier))
+  }
+
+  /**
+   * Start: the task's own worktree off the default branch (or `base`), on `hive/<identifier>-<slug>`. Idempotent while
+   * active. A branch left by an earlier Start (`branch`, the task's own) is checked out again, never recreated. Only worktree add/prune, fetch,
+   * rev-parse, symbolic-ref, config and for-each-ref run in the repo itself.
+   */
+  ensureTask(req: { taskId: Id; identifier: string; title: string; repo: string; base?: string | null; branch?: string | null }): Promise<RunWorktree> {
+    const existing = this.rowForRun(req.taskId)
+    if (existing && existing.status === 'active') return Promise.resolve(toWorktree(existing))
+    const p = this.pending.get(req.taskId)
+    if (p) return p
+    const wtPath = this.taskPath(req.identifier)
+    const job = (async () => {
+      if (fs.existsSync(wtPath)) {
+        // a folder git no longer knows is never overwritten
+        await this.d.git(['worktree', 'prune'], { cwd: req.repo })
+        throw new HiveError('conflict', `${wtPath} already exists. Move it away, then Start again.`)
+      }
+      // a worktree folder deleted by hand leaves git's record behind; prune it so the branch can be checked out again
+      await this.d.git(['worktree', 'prune'], { cwd: req.repo })
+      return this.createFor({ ownerId: req.taskId, repo: req.repo, base: req.base ?? null, branch: req.branch || taskBranchName(req.identifier, req.title), wtPath, snapshot: false, reuseBranch: true })
+    })().finally(() => this.pending.delete(req.taskId))
+    this.pending.set(req.taskId, job)
+    return job
+  }
+
+  /** What removing the task's worktree would lose: uncommitted changes and commits on no remote. */
+  async taskLoss(taskId: Id): Promise<{ exists: boolean; dirty: string[]; unpushed: string[] }> {
+    const r = this.rowForRun(taskId)
+    if (!r || r.status !== 'active') return { exists: false, dirty: [], unpushed: [] }
+    const git = this.d.git
+    const exists = fs.existsSync(r.path)
+    const st = exists ? await git(['status', '--porcelain'], { cwd: r.path }) : { code: 1, stdout: '', stderr: '' }
+    const dirty = st.code === 0 ? st.stdout.split('\n').map((l) => l.trimEnd()).filter(Boolean).slice(0, 50) : []
+    const cwd = exists ? r.path : r.repo_path
+    const has = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${r.branch}`], { cwd })
+    let unpushed: string[] = []
+    if (has.code === 0) {
+      const log = await git(['log', '--format=%h %s', `refs/heads/${r.branch}`, '--not', '--remotes', ...(r.base_sha ? [r.base_sha] : [])], { cwd })
+      unpushed = log.code === 0 ? log.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 50) : []
+    }
+    return { exists, dirty, unpushed }
+  }
+
+  /**
+   * Remove Worktree… (or the cleanup after a merge): refused while it holds work (uncommitted or unpushed) unless
+   * `discardWork` (the founder confirmed the list). The branch goes only when Start created it and nothing on it is
+   * unpushed (or discardWork); a branch that existed before is never deleted.
+   */
+  async removeTask(taskId: Id, opts: { discardWork?: boolean } = {}): Promise<RunWorktree | null> {
+    const r = this.rowForRun(taskId)
+    if (!r || r.status === 'removed') return r ? toWorktree(r) : null
+    const loss = await this.taskLoss(taskId)
+    if ((loss.dirty.length || loss.unpushed.length) && !opts.discardWork) {
+      const parts = [
+        loss.dirty.length ? `${loss.dirty.length} uncommitted change${loss.dirty.length === 1 ? '' : 's'}` : '',
+        loss.unpushed.length ? `${loss.unpushed.length} unpushed commit${loss.unpushed.length === 1 ? '' : 's'}` : ''
+      ].filter(Boolean)
+      throw new HiveError('conflict', `The worktree has ${parts.join(' and ')}. Nothing was removed.`)
+    }
+    const git = this.d.git
+    if (fs.existsSync(r.path)) {
+      const rm = await git(['worktree', 'remove', '--force', r.path], { cwd: r.repo_path })
+      if (rm.code !== 0 && fs.existsSync(r.path)) throw new HiveError('internal', `git worktree remove failed: ${rm.stderr.trim().slice(0, 300)}`)
+    }
+    await git(['worktree', 'prune'], { cwd: r.repo_path })
+    const before = (JSON.parse(r.heads_json || '[]') as string[]).includes(r.branch)
+    const exists = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${r.branch}`], { cwd: r.repo_path })
+    if (exists.code === 0 && !before) {
+      const unpushed = await git(['rev-list', `refs/heads/${r.branch}`, '--not', '--remotes', ...(r.base_sha ? [r.base_sha] : [])], { cwd: r.repo_path })
+      if ((unpushed.code === 0 && !unpushed.stdout.trim()) || opts.discardWork) await git(['branch', '-D', r.branch], { cwd: r.repo_path })
+    }
+    this.removeHooks(r.run_id)
+    this.d.log?.info('task worktree removed', { taskId, path: r.path })
+    return this.update(r.id, { status: 'removed', kept_reason: null, removed_at: this.now().toISOString() })
+  }
+
+  /** The folder went away by hand: prune git's record and close the row (the branch stays: it may hold work). */
+  async forgetTask(taskId: Id): Promise<void> {
+    const r = this.rowForRun(taskId)
+    if (!r || r.status === 'removed') return
+    if (fs.existsSync(r.path)) throw new HiveError('conflict', 'The worktree is still there')
+    await this.d.git(['worktree', 'prune'], { cwd: r.repo_path })
+    this.removeHooks(r.run_id)
+    this.update(r.id, { status: 'removed', removed_at: this.now().toISOString() })
+  }
+
+  /**
+   * A local merge: the branch has commits past its base and its tip is reachable from the local base branch
+   * (merge-base ancestry only, run inside the task's worktree; a rebased branch is never "merged" this way).
+   */
+  async mergedLocally(taskId: Id): Promise<boolean> {
+    const r = this.rowForRun(taskId)
+    if (!r || r.status !== 'active' || !r.base_sha || !fs.existsSync(r.path)) return false
+    const baseBranch = (r.base_ref ?? '').replace(/^origin\//, '')
+    if (!baseBranch || baseBranch === 'HEAD') return false
+    const git = this.d.git
+    const tip = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${r.branch}^{commit}`], { cwd: r.path })
+    if (tip.code !== 0 || tip.stdout.trim() === r.base_sha) return false
+    const local = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}^{commit}`], { cwd: r.path })
+    if (local.code !== 0) return false
+    return (await git(['merge-base', '--is-ancestor', tip.stdout.trim(), local.stdout.trim()], { cwd: r.path })).code === 0
+  }
+
   /** Boot: 'creating' -> error; 'active' (Hive quit mid-run) -> kept 'failed'; vanished paths -> removed; prune once a day. */
   async bootRecover(opts: { pruneDue: boolean } = { pruneDue: true }): Promise<{ fixed: number; pruned: number }> {
     let fixed = 0
     const at = this.now().toISOString()
     fixed += this.d.db.prepare("UPDATE worktrees SET status = 'error', error = 'Hive quit while creating it' WHERE status = 'creating'").run().changes
-    fixed += this.d.db.prepare("UPDATE worktrees SET status = 'kept', kept_reason = 'failed' WHERE status = 'active'").run().changes
-    for (const r of this.d.db.prepare("SELECT * FROM worktrees WHERE status IN ('kept','error')").all() as Row[]) {
+    // a task's worktree outlives the app (WORKTREE.md): only run rows are settled here
+    fixed += this.d.db.prepare(`UPDATE worktrees SET status = 'kept', kept_reason = 'failed' WHERE status = 'active' AND ${NOT_TASK}`).run().changes
+    for (const r of this.d.db.prepare(`SELECT * FROM worktrees WHERE status IN ('kept','error') AND ${NOT_TASK}`).all() as Row[]) {
       if (!fs.existsSync(r.path)) {
         this.d.db.prepare("UPDATE worktrees SET status = 'removed', removed_at = ? WHERE id = ?").run(at, r.id)
         this.removeHooks(r.run_id)

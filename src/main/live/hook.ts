@@ -53,11 +53,15 @@ function truncDeep(v: unknown, depth = 0): unknown {
   return o
 }
 
+/** DIAGRAMS.md §6: an answer holding a principia-graph block (at most 32 KB) arrives whole, or it can't be drawn. */
+export const DIAGRAM_ANSWER_CAP = 40 * 1024
+const keepsDiagram = (v: unknown): boolean => typeof v === 'string' && v.length <= DIAGRAM_ANSWER_CAP && v.includes('```principia-graph')
+
 /** Truncates the big fields of a hook payload. Non-objects are wrapped as { raw }. */
 export function shrinkPayload(p: unknown): unknown {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return { raw: typeof p === 'string' ? p.slice(0, FIELD_CAP) : p }
   const o: Record<string, unknown> = { ...(p as Record<string, unknown>) }
-  for (const f of TRUNC_FIELDS) if (f in o) o[f] = truncDeep(o[f])
+  for (const f of TRUNC_FIELDS) if (f in o && !(f === 'last_assistant_message' && keepsDiagram(o[f]))) o[f] = truncDeep(o[f])
   return o
 }
 

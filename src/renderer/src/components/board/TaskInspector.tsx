@@ -19,6 +19,11 @@ import { useAgentDisplay } from './NeedsYouTasks'
 import { useTone } from '../../lib/voice'
 import { TASK_DONE_LATIN_KEY, taskDoneToast } from '../../lib/taskDoneToast'
 import { StatusGlyph } from '../ui'
+import { WorkSection, WorkStart, companyRepoIds } from './TaskWork'
+import { canStartWork, workQueued } from '@shared/taskWork'
+import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
+import { LinearChip } from './LinearSheet'
+import { linearWorkLabel, startedInLinear } from '../../lib/linear'
 
 type TaskRun = Run & { taskId?: string | null }
 type TaskSession = Session & { taskId?: string | null }
@@ -31,7 +36,7 @@ const STATUS_CHOICE_LABEL = { triage: 'Inbox', backlog: 'Backlog', todo: 'Todo',
  * run and session links, artifacts, Learned notes and the typed timeline. Actions follow the task's state (§1.4):
  * Run now, Open as session, Take over, Stop, Approve as done (a note is required), Send back with a note, Unpark.
  */
-export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect }: { id: string; tasks: CompanyTask[]; companies: CompanyPassport[]; onClose: () => void; onSaved: () => void; onSelect?: (id: string) => void }): React.JSX.Element {
+export function TaskInspector({ id, tasks, companies, linear = null, onClose, onSaved, onSelect }: { id: string; tasks: CompanyTask[]; companies: CompanyPassport[]; linear?: { key: string; url: string; status?: string } | null; onClose: () => void; onSaved: () => void; onSelect?: (id: string) => void }): React.JSX.Element {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -77,18 +82,23 @@ export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect
   const department = departments.find((d) => d.id === (task.departmentId ?? agent?.departmentId)) ?? null
   const lane = taskLane(task, ctx)
   const reason = taskReason(task, ctx)
-  const inFlight = task.status === 'in_progress'
+  // LINEAR.md: in progress in Linear with no run here stays editable (it leaves by a status move)
+  const elsewhere = startedInLinear(task, linear)
+  const inFlight = task.status === 'in_progress' && !elsewhere
   const run = runs.find((r) => r.id === task.runId) ?? null
   const taskSessions = (sessions as TaskSession[]).filter((s) => s.taskId === task.id)
   const liveSession = taskSessions.find((s) => s.status === 'running')
   const headlessRun = inFlight && !liveSession && !!task.runId
-  const actions = inspectorActions(task, { hasAgent: !!(task.agentId || task.assigneeProfileId), headlessRun })
+  const actions = elsewhere ? new Set<ReturnType<typeof inspectorActions> extends Set<infer A> ? A : never>() : inspectorActions(task, { hasAgent: !!(task.agentId || task.assigneeProfileId), headlessRun })
   const subtasks = tasks.filter((t) => t.parentId === task.id)
   const unresolved = task.dependencyIds.map((d) => tasks.find((t) => t.id === d)).filter((t) => t && t.status !== 'done')
   const routing = task.routing
   const suggestion = routing?.by === 'model' && task.status === 'triage' ? routing : null
   const runBlocked = !agent && !task.assigneeProfileId ? 'Assign an agent first.' : agent && !agentActive(agent) ? `${agent.name} is ${agent.archivedAt ? 'archived' : 'paused'}.` : unresolved.length ? 'Finish this task’s dependencies before starting.' : ''
   const statusValue = task.status === 'blocked' ? (task.blockReason === 'manual' ? 'blocked:manual' : 'blocked') : task.status
+  const company = companies.find((c) => c.id === task.companyId)
+  // WORKTREE.md: one main action per screen: Start leads for a code task, Run now (in the founder's checkout) follows
+  const startOffered = !!company && (canStartWork(task, companyRepoIds(company, repos)) || workQueued(task.work))
 
   const assign = (patch: { departmentId?: string | null; agentId?: string | null }): void => void mutate(() => hive.tasks.assign({ id: task.id, ...patch }))
   const pickDepartment = (depId: string | null): void => {
@@ -117,8 +127,10 @@ export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect
     <div className="task-inspector-scroll">
       <div className="task-detail-company"><Icon name="passport" size={12} />{companies.find((c) => c.id === task.companyId)?.name}{department && <> · <span className="board-dot" style={{ background: department.color ?? 'var(--series-other)' }} />{department.name}</>}</div>
       <h2>{task.title}</h2>
-      <div className="board-inspector__lane"><Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{LANE_LABELS[lane]}</Pill>{reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{reason === 'review' && !task.report ? ' · no report' : ''}</span>}</div>
-      <p className="task-description selectable">{task.description || 'No description yet. Add the outcome and acceptance criteria in Edit task.'}</p>
+      <WorkStart task={task} company={company} busy={busy} onDone={() => { load(); onSaved() }} />
+      <WorkSection task={task} onDone={() => { load(); onSaved() }} />
+      <div className="board-inspector__lane">{elsewhere ? <Pill tone="idle">{linearWorkLabel(linear).replace(/^i/, 'I')}</Pill> : <Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{LANE_LABELS[lane]}</Pill>}{reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{reason === 'review' && !task.report ? ' · no report' : ''}</span>}</div>
+      {task.description ? <TextWithDiagrams text={task.description} renderText={(t) => <p className="task-description selectable">{t}</p>} /> : <p className="task-description selectable">No description yet. Add the outcome and acceptance criteria in Edit task.</p>}
 
       {task.status === 'blocked' && task.blockReason && task.blockReason !== 'needs_input' && <div className="board-callout" role="note">{BLOCK_REASON_TEXT[task.blockReason]}</div>}
       {task.ask && !task.ask.answer && <section className="board-section board-section--ask"><AskForm task={task} onAnswered={() => { load(); onSaved() }} /></section>}
@@ -128,16 +140,20 @@ export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect
         <label><span>Agent</span><div><select aria-label="Agent" disabled={busy || inFlight} value={task.agentId ?? ''} onChange={(e) => pickAgent(e.target.value || null)}><option value="">Unassigned</option>{seats.filter((a) => !task.departmentId || a.departmentId === task.departmentId || a.departmentId === null || a.id === task.agentId).map((a) => <option key={a.id} value={a.id}>{a.name}{a.archivedAt ? ' (archived)' : a.pausedAt ? ' (paused)' : a.data.autonomy === 'auto' ? ' · auto' : ''}</option>)}</select></div></label>
         {routing && <div className="board-routing"><span>Routing</span><span className="selectable">{routing.by === 'model' ? 'Suggested' : routing.by === 'rule' ? 'Rule' : 'You'}: {routing.reason}{routing.confidence != null && ` (${Math.round(routing.confidence * 100)}%)`}</span></div>}
         {suggestion && <div><span /><span><Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => void mutate(() => hive.tasks.acceptRoute({ id: task.id }), 'Suggestion accepted')}>Accept suggestion</Button></span></div>}
-        <label><span>Status</span><div><TaskStatusIcon status={task.status} />{inFlight || task.status === 'in_review' || (task.status === 'blocked' && task.blockReason !== 'manual') ? <span>{STATUS_LABEL[task.status]}{task.blockReason && task.status === 'blocked' ? ` · ${REASON_LABEL[task.blockReason]}` : ''}</span> : <select aria-label="Task status" disabled={busy} value={statusValue} onChange={(e) => setStatus(e.target.value)}>{task.status === 'done' && <option value="done" disabled>Done</option>}{statusChoices(task).map((v) => <option key={v} value={v}>{(task.status === 'done' || task.status === 'canceled') && v !== 'canceled' ? `Reopen: ${STATUS_CHOICE_LABEL[v]}` : task.status === 'blocked' && v === 'todo' ? `Unpark: ${STATUS_CHOICE_LABEL[v]}` : STATUS_CHOICE_LABEL[v]}</option>)}</select>}</div></label>
+        <label><span>Status</span><div><TaskStatusIcon status={task.status} />{inFlight || task.status === 'in_review' || (task.status === 'blocked' && task.blockReason !== 'manual') ? <span>{STATUS_LABEL[task.status]}{task.blockReason && task.status === 'blocked' ? ` · ${REASON_LABEL[task.blockReason]}` : ''}</span> : <select aria-label="Task status" disabled={busy} value={statusValue} onChange={(e) => setStatus(e.target.value)}>{task.status === 'done' && <option value="done" disabled>Done</option>}{elsewhere && <option value="in_progress" disabled>{linearWorkLabel(linear).replace(/^i/, 'I')}</option>}{statusChoices(task).map((v) => <option key={v} value={v}>{(task.status === 'done' || task.status === 'canceled') && v !== 'canceled' ? `Reopen: ${STATUS_CHOICE_LABEL[v]}` : task.status === 'blocked' && v === 'todo' ? `Unpark: ${STATUS_CHOICE_LABEL[v]}` : STATUS_CHOICE_LABEL[v]}</option>)}</select>}</div></label>
         <label><span>Priority</span><div><TaskPriority priority={task.priority} /><select aria-label="Task priority" value={task.priority} disabled={busy || inFlight} onChange={(e) => void mutate(() => hive.tasks.update({ id: task.id, patch: { priority: Number(e.target.value) as CompanyTaskInput['priority'] } }))}>{PRIORITIES.map((p, i) => <option key={p} value={i}>{p}</option>)}</select></div></label>
         <label><span>Repository</span><div><select aria-label="Repository" value={task.repoId ?? ''} disabled={busy || inFlight} onChange={(e) => void mutate(() => hive.tasks.update({ id: task.id, patch: { repoId: e.target.value || null } }))}><option value="">Company workspace</option>{reposOf(repos, task.companyId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div></label>
         <div><span>Source</span>{task.sourceUrl ? <button className="task-source-link" onClick={() => void hive.app.openExternal({ url: task.sourceUrl! }).catch((e) => setError(errorMessage(e)))}><TaskSourceBadge source={task.source} /><Icon name="external" size={12} /></button> : <TaskSourceBadge source={task.source} />}</div>
+        {linear && <div><span>Linear</span><span><LinearChip issueKey={linear.key} url={linear.url} /></span></div>}
+        {(task.labels?.length ?? 0) > 0 && <div><span>Labels</span><span className="selectable">{(task.labels ?? []).join(', ')}</span></div>}
+        {task.estimate != null && <div><span>Estimate</span><span>{task.estimate} {task.estimate === 1 ? 'point' : 'points'}</span></div>}
+        {task.dueDate && <div><span>Due</span><span>{task.dueDate}</span></div>}
         {task.parentId && <div><span>Parent</span><button className="link-btn" onClick={() => onSelect?.(task.parentId!)}>{tasks.find((t) => t.id === task.parentId)?.identifier ?? task.parentId}</button></div>}
       </div>
 
       <section className="task-agent-panel board-actions"><div className="task-agent-heading"><Icon name="agents" size={16} /><h3>{agent ? agent.name : 'Agent'}</h3>{inFlight && <span className="task-live-dot" />}</div>
-        <p>{inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? 'The agent finished. Approve it with a done note, or send it back with what to change.' : actions.has('run') ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : runBlocked || 'Nothing to do here right now.'}</p>
-        {actions.has('run') && <Button icon="play" variant={task.status === 'in_review' ? 'secondary' : 'primary'} disabled={busy || !!runBlocked} title={runBlocked} onClick={() => void mutate(() => hive.tasks.start({ id: task.id }), `Started ${task.identifier}`)}>Run now</Button>}
+        <p>{elsewhere ? `${linearWorkLabel(linear).replace(/^i/, 'I')} (${linear!.key}). Move it to Todo to run an agent here.` : inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? 'The agent finished. Approve it with a done note, or send it back with what to change.' : actions.has('run') ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : runBlocked || 'Nothing to do here right now.'}</p>
+        {actions.has('run') && <Button icon="play" variant={task.status === 'in_review' || startOffered ? 'secondary' : 'primary'} disabled={busy || !!runBlocked} title={runBlocked} onClick={() => void mutate(() => hive.tasks.start({ id: task.id }), `Started ${task.identifier}`)}>Run now</Button>}
         {actions.has('openSession') && <Button icon="terminal" disabled={busy || !!runBlocked} title={runBlocked} onClick={() => openSession(false)}>Open as session</Button>}
         {actions.has('takeover') && <Button icon="terminal" disabled={busy} onClick={() => openSession(true)}>Take over</Button>}
         {actions.has('stop') && <Button icon="stop" disabled={busy} onClick={() => void mutate(() => hive.tasks.stop({ id: task.id }), `Stopped ${task.identifier}`)}>Stop</Button>}
@@ -153,7 +169,7 @@ export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect
       </section>
 
       {task.report && <section className="board-section"><h3>Report <span className="board-muted">· {task.report.outcome === 'review' ? 'ready for review' : 'blocked'} · <RelativeTime iso={task.report.at} /></span></h3>
-        <p className="selectable board-report">{task.report.summary}</p>
+        <TextWithDiagrams text={task.report.summary} renderText={(t) => <p className="selectable board-report">{t}</p>} />
         {(task.report.evidence ?? []).length > 0 && <ul className="board-evidence">{(task.report.evidence ?? []).map((e, i) => <li key={i} className="selectable">{/^https?:\/\//.test(e) ? <button className="link-btn" onClick={() => void hive.app.openExternal({ url: e }).catch(() => undefined)}>{e}</button> : e}</li>)}</ul>}
       </section>}
 
@@ -169,7 +185,7 @@ export function TaskInspector({ id, tasks, companies, onClose, onSaved, onSelect
         <form onSubmit={(e) => { e.preventDefault(); if (comment.trim()) void mutate(async () => { await hive.tasks.comment({ id: task.id, message: comment.trim() }); setComment('') }) }}><textarea aria-label="Add task comment" placeholder={inFlight ? 'Add a note; the agent sees it on its next turn…' : 'Add a note or decision…'} value={comment} onChange={(e) => setComment(e.target.value)} rows={3} maxLength={8000} /><Button type="submit" disabled={busy || !comment.trim()}>Add comment</Button></form>
       </section>
     </div>
-    {editing && <TaskEditor board task={task} companies={companies} tasks={tasks} defaultCompanyId={task.companyId} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); onSaved() }} />}
+    {editing && <TaskEditor board trackerFields={!!linear} linkedKey={linear?.key ?? null} task={task} companies={companies} tasks={tasks} defaultCompanyId={task.companyId} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); onSaved() }} />}
   </aside>
 }
 

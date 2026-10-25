@@ -6,7 +6,7 @@ import { companyBadges, isMultiCompany, liveItems, taskCounts, type ActiveCompan
 import { laneContext } from './departments'
 
 export const STATUS_LABEL: Record<TaskStatus, string> = { triage: 'Triage', backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review', blocked: 'Blocked', done: 'Done', canceled: 'Canceled' }
-export const SOURCE_LABEL: Record<TaskSource, string> = { manual: 'Principia', github: 'GitHub', slack: 'Slack', sentry: 'Sentry', posthog: 'PostHog', agent: 'Agent', schedule: 'Schedule' }
+export const SOURCE_LABEL: Record<TaskSource, string> = { manual: 'Principia', github: 'GitHub', slack: 'Slack', sentry: 'Sentry', posthog: 'PostHog', agent: 'Agent', schedule: 'Schedule', linear: 'Linear' }
 export const PRIORITIES = ['No priority', 'Urgent', 'High', 'Normal', 'Low'] as const
 
 /**

@@ -81,6 +81,8 @@ export type ViewState =
   | { name: 'forum'; companyId?: Id; channelId?: Id; threadId?: Id; nonce?: number }
   /** CLOUD.md §13.1: the Principia Cloud pane */
   | { name: 'cloud' }
+  /** USAGE.md: tokens and cost per day, company, department and agent; disk and Clean Up… */
+  | { name: 'usage' }
   | { name: 'memory'; scope?: MemoryPageScope; runId?: Id; sessionId?: Id; entityId?: Id; search?: boolean; nonce?: number }
 
 /** Memory page scope picker: a repo, global rows only, or everything. Absent = the overview's default repo (PO8). */

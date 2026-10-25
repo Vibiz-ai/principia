@@ -35,7 +35,7 @@ type PtySize = { cols: number; rows: number }
 /** What the dispatcher needs from the session manager (h.sessions) for "Open as session" and "Take over" (§4.4). */
 export interface DispatcherSessions {
   /** `taskDepartmentId`: the task's department, so the pane's Passport block carries its slot (DEPARTMENTS.md §7) */
-  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null; task?: boolean; taskDepartmentId?: string | null }): Session
+  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null; task?: boolean; taskDepartmentId?: string | null; taskId?: string }): Session
   isLive(id: string): boolean
   kill(id: string): Promise<unknown>
 }
@@ -182,7 +182,7 @@ export class Dispatcher {
     return s.maxInFlight - this.inFlight(companyId)
   }
   private inFlight(companyId: string): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress'").get(companyId) as { n: number }).n
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL").get(companyId) as { n: number }).n
   }
   /** A Take over between its cancel and its session: the seat is the human's, not free for the next task. */
   private takingOver(agentId: string): boolean {
@@ -405,7 +405,7 @@ export class Dispatcher {
         const p = target as Extract<RunTarget, { kind: 'prompt' }>
         session = sessions.create({ companyId, profileId: p.profileId, repoId: p.repoId ?? null, cols: size.cols, rows: size.rows,
           title: clip(`${t.identifier} · ${t.title}`, 80), initialPrompt: p.prompt, resumeAgentSessionId: link.resumeSessionId,
-          task: true, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
+          task: true, taskId: t.id, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
         return leaseRun(session.id, 'queued', target, companyId)
       }, { actor: 'human' })
     } catch (err) {
@@ -632,6 +632,13 @@ export class HookedCompanyStore extends CompanyStore {
     this.fire(h => h.updated(prev, next))
     return this.task(next.id)
   }
+  /** LINEAR.md: a tracker's change routes and pumps like an edit */
+  override applyRemote(...args: Parameters<CompanyStore['applyRemote']>): BoardTask {
+    const prev = this.task(args[0])
+    const next = super.applyRemote(...args)
+    this.fire(h => h.updated(prev, next))
+    return this.task(next.id)
+  }
   override activity(...args: Parameters<CompanyStore['activity']>): ReturnType<CompanyStore['activity']> {
     const a = super.activity(...args)
     if (a.kind === 'comment') this.fire(h => h.commented(a.taskId, a.message, a.by))
@@ -646,6 +653,8 @@ export function taskRunBridge(o: {
   toolset: () => ((req: Parameters<NonNullable<TaskRunBridge['toolset']>>[0]) => TaskToolset | null) | null
   /** the redacted Passport block of a company, with a department slot (hive.passportContext) */
   passport?: (companyId: string, departmentId: string | null) => string | null
+  /** WORKTREE.md: the Started task's worktree (taskWork.ts) */
+  workdir?: TaskRunBridge['workdir']
 }): TaskRunBridge {
   return {
     companyOf: taskId => { try { return o.company().task(taskId).companyId } catch { return null } },
@@ -659,6 +668,7 @@ export function taskRunBridge(o: {
       if (t.runId === e.runId && t.status === 'in_progress') c.patchInFlight(t.id, { agentSessionId: e.agentSessionId })
     },
     timeLimit: e => o.company().expectStop(e.taskId, 'limit'),
+    ...(o.workdir ? { workdir: o.workdir } : {}),
     ...(o.passport ? {
       passportContext: (e: { taskId: string; companyId: string }) => {
         let departmentId: string | null = null

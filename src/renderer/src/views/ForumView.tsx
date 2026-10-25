@@ -16,6 +16,7 @@ import { Composer, type ComposerHandle } from '../components/forum/Composer'
 import { DecideSheet, EditSheet, InviteSheet, NewChannelSheet, ProposeSheet } from '../components/forum/Sheets'
 import { ForumMosaic } from '../components/forum/ForumMosaic'
 import { groupMessages, parseSlash, presenceLine, sortChannels } from '../lib/forum'
+import { forumVisualizeAsk } from '@shared/diagram'
 import { confirmNative, hive, nativeMenu } from '../lib/hive'
 import { initForumEvents, loadChannel, loadForum, loadThread, markRead, post, setViewing, useForum } from '../state/forum'
 import { activeCompany, attempt, departmentsOn, enterCompany, navigate, openBoard, toast, useStore } from '../state/store'
@@ -258,6 +259,12 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
           if (!m) return false
           ctx.toTask(m)
           return true
+        }
+        case 'visualize': {
+          // DIAGRAMS.md §6: the ask goes out as a normal message, so the agent answers in the thread with a diagram
+          const text = forumVisualizeAsk(cmd.handles, cmd.what)
+          if (!text) return (toast('Usage: /visualize @agent what to draw'), false)
+          return !!(await attempt(() => post({ companyId, channelId: channel.id, text }), 'Visualize'))
         }
         case 'unknown':
           toast(`Unknown command /${cmd.name}`)

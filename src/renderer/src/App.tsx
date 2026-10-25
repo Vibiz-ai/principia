@@ -6,6 +6,7 @@ import { LogoPickerSheet } from './components/LogoPicker'
 import { ChatCompanyCardHost } from './components/ChatCompanyCard'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
+import { DiagramOverlays } from './components/diagrams/DiagramOverlays'
 import { Sidebar } from './shell/Sidebar'
 import { StatusBar } from './shell/StatusBar'
 import { activeCompany, boot, departmentsOn, multiCompany, useStore, type ViewState } from './state/store'
@@ -40,6 +41,7 @@ import { CloudView } from './views/CloudView'
 import { WorkflowEditor } from './views/WorkflowEditor'
 import { MarketplaceView } from './views/MarketplaceView'
 import { WorkflowsView } from './views/WorkflowsView'
+import { UsageView } from './views/UsageView'
 
 type PassportViewState = Extract<ViewState, { name: 'passport' }>
 /**
@@ -71,6 +73,7 @@ const TITLES: Record<ViewState['name'], string> = {
   slack: 'Slack',
   forum: 'Forum',
   cloud: 'Cloud',
+  usage: 'Usage',
   department: 'Department',
   agentSeat: 'Agent'
 }
@@ -133,6 +136,7 @@ export function App(): React.JSX.Element {
       <CommandPalette />
       <RunInputsSheet />
       <SiblingOffer />
+      <DiagramOverlays />
       <Toasts />
       {/* VOICE.md §7: one toast per company per newly earned milestone (mounted once, outside the first-run flow) */}
       <MilestoneWatcher />
@@ -196,6 +200,8 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       return <SlackView channelId={view.channelId} threadTs={view.threadTs} search={view.search} nonce={view.nonce} />
     case 'cloud':
       return <CloudView />
+    case 'usage':
+      return <UsageView />
     case 'forum':
       return <ForumView companyId={view.companyId} channelId={view.channelId} threadId={view.threadId} nonce={view.nonce} />
   }

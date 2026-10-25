@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import * as pty from 'node-pty'
 import { Reaper, StallMonitor, createEngine, stallThresholdMs } from './engine'
 import { applyUserDataOverride, resolvePaths } from './paths'
+import { installVisualizeSkill } from './diagrams/visualizeSkill'
 import { baseChildEnv, resolveLoginEnv } from './loginEnv'
 import { openDatabase } from './db'
 import { Store } from './db/store'
@@ -36,6 +37,8 @@ import { SessionLiveHub } from './live/sessionLive'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
+import { wireTaskWork } from './company/taskWorkWire'
+import { wireLinearSync } from './company/sync/wire'
 import { SlackService } from './connectors/slack/service'
 
 applyUserDataOverride()
@@ -148,6 +151,7 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.themeSource = 'dark'
     const paths = resolvePaths()
     initLog(paths.mainLog)
+    installVisualizeSkill(paths.userData) // DIAGRAMS.md §6: /visualize in the Claude chats Principia starts
     log.info('Hive starting', { version: app.getVersion(), userData: paths.userData, packaged: app.isPackaged })
     const envState = await resolveLoginEnv()
     if (!envState.ok) log.warn('login shell env resolution failed; using fallback PATH', { shell: envState.shell })
@@ -259,6 +263,12 @@ if (!app.requestSingleInstanceLock()) {
       h.dashboards = wireDashboards(h, cipher)
     } catch (e) {
       log.error('dashboards unavailable', { e: String(e) })
+    }
+    // LINEAR.md: optional Linear sync (no connected company = no request); failure = no sync, Principia runs
+    try {
+      h.linear = wireLinearSync(h, cipher)
+    } catch (e) {
+      log.error('linear sync unavailable', { e: String(e) })
     }
     // SLACK.md §2.3: the Slack connector (no tokens = zero outbound requests). The dev-only fake transport exists only
     // in a build made with HIVE_BUILD_FAKE_SLACK=1 (the define removes this branch from every normal build).
@@ -417,6 +427,8 @@ if (!app.requestSingleInstanceLock()) {
         h.clearUnseen()
         // PO9: Claude history refreshes on window focus (stat pass + lazy queue), never on a timer
         h.safe(() => h.history?.refresh(), undefined)
+        // WORKTREE.md: worktrees and open PRs are checked on focus too (at most every 10 s)
+        h.safe(() => void h.taskWork?.focus().catch(() => undefined), undefined)
       },
       sendCommand: (cmd) => emit('ui:command', cmd),
       onReadyToShow: process.env.HIVE_SMOKE === '1' ? runSmoke : undefined
@@ -429,6 +441,8 @@ if (!app.requestSingleInstanceLock()) {
       const w = h.windows.get()
       return !!w && wc.id === w.webContents.id
     })
+    // WORKTREE.md: a code task's own worktree, branch and PR (failure = no Start, Principia runs)
+    h.taskWork = h.safe(() => wireTaskWork(h), null)
     registerAllHandlers(h)
     // DEPARTMENTS.md §3: the board dispatcher starts after registerCompanyHandlers ran CompanyStore.reconcile()
     try {
@@ -436,6 +450,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('dispatcher start failed', { e: String(e) })
     }
+    h.safe(() => h.taskWork?.start(), undefined)
 
     // artifacts indexer
     h.indexer = new ArtifactIndexer(

@@ -1,0 +1,30 @@
+/* LINEAR.md §6: the connect sheet, the issue chip and the key banner. Greys only; red only for the turned-down key. */
+.linear-sheet { display: flex; flex-direction: column; gap: 14px; }
+.linear-step { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
+.linear-step.is-off { opacity: 0.45; }
+.linear-step__n { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border-strong); color: var(--text-secondary); font-size: var(--text-xs); display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; }
+.linear-key-row { display: flex; gap: 8px; align-items: center; }
+.linear-key-row input { flex: 1; font-family: var(--font-mono); }
+.linear-muted { color: var(--text-tertiary); font-weight: var(--weight-regular); }
+.linear-teams { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.linear-team { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; color: var(--text-secondary); }
+.linear-team input { position: absolute; opacity: 0; pointer-events: none; }
+.linear-team.is-on { border-color: var(--text-secondary); color: var(--text-primary); background: var(--surface-2); }
+.linear-team__key { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-tertiary); min-width: 34px; }
+.linear-team > svg { margin-left: auto; }
+.linear-toggles { display: flex; flex-direction: column; gap: 10px; }
+.linear-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.linear-toggle > span { display: flex; flex-direction: column; gap: 2px; }
+.linear-toggle strong { font-weight: var(--weight-medium); color: var(--text-primary); }
+.linear-toggle small { color: var(--text-tertiary); font-size: var(--text-xs); }
+
+.linear-chip { display: inline-flex; align-items: center; flex: none; font-family: var(--font-mono); font-size: 10px; line-height: 1; color: var(--text-tertiary); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 2px 4px; cursor: pointer; white-space: nowrap; }
+.linear-chip:hover, .linear-chip:focus-visible { color: var(--text-primary); border-color: var(--border-strong); outline: none; }
+
+.linear-banner { display: flex; align-items: center; gap: 10px; margin: 10px 16px; padding: 8px 12px; border: 1px solid var(--status-failed-soft); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-primary); font-size: var(--text-sm); }
+.linear-banner__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status-failed); flex: none; }
+
+.cs-integration { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.cs-integration__name { font-weight: var(--weight-medium); color: var(--text-primary); }
+.cs-integration__state { color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linear-warn { display: block; margin-top: 6px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--text-secondary); font-size: var(--text-xs); }

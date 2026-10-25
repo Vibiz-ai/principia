@@ -11,6 +11,7 @@ import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from 
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
 import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
 import { AGENT_STATUSES } from '../shared/live'
+import { USAGE_RANGES } from '../shared/usage'
 import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
 import { BRIEF_MAX, GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
@@ -422,7 +423,7 @@ const memoryMutation = z.union([
  * DEPARTMENTS.md §1.3 fields only main writes (run outcome, wake guard, routing, done note). The renderer changes them
  * through the dedicated task channels (assign, answer, approve, sendBack, unpark), never through create/update.
  */
-const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true } as const
+const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true } as const
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
@@ -564,6 +565,13 @@ export const REQUEST_SCHEMAS = {
   'tasks:takeover': z.object({ id, ...ptySize }).strict(),
   'tasks:stop': z.object({ id }).strict(),
   'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional() }).strict(),
+  // WORKTREE.md
+  'taskWork:start': z.object({ id, profileId: id.optional() }).strict(),
+  'taskWork:merge': z.object({ id }).strict(),
+  'taskWork:remove': z.object({ id }).strict(),
+  'taskWork:resolveGone': z.object({ id, choice: z.enum(['cancel', 'backlog', 'keep']) }).strict(),
+  'taskWork:refresh': optObj({}),
+  'taskWork:openEditor': z.object({ id }).strict(),
   // FORUM.md §9 (bounds mirror FORUM_LIMITS; the store re-checks every rule)
   'forum:state': z.object({ companyId: id }).strict(),
   'forum:messages': z.object({ companyId: id, channelId: id, beforeSeq: z.number().int().min(1).optional(), limit: z.number().int().min(1).max(200).optional() }).strict(),
@@ -618,6 +626,13 @@ export const REQUEST_SCHEMAS = {
   'dashboards:refresh': z.object({ id }).strict(),
   'dashboards:remove': z.object({ id }).strict(),
   'dashboards:sample': z.object({ kind: dashboardKind }).strict(),
+  // LINEAR.md §6
+  'linear:status': z.object({ companyId: id }).strict(),
+  'linear:checkKey': z.object({ companyId: id, key: z.string().max(500).optional() }).strict(),
+  'linear:connect': z.object({ companyId: id, key: z.string().max(500).optional(), teamId: z.string().min(1).max(100), autosync: z.boolean(), sendOpen: z.boolean() }).strict(),
+  'linear:sync': z.object({ companyId: id }).strict(),
+  'linear:setAutosync': z.object({ companyId: id, on: z.boolean() }).strict(),
+  'linear:disconnect': z.object({ companyId: id }).strict(),
   'runs:start': z.object({ target: runTarget, companyId }),
   'runs:list': optObj({
     companyId,
@@ -909,6 +924,13 @@ export const REQUEST_SCHEMAS = {
   'onboarding:skipStep': z.object({ journalId: obHandle, step: z.enum(SOFT_LAUNCH_STEPS) }).strict(),
   'onboarding:discard': z.object({ journalId: obHandle }).strict(),
   'onboarding:start': z.object({ journalId: obHandle, autopilot: z.boolean(), scheduleRefs: z.array(obRef).max(8) }).strict(),
+  // USAGE.md
+  'usage:summary': z.object({ range: z.enum(USAGE_RANGES), companyId }),
+  'usage:disk': optObj({ fresh: z.boolean().optional() }),
+  'usage:cleanupList': none,
+  'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
+  'activity:open': none,
+  'activity:close': none,
   // CLOUD.md §13.1: the cloud:* channels
   ...CLOUD_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>

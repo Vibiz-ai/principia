@@ -1333,8 +1333,16 @@ export class Execution {
     if (t.kind !== 'prompt') return
     const profile = this.ctx.getProfile(t.profileId)!
     let cwd: string
+    let extraEnv: Record<string, string> | undefined
     try {
-      cwd = this.resolveCwd(t.repoId, null)
+      // WORKTREE.md: a Started task's turns run in its own worktree (never the founder's checkout)
+      const wd = this.task ? await this.ctx.company?.tasks?.workdir?.({ taskId: this.task.taskId, runId: this.run.id }) : null
+      if (wd) {
+        if (!isDir(wd.cwd)) throw new StepError(`The task's worktree is gone: ${wd.cwd}`)
+        this.checkCompany({ cwd: wd.cwd })
+        cwd = wd.cwd
+        extraEnv = wd.env
+      } else cwd = this.resolveCwd(t.repoId, null)
     } catch (e) {
       return void (await this.fail(e instanceof Error ? e.message : String(e)))
     }
@@ -1357,7 +1365,8 @@ export class Execution {
       // read-only global, see MemoryService.grant). An explicit 'off' is kept.
       memory: isMemoryMode(t.memory) ? t.memory : 'read-write',
       briefQuery: prompt,
-      nodeLabel: 'Prompt'
+      nodeLabel: 'Prompt',
+      ...(extraEnv ? { extraEnv } : {})
     })
     if (o.status === 'failed') await this.fail(o.error ?? 'Step failed')
   }

@@ -29,12 +29,15 @@ import {
 } from './live/attach'
 import { claudeInitialize, claudeUserMessage } from './live/claudeControl'
 import { uuid } from './util'
+import { DIAGRAM_HINT } from '../diagrams/prompt'
+import { visualizeSkillArgs } from '../diagrams/visualizeSkill'
 
 export const artifactsHint = (artifactsDir: string, keyNames: string[] = []): string =>
   `Save files you create for the user (images, video, audio, html, pdf, reports) in $ARTIFACTS_DIR (${artifactsDir}).` +
   (keyNames.length
     ? `\nAPI keys from Hive › Keys are already set as environment variables: ${keyNames.join(', ')}. Use them as $NAME in commands and scripts; never print their values or look for them anywhere else.`
-    : '')
+    : '') +
+  `\n${DIAGRAM_HINT}`
 
 /** Appended to the headless claude system prompt when hivemem's ask_user is attached (LIVE.md §4.2). */
 export const ASK_USER_HINT =
@@ -310,6 +313,7 @@ export const claudeAdapter: Adapter = {
         ...(req.mcpArgs ?? []),
         // variadic, like --mcp-config: always followed by --resume / --session-id
         ...addDirArgs(req.addDirs, 'many'),
+        ...visualizeSkillArgs(),
         ...(req.resumeId ? ['--resume', id] : ['--session-id', id]),
         // the positional first message sits right after a single-value flag, never after a variadic one
         ...(req.initialPrompt?.trim() ? [positional(req.initialPrompt)] : []),

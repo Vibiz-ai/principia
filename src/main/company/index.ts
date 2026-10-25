@@ -16,6 +16,8 @@ export { buildPassportContext, CompanyScope } from './scope'
 export type { CompanyRef, Located, PassportContextOptions, PassportRenderer, ResolveQuery, Resolved, SameCompanyRefs } from './scope'
 export { assertTransition, transitionError, TRANSITIONS, type Actor, type TaskState, type TransitionCtx } from './taskState'
 /** What startTask hands the engine besides the target (§4.3): the run's task and seat, its cwd and a Claude resume id. */
+/** LINEAR.md: the tracker issue behind a task, as agents and the Board see it. */
+export interface ExternalTaskLink { provider: 'linear'; key: string; url: string }
 export interface TaskRunLink {
   taskId: string
   agentId: string | null
@@ -49,6 +51,10 @@ export class CompanyStore {
   private readonly stopReasons = new Map<string, 'limit'|'interrupted'|'handoff_cap'>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
   private readonly runLinks: boolean
+  /** LINEAR.md: told after every task write (sync schedules a push); never fails the write */
+  private readonly writeListeners = new Set<(task: BoardTask) => void>()
+  /** LINEAR.md: the tracker issue a task is linked to (plugged in by the sync service) */
+  private externalLink: (taskId: string) => ExternalTaskLink | null = ()=>null
   constructor(readonly store: Store, opts: { companiesRoot?: string | null } = {}) {
     this.scope = new CompanyScope(store, opts.companiesRoot !== undefined ? opts.companiesRoot : defaultCompaniesRoot(store))
     store.db.exec(`CREATE TABLE IF NOT EXISTS company_passports (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -358,9 +364,10 @@ export class CompanyStore {
     t.status='blocked';t.blockReason='deps'
     return this.parkOnCanceledDep(t) ?? 'Waiting for its dependencies'
   }
-  createTask(input: CompanyTaskInput): BoardTask {
+  /** `opts.external`: an issue a tracker brought over (LINEAR.md), which may already be in progress there. */
+  createTask(input: CompanyTaskInput, opts: { external?: boolean } = {}): BoardTask {
     input=taskInputSchema.parse(input)
-    if(input.status==='in_progress') fail('Use Run agent to start work, or create the task in To do')
+    if(input.status==='in_progress'&&!opts.external) fail('Use Run agent to start work, or create the task in To do')
     // §0.7: an agent never marks a task done, not even one it creates
     if(input.source==='agent'&&input.status==='done') fail('An agent cannot create a task as done')
     return this.store.db.transaction(()=> {
@@ -372,7 +379,7 @@ export class CompanyStore {
       if(task.status!=='blocked') task.blockReason=null
       else if(!task.blockReason) task.blockReason=this.boardOn()&&task.dependencyIds.length&&!this.depsDone(task)?'deps':'manual'
       const locked=this.lockDeps(task) ?? this.parkOnCanceledDep(task)
-      this.writeTask(task);this.activity(id,'created',`Created from ${input.source}`,input.source==='agent'?'agent':input.source==='manual'?'human':'system')
+      this.writeTask(task);this.activity(id,'created',`Created from ${input.source==='linear'?'Linear':input.source}`,input.source==='agent'?'agent':input.source==='manual'?'human':'system')
       if(locked) this.activity(id,'parked',locked)
       return task
     })()
@@ -381,6 +388,7 @@ export class CompanyStore {
   private writeTask(task: CompanyTask): void {
     this.store.db.prepare('UPDATE company_tasks SET company_id=?,source_key=?,run_id=?,status=?,department_id=?,agent_id=?,data=? WHERE id=?')
       .run(task.companyId,this.sourceKey(task),task.runId,task.status,task.departmentId??null,task.agentId??null,JSON.stringify(task),task.id)
+    for(const fn of this.writeListeners) { try { fn(task as BoardTask) } catch { /* a listener never fails a write */ } }
   }
   updateTask(id:string, patch:Partial<CompanyTaskInput>): BoardTask {
     return this.store.db.transaction(()=> {
@@ -393,8 +401,11 @@ export class CompanyStore {
    * free status edits. Either way: no edits in flight, the company never changes, and blocked always has a reason.
    */
   private applyUpdate(old:BoardTask,input:CompanyTaskInput): BoardTask {
-    assertEditable(old,input)
-    if(input.status==='in_progress') fail('Use Run agent to start this task')
+    // LINEAR.md §3: in progress in a tracker, with no run of ours, stays editable and leaves by any status move
+    const elsewhere=this.startedElsewhere(old)
+    if(!elsewhere) assertEditable(old,input)
+    else if(input.companyId!==old.companyId) fail('Company cannot change after task creation; create a new task in the correct company')
+    if(input.status==='in_progress'&&!(elsewhere&&old.status==='in_progress')) fail('Use Run agent to start this task')
     this.validate(input,old.id,old)
     const next=withTaskDefaults({...old,...input,dependencyIds:[...new Set(input.dependencyIds)],updatedAt:new Date().toISOString()}) as BoardTask
     const statusChanged=old.status!==next.status
@@ -403,7 +414,7 @@ export class CompanyStore {
     else if(!next.blockReason) next.blockReason=old.blockReason??'manual'
     const board=!!(old.departmentId||old.agentId||next.departmentId||next.agentId)
     const depsDone=this.depsDone(next)
-    if(board&&(statusChanged||old.blockReason!==next.blockReason)) assertTransition(old,next,'human',{routed:!!(next.departmentId||next.agentId),depsDone,doneNote:next.doneNote})
+    if(board&&!elsewhere&&(statusChanged||old.blockReason!==next.blockReason)) assertTransition(old,next,'human',{routed:!!(next.departmentId||next.agentId),depsDone,doneNote:next.doneNote})
     if(statusChanged&&next.status!=='done'&&old.status==='done') next.doneNote=null
     // a new seat or profile never resumes the previous one's provider conversation
     if((next.agentId??null)!==(old.agentId??null)||(next.assigneeProfileId??null)!==(old.assigneeProfileId??null)) next.agentSessionId=null
@@ -417,6 +428,45 @@ export class CompanyStore {
     if(next.status==='done'&&statusChanged&&this.boardOn()) this.heal(next.companyId)
     if(next.status==='canceled'&&statusChanged) this.parkDependents(next)
     return next
+  }
+
+  // ---------- LINEAR.md: hooks for tracker sync (src/main/company/sync) ----------
+
+  onTaskWrite(fn: (task: BoardTask) => void): () => void { this.writeListeners.add(fn); return ()=>{ this.writeListeners.delete(fn) } }
+  setExternalLinks(fn: ((taskId: string) => ExternalTaskLink | null) | null): void { this.externalLink = fn ?? (()=>null) }
+  externalOf(taskId: string): ExternalTaskLink | null { try { return this.externalLink(taskId) } catch { return null } }
+  /** In progress in a linked tracker, with no run or session of ours holding it. */
+  startedElsewhere(t: BoardTask): boolean { return t.status==='in_progress'&&!t.runId&&!!this.externalOf(t.id) }
+  /** A task made from a tracker issue. A source link seen before returns that task (existed). */
+  createFromRemote(input: CompanyTaskInput): { task: BoardTask; existed: boolean } {
+    const key=this.sourceKey(input)
+    const found=key ? this.store.db.prepare('SELECT data FROM company_tasks WHERE company_id=? AND source_key=?').get(input.companyId,key) as {data:string}|undefined : undefined
+    if(found) return {task:readTask(found.data),existed:true}
+    return {task:this.createTask(input,{external:true}),existed:false}
+  }
+  /**
+   * Writes a tracker's values on a task (LINEAR.md §3). The tracker is neither a human nor an agent, so the §1.4 moves
+   * do not apply; the values are still validated (schema, parent cycles, dependencies before done).
+   */
+  applyRemote(id: string, patch: Partial<Pick<BoardTask,'title'|'description'|'status'|'priority'|'labels'|'estimate'|'dueDate'|'parentId'|'doneNote'>>, message: string): BoardTask {
+    return this.store.db.transaction(()=> {
+      const old=this.task(id)
+      const merged={...old,...patch}
+      const {id:_id,identifier:_identifier,runId:_runId,createdAt:_createdAt,updatedAt:_updatedAt,...fields}=merged
+      const input=taskInputSchema.parse(fields)
+      this.validate(input,old.id,old)
+      const next=withTaskDefaults({...old,...input,updatedAt:new Date().toISOString()}) as BoardTask
+      const statusChanged=old.status!==next.status
+      if(next.status!=='blocked') next.blockReason=null
+      if(statusChanged&&old.status==='done'&&next.status!=='done') next.doneNote=null
+      // started in the tracker: an earlier, finished run of ours no longer holds the task
+      if(statusChanged&&next.status==='in_progress') next.runId=null
+      this.writeTask(next)
+      this.activity(id,'updated',message,'system')
+      if(statusChanged&&next.status==='done'&&this.boardOn()) this.heal(next.companyId)
+      if(statusChanged&&next.status==='canceled') this.parkDependents(next)
+      return next
+    })()
   }
 
   // ---------- DEPARTMENTS.md §1.4, §4, §5: the board ----------
@@ -674,18 +724,20 @@ export class CompanyStore {
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
    * autopilot gate. One in-flight task per agent.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system'}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested'}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
+      if(this.startedElsewhere(task)) fail(`${this.externalLink(task.id)?.key ?? 'This task'} is in progress in Linear. Move it to Todo to run an agent here.`)
       if(task.status==='in_progress'||(task.runId&&['queued','running'].includes(this.store.getRun(task.runId)?.status??''))) fail('An agent already owns this task')
       if(['done','canceled'].includes(task.status)) fail('Reopen this task before starting an agent')
       if(!this.depsDone(task)) fail('Complete dependencies before starting this task')
       if(task.status==='blocked'&&task.blockReason==='deps') task=this.healOne(task)
-      assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true})
+      // WORKTREE.md: a review asking for changes on the task's own PR restarts it (the founder's Start authorized the loop)
+      assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true,...(opts.work ? {work:opts.work} : {})})
       this.validate(task,task.id,task)
       const agent=task.agentId ? this.departments.agent(task.agentId) : null
-      if(actor==='system') this.assertAutoStart(task,agent)
+      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent)
       if(agent) {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
@@ -737,8 +789,8 @@ export class CompanyStore {
     if(company.archivedAt) fail(`${company.name} is archived`)
     const settings=this.boardSettings(task.companyId)
     if(!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
-    // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot
-    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
+    // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot; LINEAR.md: nor does a task started in a tracker (no run of ours)
+    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
     if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
@@ -753,7 +805,7 @@ export class CompanyStore {
       const a=t.agentId ? this.departments.getAgent(t.agentId) : null;const d=t.departmentId ? this.departments.get(t.departmentId) : null
       return {identifier:t.identifier,title:t.title,agent:a ? a.name : trackedBy(t) ? 'a chat' : null,department:d?.name ?? null}
     })
-    return buildTaskPrompt({task,companyId:task.companyId,department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running})
+    return buildTaskPrompt({task,companyId:task.companyId,external:this.externalLink(task.id),department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running})
   }
   /**
    * Run end (§1.4, §4.5): ask → blocked(needs_input); report blocked → blocked(agent); report review, or passed with no
@@ -778,7 +830,7 @@ export class CompanyStore {
   /** Called once at startup, after engine recovery and before accepting requests. Interrupted tasks are never rerun. */
   reconcile(): void {
     for(const t of this.listTasks()) {
-      if(t.status!=='in_progress') continue
+      if(t.status!=='in_progress'||this.startedElsewhere(t)) continue
       const r=t.runId ? this.store.getRun(t.runId) : null
       if(r && ['passed','failed','canceled'].includes(r.status)) this.syncRun(r)
       else this.park(t.id,'interrupted',`Previous execution${t.runId ? ` ${t.runId}`:''} was interrupted. Review and retry explicitly.`)

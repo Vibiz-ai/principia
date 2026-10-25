@@ -155,7 +155,7 @@ export const Composer = forwardRef<ComposerHandle, {
             /
           </button>
         )}
-        <span className="fm-composer__hint">{footer ?? (compact ? '' : '/invite · /ask · /propose · /task')}</span>
+        <span className="fm-composer__hint">{footer ?? (compact ? '' : '/invite · /ask · /propose · /task · /visualize')}</span>
         <button className="fm-composer__send" disabled={!text.trim() || sending || archived} onClick={() => void send()} title="Send (↵)" aria-label="Send">
           <Icon name="play" size={12} />
         </button>

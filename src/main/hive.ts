@@ -110,6 +110,8 @@ export class Hive {
   /** shared/chatCompany.ts: the "start a company from this chat" cards (author/wire.ts). */
   chatProposals: import('./company/chatProposals').ChatProposals | null = null
   worktrees: WorktreeManager | null = null
+  /** WORKTREE.md: a task's own worktree, branch and PR (company/taskWork.ts; null until wired) */
+  taskWork: import('./company/taskWork').TaskWorkService | null = null
   notifyNode: NotifyNode | null = null
   history: ClaudeHistory | null = null
   /** SLACK.md: the Slack connector service (null until wired / on failure). */
@@ -119,6 +121,8 @@ export class Hive {
   forum: ForumService | null = null
   /** DASHBOARDS.md: department dashboards (null until wired / on failure). */
   dashboards: DashboardService | null = null
+  /** LINEAR.md: optional Linear sync per company (null until wired / on failure). */
+  linear: import('./company/sync/service').LinearSyncService | null = null
   private cloudWiring: CloudWiring | null = null
   /** CLOUD.md §4.1: this Mac's link to a Principia Cloud workspace (built on first use; idle until paired). */
   get cloud(): CloudWiring {
@@ -170,7 +174,8 @@ export class Hive {
         company: () => this.company,
         dispatcher: () => this.dispatcher,
         toolset: () => this.taskToolset,
-        passport: (companyId, departmentId) => this.passportContext('', companyId, departmentId)
+        passport: (companyId, departmentId) => this.passportContext('', companyId, departmentId),
+        workdir: (e) => this.taskWork?.workdir(e.taskId) ?? Promise.resolve(null)
       }),
       // §8: task-mode schedules and Slack triggers comment on their card and wake through the dispatcher (queued until it exists)
       boards: recurringBoards({
@@ -196,7 +201,11 @@ export class Hive {
       cancelRun: (id) => this.engine.runs.cancel(id),
       enabled: () => departmentsEnabled(this.settings().experimental),
       sessions: {
-        create: (req) => this.sessions.create(req),
+        // WORKTREE.md: a Started task opens as a session in its own worktree, never the founder's checkout
+        create: ({ taskId, ...req }) => {
+          const cwd = taskId ? this.taskWork?.sessionCwd(taskId) : null
+          return this.sessions.create(cwd ? { ...req, repoId: null, cwd } : req)
+        },
         isLive: (id) => this.sessions.isLive(id),
         kill: (id) => this.sessions.kill(id)
       },
@@ -844,6 +853,7 @@ export class Hive {
     this.windows.quitting = true
     // DEPARTMENTS.md §3: before the engine cancels its runs, so their run ends start nothing new during the quit
     this.dispatcher?.dispose()
+    this.taskWork?.dispose()
     const timeout = new Promise<void>((r) => setTimeout(r, 6000))
     await Promise.race([
       Promise.all([

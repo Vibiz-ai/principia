@@ -7,10 +7,12 @@ import { TaskPriority, TaskSourceBadge, TaskStatusIcon } from '../components/Tas
 import { TaskCard } from '../components/board/TaskCard'
 import { TaskEditor } from '../components/board/TaskEditor'
 import { TaskInspector } from '../components/board/TaskInspector'
+import { LinearBanner, LinearSheet } from '../components/board/LinearSheet'
+import { linearLine, startedInLinear, useLinear } from '../lib/linear'
 import { PRIORITIES, SOURCE_LABEL, STATUS_LABEL, useCompanyData } from '../lib/company'
 import { BOARD_LANES, TASK_DRAG_TYPE, agentDrop, autopilotToggle, dropSeats, filterTasks, keptDepartmentFilter, laneColumns, laneDrop, laneText, swimlanes, type AutopilotView, type DropAction, type DropResult } from '../lib/board'
 import { departmentsOf, laneContext, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
-import { errorMessage, hive, useHiveEvent } from '../lib/hive'
+import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { relative } from '../lib/time'
 import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, saveJson, toast, useStore } from '../state/store'
 import { CompanyChip, useScope } from '../components/CompanyChip'
@@ -61,6 +63,10 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const [selected, setSelected] = useState<string | null>(linked?.taskId ?? null)
   const [creating, setCreating] = useState(false)
   const [dragOver, setDragOver] = useState<string | null>(null)
+  // LINEAR.md §6: out of sight until wanted (the ⋯ menu); a connected company's cards carry their issue chip
+  const linear = useLinear(company?.id ?? null)
+  const [linearSheet, setLinearSheet] = useState(false)
+  const links = linear.status?.connected ? linear.status.links : null
   // a card or department picked elsewhere (sidebar, Needs you, Home, hub) arrives through the view
   useEffect(() => {
     if (embedded || view.name !== 'tasks') return
@@ -107,7 +113,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const card = (t: CompanyTask): React.JSX.Element => {
     const agent = t.agentId ? agentById.get(t.agentId) : undefined
     const depId = taskDepartment(t, ctx)
-    return <TaskCard key={t.id} task={t} agent={agent} department={depId ? depById.get(depId) : null} reason={taskReason(t, ctx)} chips={chips && !companyId} selected={selected === t.id} onOpen={open} />
+    return <TaskCard key={t.id} task={t} agent={agent} department={depId ? depById.get(depId) : null} reason={taskReason(t, ctx)} chips={chips && !companyId} selected={selected === t.id} linear={links?.[t.id] ?? null} onOpen={open} />
   }
   const column = (lane: TaskLane, list: CompanyTask[], key: string): React.JSX.Element => {
     const shown = lane === 'done' ? list.slice(0, DONE_SHOWN) : list
@@ -117,7 +123,8 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     </section>
   }
 
-  const counts = useMemo(() => { const c = laneColumns(filtered, ctx); return { working: c.working.length, needs: c.needs_you.length } }, [filtered, ctx])
+  // a task in progress only in Linear is not an agent working here
+  const counts = useMemo(() => { const c = laneColumns(filtered, ctx); return { working: c.working.filter((t) => !startedInLinear(t, links?.[t.id])).length, needs: c.needs_you.length } }, [filtered, ctx, links])
   // VOICE.md §3.7, §5.8: a board with no tasks at all (the company's, or the department's when embedded) gets the
   // amphora mosaic, one sentence and New task; a filter that hides everything keeps the empty columns
   const nothing = fixedDepartmentId ? !tasks.some((t) => taskDepartment(t, ctx) === fixedDepartmentId) : tasks.length === 0
@@ -140,20 +147,47 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     <div className="task-layout-toggle" role="group" aria-label="Board layout"><IconButton icon="grid" label="Kanban layout" aria-pressed={layout === 'kanban'} onClick={() => setLayout('kanban')} /><IconButton icon="list" label="List layout" aria-pressed={layout === 'list'} onClick={() => setLayout('list')} /></div>
   </div>
 
-  const editor = creating && <TaskEditor board companies={companies} tasks={tasks} defaultCompanyId={companyId ?? companies[0]?.id} defaultDepartmentId={depFilter} lockCompany={!!companyId} onClose={() => setCreating(false)} onSaved={(task) => { setCreating(false); if (embedded) openBoard(task.companyId, { taskId: task.id }); else { setSelected(task.id); setSearch('') } reload() }} />
+  const linearMenu = async (): Promise<void> => {
+    if (!company) return
+    const s = linear.status
+    const id = await nativeMenu(s?.connected
+      ? [
+          { id: 'line', label: `${linearLine(s)}${s.team ? ` · ${s.team.key}` : ''}`, enabled: false },
+          { id: 'sync', label: 'Sync Now', enabled: !s.syncing },
+          { id: 'autosync', label: 'Autosync', type: 'checkbox', checked: s.autosync, enabled: s.state !== 'auth' },
+          { type: 'separator' },
+          { id: 'reconnect', label: s.state === 'auth' ? 'Reconnect…' : 'Linear Settings…' },
+          { id: 'disconnect', label: 'Disconnect…' }
+        ]
+      : [{ id: 'connect', label: 'Sync with Linear…' }])
+    try {
+      if (id === 'connect' || id === 'reconnect') setLinearSheet(true)
+      else if (id === 'sync') { const r = await hive.linear.sync({ companyId: company.id }); toast(r.state === 'ok' ? `Synced with Linear · ${r.linkedCount} linked` : (r.message ?? 'Linear sync failed'), r.state === 'ok' ? 'info' : 'error'); reload() }
+      else if (id === 'autosync') { const r = await hive.linear.setAutosync({ companyId: company.id, on: !s?.autosync }); toast(r.autosync ? 'Autosync on' : 'Autosync off') }
+      else if (id === 'disconnect') {
+        const ok = await confirmNative({ message: `Disconnect ${company.name} from Linear?`, detail: 'Principia forgets the key and unlinks the tasks. The tasks stay here, and nothing changes in Linear.', confirmLabel: 'Disconnect' }).catch(() => false)
+        if (ok) { await hive.linear.disconnect({ companyId: company.id }); toast('Disconnected from Linear') }
+      }
+    } catch (e) { toast(errorMessage(e), 'error') }
+    linear.reload()
+  }
+  const editor = creating && <TaskEditor board trackerFields={!!links} companies={companies} tasks={tasks} defaultCompanyId={companyId ?? companies[0]?.id} defaultDepartmentId={depFilter} lockCompany={!!companyId} onClose={() => setCreating(false)} onSaved={(task) => { setCreating(false); if (embedded) openBoard(task.companyId, { taskId: task.id }); else { setSelected(task.id); setSearch('') } reload() }} />
   if (embedded) return <div className="board board--embedded">{!nothing && filterBar}{error && <div className="company-error" role="alert">{error}<Button size="sm" onClick={reload}>Retry</Button></div>}<div className="board-main">{body}</div>{editor}</div>
   return <div className="view company-view board">
     <Toolbar title="Board" sub={<span className="company-toolbar-meta">{counts.working} working · {counts.needs} {counts.needs === 1 ? 'needs' : 'need'} you</span>}>
       {company && <AutopilotSwitch key={company.id} company={company} />}
       <Button icon="plus" variant="primary" onClick={newTask}>{companies.length ? 'New task' : 'Create a company'}</Button>
+      {company && <IconButton icon="more" label="Board options" title={linear.status?.connected ? linearLine(linear.status) : 'Board options'} onClick={() => void linearMenu()} />}
     </Toolbar>
+    <LinearBanner status={linear.status} onReconnect={() => setLinearSheet(true)} />
     {filterBar}
     {error && <div className="company-error" role="alert">{error}<Button size="sm" onClick={reload}>Retry</Button></div>}
     <div className={`task-workspace ${selected ? 'has-detail' : ''}`}>
       <div className="task-main board-main">{body}</div>
-      {selected && <TaskInspector key={selected} id={selected} tasks={tasks} companies={companies} onClose={() => setSelected(null)} onSaved={reload} onSelect={setSelected} />}
+      {selected && <TaskInspector key={selected} id={selected} tasks={tasks} companies={companies} linear={links?.[selected] ?? null} onClose={() => setSelected(null)} onSaved={reload} onSelect={setSelected} />}
     </div>
     {editor}
+    {linearSheet && company && <LinearSheet companyId={company.id} companyName={company.name} status={linear.status} onClose={() => setLinearSheet(false)} onConnected={() => { linear.reload(); reload() }} />}
   </div>
 }
 

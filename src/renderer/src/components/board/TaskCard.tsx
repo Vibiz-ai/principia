@@ -4,6 +4,9 @@ import { TaskPriority } from '../TaskBits'
 import { CompanyChip } from '../CompanyChip'
 import { REASON_LABEL, TASK_DRAG_TYPE } from '../../lib/board'
 import { AgentBust, agentLabel, useAgentName } from '../../shell/DepartmentGroup'
+import { WorkCardBadge } from './TaskWork'
+import { LinearChip } from './LinearSheet'
+import { linearWorkLabel, startedInLinear } from '../../lib/linear'
 
 /**
  * DEPARTMENTS.md §9 kanban card: id, title, department colour bar, agent avatar, a lock for a dependency block and the
@@ -11,10 +14,12 @@ import { AgentBust, agentLabel, useAgentName } from '../../shell/DepartmentGroup
  * or the old initial and role label with personas off. Draggable onto a column or an agent avatar (the board decides what a drop means); a
  * running card does not drag at all.
  */
-export function TaskCard({ task, department, agent, reason, chips = false, selected = false, onOpen }: { task: CompanyTask; department?: Department | null; agent?: CompanyAgent | null; reason?: NeedsYouReason | null; chips?: boolean; selected?: boolean; onOpen: (t: CompanyTask) => void }): React.JSX.Element {
+export function TaskCard({ task, department, agent, reason, chips = false, selected = false, linear = null, onOpen }: { task: CompanyTask; department?: Department | null; agent?: CompanyAgent | null; reason?: NeedsYouReason | null; chips?: boolean; selected?: boolean; linear?: { key: string; url: string; status?: string } | null; onOpen: (t: CompanyTask) => void }): React.JSX.Element {
+  // LINEAR.md: in progress in Linear with no run here (someone there is on it)
+  const elsewhere = startedInLinear(task, linear)
   const locked = task.status === 'blocked' && task.blockReason === 'deps'
   const draggable = task.status !== 'in_progress'
-  const noReport = task.status === 'in_review' && !task.report
+  const noReport = task.status === 'in_review' && !task.report && !linear
   const who = useAgentName(agent)
   return <button
     type="button"
@@ -28,14 +33,16 @@ export function TaskCard({ task, department, agent, reason, chips = false, selec
     <span className="board-card__top">
       <TaskPriority priority={task.priority} />
       <span className="task-identifier">{task.identifier}</span>
+      {linear && <LinearChip issueKey={linear.key} url={linear.url} />}
       {locked && <span className="board-card__lock" title="Waiting on its dependencies"><Icon name="lock" size={11} /></span>}
+      <WorkCardBadge task={task} />
       {chips && <CompanyChip companyId={task.companyId} avatarOnly size={14} />}
       <span className={`board-card__agent ${agent?.pausedAt ? 'is-paused' : ''}`} title={agent ? `${agentLabel(who)}${agent.pausedAt ? ' (paused)' : ''}` : 'Unassigned'}>{agent ? <AgentBust agent={agent} color={department?.color ?? null} size={18} /> : <span className="task-unassigned">○</span>}</span>
     </span>
     <span className="board-card__title">{task.title}</span>
     {(reason || department || task.status === 'in_progress') && <span className="board-card__meta">
       {department && <span className="board-card__dep">{department.name}</span>}
-      {task.status === 'in_progress' && !reason && <span className="board-card__working"><span className="task-live-dot" /> working</span>}
+      {task.status === 'in_progress' && !reason && (elsewhere ? <span className="board-muted">{linearWorkLabel(linear)}</span> : <span className="board-card__working"><span className="task-live-dot" /> working</span>)}
       {reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{noReport && reason === 'review' ? ' · no report' : ''}</span>}
     </span>}
   </button>

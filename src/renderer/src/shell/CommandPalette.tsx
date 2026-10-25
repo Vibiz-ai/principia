@@ -9,6 +9,7 @@ import { activityLine, agentLabel, isLive } from '../lib/live'
 import { goNextNeedsYou } from '../state/live'
 import { showChecklist } from '../state/checklist'
 import { openApproval } from '../state/authoring'
+import { openVisualize } from '../state/diagrams'
 import { kindVerb } from '../lib/authoring'
 import { agentCompanyResolver, companyLabel, companyOf, reposOf } from '../lib/company'
 import {
@@ -157,6 +158,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
         icon: 'pause',
         run: () => void pauseAll(!getState().status?.schedulesPaused)
       },
+      { id: 'a:visualize', group: 'Actions', label: 'Visualize…', hint: 'ask the agent in the focused chat to draw it as a diagram', icon: 'canvas', run: () => setTimeout(() => openVisualize(), 0) },
       { id: 'a:sidebar', group: 'Actions', label: 'Toggle Sidebar', icon: 'sidebar', kbd: '⌘B', run: toggleSidebar },
       { id: 'a:memSearch', group: 'Actions', label: 'Search Memory…', hint: 'what agents remember about your repos', icon: 'search', run: () => void navigate({ name: 'memory', search: true, nonce: Date.now() }) },
       { id: 'a:nextNeeds', group: 'Actions', label: 'Next Needs You', hint: 'the oldest thing waiting for you', icon: 'agents', kbd: '⌘J', run: goNextNeedsYou },
@@ -172,6 +174,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       { id: 'v:art', group: 'Go to', label: 'Artifacts', icon: 'artifacts', kbd: '⌘5', run: () => void navigate({ name: 'artifacts' }) },
       { id: 'v:keys', group: 'Go to', label: 'Keys', icon: 'keys', kbd: '⌘6', run: () => void navigate({ name: 'keys' }) },
       { id: 'v:memory', group: 'Go to', label: 'Open Memory', icon: 'memory', run: () => void navigate({ name: 'memory' }) },
+      { id: 'v:usage', group: 'Go to', label: 'Usage', hint: 'tokens, cost and disk per company', icon: 'coins', run: () => void navigate({ name: 'usage' }) },
       { id: 'v:cloud', group: 'Go to', label: 'Cloud', hint: 'Principia Cloud: agents online while your Mac sleeps', icon: 'globe', run: () => void navigate({ name: 'cloud' }) },
       { id: 'v:slack', group: 'Go to', label: 'Slack', icon: 'slack', kbd: '⇧⌘L', run: () => void navigate({ name: 'slack', nonce: Date.now() }) },
       { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Principia’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },

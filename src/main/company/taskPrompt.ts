@@ -19,6 +19,8 @@ export interface TaskPromptDep { identifier: string; title: string; status: stri
 export interface TaskPromptInput {
   task: Pick<CompanyTask, 'identifier' | 'title' | 'description' | 'source' | 'sourceUrl'>
   companyId: string
+  /** LINEAR.md: the linked tracker issue, shown as data */
+  external?: { provider: string; key: string; url: string } | null
   department: { name: string } | null
   /** the seat; null for a legacy task run with a bare profile */
   agent: { name: string; instructions: string } | null
@@ -44,7 +46,7 @@ export function buildTaskPrompt(i: TaskPromptInput): string {
   const role = `<principia-role${i.department ? ` department="${attr(i.department.name)}"` : ''}${i.agent ? ` agent="${attr(i.agent.name)}"` : ''}>\n` +
     `${i.agent?.instructions.trim() ? data(i.agent.instructions.trim()) : 'You are an agent working on a task from the company board.'}\n</principia-role>`
   const t = i.task
-  const lines = [`Title: ${data(t.title)}`, `Source: ${t.source}${t.sourceUrl ? ` ${data(t.sourceUrl)}` : ''}`, 'Description:', data(clip(t.description.trim(), LIMITS.description)) || '(none)']
+  const lines = [`Title: ${data(t.title)}`, `Source: ${t.source}${t.sourceUrl ? ` ${data(t.sourceUrl)}` : ''}`, ...(i.external ? [`Linear: ${data(i.external.key)} ${data(i.external.url)}`] : []), 'Description:', data(clip(t.description.trim(), LIMITS.description)) || '(none)']
   if (i.deps.length) {
     lines.push('', 'Dependencies:')
     for (const d of i.deps) lines.push(`- ${d.identifier} ${data(d.title)} (${d.status})${d.doneNote?.trim() ? `: ${data(clip(d.doneNote.trim(), LIMITS.doneNote))}` : ''}`)

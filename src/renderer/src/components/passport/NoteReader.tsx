@@ -13,6 +13,8 @@ import { renderMarkdown, type Block, type Inline, type LinkResolver, type ListIt
 import { blockLink } from '../../lib/passport'
 import { hive } from '../../lib/hive'
 import { navigate, toast } from '../../state/store'
+import { DIAGRAM_FENCE } from '@shared/diagram'
+import { DiagramBlock } from '../diagrams/DiagramBlock'
 
 export interface ReaderActions {
   openNote: (noteId: string, opts?: { heading?: string | null; block?: string | null }) => void
@@ -76,6 +78,8 @@ function BlockView({ b, ctx }: { b: Block; ctx: Ctx }): React.JSX.Element {
         </p>
       )
     case 'code':
+      // DIAGRAMS.md: a ```principia-graph fence is drawn, every other fence stays code
+      if (b.lang === DIAGRAM_FENCE) return <div data-line={b.line}><DiagramBlock source={b.text} /></div>
       return (
         <pre className="preader__code mono" data-line={b.line}>
           <code>{b.text}</code>

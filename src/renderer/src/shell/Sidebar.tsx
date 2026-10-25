@@ -62,6 +62,7 @@ const NAV: NavItem[] = [
   { key: 'passport', label: 'Passport', icon: 'passport', kbd: '⌘7' },
   { key: 'slack', label: 'Slack', icon: 'slack', kbd: '⇧⌘L' },
   { key: 'forum', label: 'Forum', icon: 'forum', kbd: '⇧⌘F' },
+  { key: 'usage', label: 'Usage', icon: 'coins' },
   { key: 'cloud', label: 'Cloud', icon: 'cloud' }
 ]
 /** COMPANY.md §8.4: focused NAV, every badge counts this company only. */
@@ -77,6 +78,7 @@ const NAV_FOCUSED: NavItem[] = [
   { key: 'slack', label: 'Slack', icon: 'slack', kbd: '⇧⌘L' },
   { key: 'tasks', label: 'Tasks', icon: 'tasks' },
   { key: 'forum', label: 'Forum', icon: 'forum', kbd: '⇧⌘F' },
+  { key: 'usage', label: 'Usage', icon: 'coins' },
   { key: 'cloud', label: 'Cloud', icon: 'cloud' }
 ]
 

@@ -244,6 +244,12 @@ export interface TaskRunBridge {
    * EngineContext.passportContext for task runs; null = nothing to say.
    */
   passportContext?(e: { taskId: Id; companyId: Id }): string | null
+  /**
+   * WORKTREE.md: a task Started into its own worktree runs every prompt turn there, with the push guard env. null = the
+   * task has no worktree (the repo, as before). Rejects when the worktree cannot be made: the turn fails, it never
+   * falls back to the founder's checkout.
+   */
+  workdir?(e: { taskId: Id; runId: Id }): Promise<{ cwd: string; env: Record<string, string> } | null>
 }
 /** §3.6: the in-band warning, about 2 minutes before a task run's time cap. */
 export const TASK_WRAP_UP_MS = 2 * 60_000

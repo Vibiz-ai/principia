@@ -7,6 +7,7 @@ import { CompanyChip, useScope } from '../components/CompanyChip'
 import { confirmNative, errorCode, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { SECRET_NAME_RE, isLiveKey, looksLikeEnvBlob, profilesReferencing, subscriptionNote } from '../lib/secrets'
 import { companyLabel } from '../lib/companyModel'
+import { isWriteOnlyKey } from '@shared/linear'
 import { keyId, keySections, overriddenShared, type KeySection } from '../lib/scope'
 import { CompanyAvatar } from '../shell/CompanyRail'
 import { attempt, companyName, enterCompany, toast, useStore } from '../state/store'
@@ -94,8 +95,8 @@ export function KeysView(): React.JSX.Element {
   const menu = async (s: SecretMeta): Promise<void> => {
     const from = space(s)
     const id = await nativeMenu([
-      { id: 'reveal', label: revealed?.id === keyId(s) ? 'Hide' : 'Reveal for 10 s' },
-      { id: 'copy', label: 'Copy Value' },
+      // the Linear sync key is write-only (LINEAR.md §6)
+      ...(isWriteOnlyKey(s.name, s.companyId) ? [] : [{ id: 'reveal', label: revealed?.id === keyId(s) ? 'Hide' : 'Reveal for 10 s' }, { id: 'copy', label: 'Copy Value' }]),
       { id: 'copyName', label: 'Copy Name' },
       { id: 'edit', label: 'Replace Value…' },
       ...(multi
@@ -180,8 +181,10 @@ export function KeysView(): React.JSX.Element {
         </span>
         <span className="td text-tertiary">{s.lastUsedAt ? <RelativeTime iso={s.lastUsedAt} /> : 'never'}</span>
         <span className="td td--actions td--always">
-          <IconButton icon="eye" label={shown ? 'Hide' : 'Reveal for 10 s'} onClick={(e) => (e.stopPropagation(), void reveal(s))} />
-          <IconButton icon="copy" label="Copy (clears in 60 s)" onClick={(e) => (e.stopPropagation(), void copy(s))} />
+          {!isWriteOnlyKey(s.name, s.companyId) && <>
+            <IconButton icon="eye" label={shown ? 'Hide' : 'Reveal for 10 s'} onClick={(e) => (e.stopPropagation(), void reveal(s))} />
+            <IconButton icon="copy" label="Copy (clears in 60 s)" onClick={(e) => (e.stopPropagation(), void copy(s))} />
+          </>}
           <IconButton icon="more" label="More" onClick={(e) => (e.stopPropagation(), void menu(s))} />
         </span>
       </div>

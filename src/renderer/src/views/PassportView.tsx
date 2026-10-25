@@ -14,6 +14,7 @@ import { Button, Loading, Sheet, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { CompanyChooser, useScope } from '../components/CompanyChip'
 import { PassportConnect } from '../components/passport/PassportConnect'
+import { LinearIntegration } from '../components/board/LinearIntegration'
 import { companyLabel, isPersonal, reposOf, useCompanyData } from '../lib/company'
 import { confirmNative, errorMessage, hive, nativeMenu } from '../lib/hive'
 import { findHubNote, HUB_CATEGORY, hubFieldOps, hubFieldText, opFailures, type HubField } from '../lib/scope'
@@ -462,6 +463,8 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
           </section>
 
           {hub.status?.exists && <PassportConnect companyId={c.id} />}
+
+          <LinearIntegration companyId={c.id} companyName={c.name} n={hub.status?.exists ? '06' : '05'} />
 
           <footer className="passport-document-footer">
             <Icon name="shield" size={15} />

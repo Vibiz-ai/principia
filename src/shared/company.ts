@@ -1,9 +1,12 @@
 /** Portable company context and durable work. Credentials never belong in a Passport. */
 import type { AgentPersona } from './personas'
+import type { TaskWork } from './taskWork'
 export const TASK_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled'] as const
 export type TaskStatus = typeof TASK_STATUSES[number]
 /** DEPARTMENTS.md §1.3: `agent` (task_create from a run) and `schedule` (a task-mode schedule's standing card). */
-export const TASK_SOURCES = ['manual', 'github', 'slack', 'sentry', 'posthog', 'agent', 'schedule'] as const
+export const TASK_SOURCES = ['manual', 'github', 'slack', 'sentry', 'posthog', 'agent', 'schedule',
+  /** LINEAR.md: an issue Linear sync brought over (sourceUrl is the issue) */
+  'linear'] as const
 export type TaskSource = typeof TASK_SOURCES[number]
 /** COMPANY.md §2.2: the reserved Personal / Unassigned company. Unowned repos, repo-less chats and NULL stamps land here. */
 export const PERSONAL_COMPANY_ID = 'co_personal'
@@ -98,7 +101,9 @@ export interface CompanyTask extends CompanyTaskInput { id: string; identifier: 
 export type BoardTask = CompanyTask & TaskBoardFields
 export const TASK_ACTIVITY_KINDS = ['created', 'routed', 'assigned', 'woke', 'coalesced', 'started', 'report', 'asked', 'answered', 'parked', 'healed', 'handoff', 'approved', 'sent_back', 'comment', 'run_finished', 'interrupted',
   /** pre-departments edits ("Status: todo → blocked"); still written for plain field edits */
-  'updated'] as const
+  'updated',
+  /** WORKTREE.md: the task's worktree, branch and PR (created, PR opened, review, merged, removed) */
+  'work'] as const
 export type TaskActivityKind = typeof TASK_ACTIVITY_KINDS[number]
 export const ACTIVITY_BY = ['human', 'agent', 'system'] as const
 export type ActivityBy = typeof ACTIVITY_BY[number]
@@ -154,13 +159,22 @@ export interface TaskBoardFields {
   autoWakes: AutoWakes
   /** capped at MAX_HANDOFFS */
   handoffs: number
+  /** LINEAR.md §3: tracker parity. Label names as typed (matched in any case). */
+  labels: string[]
+  /** points (Linear's estimate); null = not estimated */
+  estimate: number | null
+  /** YYYY-MM-DD; null = no due date */
+  dueDate: string | null
+  /** WORKTREE.md: the task's own worktree, branch and PR once Started. Absent on older rows (read as null). */
+  work?: TaskWork | null
 }
-export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0 }
+export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0, labels: [], estimate: null, dueDate: null, work: null }
 /** Fills the §1.3 fields an older row lacks (no validation; taskInputSchema validates). */
 export function withTaskDefaults<T extends CompanyTaskInput>(t: T): T & TaskBoardFields {
   const d = TASK_BOARD_DEFAULTS
   return { ...t, departmentId: t.departmentId ?? null, agentId: t.agentId ?? null, blockReason: t.blockReason ?? null, ask: t.ask ?? null, report: t.report ?? null, doneNote: t.doneNote ?? null,
-    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0 }
+    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0, work: t.work ?? null,
+    labels: Array.isArray(t.labels) ? t.labels : [], estimate: t.estimate ?? null, dueDate: t.dueDate ?? null }
 }
 
 /**

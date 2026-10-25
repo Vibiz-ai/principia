@@ -1,3 +1,4 @@
+import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, UsageRange, UsageSummary } from './usage'
 import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
 import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
 import type { CollabState, RunConversation } from './collab'
@@ -100,6 +101,7 @@ import type {
 import type { RunBranch, RunWorktree } from './types'
 import type { MarketInstallResult, MarketList, MarketPreview, MarketRef } from './marketplace'
 import type { DashboardConfig, DashboardInstallInput, DashboardKeyLookup, DashboardKind, DashboardSnapshot, InstalledDashboard } from './dashboards'
+import type { LinearConnectInput, LinearKeyCheck, LinearStatusView } from './linear'
 import type {
   SlackChannel,
   SlackDraft,
@@ -222,6 +224,19 @@ export interface InvokeMap {
   'tasks:stop': [{ id: Id }, CompanyTask]
   /** The company's Autopilot switch (default off); maxInFlight optional (default 3). */
   'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number }, BoardSettings]
+  // WORKTREE.md: a code task's own worktree, branch and PR
+  /** Start: a new worktree + branch and the agent on it (in_progress), or queued beyond maxInFlight. */
+  'taskWork:start': [{ id: Id; profileId?: Id }, { task: CompanyTask; queued: boolean; message: string }]
+  /** Merge…: a native confirm in main, then gh pr merge --squash. null = the founder said no. */
+  'taskWork:merge': [{ id: Id }, { task: CompanyTask; message: string } | null]
+  /** Remove Worktree…: a native confirm listing what would be lost, then the removal. null = the founder said no. */
+  'taskWork:remove': [{ id: Id }, CompanyTask | null]
+  /** The gone-worktree banner: Cancel Task · Back to Backlog · Keep As Is. */
+  'taskWork:resolveGone': [{ id: Id; choice: 'cancel' | 'backlog' | 'keep' }, CompanyTask]
+  /** Window focus: check the worktrees and open PRs now (at most every 10 s). */
+  'taskWork:refresh': [V, { ok: true }]
+  /** Open in Editor: Cursor, VS Code or Zed when installed, else Finder. */
+  'taskWork:openEditor': [{ id: Id }, { opened: 'editor' | 'finder' }]
   // FORUM.md §9: the company Forum. Refused (forbidden) unless experimental.companies and .departments are on.
   'forum:state': [{ companyId: Id }, ForumState]
   'forum:messages': [{ companyId: Id; channelId: Id; beforeSeq?: number; limit?: number }, { messages: ForumMessage[]; hasMore: boolean }]
@@ -324,6 +339,14 @@ export interface InvokeMap {
   'dashboards:remove': [{ id: Id }, V]
   /** The marketplace preview: the dashboard on sample data. */
   'dashboards:sample': [{ kind: DashboardKind }, DashboardSnapshot]
+  // LINEAR.md §6: optional Linear sync per company. A key goes in (checkKey, connect), never comes back out.
+  'linear:status': [{ companyId: Id }, LinearStatusView]
+  'linear:checkKey': [{ companyId: Id; key?: string }, LinearKeyCheck]
+  'linear:connect': [LinearConnectInput, LinearStatusView]
+  'linear:sync': [{ companyId: Id }, LinearStatusView]
+  'linear:setAutosync': [{ companyId: Id; on: boolean }, LinearStatusView]
+  /** Forgets the key and unlinks the tasks; Linear is not touched. */
+  'linear:disconnect': [{ companyId: Id }, LinearStatusView]
   // runs
   /** companyId: the explicit stamp, last in the inheritance chain (workflow, then target repo, then this, §3). */
   'runs:start': [{ target: RunTarget; companyId?: Id }, Run]
@@ -439,6 +462,14 @@ export interface InvokeMap {
   'history:list': [HistoryListQuery | V, HistoryListResult]
   'history:get': [{ id: string }, ClaudeTranscript]
   'history:resume': [{ id: string; profileId?: Id; cols: number; rows: number } & CompanyFilter, Session] // companyId: for a folder no repo owns
+  // USAGE.md: the Usage page and the portfolio Activity canvas
+  'usage:summary': [{ range: UsageRange; companyId?: Id }, UsageSummary]
+  'usage:disk': [{ fresh?: boolean } | V, DiskUsage]
+  'usage:cleanupList': [V, CleanupItem[]]
+  'usage:cleanup': [{ ids: string[] }, CleanupResult]
+  /** Starts (or renews, every minute) the read-only watcher of outside Claude sessions; returns the snapshot. */
+  'activity:open': [V, ActivitySnapshot]
+  'activity:close': [V, V]
   // Slack (CONTRACT "Slack.5", SLACK.md §0.3 PO-S1/PO-S2). The renderer never receives a token value.
   'slack:status': [V, SlackStatus]
   'slack:manifest': [{ name?: string } | V, { json: string; yaml: string; createUrl: string }]
@@ -602,6 +633,7 @@ export interface EventMap {
   'chatCompany:updated': CompanyProposal
   'worktree:updated': RunWorktree
   'history:changed': { total: number }
+  'activity:changed': ActivitySnapshot // USAGE.md §4, at most every 2 s while the Activity layer is open
   // Slack (CONTRACT "Slack.5")
   'slack:status': SlackStatus
   'slack:channels': SlackChannel[]
@@ -741,6 +773,7 @@ export const INVOKE_CHANNELS = [
   'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
   'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop',
   'board:autopilot',
+  'taskWork:start', 'taskWork:merge', 'taskWork:remove', 'taskWork:resolveGone', 'taskWork:refresh', 'taskWork:openEditor',
   'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
   'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
   'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask', 'forum:collab', 'forum:runConversation',
@@ -757,6 +790,7 @@ export const INVOKE_CHANNELS = [
   'workflows:duplicate', 'workflows:validate', 'workflows:export', 'workflows:import',
   'marketplace:list', 'marketplace:preview', 'marketplace:install',
   'dashboards:list', 'dashboards:keys', 'dashboards:install', 'dashboards:update', 'dashboards:refresh', 'dashboards:remove', 'dashboards:sample',
+  'linear:status', 'linear:checkKey', 'linear:connect', 'linear:sync', 'linear:setAutosync', 'linear:disconnect',
   'runs:start', 'runs:list', 'runs:get', 'runs:cancel', 'runs:rerun', 'runs:stepLog', 'runs:openAsSession',
   'schedules:list', 'schedules:create', 'schedules:update', 'schedules:remove', 'schedules:setEnabled',
   'schedules:runNow', 'schedules:preview', 'schedules:events', 'schedules:pauseAll',
@@ -773,6 +807,7 @@ export const INVOKE_CHANNELS = [
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
   'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
   'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
+  'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'activity:open', 'activity:close',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
   'slack:backfill', 'slack:askAgent', 'slack:drafts', 'slack:draftGet', 'slack:draftDecide', 'slack:testAlert',
@@ -798,6 +833,7 @@ export const EVENT_NAMES = [
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
   'settings:changed', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
   'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'chatCompany:updated', 'worktree:updated', 'history:changed',
+  'activity:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',
   'onboarding:progress', 'onboarding:cloneProgress', 'forum:event', 'cloud'
 ] as const satisfies readonly EventName[]

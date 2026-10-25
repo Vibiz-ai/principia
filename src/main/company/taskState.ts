@@ -30,6 +30,10 @@ export interface TransitionCtx {
   depCanceled?: boolean
   /** PROACTIVE.md §3: the move is the chat that tracks this task (shared/company.ts trackedBy) moving it */
   tracked?: boolean
+  /** WORKTREE.md: the task's own PR moved its status (opened and ready, changes requested, merged by a human) */
+  work?: 'pr_ready' | 'changes_requested' | 'merged'
+  /** WORKTREE.md: the task's worktree is gone and the founder chose Back to Backlog */
+  worktreeGone?: boolean
 }
 
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
@@ -45,6 +49,8 @@ interface Rule {
   actors: readonly Actor[]
   /** an extra condition; returns the refusal, or null */
   check?: (ctx: TransitionCtx, from: TaskState, to: TaskState) => string | null
+  /** the row exists only for this kind of move (WORKTREE.md): other moves never see it, nor its refusal */
+  when?: (ctx: TransitionCtx) => boolean
 }
 const isDeps = (s: TaskState) => s.status === 'blocked' && s.blockReason === 'deps'
 const parked = (s: TaskState) => s.status === 'blocked' && s.blockReason !== 'deps'
@@ -87,7 +93,16 @@ export const TRANSITIONS: readonly Rule[] = [
   { row: 'tracked: start (todo / backlog / parked / in review → in_progress)', from: s => ['todo', 'backlog', 'triage', 'in_review'].includes(s.status) || parked(s), to: 'in_progress', actors: AGENT,
     check: (ctx) => !ctx.tracked ? 'Only the chat that tracks this task can move it' : ctx.depsDone === false ? 'Complete dependencies before starting this task' : null },
   { row: 'tracked: in_progress → in_review', from: 'in_progress', to: 'in_review', actors: AGENT, check: (ctx) => ctx.tracked ? null : 'Only the chat that tracks this task can move it' },
-  { row: 'tracked: in_progress → blocked(agent)', from: 'in_progress', to: s => s.status === 'blocked' && s.blockReason === 'agent', actors: AGENT, check: (ctx) => ctx.tracked ? null : 'Only the chat that tracks this task can move it' }
+  { row: 'tracked: in_progress → blocked(agent)', from: 'in_progress', to: s => s.status === 'blocked' && s.blockReason === 'agent', actors: AGENT, check: (ctx) => ctx.tracked ? null : 'Only the chat that tracks this task can move it' },
+  // WORKTREE.md: the task follows its PR (never while a run holds it; the run end comes first)
+  { row: 'PR opened and ready → in_review', from: s => s.status !== 'in_progress' && s.status !== 'done' && s.status !== 'canceled' && s.status !== 'in_review', to: 'in_review', actors: SYSTEM,
+    when: ctx => ctx.work === 'pr_ready' },
+  { row: 'changes requested on its PR → in_progress', from: 'in_review', to: 'in_progress', actors: SYSTEM,
+    when: ctx => ctx.work === 'changes_requested', check: startCheck },
+  { row: 'PR merged → done', from: s => s.status !== 'in_progress' && s.status !== 'done' && s.status !== 'canceled', to: 'done', actors: SYSTEM,
+    when: ctx => ctx.work === 'merged', check: ctx => blank(ctx.doneNote) ? 'A done note is required' : null },
+  { row: 'worktree gone → Back to Backlog', from: s => s.status !== 'in_progress' && s.status !== 'done' && s.status !== 'canceled', to: 'backlog', actors: HUMAN,
+    when: ctx => !!ctx.worktreeGone }
 ]
 function startCheck(ctx: TransitionCtx): string | null {
   if (!ctx.start) return 'Use Run now to start this task'
@@ -97,11 +112,12 @@ const matches = (m: TaskStatus | ((s: TaskState) => boolean), s: TaskState) => t
 
 /** The refusal for a move, or null when §1.4 allows it. */
 export function transitionError(from: TaskState, to: TaskState, actor: Actor, ctx: TransitionCtx = {}): string | null {
-  // never relaxed, whatever the row
-  if (to.status === 'done' && actor !== 'human') return 'Only a human can mark a task done'
+  // never relaxed, whatever the row: done is a human's (a PR merged by a human on GitHub or from Principia counts; the
+  // agent shims refuse gh pr merge, so no agent can merge)
+  if (to.status === 'done' && actor !== 'human' && !(actor === 'system' && ctx.work === 'merged')) return 'Only a human can mark a task done'
   if (to.status === 'blocked' && !to.blockReason) return 'A blocked task needs a reason'
   if (from.status === to.status && (from.blockReason ?? null) === (to.blockReason ?? null)) return null
-  const rows = TRANSITIONS.filter(r => matches(r.from, from) && matches(r.to, to))
+  const rows = TRANSITIONS.filter(r => (!r.when || r.when(ctx)) && matches(r.from, from) && matches(r.to, to))
   if (!rows.length) return `A task cannot move from ${stateLabel(from)} to ${stateLabel(to)}`
   const allowed = rows.filter(r => r.actors.includes(actor))
   if (!allowed.length) return to.status === 'done' ? 'Only a human can mark a task done' : `Only ${rows[0].actors.join(' or ')} can move a task from ${stateLabel(from)} to ${stateLabel(to)}`

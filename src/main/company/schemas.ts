@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { lookSchema, personaSchema } from '../../shared/onboarding'
+import { taskWorkSchema } from './taskWorkSchema'
 import { AGENT_DATA_DEFAULTS, AGENT_LIMITS, BLOCK_REASONS, DEPARTMENT_DATA_DEFAULTS, DEPARTMENT_LIMITS, DEPARTMENT_PRESET_KEYS, TASK_ASK_KINDS, TASK_SOURCES, TASK_STATUSES } from '../../shared/company'
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/)
 const context = z.string().max(30_000)
@@ -28,7 +29,13 @@ const taskBoardShape = {
   pendingWake: z.object({ reasons: z.array(short(4000)).max(50), count: z.number().int().min(0).max(10_000) }).strict().nullable(),
   agentSessionId: short(200).nullable(),
   autoWakes: z.object({ windowStart: iso.nullable(), n: z.number().int().min(0).max(10_000), at: z.array(iso).max(20).optional() }).strict(),
-  handoffs: z.number().int().min(0).max(100)
+  handoffs: z.number().int().min(0).max(100),
+  /** WORKTREE.md: written by main only (taskWork.ts); the renderer's task channels omit it */
+  work: taskWorkSchema.nullable(),
+  /** LINEAR.md §3 */
+  labels: z.array(z.string().trim().min(1).max(80)).max(50),
+  estimate: z.number().min(0).max(1000).nullable(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date').nullable()
 }
 const taskBaseShape = {
   title:z.string().trim().min(1).max(240), description:z.string().max(50_000), companyId:id, repoId:id.nullable(), status:z.enum(TASK_STATUSES), priority:z.union([z.literal(0),z.literal(1),z.literal(2),z.literal(3),z.literal(4)]),
@@ -40,7 +47,8 @@ export const taskInputSchema = z.object({
   departmentId: taskBoardShape.departmentId.default(null), agentId: taskBoardShape.agentId.default(null), blockReason: taskBoardShape.blockReason.default(null),
   ask: taskBoardShape.ask.default(null), report: taskBoardShape.report.default(null), doneNote: taskBoardShape.doneNote.default(null), routing: taskBoardShape.routing.default(null),
   pendingWake: taskBoardShape.pendingWake.default(null), agentSessionId: taskBoardShape.agentSessionId.default(null),
-  autoWakes: taskBoardShape.autoWakes.default(()=>({windowStart:null,n:0})), handoffs: taskBoardShape.handoffs.default(0)
+  autoWakes: taskBoardShape.autoWakes.default(()=>({windowStart:null,n:0})), handoffs: taskBoardShape.handoffs.default(0), work: taskBoardShape.work.default(null),
+  labels: taskBoardShape.labels.default(()=>[]), estimate: taskBoardShape.estimate.default(null), dueDate: taskBoardShape.dueDate.default(null)
 }).strict()
 /**
  * tasks:update patches. zod 4 applies defaults inside .partial(), so `taskInputSchema.partial()` would reset every
