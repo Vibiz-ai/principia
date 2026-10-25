@@ -48,8 +48,10 @@ function BlockLite({ b }: { b: Block }): React.JSX.Element {
     case 'list':
     case 'history': {
       const L = b.t === 'list' && b.items[0]?.ordered ? 'ol' : 'ul'
+      // "1. … #tags 2. …": each item is its own list; it keeps its number instead of restarting at 1
+      const start = L === 'ol' && b.items[0]?.num && b.items[0].num > 1 ? b.items[0].num : undefined
       return (
-        <L>
+        <L start={start}>
           {b.items.map((it) => (
             <li key={it.line} style={it.depth ? { marginLeft: it.depth * 12 } : undefined}>
               {it.task !== null && <span className="dgm-md__check">{it.task ? '☑' : '☐'} </span>}

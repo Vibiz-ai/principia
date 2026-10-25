@@ -869,6 +869,8 @@ export async function departmentChatMenu(d: Department): Promise<void> {
 }
 
 export function sessionTitle(s: Session): string {
+  // CHAT-UI.md: a chat titled by its first message (or renamed by the user) reads as that title
+  if (s.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(s.title)) return s.title
   const repo = s.repoId ? state.repos.find((r) => r.id === s.repoId) : null
   const dep = s.departmentId ? state.departments.find((d) => d.id === s.departmentId) : null
   return `${providerLabel(s.adapter)} in ${repo?.name ?? dep?.name ?? 'Chat'}`

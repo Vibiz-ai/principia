@@ -95,7 +95,9 @@ export const DEFAULT_SETTINGS: Settings = {
   proactiveAgents: true,
   trackTasks: 'auto',
   // Five doors: sidebar pins and More visibility per company (UI state)
-  sidebarNav: {}
+  sidebarNav: {},
+  // CHAT-UI.md §4.4
+  openChatsAs: 'auto'
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments and plans stay absent (= off) so settings:get keeps its three-flag shape until the feature is enabled

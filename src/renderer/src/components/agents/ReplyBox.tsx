@@ -7,6 +7,7 @@ import type { AgentNode } from '@shared/live'
 import { lastSaid } from '../../lib/live'
 import { replyToAgent } from '../../state/live'
 import { Button } from '../ui'
+import { peekChat } from '../../state/chat'
 
 export function ReplyBox({ agent, onOpen, autoFocus = false }: { agent: AgentNode; onOpen?: () => void; autoFocus?: boolean }): React.JSX.Element {
   const [text, setText] = useState('')
@@ -20,6 +21,8 @@ export function ReplyBox({ agent, onOpen, autoFocus = false }: { agent: AgentNod
     if (ok) setText('')
   }
   const said = lastSaid(agent)
+  // CHAT-UI.md: a Claude chat opens as the chat, not a terminal
+  const chat = !!agent.sessionId && peekChat(agent.sessionId)?.mode === 'chat'
   return (
     <div className="reply-box" onClick={(e) => e.stopPropagation()}>
       {said && (
@@ -46,8 +49,8 @@ export function ReplyBox({ agent, onOpen, autoFocus = false }: { agent: AgentNod
           }}
         />
         {onOpen && (
-          <Button size="sm" variant="ghost" icon="terminal" onClick={onOpen}>
-            Open terminal
+          <Button size="sm" variant="ghost" icon={chat ? 'chat' : 'terminal'} onClick={onOpen}>
+            {chat ? 'Open chat' : 'Open terminal'}
           </Button>
         )}
       </div>

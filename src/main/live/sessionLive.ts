@@ -9,7 +9,7 @@
  * No Electron imports (testable with fakes).
  */
 import type { AdapterId, Id, Session } from '../../shared/types'
-import type { AgentNode, Ask, AskAnswer } from '../../shared/live'
+import type { AgentNode, Ask, AskAnswer, AskOption } from '../../shared/live'
 import type { LiveChannel } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import { newId } from '../../shared/ids'
@@ -225,6 +225,47 @@ export class SessionLive {
     this.d.onLimitCleared?.(this.session.id)
   }
 
+  // ---------- CHAT-UI.md §3.2: a chat pane owns this session's asks ----------
+  /** Set while the session is a chat: hook permission lines are not asks then, and stdio asks are answered by it. */
+  chat: { ownsAsks(): boolean; answer(ask: Ask, a: AskAnswer, gateId: string): Ask } | null = null
+
+  /** A chat's permission / question / plan request becomes a Needs-you ask (channel stdio). */
+  openChatAsk(e: { requestId: string; toolName: string; input: unknown; description: string | null; toolUseId: string | null; title?: string; options?: AskOption[] }): void {
+    if (this.ended) return
+    this.applier.apply(this.tracker.stream({ kind: 'permission_request', requestId: e.requestId, toolName: e.toolName, input: e.input, agentId: null, toolUseId: e.toolUseId, description: e.description, suggestions: [], ...(e.title ? { title: e.title } : {}), ...(e.options ? { options: e.options } : {}) }))
+    this.applier.flush()
+  }
+
+  /** The chat was titled by its first message: Live and Needs you read the same title. */
+  retitle(title: string): void {
+    if (this.ended) return
+    this.applier.apply(this.tracker.retitle(title))
+    this.applier.flush()
+  }
+
+  /** A chat turn started: the root works (as UserPromptSubmit would make it). */
+  chatWorking(): void {
+    if (this.ended) return
+    const r = this.d.store.getAgent(this.root.id)
+    if (r?.status === 'working') return
+    this.feed({ kind: 'prompt', background: false })
+    this.applier.flush()
+  }
+
+  /** The chat's turn was stopped (interrupt): no Stop hook fires for it, so the root goes idle here. */
+  chatStopped(): void {
+    if (this.ended) return
+    this.feed({ kind: 'stop', background: 0 })
+    this.applier.flush()
+  }
+
+  /** Answered in the chat (summary) or gone (null: canceled). */
+  closeChatAsk(gateId: string, summary: string | null): void {
+    if (this.ended || !this.tracker.ask(gateId)) return
+    this.applier.apply(summary === null ? this.tracker.cancel(gateId) : this.tracker.answered(gateId, summary))
+    this.applier.flush()
+  }
+
   /** CONTRACT §13 "Retry at reset" for a session: pending resume time on the root (null = none). */
   setRetryAt(at: string | null): void {
     if (this.ended) return
@@ -311,6 +352,10 @@ export class SessionLive {
     } catch (e) {
       this.d.log?.warn('live: hook line not understood', { e: String(e) })
     }
+    // CHAT-UI.md §3.2: the chat's stream owns its permission asks; the hook's copy would count them twice
+    if (this.chat?.ownsAsks()) evs = evs.filter((ev) => ev.kind !== 'permission' && ev.kind !== 'notify_permission')
+    // a chat's process sleeps and hands over to the terminal: its SessionEnd is not the session's end (exit() is)
+    if (this.chat) evs = evs.filter((ev) => ev.kind !== 'session_end')
     for (const ev of evs) this.feed(ev)
   }
 
@@ -369,6 +414,8 @@ export class SessionLive {
     if (ask.status !== 'open') throw new HiveError('conflict', 'Already answered in the terminal')
     if (ask.kind === 'approval') throw new HiveError('bad_request', 'Approval cards are decided with author:decide')
     if (ask.kind === 'slack_reply') throw new HiveError('bad_request', 'Slack drafts are decided with slack:draftDecide')
+    const chatGate = ask.channel === 'stdio' && this.chat ? this.applier.gateOf(ask.id) : null
+    if (chatGate && this.chat) return this.chat.answer(ask, a, chatGate)
     const opt = a.optionId ? ask.options.find((o) => o.id === a.optionId) : null
     if (a.optionId && !opt) throw new HiveError('bad_request', 'That option is not offered for this request')
     if (!opt || (opt.kind !== 'allow' && opt.kind !== 'deny')) {

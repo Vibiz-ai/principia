@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { EMBLEM_VARIANTS } from '../shared/chatCompany'
 import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
+import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
@@ -221,6 +222,8 @@ const settingsPatch = z
     // PROACTIVE.md
     proactiveAgents: z.boolean(),
     trackTasks: z.enum(['off', 'auto', 'always']),
+    // CHAT-UI.md §4.4
+    openChatsAs: z.enum(['auto', 'chat', 'terminal']),
     // Five doors: the sidebar's pins and More visibility per company ('all' = All companies). UI state only.
     sidebarNav: z
       .record(
@@ -949,7 +952,9 @@ export const REQUEST_SCHEMAS = {
   // CLOUD.md §13.1: the cloud:* channels
   ...CLOUD_REQUEST_SCHEMAS,
   // PLANS.md §3: tasks:brief, tasks:proofPreview, plans:*
-  ...PLANS_REQUEST_SCHEMAS
+  ...PLANS_REQUEST_SCHEMAS,
+  // CHAT-UI.md §3.2: chat:*
+  ...CHAT_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {

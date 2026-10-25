@@ -93,6 +93,8 @@ export class Hive {
   /** Live agents (LIVE.md): agents/asks repository, session wiring, notifications. */
   live!: LiveStore
   sessionLive!: SessionLiveHub
+  /** CHAT-UI.md §3: Claude sessions shown as a chat (absent in tests and before boot) */
+  chats?: import('./chat/chatHub').ChatHub
   notifier!: NeedsYouNotifier
   /** What the renderer shows (ui:visibleOwner): suppresses notifications, marks idle sessions seen (A3). */
   visibleOwner: { sessionId: Id | null; runId: Id | null } = { sessionId: null, runId: null }

@@ -13,6 +13,9 @@ import { activityLine, agentLabel, agentVisual, attributionNote, descendants, is
 import { useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
 import { Popover } from '../components/ui'
 import { TerminalPane, type TerminalHandle } from '../components/TerminalPane'
+// CHAT-UI.md §4: Claude sessions as a chat (the terminal stays one click away)
+import { ChatModeToggle, ChatPane, ChatTerminalBar } from '../components/chat/ChatPane'
+import { useChatMode } from '../state/chat'
 import { Button, EmptyState, IconButton, Toolbar } from '../components/ui'
 import { hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { injectedNames } from '../lib/secrets'
@@ -156,7 +159,9 @@ export function SessionView(): React.JSX.Element {
     if (id === 'single' && focused) setState({ grid: [focused] })
   }
 
-  const title = cur ? (repo?.name ?? (cur.repoId ? 'Repository' : 'Chat')) : 'Session'
+  // CHAT-UI.md: a chat titled by its first message reads as that title
+  const custom = cur && cur.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(cur.title) ? cur.title : null
+  const title = cur ? (repo?.name ?? (cur.repoId ? 'Repository' : (custom ?? 'Chat'))) : 'Session'
   const layoutClass = panes.length <= 1 ? 'grid-1' : panes.length === 2 ? `grid-2 grid-2--${gridDir}` : 'grid-4'
   return (
     <div className="view">
@@ -281,7 +286,9 @@ function SessionPane({
   const tree = root ? new Set([root.id, ...descendants(idx, root.id).map((d) => d.agent.id)]) : null
   // agent-authored drafts are pinned from the drafts slice; their approval asks would only duplicate the card
   const paneDrafts = useSessionDrafts(s.id)
-  const paneAsks = tree ? asks.filter((a) => tree.has(a.agentId) && !(a.kind === 'approval' && paneDrafts.some((d) => d.id === a.draftId))) : []
+  const chatMode = useChatMode(s)
+  // a chat draws its own permission / question cards in the conversation
+  const paneAsks = tree ? asks.filter((a) => tree.has(a.agentId) && !(a.kind === 'approval' && paneDrafts.some((d) => d.id === a.draftId)) && !(chatMode === 'chat' && a.channel === 'stdio')) : []
 
   // An exit right after start usually has a known cause printed in the terminal; explain it instead of a bare "exited 1".
   useEffect(() => {
@@ -348,10 +355,12 @@ function SessionPane({
           {departmentName && <span className="text-tertiary" aria-hidden>· </span>}
           {sessionPlace(s, departmentName)}
         </span>
+        {s.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(s.title) && <span className="pane__title-text" title={s.title}>· {s.title}</span>}
         {s.adapter !== 'shell' && <span className="text-tertiary">· {providerLabel(s.adapter)}</span>}
         {profile && profile.adapter !== 'shell' && interactiveBypass && <span className="text-tertiary" title="The agent edits files and runs commands without asking first. Change it in Settings.">· runs without asking</span>}
         {!exited && <StalledBadge agent={root} />}
         <span className="flex1" />
+        <ChatModeToggle session={s} focused={focused} />
         {handoffButton}
         {s.adapter !== 'shell' && s.adapter !== 'claude' && !exited && (
           <Button size="sm" onClick={() => void newCompanyFromChat()} title="Set up what you are talking about as a new Principia company (you review the plan first)">
@@ -396,9 +405,11 @@ function SessionPane({
           {paneAsks.length > 1 && <div className="pane__needs-more text-tertiary">+{paneAsks.length - 1} more waiting — answer this one first</div>}
         </div>
       )}
-      {root && s.adapter !== 'shell' && <SessionDiagrams sessionId={s.id} answer={root.report} />}
+      {/* a chat draws its diagrams inline in the conversation */}
+      {root && s.adapter !== 'shell' && chatMode !== 'chat' && <SessionDiagrams sessionId={s.id} answer={root.report} />}
+      <ChatTerminalBar session={s} />
       <div className="pane__body">
-        <TerminalPane
+        {chatMode === 'chat' ? <ChatPane session={s} focused={focused} /> : chatMode === null ? null : <TerminalPane
           ref={(h) => {
             termRef.current = h
             registerHandle(h)
@@ -408,7 +419,7 @@ function SessionPane({
           fontSize={fontSize}
           focused={focused}
           onFocus={() => setState({ focusedSession: s.id })}
-        />
+        />}
       </div>
       {exited && diagnosis && (
         <div className="pane__banner pane__banner--warn">

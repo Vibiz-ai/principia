@@ -15,6 +15,8 @@ import { openApproval } from '../state/authoring'
 import { openVisualize } from '../state/diagrams'
 import { kindVerb } from '../lib/authoring'
 import { goToEntries, viewFor } from '../lib/nav'
+// CHAT-UI.md: ⌘K "Show this chat as Terminal / Chat"
+import { chatModeCommand } from '../components/chat/ChatPane'
 import { plansEnabled } from '@shared/plans'
 import { companyLabel, companyOf, isPersonal, reposOf } from '../lib/company'
 import {
@@ -171,6 +173,8 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
     out.push(
       { id: 'a:newSession', group: 'Actions', label: 'New Session…', icon: 'terminal', kbd: '⌘N', run: () => setTimeout(() => openPalette('newSession'), 0) },
       chatItem,
+      // CHAT-UI.md: the focused Claude chat's Chat | Terminal switch
+      ...((c) => (c ? [{ id: 'a:chatMode', group: 'Actions', label: c.label, icon: 'terminal', kbd: '⌃`', keywords: 'terminal chat switch toggle view', run: c.run }] : []))(chatModeCommand(sessions.find((x) => x.id === getState().focusedSession))),
       { id: 'a:newWf', group: 'Actions', label: 'New Workflow', icon: 'workflows', kbd: '⌘⇧N', run: () => void navigate({ name: 'editor', workflowId: null, nonce: Date.now() }) },
       { id: 'a:newSch', group: 'Actions', label: 'New Schedule', icon: 'schedules', run: () => void navigate({ name: 'schedules', seed: {}, nonce: Date.now() }) },
       { id: 'a:addRepo', group: 'Actions', label: 'Add Repository…', icon: 'folder', kbd: '⌘O', run: () => void addRepos() },

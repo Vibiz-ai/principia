@@ -189,6 +189,28 @@ function General(): React.JSX.Element {
   )
 }
 
+/** CHAT-UI.md §4.4: Claude sessions open as a chat or a terminal (the pane's toggle changes one session). */
+function OpenChatsAsRow(): React.JSX.Element {
+  const openChatsAs = useStore((s) => s.settings?.openChatsAs ?? 'auto')
+  return (
+    <SRow
+      label="Open Claude chats as"
+      desc="Chat shows tools as cards and approvals as buttons; Terminal is Claude Code itself. Auto: chats open as Chat (a company’s chats too, even in its repository folder); a session you start on a repository or a worktree (New Session › a repository) opens as Terminal. Every chat has a Chat | Terminal switch (⌃`)."
+    >
+      <Segmented<'auto' | 'chat' | 'terminal'>
+        size="sm"
+        value={openChatsAs}
+        items={[
+          { value: 'auto', label: 'Auto' },
+          { value: 'chat', label: 'Chat' },
+          { value: 'terminal', label: 'Terminal' }
+        ]}
+        onChange={(v) => void updateSettings({ openChatsAs: v })}
+      />
+    </SRow>
+  )
+}
+
 function Agents(): React.JSX.Element {
   const providers = useStore((s) => s.providers)
   const profiles = useStore((s) => s.profiles)
@@ -250,10 +272,10 @@ function Agents(): React.JSX.Element {
       <div className="sgroup">
         <div className="sgroup__title">Permissions</div>
         <SRow
-          label="Skip permission prompts in terminal sessions"
-          desc="Off: interactive panes start in the CLI’s normal mode and ask before editing or running commands. Workflow steps run headless and can’t ask, so they follow each profile’s setting below."
+          label="Skip permission prompts in chats and terminal sessions"
+          desc="Off: chats and terminal panes start in the CLI’s normal mode and ask before editing or running commands (a chat asks with Allow / Deny buttons; on, its mode chip reads “Runs without asking”). Workflow steps run headless and can’t ask, so they follow each profile’s setting below."
         >
-          <Switch checked={interactiveBypass} onChange={(v) => void updateSettings({ interactiveBypass: v })} label="Skip permission prompts in terminal sessions" />
+          <Switch checked={interactiveBypass} onChange={(v) => void updateSettings({ interactiveBypass: v })} label="Skip permission prompts in chats and terminal sessions" />
         </SRow>
         <SRow
           label="Agents use Principia on their own"
@@ -276,6 +298,7 @@ function Agents(): React.JSX.Element {
             onChange={(v) => void updateSettings({ trackTasks: v })}
           />
         </SRow>
+        <OpenChatsAsRow />
       </div>
       <SessionMemory />
       <div className="sgroup">

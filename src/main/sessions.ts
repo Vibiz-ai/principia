@@ -16,6 +16,7 @@ import { TailBuffer, trimToLineStart } from './tailBuffer'
 import { stripAnsi } from './engine/live/pty'
 import { log } from './log'
 import type { ChatPlacement } from './company/chatContext'
+import type { PtyHostInfo } from './chat/chatHub'
 
 export const SESSION_TAIL_CHARS = 1024 * 1024 // in-memory replay tail
 /** What a pane replays on attach: enough for the visible screen + recent history, without parsing 1 MB on every remount. */
@@ -34,11 +35,15 @@ export interface PtyLike {
   write(d: string): void
   resize(cols: number, rows: number): void
   kill(signal?: string): void
+  /** CHAT-UI.md §3.1: a chat session stops its own (changing) processes; never signal its pid group directly. */
+  readonly selfKill?: boolean
 }
 export type PtySpawn = (
   file: string,
   args: string[],
-  opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
+  opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> },
+  /** CHAT-UI.md §3.1: who the pane is for (the chat hub decides chat or terminal for Claude panes) */
+  host?: PtyHostInfo
 ) => PtyLike
 
 export interface SessionDeps {
@@ -398,7 +403,12 @@ export class SessionManager {
     const rows = clamp(req.rows, 5, 300, 32)
     let pty: PtyLike
     try {
-      pty = this.d.spawnPty(spec.file, spec.args, { name: 'xterm-256color', cols, rows, cwd, env })
+      pty = this.d.spawnPty(spec.file, spec.args, { name: 'xterm-256color', cols, rows, cwd, env }, {
+        sessionId: id,
+        adapter: profile.adapter,
+        codeWork: !!repoId || guarded,
+        resumeId: req.resumeAgentSessionId ?? null
+      })
     } catch (e) {
       if (memory) this.d.memory?.release(memory.grantId)
       channel?.close()
@@ -673,7 +683,7 @@ export class SessionManager {
       }
     }
     const exited = new Promise<void>((resolve) => live.exitWaiters.push(resolve))
-    if (!killGroup(live.pty.pid, 'SIGHUP')) {
+    if (live.pty.selfKill || !killGroup(live.pty.pid, 'SIGHUP')) {
       try {
         live.pty.kill('SIGHUP')
       } catch {
@@ -681,7 +691,10 @@ export class SessionManager {
       }
     }
     const hard = setTimeout(() => {
-      if (!live.exited) killGroup(live.pty.pid, 'SIGKILL')
+      if (!live.exited) {
+        if (live.pty.selfKill) live.pty.kill('SIGKILL')
+        else killGroup(live.pty.pid, 'SIGKILL')
+      }
     }, KILL_GRACE_MS)
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, KILL_TIMEOUT_MS))
     await Promise.race([exited, timeout])
@@ -805,7 +818,10 @@ export class SessionManager {
     let n = 0
     for (const l of this.live.values()) {
       if (l.exited) continue
-      if (killGroup(l.pty.pid, 'SIGKILL')) n++
+      if (l.pty.selfKill) {
+        l.pty.kill('SIGKILL')
+        n++
+      } else if (killGroup(l.pty.pid, 'SIGKILL')) n++
     }
     return n
   }

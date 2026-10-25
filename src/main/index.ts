@@ -34,6 +34,7 @@ import { pickCli, strippedChildEnv } from './oneshot'
 import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
+import { chatLink, createChatHub } from './chat/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
@@ -334,10 +335,27 @@ if (!app.requestSingleInstanceLock()) {
     })
     store.setDescribe((w) => h.engine.scheduler.describe(w))
 
+    // CHAT-UI.md §3: Claude panes go through the chat hub (chat or terminal inside); every other pane is a plain pty
+    h.chats = createChatHub(h, {
+      userData: paths.userData,
+      emit: (sessionId, seq, ops) => emit('chat:ops', { sessionId, seq, ops }),
+      redact: (t) => vault.redact(t),
+      killGroup: (pid, sig) => {
+        try {
+          process.kill(-pid, sig)
+          return true
+        } catch {
+          return false
+        }
+      },
+      log,
+      baseEnv: () => baseChildEnv()
+    })
+    const plainPty = (file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }) => pty.spawn(file, args, opts)
     h.sessions = new SessionManager({
       store,
       paths,
-      spawnPty: (file, args, opts) => pty.spawn(file, args, opts),
+      spawnPty: (file, args, opts, host) => (h.chats ? h.chats.spawn(file, args, opts, host, plainPty) : plainPty(file, args, opts)),
       interactiveSpawn: (profile, opts) => h.engine.providers.interactiveSpawn(profile, opts),
       baseEnv: () => baseChildEnv(),
       secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
@@ -362,7 +380,9 @@ if (!app.requestSingleInstanceLock()) {
       live: {
         open: (sid, adapter) => (adapter === 'shell' ? null : liveBridge.open({ sessionId: sid })),
         start: (s, channel) => {
-          h.sessionLive.open(s, channel)
+          const sl = h.sessionLive.open(s, channel)
+          // CHAT-UI.md §3.2: a chat owns its asks from the first moment (before any hook line arrives)
+          if (sl && h.chats?.get(s.id)) sl.chat = chatLink(h, h.chats, s.id)
         },
         data: (sid, data) => h.sessionLive.get(sid)?.onPtyData(data),
         input: (sid, data, typed) => h.sessionLive.get(sid)?.onUserInput(data, typed),

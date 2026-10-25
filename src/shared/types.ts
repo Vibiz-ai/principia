@@ -609,6 +609,8 @@ export interface Settings {
    * state only: main never reads it. Absent = the registry defaults (Forum "Show when active", the rest in More).
    */
   sidebarNav?: Record<string, SidebarPrefs>
+  /** CHAT-UI.md §4.4: Claude sessions open as a chat or a terminal. auto: chats as Chat, repo/worktree sessions as Terminal. Absent = 'auto'. */
+  openChatsAs?: import('./chat').OpenChatsAs
 }
 export type TrackTasks = 'off' | 'auto' | 'always'
 /** A More item's place in the sidebar: always in PINNED, in PINNED only while it has something for you, or in More. */

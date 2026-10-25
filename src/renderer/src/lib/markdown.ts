@@ -33,6 +33,8 @@ export interface ListItem {
   /** null = not a task; true/false = checkbox state */
   task: boolean | null
   ordered: boolean
+  /** an ordered item's own number ("3." -> 3): a list split by a paragraph keeps counting */
+  num?: number
   c: Inline[]
   /** `^anchor` at the end of the line (hidden in reading mode, used by "Copy block link") */
   blockId: string | null
@@ -207,6 +209,7 @@ function listItem(line: string, lineNo: number, opts: RenderOptions, inHistory: 
   const indent = m[1]!.replace(/\t/g, '  ').length
   const ordered = /\d/.test(m[2]!)
   const base: ListItem = { line: lineNo, depth: Math.floor(indent / 2), task: null, ordered, c: [], blockId: null, obs: null, rel: null, history: null }
+  if (ordered) base.num = parseInt(m[2]!, 10)
   let rest = m[3]!
   const task = TASK_RE.exec(rest)
   if (task && !ordered) {
