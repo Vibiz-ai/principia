@@ -35,3 +35,6 @@
 .task-strip__branch { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 2 auto; }
 .task-strip__open { margin-left: auto; flex: none; color: var(--text-tertiary); }
 .task-strip:hover .task-strip__open { color: var(--text-primary); }
+/* A1: a disabled action (Merge… while an agent works, Remove Worktree…) reads as unavailable; its wrapper keeps the tooltip */
+.work-section__actions .link-btn:disabled { color: var(--text-tertiary); cursor: not-allowed; text-decoration: none; }
+.work-section__merge { display: inline-flex; }

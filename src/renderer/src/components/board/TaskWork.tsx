@@ -73,6 +73,13 @@ export function WorkStart({ task, company, busy, onDone }: { task: CompanyTask; 
   </div>
 }
 
+/** Why Merge… is (not) available: an agent at work comes first, then a draft. */
+export function mergeTitle(inFlight: boolean, draft: boolean): string {
+  if (inFlight) return 'An agent is working on this task. Merge once it is In Review.'
+  if (draft) return 'The pull request is a draft'
+  return 'Squash-merge it on GitHub (a confirm comes first)'
+}
+
 /**
  * Under the title: the gone banner (Cancel Task · Back to Backlog · Keep As Is), then branch (mono), worktree path,
  * PR chip and gh state, and Open in Editor · Open PR · Merge… · Remove Worktree….
@@ -117,8 +124,11 @@ export function WorkSection({ task, onDone }: { task: CompanyTask; onDone: () =>
       {[
         started && !gone && <button key="editor" className="link-btn" disabled={busy} onClick={() => void run(() => hive.taskWork.openEditor({ id: task.id }), (r) => (r as { opened: string }).opened === 'finder' ? 'Opened in Finder' : null)}>Open in Editor</button>,
         pr && <button key="pr" className="link-btn" disabled={busy} onClick={() => void run(() => hive.app.openExternal({ url: pr.url }))}>Open PR</button>,
-        pr?.state === 'OPEN' && <button key="merge" className="link-btn" disabled={busy || pr.isDraft} title={pr.isDraft ? 'The pull request is a draft' : 'Squash-merge it on GitHub (a confirm comes first)'} onClick={() => void run(() => hive.taskWork.merge({ id: task.id }), (r) => (r ? (r as { message: string }).message : null))}>Merge…</button>,
-        started && <button key="remove" className="link-btn" disabled={busy || inFlight} title={inFlight ? 'Stop the agent first' : 'Lists what would be lost first'} onClick={() => void run(() => hive.taskWork.remove({ id: task.id }), (r) => (r ? 'Worktree removed' : null))}>Remove Worktree…</button>
+        // A1: never while an agent works on it (it may still be pushing to the branch). The tooltip sits on a wrapper:
+        // a disabled button gets no pointer events
+        pr?.state === 'OPEN' && <span key="merge" className="work-section__merge" title={mergeTitle(inFlight, pr.isDraft)}><button className="link-btn" disabled={busy || pr.isDraft || inFlight} title={mergeTitle(inFlight, pr.isDraft)} onClick={() => void run(() => hive.taskWork.merge({ id: task.id }), (r) => (r ? (r as { message: string }).message : null))}>Merge…</button></span>,
+        // a gone worktree has nothing to remove: the banner above offers what to do instead (QA)
+        started && !gone && <button key="remove" className="link-btn" disabled={busy || inFlight} title={inFlight ? 'Stop the agent first' : 'Lists what would be lost first'} onClick={() => void run(() => hive.taskWork.remove({ id: task.id }), (r) => (r ? 'Worktree removed' : null))}>Remove Worktree…</button>
       ].filter(Boolean).flatMap((el, i) => (i ? [<span key={`sep${i}`} aria-hidden>·</span>, el] : [el]))}
     </div>
   </section>

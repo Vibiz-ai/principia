@@ -384,6 +384,8 @@ CREATE INDEX IF NOT EXISTS claude_history_session ON claude_history(session_id);
 `
 
 export const AUTHORING_ADDED_COLUMNS: [table: string, column: string, ddl: string][] = [
+  // WORKTREE.md A3: frozen at the run end, the branches this run created (only these may be deleted later)
+  ['run_refs', 'created_json', 'TEXT'],
   ['workflows', 'origin_json', 'TEXT'],
   ['workflows', 'worktree_json', 'TEXT'],
   ['runs', 'outcome', 'TEXT'],

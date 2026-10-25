@@ -52,7 +52,8 @@ export function filterTasks(tasks: CompanyTask[], f: BoardFilter, ctx: LaneConte
     (!f.companyId || t.companyId === f.companyId) &&
     (!f.departmentId || taskDepartment(t, ctx) === f.departmentId) &&
     (!f.agentId || t.agentId === f.agentId) &&
-    (f.showBacklog !== false || t.status !== 'backlog') &&
+    // a plan's tasks wait in Backlog for the plan pilot: they show either way, so an approved plan is visible on the Board
+    (f.showBacklog !== false || t.status !== 'backlog' || !!t.plan) &&
     (!q || `${t.identifier} ${t.title} ${t.description}`.toLowerCase().includes(q)))
 }
 

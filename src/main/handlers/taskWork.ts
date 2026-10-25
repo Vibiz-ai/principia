@@ -37,13 +37,16 @@ export function registerTaskWorkHandlers(h: Hive): void {
     const t = h.company.task(id)
     const pr = t.work?.pr
     if (!pr || pr.state !== 'OPEN') throw new HiveError('bad_request', 'There is no open pull request to merge')
+    // A1: no confirm while an agent works on it (the service refuses too)
+    if (t.status === 'in_progress') throw new HiveError('conflict', 'An agent is working on this task. Merge once it is In Review.')
     const ok = await confirm(sender, {
       type: 'question',
       buttons: ['Merge', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
-      message: `Merge #${pr.number} into ${(t.work?.baseRef ?? 'the base branch').replace(/^origin\//, '')}?`,
-      detail: `${t.identifier} · ${t.title}\nSquash-merges the pull request on GitHub (gh pr merge --squash). ${t.identifier} becomes Done with “Merged #${pr.number}”. Your checkout is not touched.`
+      // the PR's own base (a plan's PR goes into main even when its branch started from another milestone's)
+      message: `Merge #${pr.number} into ${(pr.base ?? t.work?.baseRef ?? 'the base branch').replace(/^origin\//, '')}?`,
+      detail: `${t.identifier} · ${t.title}\nSquash-merges the pull request on GitHub (gh pr merge --squash).${t.status === 'done' ? '' : ` ${t.identifier} becomes Done with “Merged #${pr.number}”.`} Your checkout is not touched.`
     })
     return ok ? svc().merge(id) : null
   })

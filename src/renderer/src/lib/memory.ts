@@ -1,6 +1,7 @@
 /** Pure helpers for the Memory page and the memory controls elsewhere (MEMORY.md §10). No DOM, no IPC. */
 import type { AdapterId, ProviderInfo, WorkflowNode } from '@shared/types'
 import type { MemoryEntity, MemoryFact, MemoryFactKind, MemoryMode, MemoryProvenance, MemoryScoreWhy } from '@shared/memory'
+import { promptTitle } from './format'
 
 const DAY = 86_400_000
 
@@ -134,7 +135,7 @@ export function runsFrom(rows: { provenance: MemoryProvenance | null; createdAt:
     const p = r.provenance
     if (!p?.runId) continue
     const cur = m.get(p.runId)
-    if (!cur || cur.at < r.createdAt) m.set(p.runId, { runId: p.runId, title: p.runTitle ?? p.runId, at: cur && cur.at > r.createdAt ? cur.at : r.createdAt })
+    if (!cur || cur.at < r.createdAt) m.set(p.runId, { runId: p.runId, title: p.runTitle ? (/^\s*<principia-/i.test(p.runTitle) ? promptTitle(p.runTitle, 60) : p.runTitle) : p.runId, at: cur && cur.at > r.createdAt ? cur.at : r.createdAt })
   }
   return [...m.values()].sort((a, b) => (a.at < b.at ? 1 : -1))
 }

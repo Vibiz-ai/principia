@@ -54,6 +54,8 @@ export interface ScheduleSeed {
 export type ViewState =
   /** DEPARTMENTS.md §9: the Board once departments are on. `taskId` selects a card, `departmentId` filters (BoardView). */
   | { name: 'tasks'; taskId?: Id; departmentId?: Id }
+  /** PLANS.md §3: the plans list, one plan's page, or the New Plan sheet */
+  | { name: 'plans'; planId?: Id; create?: boolean; nonce?: number }
   /** DEPARTMENTS.md §9: department page (charter, passport section, agents, recurring, routing, filtered board). */
   | { name: 'department'; id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }
   /** DEPARTMENTS.md §9: one agent seat (current task, queue, run history, instructions). */
@@ -1385,7 +1387,7 @@ const COMPANY_COLORS: { label: string; value: string }[] = [
   { label: 'Cyan', value: 'var(--series-2)' },
   { label: 'Green', value: 'var(--series-3)' },
   { label: 'Purple', value: 'var(--series-4)' },
-  { label: 'Pink', value: 'var(--series-5)' },
+  { label: 'Sky', value: 'var(--series-5)' },
   { label: 'Grey', value: 'var(--series-other)' }
 ]
 

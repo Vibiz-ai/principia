@@ -311,6 +311,7 @@ describe('DEPARTMENTS.md board: task model, state machine, heal and park',()=>{
     expect(target).toMatchObject({kind:'prompt',profileId:profile.id,repoId:null})
     const ws=path.join(dir,'companies',acme.slug,'workspace')
     expect(link).toMatchObject({taskId:t.id,agentId:agent.id,cwd:ws,resumeSessionId:null});expect(fs.statSync(ws).isDirectory()).toBe(true)
+    expect(link.title).toBe(`${t.identifier} · Launch post`)
     const prompt=target.kind==='prompt'?target.prompt:''
     expect(prompt).toContain('<principia-role department="Marketing" agent="Copywriter">');expect(prompt).toContain('Write in a warm, plain voice.')
     expect(prompt).toContain(`<principia-task id="${t.identifier}"`);expect(prompt).toContain('Launch post');expect(prompt).toContain('Keep it under 200 words')

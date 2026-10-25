@@ -1,11 +1,15 @@
-import { navigate, useStore } from '../state/store'
+import { navigate, scopeCompanyId, useStore } from '../state/store'
 import { RelativeTime } from '../components/ui'
 
 export function StatusBar(): React.JSX.Element {
   const status = useStore((s) => s.status)
-  const running = (status?.runningSessions ?? 0) + (status?.runningRuns ?? 0)
-  const queued = status?.queuedRuns ?? 0
   const hint = useStore((s) => s.statusHint)
+  // a focused company counts only its own runs and sessions (QA: Beta showed Alpha's 24h and Alpha's running chat)
+  const companyId = useStore((s) => scopeCompanyId(s))
+  const own = companyId && status?.activeByCompany ? (status.activeByCompany[companyId] ?? { running: 0, queued: 0 }) : null
+  const running = own ? own.running : (status?.runningSessions ?? 0) + (status?.runningRuns ?? 0)
+  const queued = own ? own.queued : (status?.queuedRuns ?? 0)
+  const day = status ? (companyId ? (status.last24hByCompany?.[companyId] ?? (status.last24hByCompany ? { passed: 0, failed: 0 } : status.last24h)) : status.last24h) : null
   return (
     <footer className="statusbar">
       <button type="button" className="statusbar__item" onClick={() => void navigate({ name: 'canvas' })} title="Open Canvas (⌘2)">
@@ -30,9 +34,9 @@ export function StatusBar(): React.JSX.Element {
       )}
       <span className="flex1" />
       {hint && <span className="statusbar__item statusbar__static statusbar__hint">{hint}</span>}
-      {status && (status.last24h.passed > 0 || status.last24h.failed > 0) && (
+      {day && (day.passed > 0 || day.failed > 0) && (
         <span className="statusbar__item statusbar__static">
-          24h: <span className="text-success">{status.last24h.passed} ✓</span> <span className={status.last24h.failed ? 'text-failed' : ''}>{status.last24h.failed} ✕</span>
+          24h: <span className="text-success">{day.passed} ✓</span> <span className={day.failed ? 'text-failed' : ''}>{day.failed} ✕</span>
         </span>
       )}
     </footer>

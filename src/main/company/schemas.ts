@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { lookSchema, personaSchema } from '../../shared/onboarding'
 import { taskWorkSchema } from './taskWorkSchema'
+import { taskBriefShape } from './briefSchemas'
 import { AGENT_DATA_DEFAULTS, AGENT_LIMITS, BLOCK_REASONS, DEPARTMENT_DATA_DEFAULTS, DEPARTMENT_LIMITS, DEPARTMENT_PRESET_KEYS, TASK_ASK_KINDS, TASK_SOURCES, TASK_STATUSES } from '../../shared/company'
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/)
 const context = z.string().max(30_000)
@@ -39,7 +40,9 @@ const taskBoardShape = {
 }
 const taskBaseShape = {
   title:z.string().trim().min(1).max(240), description:z.string().max(50_000), companyId:id, repoId:id.nullable(), status:z.enum(TASK_STATUSES), priority:z.union([z.literal(0),z.literal(1),z.literal(2),z.literal(3),z.literal(4)]),
-  source:z.enum(TASK_SOURCES), sourceUrl:z.string().url().max(4000).refine(s=>/^https?:\/\//.test(s),'Use an HTTP or HTTPS source link').nullable(), externalId:z.string().trim().min(1).max(500).nullable(), assigneeProfileId:id.nullable(), parentId:id.nullable(), dependencyIds:z.array(id).max(100)
+  source:z.enum(TASK_SOURCES), sourceUrl:z.string().url().max(4000).refine(s=>/^https?:\/\//.test(s),'Use an HTTP or HTTPS source link').nullable(), externalId:z.string().trim().min(1).max(500).nullable(), assigneeProfileId:id.nullable(), parentId:id.nullable(), dependencyIds:z.array(id).max(100),
+  // PLANS.md §1 (optional: older rows parse unchanged)
+  ...taskBriefShape
 }
 /** Strict, and every §1.3 field is optional with a default, so rows written before departments parse unchanged. */
 export const taskInputSchema = z.object({

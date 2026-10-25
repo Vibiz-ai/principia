@@ -4,6 +4,7 @@ import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoi
 import type { CollabState, RunConversation } from './collab'
 import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
 import type { CompanyProposal, ProposalDecision } from './chatCompany'
+import { PLANS_CHANNELS, type PlansInvokeMap } from './plans'
 import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyLogo, CompanyOverview, LogoCandidate, LogoPick, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
 /**
  * Typed IPC contract between main and renderer. The ONLY bridge is `window.hive` (src/preload).
@@ -146,7 +147,8 @@ export type CompanyAsk = Ask & CompanyStamped
 type KeySpace = { companyId?: Id | null }
 
 /** invoke channels: [request, response]. `void` request = call with no argument. */
-export interface InvokeMap {
+/** PLANS.md: tasks:brief, tasks:proofPreview and the plans:* channels live in shared/plans.ts. */
+export interface InvokeMap extends PlansInvokeMap {
   /** Rail order, Personal last; archived companies only with includeArchived (Settings → Companies). */
   'company:list': [{ includeArchived?: boolean } | V, CompanyPassport[]]
   'company:save': [{id?: string; passport: CompanyPassportInput}, CompanyPassport]
@@ -819,7 +821,8 @@ export const INVOKE_CHANNELS = [
   'cloud:state', 'cloud:pair', 'cloud:unlink', 'cloud:summary', 'cloud:providers', 'cloud:providerPut', 'cloud:providerDelete',
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
-  'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize'
+  'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
+  ...PLANS_CHANNELS
 ] as const satisfies readonly InvokeChannel[]
 
 // compile-time check: INVOKE_CHANNELS covers InvokeMap exactly

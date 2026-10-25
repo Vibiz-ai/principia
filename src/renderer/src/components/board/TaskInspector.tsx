@@ -7,6 +7,7 @@ import { TaskPriority, TaskSourceBadge, TaskStatusIcon } from '../TaskBits'
 import { AskForm } from './AskForm'
 import { ActivityTimeline } from './ActivityTimeline'
 import { TaskEditor } from './TaskEditor'
+import { BriefPanel } from './BriefPanel'
 import { BLOCK_REASON_TEXT, LANE_LABELS, REASON_LABEL, canApprove, inspectorActions, statusChoices } from '../../lib/board'
 import { PRIORITIES, STATUS_LABEL } from '../../lib/company'
 import { reposOf } from '../../lib/companyModel'
@@ -130,7 +131,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
       <WorkStart task={task} company={company} busy={busy} onDone={() => { load(); onSaved() }} />
       <WorkSection task={task} onDone={() => { load(); onSaved() }} />
       <div className="board-inspector__lane">{elsewhere ? <Pill tone="idle">{linearWorkLabel(linear).replace(/^i/, 'I')}</Pill> : <Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{LANE_LABELS[lane]}</Pill>}{reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{reason === 'review' && !task.report ? ' · no report' : ''}</span>}</div>
-      {task.description ? <TextWithDiagrams text={task.description} renderText={(t) => <p className="task-description selectable">{t}</p>} /> : <p className="task-description selectable">No description yet. Add the outcome and acceptance criteria in Edit task.</p>}
+      <BriefPanel task={task} onChanged={() => { load(); onSaved() }} />
 
       {task.status === 'blocked' && task.blockReason && task.blockReason !== 'needs_input' && <div className="board-callout" role="note">{BLOCK_REASON_TEXT[task.blockReason]}</div>}
       {task.ask && !task.ask.answer && <section className="board-section board-section--ask"><AskForm task={task} onAnswered={() => { load(); onSaved() }} /></section>}

@@ -192,6 +192,32 @@ d('Start: a task into its own worktree', () => {
     // the one shared-config key, set once
     expect(git(repo, ['config', '--get-all', 'extensions.worktreeConfig'])).toBe('true')
   })
+
+  it('A2: an interactive session in the task worktree gets the same shims (gh pr merge refused there too)', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId })
+    await svc.startTask(t.id)
+    const w = c.task(t.id).work!
+    const fake = path.join(root, 'fakebin'); fs.mkdirSync(fake)
+    fs.writeFileSync(path.join(fake, 'gh'), '#!/bin/sh\necho REAL GH "$@"\n', { mode: 0o755 })
+    // what SessionDeps.worktreeGuard hands a PTY: the shims first on the session's own PATH
+    const env = wm.guardEnvForPath(path.join(w.worktreePath, 'src'), `${fake}:/usr/bin:/bin`)!
+    expect(env.GIT_CONFIG_VALUE_0).toBe(wm.hooksDir(t.id))
+    expect(env.PATH).toBe(`${path.join(wm.hooksDir(t.id), 'bin')}:${fake}:/usr/bin:/bin`)
+    const merge = spawnSync('gh', ['pr', 'merge', '7'], { cwd: w.worktreePath, env: { ...GIT_ENV, ...env }, encoding: 'utf8' })
+    expect(merge.status).not.toBe(0)
+    expect(merge.stderr).toMatch(/gh pr merge is blocked/)
+    const force = spawnSync('git', ['push', '--force', 'origin', 'HEAD'], { cwd: w.worktreePath, env: { ...GIT_ENV, ...env }, encoding: 'utf8' })
+    expect(force.stderr).toMatch(/blocked in Hive worktrees/)
+    // the founder's checkout and any other folder: no guard env
+    expect(wm.guardEnvForPath(repo, '/usr/bin')).toBeNull()
+    expect(wm.guardEnvForPath(path.join(userData, 'worktrees'), '/usr/bin')).toBeNull()
+    // a removed worktree is no longer guarded (nothing runs there)
+    await svc.removeWorktree(t.id, true).catch(() => undefined)
+    end('canceled')
+    await svc.removeWorktree(t.id, true)
+    expect(wm.guardEnvForPath(w.worktreePath, '/usr/bin')).toBeNull()
+  })
 })
 
 d('the task follows its PR', () => {
@@ -240,6 +266,20 @@ d('the task follows its PR', () => {
     expect(fs.existsSync(w.worktreePath)).toBe(false)
     expect(done.work!.removedAt).toBeTruthy()
     expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('founder edit\n')
+  })
+
+  it('A1: Merge… is refused while the task is In Progress (an agent may still push); gh is never called', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId })
+    await svc.startTask(t.id)
+    const w = c.task(t.id).work!
+    commitIn(w.worktreePath, 'fix.txt')
+    spawnSync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: w.worktreePath, env: GIT_ENV })
+    gh.open(w.branch)
+    await svc.checkTask(t.id)
+    expect(c.task(t.id).status).toBe('in_progress')
+    await expect(svc.merge(t.id)).rejects.toThrow('An agent is working on this task. Merge once it is In Review.')
+    expect(gh.merges).toEqual([])
   })
 
   it('Merge… from Principia: gh pr merge --squash, then Done; a conflict stops at "Merge conflict, open in editor"', async () => {
@@ -472,5 +512,30 @@ d('QA fixes', () => {
     expect(await wm.branches('run_other1')).toEqual([])
     await wm.sweepRun('run_other1')
     expect(git(repo, ['branch', '--list', w.branch])).toContain(w.branch)
+  })
+
+  it('A3: a task turn owns only the branches its guard recorded; one the founder makes meanwhile is never swept', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId })
+    await svc.startTask(t.id)
+    const w = c.task(t.id).work!
+    // the turn's run snapshots the repo when it starts (QA found this: the founder branched in their checkout mid-turn)
+    const runId = lastRun().run.id
+    wm.snapshotRun(runId, [repo])
+    // the agent makes a scratch branch in its worktree (the guard's reference-transaction hook records it)
+    git(w.worktreePath, ['branch', 'agent-scratch'])
+    // the founder makes branches in their own checkout while the turn runs
+    git(repo, ['branch', 'founder-mid'])
+    git(repo, ['branch', 'founder-mid-2', 'main'])
+    expect(fs.readFileSync(path.join(wm.hooksDir(t.id), 'created-refs'), 'utf8')).toMatch(/^\d+ agent-scratch\n$/)
+    expect(svc.guardOwner(t.id)).toBe(t.id)
+    end('passed')
+    const left = await wm.sweepRun(runId, { atRunEnd: true, guardOwners: [svc.guardOwner(t.id)!] })
+    expect(left).toEqual([])
+    expect(git(repo, ['branch', '--list', 'agent-scratch'])).toBe('')
+    expect(git(repo, ['branch', '--list', 'founder-mid'])).toContain('founder-mid')
+    expect(git(repo, ['branch', '--list', 'founder-mid-2'])).toContain('founder-mid-2')
+    // and a later Remove-time sweep never offers them either
+    expect(await wm.branches(runId)).toEqual([])
   })
 })

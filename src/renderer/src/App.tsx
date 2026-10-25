@@ -16,6 +16,8 @@ import { AgentsView } from './views/AgentsView'
 import { ArtifactsView } from './views/ArtifactsView'
 import { CanvasView } from './views/CanvasView'
 import { TasksView } from './views/TasksView'
+import { PlansView } from './views/PlansView'
+import { plansEnabled, PLANS_OFF } from '@shared/plans'
 import { AgentSeatView } from './views/AgentSeatView'
 import { DepartmentView } from './views/DepartmentView'
 import { EmptyState } from './components/ui'
@@ -54,6 +56,7 @@ const PassportVaultView = lateViews['./views/PassportVaultView.tsx']?.PassportVa
 
 const TITLES: Record<ViewState['name'], string> = {
   tasks: 'Tasks',
+  plans: 'Plans',
   passport: 'Passport',
   portfolio: 'Portfolio',
   company: 'Company Settings',
@@ -151,6 +154,7 @@ export function App(): React.JSX.Element {
 
 function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
   const portfolioHome = useStore((s) => multiCompany(s) && activeCompany(s) === 'all')
+  const plansOn = useStore((s) => plansEnabled(s.settings?.experimental))
   const departments = useStore((s) => departmentsOn(s))
   switch (view.name) {
     case 'department':
@@ -160,6 +164,11 @@ function ViewSwitch({ view }: { view: ViewState }): React.JSX.Element {
       return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} nonce={view.nonce} /> : <AgentSeatView id={view.id} />
     case 'tasks':
       return <TasksView />
+    case 'plans':
+      if (!departments) return <DepartmentsOff />
+      // PLANS.md §0: behind experimental.plans; a stale deep link lands on a plain notice
+      if (!plansOn) return <div className="view"><Toolbar title="Plans" /><EmptyState icon="plans" text={PLANS_OFF} /></div>
+      return <PlansView planId={view.planId} create={view.create} nonce={view.nonce} />
     case 'passport':
       return PassportVaultView ? (
         <PassportVaultView view={view} />

@@ -69,19 +69,19 @@
   --status-failed-soft: rgba(242, 92, 92, 0.14);
   --status-scheduled: #b28cff;
   --status-scheduled-soft: rgba(178, 140, 255, 0.14);
-  --status-warning: #f0b54a;              /* paused, LIVE keys, missed */
-  --status-warning-soft: rgba(240, 181, 74, 0.14);
+  --status-warning: #d6e0f0;              /* paused, LIVE keys, missed */
+  --status-warning-soft: rgba(214, 224, 240, 0.14);
   --status-canceled: #6d6e76;
   --status-canceled-soft: rgba(109, 110, 118, 0.14);
-  --status-needs: #f5a524;                /* Needs you: asks, idle turns (LIVE.md §11) */
-  --status-needs-soft: rgba(245, 165, 36, 0.14);
+  --status-needs: #38d6e8;                /* Needs you: asks, idle turns (LIVE.md §11) */
+  --status-needs-soft: rgba(56, 214, 232, 0.14);
 
   /* ---------- Chart series (categorical, fixed order; validated on the dark surface) ---------- */
   --series-1: #3987e5;
   --series-2: #2fb5c9;                  /* cyan (was a terracotta orange; the founder bans warm/brown accents) */
   --series-3: #199e70;
   --series-4: #9085e9;
-  --series-5: #d55181;
+  --series-5: #7fc4ff;                  /* sky (was a warm pink; company avatars draw from these: no warm hues) */
   --series-other: #8b8d96;
 
   /* ---------- Providers (dots, segment tints only) ---------- */

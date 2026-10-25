@@ -66,9 +66,17 @@ export const GRAPH_CAP = 150
 export const BRIEF = { pinnedChars: 1500, relevantChars: 2500, keyChars: 1500, totalChars: 5600, relevantFacts: 8, keyFacts: 10, promptChars: 8000 }
 const DAY = 86_400_000
 
-export function visFromFilter(scope: MemoryScopeFilter['scope']): Visibility {
-  if (scope === 'all') return { kind: 'all' }
+/**
+ * `within`: the repositories of the company asking (COMPANY.md §3). Given, "all" means those repos plus global, and a
+ * repo outside them shows only global memory. Absent = every company (the pre-company behaviour).
+ */
+export function visFromFilter(scope: MemoryScopeFilter['scope'], within?: readonly Id[] | null): Visibility {
   if (scope === 'global') return { kind: 'global' }
+  if (within) {
+    if (scope === 'all') return { kind: 'repos', repoIds: [...within] }
+    return within.includes(scope.repoId) ? { kind: 'repo', repoId: scope.repoId } : { kind: 'repos', repoIds: [] }
+  }
+  if (scope === 'all') return { kind: 'all' }
   return { kind: 'repo', repoId: scope.repoId }
 }
 
@@ -294,6 +302,10 @@ const round = (n: number) => Math.round(n * 1000) / 1000
 export function lookupEntity(store: MemoryStore, nameOrId: string, vis: Visibility): EntityRow | null {
   if (vis.kind === 'repo') return store.resolveEntity(nameOrId, vis.repoId)
   if (vis.kind === 'global') return store.resolveEntity(nameOrId, null)
+  if (vis.kind === 'repos') {
+    const e = lookupEntity(store, nameOrId, { kind: 'all' })
+    return e && (!e.repo_id || vis.repoIds.includes(e.repo_id)) ? e : null
+  }
   const s = nameOrId.trim()
   if (/^ment_[0-9a-z]+$/.test(s)) return store.entityRow(s)
   const norm = normalizeName(s)
@@ -362,8 +374,8 @@ export function relationsTouching(store: MemoryStore, ids: string[], vis: Visibi
 // ======================================================================================
 const statusesOf = (f: MemoryScopeFilter): MemoryStatus[] => (f.statuses?.length ? f.statuses : ['active', 'pending'])
 
-export function searchPage(store: MemoryStore, q: { query: string; includeHistory?: boolean; limit?: number } & MemoryScopeFilter, redact?: (s: string) => string): MemorySearchHit[] {
-  const vis = visFromFilter(q.scope)
+export function searchPage(store: MemoryStore, q: { query: string; includeHistory?: boolean; limit?: number } & MemoryScopeFilter, redact?: (s: string) => string, within?: readonly Id[] | null): MemorySearchHit[] {
+  const vis = visFromFilter(q.scope, within)
   const ranked = rankedSearch(store, {
     vis,
     query: q.query,
@@ -382,9 +394,9 @@ export function searchPage(store: MemoryStore, q: { query: string; includeHistor
   }))
 }
 
-export function graphQuery(store: MemoryStore, q: MemoryGraphQuery, redact?: (s: string) => string): MemoryGraph {
+export function graphQuery(store: MemoryStore, q: MemoryGraphQuery, redact?: (s: string) => string, within?: readonly Id[] | null): MemoryGraph {
   const db = store.db
-  const vis = visFromFilter(q.scope)
+  const vis = visFromFilter(q.scope, within)
   const statuses = statusesOf(q)
   const limit = Math.min(Math.max(q.limit ?? GRAPH_CAP, 1), GRAPH_CAP)
   const ff: FactFilter = { kinds: q.kinds, actors: q.actors, adapters: q.adapters, unreviewedOnly: q.unreviewedOnly, statuses }
@@ -484,8 +496,8 @@ export function entityDetail(store: MemoryStore, id: Id, redact?: (s: string) =>
   }
 }
 
-export function factsQuery(store: MemoryStore, q: MemoryFactQuery, redact?: (s: string) => string): { items: MemoryFact[]; total: number } {
-  const vis = visFromFilter(q.scope)
+export function factsQuery(store: MemoryStore, q: MemoryFactQuery, redact?: (s: string) => string, within?: readonly Id[] | null): { items: MemoryFact[]; total: number } {
+  const vis = visFromFilter(q.scope, within)
   const v = scopedSql(vis, 'f')
   const fl = factFilterSql({ kinds: q.kinds, actors: q.actors, adapters: q.adapters, unreviewedOnly: q.unreviewedOnly, runId: q.runId, sessionId: q.sessionId, statuses: statusesOf(q) }, 'f')
   const where = [v.sql, fl.sql]
@@ -515,10 +527,19 @@ export interface OverviewCore {
   repos: { repoId: Id; repoName: string | null; facts: number; changedAt: string }[]
   lastSeq: number
 }
-export function overviewCore(store: MemoryStore): OverviewCore {
+/**
+ * The overview's counts and repos. `within`: one company's repositories (COMPANY.md §3), so the counts are what that
+ * company can see (its repos plus global memory), never another company's; undefined = every repo (All mode).
+ */
+export function overviewCore(store: MemoryStore, within?: readonly Id[] | null): OverviewCore {
   const db = store.db
-  const one = (sql: string) => (db.prepare(sql).get() as { n: number }).n
-  const repos = db
+  const vis = visFromFilter('all', within)
+  const fv = scopedSql(vis, 'f')
+  const ev = entityVisSql(vis, 'e')
+  const rv = scopedSql(vis, 'r')
+  const re = relationEndsSql(vis, 'r')
+  const one = (sql: string, params: unknown[] = []) => (db.prepare(sql).get(...params) as { n: number }).n
+  const repos = (db
     .prepare(
       `SELECT x.repo_id AS repoId, sum(x.nf) AS facts, max(x.changed) AS changedAt,
          (SELECT g.repo_name FROM mem_grant g WHERE g.repo_id = x.repo_id AND g.repo_name IS NOT NULL ORDER BY g.created_at DESC LIMIT 1) AS repoName
@@ -526,16 +547,17 @@ export function overviewCore(store: MemoryStore): OverviewCore {
              UNION ALL SELECT repo_id, 0, updated_at FROM mem_entity WHERE repo_id IS NOT NULL) x
        GROUP BY x.repo_id ORDER BY changedAt DESC`
     )
-    .all() as OverviewCore['repos']
+    .all() as OverviewCore['repos']).filter((r) => !within || within.includes(r.repoId))
   return {
     agentWritesPaused: store.isPaused(),
     counts: {
-      entities: one('SELECT count(*) AS n FROM mem_entity'),
-      facts: one("SELECT count(*) AS n FROM mem_fact WHERE status = 'active'"),
-      relations: one("SELECT count(*) AS n FROM mem_relation WHERE status = 'active'"),
+      entities: one(`SELECT count(*) AS n FROM mem_entity e WHERE ${ev.sql}`, ev.params),
+      facts: one(`SELECT count(*) AS n FROM mem_fact f WHERE f.status = 'active' AND ${fv.sql}`, fv.params),
+      relations: one(`SELECT count(*) AS n FROM mem_relation r WHERE r.status = 'active' AND ${rv.sql} AND ${re.sql}`, [...rv.params, ...re.params]),
       pending:
-        one("SELECT count(*) AS n FROM mem_fact WHERE status = 'pending'") + one("SELECT count(*) AS n FROM mem_relation WHERE status = 'pending'"),
-      unreviewed: one("SELECT count(*) AS n FROM mem_fact WHERE status = 'active' AND actor = 'agent' AND reviewed = 0")
+        one(`SELECT count(*) AS n FROM mem_fact f WHERE f.status = 'pending' AND ${fv.sql}`, fv.params) +
+        one(`SELECT count(*) AS n FROM mem_relation r WHERE r.status = 'pending' AND ${rv.sql} AND ${re.sql}`, [...rv.params, ...re.params]),
+      unreviewed: one(`SELECT count(*) AS n FROM mem_fact f WHERE f.status = 'active' AND f.actor = 'agent' AND f.reviewed = 0 AND ${fv.sql}`, fv.params)
     },
     repos,
     lastSeq: store.lastSeq()
@@ -543,8 +565,8 @@ export function overviewCore(store: MemoryStore): OverviewCore {
 }
 
 /** JSONL export lines (one entity / fact / relation per line, with provenance). */
-export function exportLines(store: MemoryStore, scope: MemoryScopeFilter['scope'], redact?: (s: string) => string): string[] {
-  const vis = visFromFilter(scope)
+export function exportLines(store: MemoryStore, scope: MemoryScopeFilter['scope'], redact?: (s: string) => string, within?: readonly Id[] | null): string[] {
+  const vis = visFromFilter(scope, within)
   const m = new RowMapper(store, redact)
   const ev = entityVisSql(vis, 'e')
   const ents = store.db.prepare(`SELECT e.* FROM mem_entity e WHERE ${ev.sql} ORDER BY e.created_at`).all(...ev.params) as EntityRow[]

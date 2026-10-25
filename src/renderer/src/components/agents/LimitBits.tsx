@@ -1,5 +1,5 @@
 /**
- * Usage limits, "Stalled?" and leftover processes (LANDSCAPE "Elon's cut" #4, #5): the amber Stalled? badge, the
+ * Usage limits, "Stalled?" and leftover processes (LANDSCAPE "Elon's cut" #4, #5): the cyan Stalled? badge, the
  * "Hit usage limit · resets 15:00" line with Retry at reset / Retry now / Cancel, and the leftover-process list used
  * on Home and in Settings. Principia never stops a stalled agent or a leftover process on its own.
  */
@@ -12,7 +12,7 @@ import { span } from '../../lib/time'
 import { attempt, navigate, toast, useStore } from '../../state/store'
 import { Button, EmptyState, useTick } from '../ui'
 
-/** Amber "Stalled?" badge for a live root with no output for Settings.stallMinutes. Hidden otherwise. */
+/** Cyan "Stalled?" badge for a live root with no output for Settings.stallMinutes. Hidden otherwise. */
 export function StalledBadge({ agent }: { agent: Pick<AgentNode, 'status' | 'stalledSince'> | null | undefined }): React.JSX.Element | null {
   const mins = useStore((s) => s.settings?.stallMinutes ?? 10)
   useTick(60_000)

@@ -9,6 +9,8 @@ import { log } from '../log'
 import { DepartmentStore } from './departments'
 import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpdateSchema, passportExportSchema, passportInputSchema, taskInputSchema, taskPatchSchema } from './schemas'
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
+import { briefPromptBlock, contextFromDescription, planStartRefusal } from './brief'
+import { planBlockerMet } from '../../shared/plans'
 import { assertEditable, assertReassignable, assertTransition, runEndState } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
@@ -25,6 +27,8 @@ export interface TaskRunLink {
   cwd: string | null
   /** set on a resumed Claude turn: the prompt then holds only the wake and the rules footer */
   resumeSessionId: string | null
+  /** the run's title: the task's key and title, never the prompt's frame (QA: canvas cards showed <principia-role>) */
+  title?: string
 }
 /** patchInFlight: the fields main writes while a run holds the task. */
 const inFlightPatchSchema = taskPatchSchema.pick({ report: true, ask: true, agentSessionId: true, pendingWake: true, autoWakes: true, handoffs: true })
@@ -339,7 +343,8 @@ export class CompanyStore {
     }
     if (input.status==='done' && !this.depsDone(input)) fail('Complete dependencies before completing this task')
   }
-  private depsDone(t: Pick<CompanyTaskInput,'dependencyIds'>): boolean { return t.dependencyIds.every(d=>this.task(d).status==='done') }
+  /** PLANS.md §2: inside one plan a blocker in review counts as met (the milestone gate reviews them together). */
+  private depsDone(t: Pick<CompanyTaskInput,'dependencyIds'|'plan'>): boolean { return t.dependencyIds.every(d=>{const dep=this.task(d);return dep.status==='done'||planBlockerMet(t,dep)}) }
   /** A canceled dependency never becomes done: a task waiting on it would sit in blocked(deps) forever. */
   private canceledDep(t: Pick<CompanyTaskInput,'dependencyIds'>): BoardTask|null {
     for(const d of t.dependencyIds) { const dep=this.task(d);if(dep.status==='canceled') return dep }
@@ -416,6 +421,7 @@ export class CompanyStore {
     const depsDone=this.depsDone(next)
     if(board&&!elsewhere&&(statusChanged||old.blockReason!==next.blockReason)) assertTransition(old,next,'human',{routed:!!(next.departmentId||next.agentId),depsDone,doneNote:next.doneNote})
     if(statusChanged&&next.status!=='done'&&old.status==='done') next.doneNote=null
+    if(next.brief&&next.description!==old.description) next.brief=contextFromDescription(next.brief,next.description,new Date().toISOString())
     // a new seat or profile never resumes the previous one's provider conversation
     if((next.agentId??null)!==(old.agentId??null)||(next.assigneeProfileId??null)!==(old.assigneeProfileId??null)) next.agentSessionId=null
     let healed=false
@@ -724,11 +730,13 @@ export class CompanyStore {
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
    * autopilot gate. One in-flight task per agent.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested'}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
       if(this.startedElsewhere(task)) fail(`${this.externalLink(task.id)?.key ?? 'This task'} is in progress in Linear. Move it to Todo to run an agent here.`)
+      // PLANS.md §2.4: a plan task runs only through the plan pilot (its milestone worktree), never in the checkout
+      if(task.plan&&!opts.plan) fail(planStartRefusal(task))
       if(task.status==='in_progress'||(task.runId&&['queued','running'].includes(this.store.getRun(task.runId)?.status??''))) fail('An agent already owns this task')
       if(['done','canceled'].includes(task.status)) fail('Reopen this task before starting an agent')
       if(!this.depsDone(task)) fail('Complete dependencies before starting this task')
@@ -765,7 +773,7 @@ export class CompanyStore {
         const prompt=resumeSessionId ? buildResumePrompt(wake) : this.taskPrompt(task,agent,wake)
         target={kind:'prompt',profileId:selected!,repoId,prompt:this.redact(prompt),memory:'read-write'}
       }
-      const run=start(target,task.companyId,{taskId:task.id,agentId:agent?.id ?? null,cwd,resumeSessionId})
+      const run=start(target,task.companyId,{taskId:task.id,agentId:agent?.id ?? null,cwd,resumeSessionId,title:`${task.identifier} · ${task.title}`})
       // §6: a task's run belongs to the task's company, whatever the engine inferred; §1.2 runs.task_id / agent_id
       this.store.db.prepare('UPDATE runs SET company_id=? WHERE id=?').run(task.companyId,run.id)
       if(this.runLinks) this.store.db.prepare('UPDATE runs SET task_id=?,agent_id=? WHERE id=?').run(task.id,agent?.id ?? null,run.id)
@@ -805,7 +813,7 @@ export class CompanyStore {
       const a=t.agentId ? this.departments.getAgent(t.agentId) : null;const d=t.departmentId ? this.departments.get(t.departmentId) : null
       return {identifier:t.identifier,title:t.title,agent:a ? a.name : trackedBy(t) ? 'a chat' : null,department:d?.name ?? null}
     })
-    return buildTaskPrompt({task,companyId:task.companyId,external:this.externalLink(task.id),department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running})
+    return buildTaskPrompt({task,companyId:task.companyId,external:this.externalLink(task.id),department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running,brief:briefPromptBlock(task)})
   }
   /**
    * Run end (§1.4, §4.5): ask → blocked(needs_input); report blocked → blocked(agent); report review, or passed with no

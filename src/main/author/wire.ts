@@ -102,7 +102,17 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     }
     if (TERMINAL_RUN.has(run.status) && snapped.has(run.id) && !swept.has(run.id)) {
       swept.add(run.id)
-      void wm.sweepRun(run.id).catch((e) => log.warn('run branch sweep failed', { runId: run.id, e: String(e) }))
+      // WORKTREE.md A3: a task's turn ran every git command under its worktree's guard, which recorded the branches it
+      // made; only those are the run's (never one the founder made meanwhile in their own checkout)
+      let guardOwners: Id[] | undefined
+      try {
+        const taskId = (h.db.prepare('SELECT task_id FROM runs WHERE id = ?').get(run.id) as { task_id: string | null } | undefined)?.task_id ?? null
+        const owner = taskId ? (h.taskWork?.guardOwner(taskId) ?? null) : null
+        if (owner) guardOwners = [owner]
+      } catch {
+        /* older db: the refs diff */
+      }
+      void wm.sweepRun(run.id, { atRunEnd: true, guardOwners }).catch((e) => log.warn('run branch sweep failed', { runId: run.id, e: String(e) }))
     }
   })
 

@@ -518,6 +518,8 @@ export interface StartRunOptions {
   agentId?: Id | null
   /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
   resumeSessionId?: string | null
+  /** Prompt runs: the title to show instead of one cut from the prompt (a board task turn: its key and title). */
+  title?: string | null
   /** §3.6 task runs: the time cap in minutes (warned ~2 min before, then canceled). Absent = the seat's limits.runMinutes. */
   runMinutes?: number | null
 }

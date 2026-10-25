@@ -104,6 +104,19 @@ export interface EngineOverrides {
   harnessFallback?: (runId: string, to: AdapterId) => boolean
 }
 
+/**
+ * A prompt run's title source. A framed prompt (a board task turn, a Forum reply: `<principia-role …>` first) is named by
+ * its task's Title line, else by the first text outside the frames, never by the frame itself.
+ */
+export function framedPromptTitle(prompt: string): string {
+  const text = prompt.trim()
+  if (!/^<principia-[a-z]/i.test(text)) return text
+  const title = /<principia-task\b[^>]*>\s*Title:[ \t]*([^\n]*)/i.exec(text)?.[1]?.trim()
+  if (title) return title
+  const rest = text.replace(/<principia-([a-z-]+)\b[^>]*>[\s\S]*?<\/principia-\1>/gi, '').trim()
+  return rest.split('\n').map((l) => l.trim()).find(Boolean) ?? 'Task turn'
+}
+
 export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides = {}): Engine {
   const now = (): Date => (ctx.now ? ctx.now() : new Date())
   const adapters: Record<AdapterId, Adapter> = { ...DEFAULT_ADAPTERS, ...overrides.adapters }
@@ -228,7 +241,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       if (!target.prompt?.trim()) throw new HiveError('validation', 'Prompt is empty', [{ path: 'prompt', message: 'Prompt is empty' }])
       if (!ctx.getProfile(target.profileId)) throw new HiveError('not_found', `Agent profile ${target.profileId} not found`)
       if (target.repoId && !ctx.getRepo(target.repoId)) throw new HiveError('not_found', `Repository ${target.repoId} not found`)
-      const oneLine = target.prompt.trim().replace(/\s+/g, ' ')
+      const oneLine = (opts.title?.trim() || framedPromptTitle(target.prompt)).replace(/\s+/g, ' ')
       title = oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine
     } else if (target.kind === 'workflow') {
       const wf = ctx.getWorkflow(target.workflowId)

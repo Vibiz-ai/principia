@@ -23,6 +23,12 @@ describe('IPC request schemas', () => {
     expect(REQUEST_SCHEMAS['artifacts:openDir'].safeParse({ runId: 'r_abc' }).success).toBe(true)
     expect(REQUEST_SCHEMAS['sessions:kill'].safeParse({ id: '../../etc' }).success).toBe(false)
   })
+  it('usage:cleanup takes run worktree, task worktree and log ids, nothing else', () => {
+    const ok = (ids: string[]) => REQUEST_SCHEMAS['usage:cleanup'].safeParse({ ids }).success
+    expect(ok(['wt:wt_ab12', 'tw:task_310da2a460d890c487ff', 'log:r_0000000001'])).toBe(true)
+    expect(ok(['tw:../../etc'])).toBe(false)
+    expect(ok(['rm:task_1'])).toBe(false)
+  })
   it('accepts a full workflow draft with all node types', () => {
     const draft = {
       name: 'W',

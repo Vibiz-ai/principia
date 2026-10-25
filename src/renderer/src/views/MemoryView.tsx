@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AdapterId, Id } from '@shared/types'
 import type { MemoryEntity, MemoryFact, MemoryFactKind, MemoryGraph as Graph, MemoryOverview, MemoryRelation, MemoryScopeFilter, MemorySearchHit } from '@shared/memory'
 import { MEMORY_FACT_KINDS } from '@shared/memory'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { Icon } from '../components/Icon'
 import { MemoryGraph } from '../components/memory/MemoryGraph'
 import { MemoryInspector } from '../components/memory/MemoryInspector'
@@ -17,7 +18,7 @@ import { EntityPicker, type EntityPick } from '../components/memory/EntityPicker
 import { AutoTextarea, Button, EmptyState, ErrorState, Field, IconButton, Kbd, Loading, Segmented, Sheet, Switch, Toolbar } from '../components/ui'
 import { ENTITY_TYPES, KIND_GLYPH, KIND_LABEL, KIND_SINGULAR, TIME_WINDOW_LABEL, adapterName, briefPinned, entityHue, factsByEntity, keyKnowledge, recentOffGraph, runsFrom, typeCounts, whyText, withinWindow, type TimeWindow } from '../lib/memory'
 import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
-import { attempt, getState, loadJson, navigate, saveJson, setMemoryPaused, setState, toast, useStore, type MemoryPageScope, type ViewState } from '../state/store'
+import { attempt, getState, loadJson, scopeCompanyId, navigate, saveJson, setMemoryPaused, setState, toast, useStore, type MemoryPageScope, type ViewState } from '../state/store'
 import '../styles/memory.css'
 
 type Tab = 'graph' | 'facts' | 'review'
@@ -80,9 +81,22 @@ export function LegacyMemoryPage({ view }: { view: MemoryViewState }): React.JSX
   )
 }
 
+/** COMPANY.md §3: the repositories of the focused company (every repo in All mode). Memory never lists another's. */
+function useCompanyRepos(): ReturnType<typeof getState>['repos'] {
+  const all = useStore((s) => s.repos)
+  const companyId = useStore((s) => scopeCompanyId(s))
+  return useMemo(() => (companyId ? all.filter((r) => (r.companyId ?? PERSONAL_COMPANY_ID) === companyId) : all), [all, companyId])
+}
+/** Every v1 memory read carries the focused company, so main scopes it to that company's repositories. */
+const co = <T extends object>(q: T): T & { companyId?: Id } => {
+  const companyId = scopeCompanyId()
+  return companyId ? { ...q, companyId } : q
+}
+
 function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }): React.JSX.Element {
   const overview = useStore((s) => s.memory)
-  const repos = useStore((s) => s.repos)
+  const repos = useCompanyRepos()
+  const companyKey = useStore((s) => scopeCompanyId(s) ?? 'all')
   const lastRepoId = useStore((s) => s.settings?.lastRepoId ?? null)
   const sessionsWrite = useStore((s) => (s.settings?.sessionMemory ?? 'read-write') === 'read-write')
   const [ovError, setOvError] = useState<string | null>(null)
@@ -113,7 +127,8 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
 
   // ---- overview (also refreshed by the store on memory:changed) ----
   const loadOverview = useCallback(() => {
-    hive.memory.overview().then(
+    const companyId = scopeCompanyId()
+    hive.memory.overview(companyId ? { companyId } : undefined).then(
       (o) => {
         setState({ memory: o })
         setOvError(null)
@@ -121,7 +136,17 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
       (e) => setOvError(errorMessage(e))
     )
   }, [])
-  useEffect(loadOverview, [loadOverview])
+  useEffect(loadOverview, [loadOverview, companyKey])
+  // another company's repo (or run) never carries over a company switch: pick again from this company's overview
+  const firstCompany = useRef(true)
+  useEffect(() => {
+    if (firstCompany.current) return void (firstCompany.current = false)
+    setScope(null)
+    setRunId(null)
+    setSessionId(null)
+    setSelected(null)
+    setCenter(null)
+  }, [companyKey])
 
   // deep links (RunView chip, palette) re-apply on every navigation
   useEffect(() => {
@@ -183,7 +208,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
     if (!scope) return
     let live = true
     hive.memory
-      .graph({ ...query, runId: runId ?? undefined, centerId: center?.id, hops: center ? center.hops : undefined })
+      .graph(co({ ...query, runId: runId ?? undefined, centerId: center?.id, hops: center ? center.hops : undefined }))
       .then(
         (g) => {
           if (!live) return
@@ -201,7 +226,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
   useEffect(() => {
     if (!scope) return
     let live = true
-    hive.memory.facts({ ...query, runId: runId ?? undefined, limit: 1000 }).then(
+    hive.memory.facts(co({ ...query, runId: runId ?? undefined, limit: 1000 })).then(
       (r) => live && setFacts(r),
       () => live && setFacts({ items: [], total: 0 })
     )
@@ -213,14 +238,14 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
   useEffect(() => {
     if (!scope) return
     let live = true
-    hive.memory.facts({ scope: scopeArg, statuses: ['pending'], limit: 500 }).then(
+    hive.memory.facts(co({ scope: scopeArg, statuses: ['pending'], limit: 500 })).then(
       (r) => live && setPending(r.items),
       () => live && setPending([])
     )
     // contested relations wait for review too (they count in the sidebar badge). The graph query caps entities at
     // 150, so "All" asks per repository (and global) to stay complete for real repo sizes.
     const scopes: MemoryScopeFilter['scope'][] = scopeArg === 'all' ? [...(getState().memory?.repos ?? []).map((r) => ({ repoId: r.repoId })), 'global'] : [scopeArg]
-    Promise.all(scopes.map((sc) => hive.memory.graph({ scope: sc, statuses: ['pending'] }))).then(
+    Promise.all(scopes.map((sc) => hive.memory.graph(co({ scope: sc, statuses: ['pending'] })))).then(
       (gs) => {
         if (!live) return
         const names: Record<string, string> = {}
@@ -234,7 +259,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
       () => live && setPendingRels({ relations: [], names: {} })
     )
     // run picker options: every run that wrote memory in this scope (unaffected by the other filters)
-    hive.memory.facts({ scope: scopeArg, statuses: ['active', 'pending', 'invalid'], limit: 1000 }).then(
+    hive.memory.facts(co({ scope: scopeArg, statuses: ['active', 'pending', 'invalid'], limit: 1000 })).then(
       (r) => live && setAllRuns(runsFrom(r.items)),
       () => undefined
     )
@@ -348,7 +373,7 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
     }
   }
   const exportMemory = async (): Promise<void> => {
-    const res = await attempt(() => hive.memory.export({ scope: scopeArg }), 'Export memory')
+    const res = await attempt(() => hive.memory.export(co({ scope: scopeArg })), 'Export memory')
     if (res) toast(`Exported to ${res.path}`)
   }
   const moreMenu = async (): Promise<void> => {
@@ -636,11 +661,14 @@ function MemoryPage({ view }: { view: Extract<ViewState, { name: 'memory' }> }):
 function MemoryConnectionStatus(): React.JSX.Element {
   const providers = useStore(s => s.providers)
   const mode = useStore(s => s.settings?.sessionMemory ?? 'read-write')
+  // the company's own Passport (mission, connections, Linear) is the 'company' view; 'passport' is this page while the
+  // vault is off, so the button went nowhere (QA)
+  const companyId = useStore(s => scopeCompanyId(s))
   const available = providers.filter(p => p.available && p.id !== 'shell')
   return <div className="mview__connections" aria-label="Memory connections">
     <div><strong>Shared project memory</strong><span>Saved facts and decisions appear here. Full conversations stay in session history.</span></div>
     <div className="mview__connection-badges">{available.map(p => <span key={p.id} className={p.memory === 'inject' ? 'text-warning' : ''} title="Applies to new sessions in an assigned project; existing sessions keep their original connection.">{p.label}: {mode === 'off' ? 'off for new sessions' : p.memory === 'mcp' ? mode === 'read-write' ? 'read & write tools' : 'read tools' : 'brief only · cannot save'}</span>)}</div>
-    <div className="mview__connection-actions"><Button size="sm" variant="ghost" icon="passport" onClick={() => void navigate({ name: 'passport' })}>Company Passport</Button><Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>Memory settings</Button></div>
+    <div className="mview__connection-actions">{companyId && <Button size="sm" variant="ghost" icon="passport" onClick={() => void navigate({ name: 'company', companyId, nonce: Date.now() })}>Company Passport</Button>}<Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>Memory settings</Button></div>
   </div>
 }
 
@@ -664,7 +692,7 @@ async function entityContextMenu(id: Id, g: Graph, select: (id: Id | null, o?: {
 
 // ---------- header pieces ----------
 function ScopePicker({ scope, onChange, overview, repoNames }: { scope: MemoryPageScope; onChange: (s: MemoryPageScope) => void; overview: MemoryOverview; repoNames: Record<string, string> }): React.JSX.Element {
-  const repos = useStore((s) => s.repos)
+  const repos = useCompanyRepos()
   const withMemory = new Map(overview.repos.map((r) => [r.repoId, r]))
   const others = repos.filter((r) => !withMemory.has(r.id))
   const value = typeof scope === 'string' ? scope : `repo:${scope.repoId}`
@@ -732,7 +760,7 @@ function SearchBox({ inputRef, scope, onPick }: { inputRef: React.RefObject<HTML
     if (!query) return setHits(null)
     const my = ++seq.current
     const t = setTimeout(() => {
-      hive.memory.search({ scope, query, limit: 12, includeHistory: false }).then(
+      hive.memory.search(co({ scope, query, limit: 12, includeHistory: false })).then(
         (h) => {
           if (my !== seq.current) return
           setHits(h)
@@ -974,7 +1002,7 @@ function FilteredEmpty({ filtered, scope, repoNames, onClear, onAdd }: { filtere
 
 // ---------- + Add memory (user-authored) ----------
 function AddMemorySheet({ scope, repoNames, candidates, onClose }: { scope: MemoryPageScope; repoNames: Record<string, string>; candidates: MemoryEntity[]; onClose: (entityId: Id | null) => void }): React.JSX.Element {
-  const repos = useStore((s) => s.repos)
+  const repos = useCompanyRepos()
   const [where, setWhere] = useState<string>(typeof scope === 'string' ? (scope === 'all' && repos[0] ? repos[0].id : 'global') : scope.repoId)
   const [pick, setPick] = useState<EntityPick | null>(null)
   const [type, setType] = useState('concept')
@@ -1058,7 +1086,7 @@ function BriefSheet({ scope, repoNames, onPickEntity, onClose }: { scope: Memory
   const seq = useRef(0)
   useEffect(() => {
     let live = true
-    hive.memory.facts({ scope: scopeArg, statuses: ['active'], limit: 1000 }).then(
+    hive.memory.facts(co({ scope: scopeArg, statuses: ['active'], limit: 1000 })).then(
       (r) => live && setFacts(r.items),
       () => live && setFacts([])
     )
@@ -1071,7 +1099,7 @@ function BriefSheet({ scope, repoNames, onPickEntity, onClose }: { scope: Memory
     if (!q) return setRelevant(null)
     const my = ++seq.current
     const t = setTimeout(() => {
-      hive.memory.search({ scope: scopeArg, query: q.slice(0, 300), limit: 20 }).then(
+      hive.memory.search(co({ scope: scopeArg, query: q.slice(0, 300), limit: 20 })).then(
         (hits) => {
           if (my !== seq.current) return
           const out: MemoryFact[] = []

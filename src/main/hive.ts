@@ -9,6 +9,7 @@ import { createCompanyBridge } from './companyBridge'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge } from './company/dispatcher'
 import { recurringBoards } from './company/recurring'
 import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../shared/company'
+import { activeByCompany } from './statusCounts'
 import { chatPlacement, type ChatPlacement } from './company/chatContext'
 import { routeModelCall } from './company/routeCall'
 import type { CompanyBridge, Engine, ProcessReaper, StepOutputEvent, TaskRunBridge, TaskToolset } from '../shared/engine'
@@ -309,6 +310,8 @@ export class Hive {
       schedulesPaused: s.schedulesPaused,
       nextFire: next,
       last24h: this.store.countEndedSince(new Date(Date.now() - 86400_000).toISOString()),
+      last24hByCompany: this.safe(() => this.store.countEndedSinceByCompany(new Date(Date.now() - 86400_000).toISOString()), {}),
+      activeByCompany: this.safe(() => activeByCompany(active, this.sessions.liveCountByCompany()), {}),
       unseenFailures: this.unseenFailures,
       needsYou: this.live ? this.safe(() => this.live.needsYouCount(), 0) : 0
     }
@@ -895,3 +898,4 @@ export class Hive {
     return this.settings().launchAtLogin && os.uptime() < 180
   }
 }
+

@@ -45,6 +45,7 @@ import { CompanySwitcher, OtherCompanies } from './OtherCompanies'
 import { ForumSidebarSection, useForumBadge } from '../components/forum/SidebarSection'
 import { CloudMark } from '../components/cloud/bits'
 import { useCloudBadge } from '../state/cloud'
+import { plansEnabled } from '@shared/plans'
 
 type NavItem = { key: ViewState['name']; label: string; icon: string; kbd?: string }
 
@@ -53,6 +54,7 @@ const NAV: NavItem[] = [
   { key: 'agents', label: 'Agents', icon: 'agents', kbd: '⇧⌘A' },
   { key: 'home', label: 'Home', icon: 'home', kbd: '⌘1' },
   { key: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { key: 'plans', label: 'Plans', icon: 'plans' },
   { key: 'canvas', label: 'Canvas', icon: 'canvas', kbd: '⌘2' },
   { key: 'workflows', label: 'Workflows', icon: 'workflows', kbd: '⌘3' },
   { key: 'marketplace', label: 'Marketplace', icon: 'marketplace' },
@@ -77,6 +79,7 @@ const NAV_FOCUSED: NavItem[] = [
   { key: 'passport', label: 'Passport', icon: 'passport', kbd: '⌘7' },
   { key: 'slack', label: 'Slack', icon: 'slack', kbd: '⇧⌘L' },
   { key: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { key: 'plans', label: 'Plans', icon: 'plans' },
   { key: 'forum', label: 'Forum', icon: 'forum', kbd: '⇧⌘F' },
   { key: 'usage', label: 'Usage', icon: 'coins' },
   { key: 'cloud', label: 'Cloud', icon: 'cloud' }
@@ -100,6 +103,8 @@ export function Sidebar(): React.JSX.Element {
   const expandedCompanies = useStore((s) => s.expandedCompanies)
   // DEPARTMENTS.md §9: with the flag off nothing below changes (no Board label, no Departments, no task items)
   const departments = useStore((s) => departmentsOn(s))
+  // PLANS.md §0: Plans sit behind their own experimental flag
+  const plansOn = useStore((s) => plansEnabled(s.settings?.experimental))
   const boardCounts = useBoardCounts()
   // All mode: board task items join the Needs you section (header count = live items + task items)
   const needsTaskCount = useNeedsYouTaskCount()
@@ -465,7 +470,7 @@ export function Sidebar(): React.JSX.Element {
     >
       <div className={`sidebar__drag drag ${multi ? 'has-rail' : ''} ${focusedCompany ? 'has-switcher' : ''}`}>{focusedCompany && <CompanySwitcher company={focusedCompany} />}</div>
       <nav className="sidebar__nav">
-        {(mode === 'focused' ? NAV_FOCUSED : NAV).map((n) => (
+        {(mode === 'focused' ? NAV_FOCUSED : NAV).filter((n) => n.key !== 'plans' || plansOn).map((n) => (
           <div
             key={n.key}
             className={`side-row side-row--nav ${navActive(n.key) ? 'is-selected' : ''}`}

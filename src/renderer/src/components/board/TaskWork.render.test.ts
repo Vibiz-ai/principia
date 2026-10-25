@@ -28,6 +28,16 @@ describe('TaskWork', () => {
     expect(renderToStaticMarkup(createElement(WorkStart, { task: task(), company: personal, busy: false, onDone: () => {} }))).toContain('Start')
   })
 
+  it('A1: Merge… is disabled while the task is In Progress, and the tooltip says why', async () => {
+    const { WorkSection } = await import('./TaskWork')
+    const pr = { number: 42, url: 'https://github.com/a/b/pull/42', state: 'OPEN' as const, isDraft: false, reviewDecision: null, mergedAt: null, checkedAt: '2026-10-25T00:00:00Z' }
+    const running = renderToStaticMarkup(createElement(WorkSection, { task: task({ status: 'in_progress', work: work({ pr }) }), onDone: () => {} }))
+    expect(running).toMatch(/<span class="work-section__merge" title="An agent is working on this task. Merge once it is In Review."><button class="link-btn" disabled=""/)
+    const review = renderToStaticMarkup(createElement(WorkSection, { task: task({ status: 'in_review', work: work({ pr }) }), onDone: () => {} }))
+    expect(review).toContain('title="Squash-merge it on GitHub (a confirm comes first)"><button class="link-btn" title=')
+    expect(review).not.toMatch(/disabled=""[^>]*>Merge…/)
+  })
+
   it('after Keep As Is the Work section keeps the branch and says Start checks it out again', async () => {
     const { WorkSection, WorkStart } = await import('./TaskWork')
     const t = task({ status: 'in_review', work: work({ removedAt: '2026-10-25T01:00:00Z' }) })
@@ -38,5 +48,14 @@ describe('TaskWork', () => {
     const { setState } = await import('../../state/store')
     setState({ repos: [{ id: 'repo_new', name: 'new', path: '/r/new', companyId: null } as never] })
     expect(renderToStaticMarkup(createElement(WorkStart, { task: t, company: personal, busy: false, onDone: () => {} }))).toContain('Checks out hive/prn-1-fix-it in a new worktree.')
+  })
+
+  it('a gone worktree offers the banner\'s choices, not Remove Worktree… (QA)', async () => {
+    const { WorkSection } = await import('./TaskWork')
+    const html = renderToStaticMarkup(createElement(WorkSection, { task: task({ status: 'in_review', work: work({ goneAt: '2026-10-25T01:00:00Z' }) }), onDone: () => {} }))
+    expect(html).toContain('The worktree for PRN-1 is gone.')
+    expect(html).toContain('Keep As Is')
+    expect(html).not.toContain('Remove Worktree')
+    expect(html).not.toContain('Open in Editor')
   })
 })

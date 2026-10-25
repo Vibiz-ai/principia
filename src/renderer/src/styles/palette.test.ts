@@ -117,6 +117,34 @@ describe('renderer palette guard', () => {
     expect(flagged).not.toContain('ok')
   })
 
+  it('status tokens are cool: Needs you and warnings are never amber (QA: the sidebar NEEDS YOU and its badges)', () => {
+    const tokens = readFileSync(join(ROOT, 'styles', 'tokens.css'), 'utf8')
+    for (const name of ['--status-needs', '--status-needs-soft', '--status-warning', '--status-warning-soft']) {
+      const lit = new RegExp(`${name}:\\s*([^;]+);`).exec(tokens)?.[1]?.trim() ?? ''
+      expect(lit, name).not.toBe('')
+      expect(isWarm(lit), `${name}: ${lit}`).toBe(false)
+    }
+    // the copies of the old amber in other style sheets went with it
+    const amber = /rgba\(\s*(245,\s*165,\s*36|240,\s*181,\s*74)\b|#f5a524|#f0b54a|#d8bc85/i
+    expect(files.filter((f) => amber.test(readFileSync(f, 'utf8'))).map((f) => relative(ROOT, f))).toEqual([])
+  })
+
+  it('company colours (rail avatars, departments) are cool or neutral, never warm or pink (QA: a pink-red avatar)', () => {
+    const tokens = readFileSync(join(ROOT, 'styles', 'tokens.css'), 'utf8')
+    const company = readFileSync(join(ROOT, '..', '..', 'main', 'onboarding', 'launch.ts'), 'utf8')
+    const palette = /COMPANY_PALETTE = \[([^\]]+)\]/.exec(company)![1].match(/--[a-z0-9-]+/g)!
+    for (const name of new Set([...palette, '--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-other'])) {
+      const lit = new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i').exec(tokens)?.[1] ?? ''
+      expect(lit, name).not.toBe('')
+      const [r, g, b] = rgbOf(lit)!.map((v) => v / 255)
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+      if (d < 0.08) continue // a grey
+      let hue = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+      hue = (hue * 60 + 360) % 360
+      expect(hue >= 90 && hue <= 290, `${name}: ${lit} (hue ${Math.round(hue)})`).toBe(true)
+    }
+  })
+
   it('flags unlisted warm kin (ochre, mustard, beige, terracotta) on Roman surfaces only', () => {
     const fake: Record<string, string> = {
       'components/roman/A.tsx': '<rect fill="#c9a227" />',

@@ -30,6 +30,10 @@ export function registerUsageHandlers(h: Hive): void {
       paths: h.paths,
       companySlugs: () => h.company.listPassports({ includeArchived: true }).map((c) => ({ id: c.id, slug: c.slug })),
       git: gitRunner(() => baseChildEnv()),
+      removeTaskWorktree: (taskId) => {
+        if (!h.taskWork) throw new Error('task worktrees are unavailable')
+        return h.taskWork.removeWorktree(taskId, false)
+      },
       // read at call time: worktrees are wired after the handlers
       get worktrees() {
         return h.worktrees

@@ -198,7 +198,8 @@ export class Dispatcher {
   }
   /** The seat's todo tasks, highest priority first, oldest first. */
   private queueOf(agent: CompanyAgent): BoardTask[] {
-    const rows = this.db.prepare("SELECT seq, data FROM company_tasks WHERE company_id=? AND agent_id=? AND status='todo' ORDER BY seq").all(agent.companyId, agent.id) as { seq: number; data: string }[]
+    // a plan's tasks are the plan pilot's (PLANS.md §2.4): never picked here, even in To do
+    const rows = this.db.prepare("SELECT seq, data FROM company_tasks WHERE company_id=? AND agent_id=? AND status='todo' AND json_extract(data,'$.plan') IS NULL ORDER BY seq").all(agent.companyId, agent.id) as { seq: number; data: string }[]
     return rows.map(r => ({ seq: r.seq, t: this.c.task(JSON.parse(r.data).id as string) }))
       .sort((a, b) => rank(a.t.priority) - rank(b.t.priority) || a.seq - b.seq).map(x => x.t)
   }
@@ -281,7 +282,7 @@ export class Dispatcher {
   private starter(agent: CompanyAgent | null, onRun?: (runId: string) => void) {
     return (target: RunTarget, companyId: string, link: TaskRunLink): Run => {
       const run = this.d.startRun(target, {
-        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId,
+        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null,
         runMinutes: agent?.data.limits?.runMinutes ?? null
       })
       onRun?.(run.id)
@@ -352,7 +353,7 @@ export class Dispatcher {
    * may start automatically and the guard allows it (else it parks blocked(limit)).
    */
   private followUp(t: BoardTask): void {
-    if (this.disposed || !t.pendingWake?.count || (t.ask && !t.ask.answer)) return
+    if (this.disposed || !t.pendingWake?.count || (t.ask && !t.ask.answer) || t.plan) return
     const from = t.status === 'in_review' ? 'in_review' : t.status === 'blocked' && t.blockReason === 'agent' ? 'blocked' : null
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
     if (!from || !agent || !this.d.enabled() || !this.seatEligible(agent) || this.autopilotRoom(t.companyId) <= 0 || this.busyOn(agent.id)) return
@@ -422,6 +423,8 @@ export class Dispatcher {
   /** "Take over": cancel the headless run (no follow-up), then open a session that resumes its conversation. */
   async takeover(taskId: string, size: PtySize): Promise<{ task: BoardTask; session: Session }> {
     const t = this.c.task(taskId)
+    // a plan task runs in its milestone's worktree; a session would run in the checkout (PLANS.md §2.4)
+    if (t.plan) fail(`${t.identifier} belongs to a plan and runs in its milestone's worktree, so it cannot be taken over as a session. Let the run finish, or stop it.`)
     if (t.status !== 'in_progress') fail('This task is not running')
     if (this.leaseOf(taskId)) fail('This task is already open as a session')
     const run = t.runId ? this.c.store.getRun(t.runId) : null

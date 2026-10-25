@@ -217,6 +217,8 @@ interface RefsRow {
   created_at: string
   left_json: string | null
   swept_at: string | null
+  /** frozen at the run end: the branches this run created. null = not frozen yet (the run runs) or an older row */
+  created_json?: string | null
 }
 
 /** Lowercase slug for branch names: "PR roundup" -> "pr-roundup". */
@@ -248,7 +250,7 @@ const GLOB_RE = /^[A-Za-z0-9._/*-]{1,100}$/
  * Blocks: remote deletes, non-branch refs (tags), protected branches, branches outside `allow`, and non-fast-forward
  * (force) updates, including a remote tip this clone does not have.
  */
-export function prePushScript(protect: string[], chain: string | null, allow: string[] = DEFAULT_PUSH_BRANCHES, dryRunFile: string | null = null): string {
+export function prePushScript(protect: string[], chain: string | null, allow: string[] = DEFAULT_PUSH_BRANCHES, dryRunFile: string | null = null, forTask = false): string {
   const globs = allow.filter((g) => GLOB_RE.test(g))
   const lines = [
     '#!/bin/sh',
@@ -269,7 +271,9 @@ export function prePushScript(protect: string[], chain: string | null, allow: st
     '  set -f',
     '  for g in $allow; do case "$b" in $g) ok=1 ;; esac; done',
     '  set +f',
-    '  if [ "$ok" != 1 ]; then echo "Hive push guard: this workflow may push only to: $allow (not $b). Add the branch pattern to the workflow\'s worktree.pushBranches." >&2; exit 1; fi',
+    forTask
+      ? '  if [ "$ok" != 1 ]; then echo "Hive push guard: this task may push only to: $allow (not $b). Push the task branch itself: git push origin HEAD." >&2; exit 1; fi'
+      : '  if [ "$ok" != 1 ]; then echo "Hive push guard: this workflow may push only to: $allow (not $b). Add the branch pattern to the workflow\'s worktree.pushBranches." >&2; exit 1; fi',
     '  case "$rsha" in',
     '    *[!0]*)',
     '      if ! git cat-file -e "$rsha^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$rsha" "$lsha" 2>/dev/null; then',
@@ -383,6 +387,30 @@ function chainLines(hook: string, chain: string | null, stdinSaved: boolean): st
   ]
 }
 
+/** File in a guard dir: one line per local branch created through it, `<unix seconds> <branch>` (refTransactionScript). */
+export const CREATED_REFS = 'created-refs'
+
+/**
+ * WORKTREE.md A3: the guard dir's reference-transaction hook. It records every local branch created by a git command
+ * that runs with this guard (the owner's agents, in its worktree), so a run's sweep can tell its own branches from the
+ * founder's made meanwhile in their own checkout. Then it chains to the repository's own hook, if it has one.
+ */
+export function refTransactionScript(hooksDir: string, chain: string | null): string {
+  const log = q(path.join(hooksDir, CREATED_REFS))
+  return `${[
+    '#!/bin/sh',
+    '# Hive (WORKTREE.md A3): records branches created here, then chains to the repository\'s own hook.',
+    'input=$(cat)',
+    'if [ "$1" = committed ]; then',
+    '  now=$(date +%s)',
+    '  printf "%s\\n" "$input" | while read -r old new ref; do',
+    '    case "$ref" in refs/heads/*) case "$old" in *[!0]*) ;; *) printf "%s %s\\n" "$now" "${ref#refs/heads/}" >> ' + log + ' ;; esac ;; esac',
+    '  done',
+    'fi',
+    ...chainLines('reference-transaction', chain, true)
+  ].join('\n')}\n`
+}
+
 export function shimScript(hook: string, chain: string): string {
   return `${['#!/bin/sh', `# Hive: chains to the repository's own ${hook} hook (core.hooksPath points here for this run).`, ...chainLines(hook, chain, false)].join('\n')}\n`
 }
@@ -463,11 +491,11 @@ export class WorktreeManager implements WorktreeBridge {
 
   // ---------- PO5 ----------
   /** Env for every process of an isolated node: core.hooksPath -> this run's guard dir. */
-  guardEnv(runId: Id): Record<string, string> {
+  guardEnv(runId: Id, basePath?: string): Record<string, string> {
     const r = this.rowForRun(runId)
     if (!r || (r.status !== 'active' && r.status !== 'creating')) return {}
     const bin = path.join(this.hooksDir(runId), 'bin')
-    const base = this.d.basePath?.() ?? process.env.PATH ?? '/usr/bin:/bin'
+    const base = basePath || this.d.basePath?.() || process.env.PATH || '/usr/bin:/bin'
     return {
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'core.hooksPath',
@@ -476,6 +504,27 @@ export class WorktreeManager implements WorktreeBridge {
       HIVE_WORKTREE_BRANCH: r.branch,
       ...(fs.existsSync(bin) ? { PATH: `${bin}:${base}` } : {})
     }
+  }
+
+  /**
+   * WORKTREE.md §3 for interactive sessions: a PTY whose cwd is inside an active Hive worktree (a task's, or a kept run's
+   * while it is active) gets the same guard env as a headless turn there: core.hooksPath and the bin/ shims first on
+   * `basePath` (the session's own PATH), so `gh pr merge` and force pushes are refused in a chat too. null = not in one.
+   */
+  guardEnvForPath(cwd: string, basePath?: string): Record<string, string> | null {
+    let abs = path.resolve(cwd)
+    try {
+      abs = fs.realpathSync(abs)
+    } catch {
+      /* keep */
+    }
+    const root = this.root + path.sep
+    if (!abs.startsWith(root) && !path.resolve(cwd).startsWith(root)) return null
+    const rows = this.d.db.prepare("SELECT * FROM worktrees WHERE status = 'active' ORDER BY created_at DESC").all() as Row[]
+    const hit = rows.find((r) => [abs, path.resolve(cwd)].some((p) => p === r.path || p.startsWith(r.path + path.sep)))
+    if (!hit) return null
+    const env = this.guardEnv(hit.run_id, basePath)
+    return Object.keys(env).length ? env : null
   }
 
   private async writeHooks(runId: Id, repoPath: string, protect: string[]): Promise<void> {
@@ -501,7 +550,8 @@ export class WorktreeManager implements WorktreeBridge {
     } catch {
       /* default */
     }
-    write('pre-push', prePushScript(protect, chain, allow, path.join(dir, DRY_RUN_MARKER)))
+    // a board task has no workflow to declare pushBranches in: its refusal says so in task words (QA)
+    write('pre-push', prePushScript(protect, chain, allow, path.join(dir, DRY_RUN_MARKER), isTaskOwner(runId)))
     const bin = path.join(dir, 'bin')
     fs.mkdirSync(bin, { recursive: true, mode: 0o700 })
     for (const [name, text] of [['git', gitShimScript(dir)], ['gh', ghShimScript()]] as const) {
@@ -509,10 +559,22 @@ export class WorktreeManager implements WorktreeBridge {
       fs.writeFileSync(f, text, { mode: 0o755 })
       fs.chmodSync(f, 0o755)
     }
+    // A3: the branch recorder, chained to the repo's own reference-transaction only when it has one (absolute dirs)
+    let refChain: string | null = null
+    if (chain && path.isAbsolute(chain)) {
+      try {
+        fs.accessSync(path.join(chain, 'reference-transaction'), fs.constants.X_OK)
+        refChain = chain
+      } catch {
+        /* none */
+      }
+    }
+    write('reference-transaction', refTransactionScript(dir, refChain))
     if (!chain) return
     // shims only for hooks the repo actually has (absolute chain dirs); relative chains get every shim (cheap no-op)
     const abs = path.isAbsolute(chain)
     for (const h of CHAINED_HOOKS) {
+      if (h === 'reference-transaction') continue
       if (abs) {
         try {
           fs.accessSync(path.join(chain, h), fs.constants.X_OK)
@@ -557,18 +619,82 @@ export class WorktreeManager implements WorktreeBridge {
     return (this.d.db.prepare('SELECT * FROM run_refs WHERE run_id = ? AND repo_path = ?').get(runId, repoPath) as RefsRow | undefined) ?? null
   }
 
-  /** Every local branch created while the run ran, per snapshotted repo (plus the worktree repo of older rows). */
-  async branches(runId: Id): Promise<RunBranch[]> {
+  /** The run's own branches, frozen at its end (null = not frozen: the run still runs, or an older row). */
+  private frozen(x: RefsRow | null | undefined): Set<string> | null {
+    if (!x?.created_json) return null
+    try {
+      return new Set(JSON.parse(x.created_json) as string[])
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The run is over: records, per repo, which branches it created (refs/heads now minus refs/heads when it started, plus
+   * its own worktree branch). Later Remove or sweep calls only ever touch those, so a branch the founder makes after the
+   * run is never taken for the run's. The first freeze wins.
+   */
+  async freezeRun(runId: Id, opts: { guardOwners?: Id[] } = {}): Promise<void> {
+    const rows = this.d.db.prepare('SELECT * FROM run_refs WHERE run_id = ? AND created_json IS NULL').all(runId) as RefsRow[]
+    if (!rows.length) return
+    const wt = this.rowForRun(runId)
+    const taskBranches = this.taskBranchKeys()
+    for (const x of rows) {
+      const before = new Set<string>(JSON.parse(x.heads_json) as string[])
+      const created = new Set<string>()
+      // a run whose every git command ran under a guard dir (a task's turn in its worktree) owns only the branches that
+      // guard recorded since it started: a branch the founder made meanwhile in their own checkout is not its
+      const logged = opts.guardOwners?.length ? this.loggedBranches(opts.guardOwners, Date.parse(x.created_at) / 1000 - 1) : null
+      if (fs.existsSync(x.repo_path)) {
+        const heads = await this.d.git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: x.repo_path })
+        if (heads.code === 0) {
+          for (const b of heads.stdout.split('\n').map((l) => l.trim())) if (b && !before.has(b) && !taskBranches.has(`${x.repo_path}\0${b}`) && (!logged || logged.has(b))) created.add(b)
+        }
+      }
+      if (wt && wt.repo_path === x.repo_path && !before.has(wt.branch)) created.add(wt.branch)
+      this.d.db.prepare('UPDATE run_refs SET created_json = ? WHERE run_id = ? AND repo_path = ? AND created_json IS NULL').run(JSON.stringify([...created].sort()), runId, x.repo_path)
+    }
+  }
+
+  /** Branches the guard dirs of `owners` recorded as created at or after `since` (unix seconds). */
+  private loggedBranches(owners: Id[], since: number): Set<string> {
+    const out = new Set<string>()
+    for (const o of owners) {
+      let text = ''
+      try {
+        text = fs.readFileSync(path.join(this.hooksDir(o), CREATED_REFS), 'utf8')
+      } catch {
+        continue
+      }
+      for (const line of text.split('\n')) {
+        const m = /^(\d+) (.+)$/.exec(line.trim())
+        if (m && Number(m[1]) >= since) out.add(m[2])
+      }
+    }
+    return out
+  }
+
+  /** `<repo>\0<branch>` of every board task's branch (WORKTREE.md): never one of a run's. */
+  private taskBranchKeys(): Set<string> {
+    return new Set((this.d.db.prepare(`SELECT repo_path, branch FROM worktrees WHERE NOT (${NOT_TASK})`).all() as { repo_path: string; branch: string }[]).map((x) => `${x.repo_path}\0${x.branch}`))
+  }
+
+  /**
+   * Local branches the run created, per snapshotted repo (plus the worktree repo of older rows). Once the run ended this
+   * is the set frozen then (those still present); before that, and for rows from before the freeze existed, every
+   * branch made since the run started, marked `frozen: false` (listed, never deleted by a sweep).
+   */
+  async branches(runId: Id): Promise<(RunBranch & { frozen?: false })[]> {
     const git = this.d.git
     const wt = this.rowForRun(runId)
     const rows = this.d.db.prepare('SELECT * FROM run_refs WHERE run_id = ?').all(runId) as RefsRow[]
-    const scopes = rows.map((x) => ({ repo: x.repo_path, before: new Set<string>(JSON.parse(x.heads_json) as string[]), since: x.created_at }))
+    const scopes = rows.map((x) => ({ repo: x.repo_path, before: new Set<string>(JSON.parse(x.heads_json) as string[]), since: x.created_at, own: this.frozen(x) }))
     if (wt && !scopes.some((x) => x.repo === wt.repo_path)) {
-      scopes.push({ repo: wt.repo_path, before: new Set<string>(JSON.parse(wt.heads_json || '[]') as string[]), since: wt.created_at })
+      scopes.push({ repo: wt.repo_path, before: new Set<string>(JSON.parse(wt.heads_json || '[]') as string[]), since: wt.created_at, own: null })
     }
-    const out: RunBranch[] = []
+    const out: (RunBranch & { frozen?: false })[] = []
     // a board task's branch (WORKTREE.md) is the task's, even when its worktree was made while this run ran
-    const taskBranches = new Set((this.d.db.prepare(`SELECT repo_path, branch FROM worktrees WHERE NOT (${NOT_TASK})`).all() as { repo_path: string; branch: string }[]).map((x) => `${x.repo_path}\0${x.branch}`))
+    const taskBranches = this.taskBranchKeys()
     for (const sc of scopes) {
       if (!fs.existsSync(sc.repo)) continue
       const heads = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: sc.repo })
@@ -576,7 +702,7 @@ export class WorktreeManager implements WorktreeBridge {
       const created = heads.stdout
         .split('\n')
         .map((x) => x.trim())
-        .filter((b) => b && !sc.before.has(b) && !taskBranches.has(`${sc.repo}\0${b}`))
+        .filter((b) => b && !sc.before.has(b) && !taskBranches.has(`${sc.repo}\0${b}`) && (!sc.own || sc.own.has(b)))
       if (!created.length) continue
       const wl = await git(['worktree', 'list', '--porcelain'], { cwd: sc.repo })
       const checked = new Set(
@@ -590,23 +716,30 @@ export class WorktreeManager implements WorktreeBridge {
       for (const name of created) {
         const rl = await git(['rev-list', '--count', since, `refs/heads/${name}`, '--not', '--remotes', ...extraNot], { cwd: sc.repo })
         const n = rl.code === 0 ? Number.parseInt(rl.stdout.trim(), 10) || 0 : 1
-        out.push({ repoPath: sc.repo, name, newCommits: n, checkedOut: checked.has(name), hive: !!wt && wt.repo_path === sc.repo && wt.branch === name })
+        out.push({ repoPath: sc.repo, name, newCommits: n, checkedOut: checked.has(name), hive: !!wt && wt.repo_path === sc.repo && wt.branch === name, ...(sc.own ? {} : { frozen: false as const }) })
       }
     }
     return out
   }
 
   /**
-   * PO6 for every branch created during the run: delete the ones that carry no new unpushed commit and are not checked
-   * out (fetched PR heads like `git fetch origin pull/N/head:prN`, pushed branches). Returns what is left (offered on the
-   * RunView). Never runs while the run's worktree is in use.
+   * PO6 for every branch the run created: delete the ones that carry no new unpushed commit and are not checked out
+   * (fetched PR heads like `git fetch origin pull/N/head:prN`, pushed branches). Returns what is left (offered on the
+   * RunView). Never runs while the run's worktree is in use. `atRunEnd` (the run-end hook) first freezes the run's own
+   * branches; every later call (Remove, long after) deletes only from that frozen set, never a branch made since.
    */
-  async sweepRun(runId: Id): Promise<RunBranch[]> {
+  async sweepRun(runId: Id, opts: { atRunEnd?: boolean; /** the guard dirs every git command of this run went through (a task turn) */ guardOwners?: Id[] } = {}): Promise<RunBranch[]> {
+    if (opts.atRunEnd) await this.freezeRun(runId, { guardOwners: opts.guardOwners })
     const wt = this.rowForRun(runId)
     if (wt && (wt.status === 'active' || wt.status === 'creating')) return []
     const all = await this.branches(runId)
     const left: RunBranch[] = []
-    for (const b of all) {
+    for (const { frozen, ...b } of all) {
+      // not frozen (a row from before the freeze, or no run end seen): listed, never deleted by a sweep
+      if (frozen === false) {
+        left.push(b)
+        continue
+      }
       // item 5: Hive's own hive/ branch stays once it was pushed (the user may continue it); it is listed, not deleted
       if (b.hive && wt && (await this.isPushed(b.repoPath, b.name, wt.base_sha))) {
         left.push(b)
@@ -633,7 +766,7 @@ export class WorktreeManager implements WorktreeBridge {
       const del = await this.d.git(['branch', '-D', b.name], { cwd: b.repoPath })
       if (del.code !== 0) throw new HiveError('internal', `git branch -D ${b.name} failed: ${del.stderr.trim().slice(0, 300)}`)
     }
-    const left = await this.branches(runId)
+    const left = (await this.branches(runId)).map(({ frozen: _f, ...b }) => b)
     this.recordLeft(runId, left)
     return left
   }
@@ -662,7 +795,7 @@ export class WorktreeManager implements WorktreeBridge {
    * origin/HEAD, main, master, HEAD. Runs record refs/heads in run_refs (PO14); a task only keeps them on its row.
    * `reuseBranch`: the branch may already exist (a task Started again): it is checked out instead of created.
    */
-  private async createFor(req: { ownerId: Id; repo: string; base: string | null; dryRun?: boolean; branch: string; wtPath: string; snapshot: boolean; reuseBranch?: boolean }): Promise<RunWorktree> {
+  private async createFor(req: { ownerId: Id; repo: string; base: string | null; dryRun?: boolean; branch: string; wtPath: string; snapshot: boolean; reuseBranch?: boolean; startPoint?: string | null }): Promise<RunWorktree> {
     if (!/^[a-z]+_[0-9a-z]+$/.test(req.ownerId)) throw new HiveError('bad_request', 'bad run id')
     const git = this.d.git
     let repoPath = req.repo
@@ -691,7 +824,12 @@ export class WorktreeManager implements WorktreeBridge {
     const want = req.base?.trim() || defaultBranch
     let baseRef = 'HEAD'
     let baseBranch: string | null = null
-    if (want) {
+    if (req.startPoint) {
+      // PLANS.md §2.6: a local branch to start from (a dependency milestone's branch), as it is now; nothing fetched
+      if (!(await has(`refs/heads/${req.startPoint}`))) throw new HiveError('validation', `Branch "${req.startPoint}" not found in ${repoPath}`)
+      baseRef = req.startPoint
+      baseBranch = req.startPoint
+    } else if (want) {
       const remoteName = want.replace(/^origin\//, '')
       const remote = await git(['remote'], { cwd: repoPath })
       const hasOrigin = remote.code === 0 && remote.stdout.split('\n').map((s) => s.trim()).includes('origin')
@@ -813,6 +951,7 @@ export class WorktreeManager implements WorktreeBridge {
       const r = this.rowForRun(runId)
       if (!r || r.status !== 'active' || isTaskOwner(r.run_id)) return r ? toWorktree(r) : null
       this.clearDryRun(runId)
+      await this.freezeRun(runId)
       if (outcome.status === 'failed') return this.update(r.id, { status: 'kept', kept_reason: 'failed' })
       if (outcome.status === 'canceled') return this.update(r.id, { status: 'kept', kept_reason: 'canceled' })
       const work = await this.inspect(r)
@@ -834,11 +973,13 @@ export class WorktreeManager implements WorktreeBridge {
     const st = exists ? await git(['status', '--porcelain'], { cwd: r.path }) : { code: 1, stdout: '', stderr: '' }
     const dirty = st.code === 0 && st.stdout.trim().length > 0
     const before = new Set<string>(JSON.parse(r.heads_json || '[]') as string[])
+    // only branches the run created (frozen at its end); a row not frozen yet compares refs/heads now
+    const own = this.frozen(this.refsRow(r.run_id, r.repo_path))
     const heads = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: r.repo_path })
     const newBranches = heads.stdout
       .split('\n')
       .map((s) => s.trim())
-      .filter((b) => b && !before.has(b))
+      .filter((b) => b && !before.has(b) && (!own || own.has(b)))
     const tips = [...(exists ? ['HEAD'] : []), ...newBranches.map((b) => `refs/heads/${b}`)]
     if (!tips.length || !r.base_sha) return { dirty, newCommits: 0, unpushed: 0, pushed: false, newBranches }
     // "created in this run" = committer date at/after ensure (1 s of slack); a PR checked out detached is older
@@ -947,9 +1088,10 @@ export class WorktreeManager implements WorktreeBridge {
   /**
    * Start: the task's own worktree off the default branch (or `base`), on `hive/<identifier>-<slug>`. Idempotent while
    * active. A branch left by an earlier Start (`branch`, the task's own) is checked out again, never recreated. Only worktree add/prune, fetch,
-   * rev-parse, symbolic-ref, config and for-each-ref run in the repo itself.
+   * rev-parse, symbolic-ref, config and for-each-ref run in the repo itself. `startPoint` (PLANS.md §2.6): a local
+   * branch to start from instead (a dependency milestone's), taken as it is, nothing fetched.
    */
-  ensureTask(req: { taskId: Id; identifier: string; title: string; repo: string; base?: string | null; branch?: string | null }): Promise<RunWorktree> {
+  ensureTask(req: { taskId: Id; identifier: string; title: string; repo: string; base?: string | null; branch?: string | null; startPoint?: string | null }): Promise<RunWorktree> {
     const existing = this.rowForRun(req.taskId)
     if (existing && existing.status === 'active') return Promise.resolve(toWorktree(existing))
     const p = this.pending.get(req.taskId)
@@ -963,7 +1105,7 @@ export class WorktreeManager implements WorktreeBridge {
       }
       // a worktree folder deleted by hand leaves git's record behind; prune it so the branch can be checked out again
       await this.d.git(['worktree', 'prune'], { cwd: req.repo })
-      return this.createFor({ ownerId: req.taskId, repo: req.repo, base: req.base ?? null, branch: req.branch || taskBranchName(req.identifier, req.title), wtPath, snapshot: false, reuseBranch: true })
+      return this.createFor({ ownerId: req.taskId, repo: req.repo, base: req.base ?? null, branch: req.branch || taskBranchName(req.identifier, req.title), wtPath, snapshot: false, reuseBranch: true, startPoint: req.startPoint ?? null })
     })().finally(() => this.pending.delete(req.taskId))
     this.pending.set(req.taskId, job)
     return job

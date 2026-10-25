@@ -6,6 +6,7 @@ import { assignRepoSchema, companyAgentSaveSchema, companyCreateSchema, companyR
 import { z } from 'zod'
 import { EMBLEM_VARIANTS } from '../shared/chatCompany'
 import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
+import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
@@ -197,7 +198,7 @@ const settingsPatch = z
     activeCompanyId: z.union([z.literal('all'), id]),
     expandedCompanies: z.record(id, z.boolean()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
     // COMPANY.md §6: a partial patch, merged into the stored flags
-    experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean() }).partial().strict(),
+    experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean(), plans: z.boolean() }).partial().strict(),
     // VOICE.md §0
     tone: z.enum(['playful', 'plain']),
     personas: z.boolean(),
@@ -423,7 +424,7 @@ const memoryMutation = z.union([
  * DEPARTMENTS.md §1.3 fields only main writes (run outcome, wake guard, routing, done note). The renderer changes them
  * through the dedicated task channels (assign, answer, approve, sendBack, unpark), never through create/update.
  */
-const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true } as const
+const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true, brief: true, proof: true, plan: true } as const
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
@@ -928,11 +929,13 @@ export const REQUEST_SCHEMAS = {
   'usage:summary': z.object({ range: z.enum(USAGE_RANGES), companyId }),
   'usage:disk': optObj({ fresh: z.boolean().optional() }),
   'usage:cleanupList': none,
-  'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
+  'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|tw|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
   'activity:open': none,
   'activity:close': none,
   // CLOUD.md §13.1: the cloud:* channels
-  ...CLOUD_REQUEST_SCHEMAS
+  ...CLOUD_REQUEST_SCHEMAS,
+  // PLANS.md §3: tasks:brief, tasks:proofPreview, plans:*
+  ...PLANS_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {

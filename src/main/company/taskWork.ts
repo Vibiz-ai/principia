@@ -60,8 +60,21 @@ export class TaskWorkService {
   private lastFocus = 0
   private polling: Promise<void> | null = null
   private disposed = false
+  /** per task: the local branch its next worktree starts from (PLANS.md §2.6, a dependency milestone's branch) */
+  private readonly startPoints = new Map<string, string>()
 
   constructor(private readonly d: TaskWorkDeps) {}
+  /**
+   * PLANS.md §2.4: the board task whose worktree a task works in: a plan task works in its milestone task's (its
+   * parent, written at approval), else null (its own). One owner record per worktree stays the rule.
+   */
+  ownerOf(t: BoardTask): string | null {
+    if (t.plan?.role !== 'task' || !t.parentId) return null
+    try {
+      const m = this.c.task(t.parentId)
+      return m.plan?.role === 'milestone' && m.plan.planId === t.plan.planId ? m.id : null
+    } catch { return null }
+  }
   private get c(): CompanyStore { return this.d.company() }
   private now(): Date { return this.d.now ? this.d.now() : new Date() }
   private wt(): WorktreeManager {
@@ -90,6 +103,7 @@ export class TaskWorkService {
     if (this.starting.has(taskId) || this.ensuring.has(taskId)) throw new HiveError('conflict', 'This task is starting already')
     const t = this.c.task(taskId)
     const company = this.c.passport(t.companyId)
+    if (t.plan) throw new HiveError('bad_request', `${t.identifier} belongs to a plan: start it from the plan (it works in its milestone's worktree)`)
     if (!canStartWork(t, company.repoIds)) {
       if (!t.repoId) throw new HiveError('bad_request', 'Choose a repository for this task first')
       if (!company.repoIds.includes(t.repoId)) throw new HiveError('bad_request', `That repository does not belong to ${company.name}`)
@@ -130,7 +144,7 @@ export class TaskWorkService {
         autoWakes: { windowStart: null, n: 0 }
       })
       const out = this.c.startTask(taskId, profileId, (target, companyId, link) => this.d.startRun(target, {
-        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId,
+        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null,
         runMinutes: link.agentId ? this.c.departments.getAgent(link.agentId)?.data.limits?.runMinutes ?? null : null
       }), { actor, ...(work ? { work } : {}) })
       this.changed(out.companyId)
@@ -173,7 +187,7 @@ export class TaskWorkService {
     // a new worktree means a new folder: the provider conversation (keyed by folder) starts fresh
     if (t.agentSessionId) this.c.patchInFlight(taskId, { agentSessionId: null })
     // a task that had a worktree before (Keep As Is, Remove Worktree…) checks its own branch out again
-    const row = await wm.ensureTask({ taskId, identifier: t.identifier, title: t.title, repo: repo.path, branch: t.work?.startedAt ? t.work.branch : null })
+    const row = await wm.ensureTask({ taskId, identifier: t.identifier, title: t.title, repo: repo.path, branch: t.work?.startedAt ? t.work.branch : null, startPoint: this.startPoints.get(taskId) ?? null })
     if (row.status !== 'active') throw new HiveError('internal', `Could not create the worktree: ${row.error ?? 'unknown error'}`)
     const base = wm.taskBase(taskId)
     const at = this.now().toISOString()
@@ -187,6 +201,14 @@ export class TaskWorkService {
   async workdir(taskId: string): Promise<{ cwd: string; env: Record<string, string> } | null> {
     let t: BoardTask
     try { t = this.c.task(taskId) } catch { return null }
+    // PLANS.md §2.4: a plan task runs in its milestone's worktree (the milestone task owns it). Missing: the turn fails,
+    // it never lands in the founder's checkout
+    const owner = this.ownerOf(t)
+    if (owner) {
+      const ow = this.c.task(owner).work
+      if (!workStarted(ow) || !fs.existsSync(ow!.worktreePath)) throw new HiveError('bad_request', `The milestone worktree for ${t.identifier} is not there. Start it from its plan.`)
+      return { cwd: ow!.worktreePath, env: { ...this.wt().guardEnv(owner), HIVE_TASK_ID: t.identifier } }
+    }
     const w = t.work
     if (!w) return null
     // queued (no worktree yet), or its worktree was removed (Keep As Is, Remove Worktree…): the turn gets the task's own
@@ -201,7 +223,8 @@ export class TaskWorkService {
   /** "Open as session" on a Started task: its worktree (it must exist), else null (the task's repo, as before). */
   sessionCwd(taskId: string): string | null {
     try {
-      const w = this.c.task(taskId).work
+      const t = this.c.task(taskId)
+      const w = (this.ownerOf(t) ? this.c.task(this.ownerOf(t)!) : t).work
       if (!w || !workStarted(w)) return null
       if (!fs.existsSync(w.worktreePath)) throw new HiveError('bad_request', `The worktree for this task is gone: ${w.worktreePath}`)
       return w.worktreePath
@@ -210,6 +233,62 @@ export class TaskWorkService {
       return null
     }
   }
+
+  // ---------- PLANS.md: a plan milestone's worktree is its milestone task's binding ----------
+  /**
+   * The milestone task's worktree, made the WORKTREE.md way (WorktreeManager.ensureTask, the `work` binding, the push
+   * guard): on its own branch off `startPoint` (a dependency milestone's local branch) or the default branch. Idempotent:
+   * a live binding is returned as is. `created`: made by this call (only the creator cleans it up).
+   */
+  async bind(taskId: string, startPoint: string | null): Promise<{ work: TaskWork; created: boolean }> {
+    if (startPoint) this.startPoints.set(taskId, startPoint)
+    try {
+      const created = await this.ensureWorktree(taskId)
+      return { work: this.c.task(taskId).work!, created }
+    } finally {
+      this.startPoints.delete(taskId)
+    }
+  }
+  /** Takes a binding made a moment ago away again (a multi-dependency start that conflicted): worktree, branch, row. */
+  async unbind(taskId: string, why: string): Promise<void> {
+    const wm = this.wt()
+    try { await wm.removeTask(taskId, { discardWork: true }) } catch (e) { this.d.log?.warn('task work: unbind', { taskId, error: String(e) }) }
+    this.writeWork(taskId, null)
+    this.c.activity(taskId, 'work', clip(why, 400), 'system')
+  }
+  /**
+   * WORKTREE.md A3: the owner whose guard dir a turn of this task ran under (its own worktree, or its milestone's), or
+   * null when it has none (the turn ran elsewhere). The run's branch sweep reads that dir's record of created branches.
+   */
+  guardOwner(taskId: string): string | null {
+    try {
+      const t = this.c.task(taskId)
+      const owner = this.ownerOf(t) ?? t.id
+      const w = owner === t.id ? t.work : this.c.task(owner).work
+      return w?.startedAt ? owner : null
+    } catch { return null }
+  }
+  /** The gh the PR calls use (HIVE_GH_BIN seam included), for the plan's `gh pr create`. */
+  get ghRunner(): GhRunner { return this.d.gh }
+  /** gh signed in? (a fresh check: the plan page's Open a PR asks right now) */
+  ghReady(cwd: string): Promise<GhState> { return this.ghState(cwd, true) }
+  /**
+   * The plan's PR was opened (by main, after the guarded push): record it on the task's binding the way a PR the agent
+   * opened is recorded, so the poll follows it and Merge… works on it. Returns the reading.
+   */
+  async recordPr(taskId: string, url: string | null): Promise<TaskPr | null> {
+    const t = this.c.task(taskId)
+    const w = t.work
+    if (!w) return null
+    const cwd = fs.existsSync(w.worktreePath) ? w.worktreePath : (this.c.store.getRepo(w.repoId)?.path ?? w.worktreePath)
+    const found = await lookupPr(this.d.gh, { cwd, url, branch: w.branch }, this.now())
+    if (found.kind !== 'pr') return null
+    this.backoff.delete(taskId)
+    await this.applyPr(taskId, found.pr, cwd)
+    return this.c.task(taskId).work?.pr ?? null
+  }
+  /** After the plan's PR merged: each milestone worktree goes when nothing would be lost (the WORKTREE.md rule). */
+  cleanupMerged(taskId: string): Promise<void> { return this.cleanup(taskId) }
 
   /** Tasks in flight in the company, plus the ones being started right now. */
   private running(companyId: string): number {
@@ -303,10 +382,13 @@ export class TaskWorkService {
       this.changed(t.companyId)
       t = this.c.task(taskId)
     }
-    if (closed) return
+    // a closed task is still followed while its PR is open (a plan's result PR: its milestone task is done before the
+    // founder merges), with no status moves (nextMove leaves closed tasks alone)
+    if (closed && w.pr?.state !== 'OPEN') return
     const wm = this.d.worktrees()
-    // a local merge of the branch into its base (ancestry only), unless an open PR still decides
-    if (wm && workStarted(w) && !workGone(w) && t.status !== 'in_progress' && w.pr?.state !== 'OPEN' && (await wm.mergedLocally(taskId))) {
+    // a local merge of the branch into its base (ancestry only), unless an open PR still decides. Never for a plan's
+    // milestone: its branch starts from, and is merged into, the plan's other milestone branches by design
+    if (wm && !closed && !t.plan && workStarted(w) && !workGone(w) && t.status !== 'in_progress' && w.pr?.state !== 'OPEN' && (await wm.mergedLocally(taskId))) {
       this.complete(t, `Merged ${w.branch} into ${(w.baseRef ?? 'the base').replace(/^origin\//, '')} locally`)
       await this.cleanup(taskId)
       return
@@ -419,6 +501,7 @@ export class TaskWorkService {
     const t = this.c.task(taskId)
     const pr = t.work?.pr
     if (!pr || pr.state !== 'OPEN') throw new HiveError('bad_request', 'There is no open pull request to merge')
+    if (t.status === 'in_progress') throw new HiveError('conflict', 'An agent is working on this task. Merge once it is In Review.')
     if (pr.isDraft) throw new HiveError('bad_request', 'The pull request is a draft; mark it ready on GitHub first')
     const cwd = t.work && fs.existsSync(t.work.worktreePath) ? t.work.worktreePath : (this.c.store.getRepo(t.work!.repoId)?.path ?? process.cwd())
     const gh = await this.ghState(cwd, true)

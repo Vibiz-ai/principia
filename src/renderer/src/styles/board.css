@@ -69,7 +69,7 @@
 .board-callout { font-size: 11px; line-height: 1.6; color: var(--text-secondary); background: var(--status-needs-soft); border-radius: 6px; padding: 9px 11px; margin-bottom: 16px; }
 .board-section { margin-bottom: 20px; }
 .board-section h3 { font-size: 11px; font-weight: 550; margin-bottom: 8px; }
-.board-section--ask { border: 1px solid rgba(245, 165, 36, 0.35); background: var(--status-needs-soft); border-radius: 7px; padding: 12px; }
+.board-section--ask { border: 1px solid rgba(56, 214, 232, 0.35); background: var(--status-needs-soft); border-radius: 7px; padding: 12px; }
 .board-routing > span:last-child { color: var(--text-secondary); line-height: 1.5; }
 .board-actions .btn { flex: none; }
 .board-review { display: flex; flex-direction: column; gap: 8px; width: 100%; }

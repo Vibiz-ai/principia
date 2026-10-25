@@ -121,19 +121,32 @@ export interface RelationRow {
 }
 
 /** What a reader can see. repo = that repo's project rows + global rows. */
-export type Visibility = { kind: 'all' } | { kind: 'global' } | { kind: 'repo'; repoId: Id }
+/**
+ * `repos`: what one company may see in v1 memory (COMPANY.md §3): its own repositories' project memory plus global. A
+ * focused company's "All repositories" and any repo outside it map here, so another company's repo never shows.
+ */
+export type Visibility = { kind: 'all' } | { kind: 'global' } | { kind: 'repo'; repoId: Id } | { kind: 'repos'; repoIds: Id[] }
+const inList = (ids: Id[]) => ids.map(() => '?').join(', ')
 export const visForGrant = (g: Pick<GrantRow, 'repo_id'>): Visibility =>
   g.repo_id ? { kind: 'repo', repoId: g.repo_id } : { kind: 'global' }
 
 export function scopedSql(v: Visibility, a: string): { sql: string; params: unknown[] } {
   if (v.kind === 'all') return { sql: '1=1', params: [] }
   if (v.kind === 'global') return { sql: `${a}.scope = 'global'`, params: [] }
+  if (v.kind === 'repos') {
+    if (!v.repoIds.length) return { sql: `${a}.scope = 'global'`, params: [] }
+    return { sql: `((${a}.scope = 'project' AND ${a}.repo_id IN (${inList(v.repoIds)})) OR ${a}.scope = 'global')`, params: [...v.repoIds] }
+  }
   return { sql: `((${a}.scope = 'project' AND ${a}.repo_id = ?) OR ${a}.scope = 'global')`, params: [v.repoId] }
 }
 export function entityVisSql(v: Visibility, a: string): { sql: string; params: unknown[] } {
   const hasGlobal = `EXISTS (SELECT 1 FROM mem_fact gf WHERE gf.entity_id = ${a}.id AND gf.scope = 'global')`
   if (v.kind === 'all') return { sql: '1=1', params: [] }
   if (v.kind === 'global') return { sql: `(${a}.repo_id IS NULL OR ${hasGlobal})`, params: [] }
+  if (v.kind === 'repos') {
+    if (!v.repoIds.length) return { sql: `(${a}.repo_id IS NULL OR ${hasGlobal})`, params: [] }
+    return { sql: `(${a}.repo_id IN (${inList(v.repoIds)}) OR ${a}.repo_id IS NULL OR ${hasGlobal})`, params: [...v.repoIds] }
+  }
   return { sql: `(${a}.repo_id = ? OR ${a}.repo_id IS NULL OR ${hasGlobal})`, params: [v.repoId] }
 }
 
@@ -1319,6 +1332,7 @@ function contestedIds(reason: string | null): string[] {
 export function visible(row: { scope: MemoryScope; repo_id: string | null }, v: Visibility): boolean {
   if (v.kind === 'all') return true
   if (row.scope === 'global') return true
+  if (v.kind === 'repos') return !!row.repo_id && v.repoIds.includes(row.repo_id)
   return v.kind === 'repo' && row.repo_id === v.repoId
 }
 

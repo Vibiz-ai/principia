@@ -11,7 +11,8 @@ export const taskPrSchema = z.object({
   isDraft: z.boolean(),
   reviewDecision: z.enum(REVIEW_DECISIONS).nullable(),
   mergedAt: iso.nullable(),
-  checkedAt: iso
+  checkedAt: iso,
+  base: z.string().max(250).nullable().optional()
 }).strict()
 /** Lenient on the optional bookkeeping (every key defaults), strict on unknown keys like the rest of the task. */
 export const taskWorkSchema = z.object({

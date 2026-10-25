@@ -1,6 +1,8 @@
 /** Line icons (16px, 1.5 stroke), inline SVG so the app works offline. */
 const P: Record<string, string> = {
   tasks: 'M3 3h10v11H3zM6 1.5v3h4v-3zM5.5 8l1.2 1.2L9 7M5.5 11.5h5',
+  /** PLANS.md: milestones on a line, the last one flagged */
+  plans: 'M2 12.5h2.5M6.5 12.5H9M11 12.5h3M3.2 12.5V9M7.7 12.5V9M12.5 12.5V3.5l2 1.2-2 1.2',
   passport: 'M4 2h8a1 1 0 0 1 1 1v11H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM3 12h10M8 9.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM5.5 7h5M8 4.5c1.5 1.5 1.5 3.5 0 5-1.5-1.5-1.5-3.5 0-5',
   marketplace: 'M2 6l1-3h10l1 3M2 6v1a1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0V6zM3 8.5V14h10V8.5M6 14v-4h4v4',
   book: 'M8 4C6 2.5 3.5 2.5 1.5 3v10c2-.5 4.5-.5 6.5 1 2-1.5 4.5-1.5 6.5-1V3C12.5 2.5 10 2.5 8 4v10',

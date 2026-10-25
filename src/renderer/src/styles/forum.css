@@ -128,7 +128,7 @@
 
 /* ---------- ask card ---------- */
 .fm-ask { margin-top: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 8px); background: var(--surface-1); overflow: hidden; max-width: 640px; }
-.fm-ask.is-open { border-color: rgba(245, 165, 36, 0.35); }
+.fm-ask.is-open { border-color: rgba(56, 214, 232, 0.35); }
 .fm-ask__kicker { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; font-size: 11px; font-weight: var(--weight-semibold); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--status-needs); }
 .fm-ask.is-answered .fm-ask__kicker { color: var(--status-success); }
 .fm-ask__park { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: var(--weight-regular); color: var(--text-tertiary); }

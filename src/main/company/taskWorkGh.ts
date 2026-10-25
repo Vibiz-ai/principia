@@ -30,7 +30,7 @@ export function ghRunner(env: () => Record<string, string>): GhRunner {
   })
 }
 
-export const PR_FIELDS = 'number,url,state,isDraft,reviewDecision,mergedAt'
+export const PR_FIELDS = 'number,url,state,isDraft,reviewDecision,mergedAt,baseRefName'
 const prSchema = z.object({
   number: z.number().int().positive(),
   url: z.string().url(),
@@ -38,10 +38,11 @@ const prSchema = z.object({
   isDraft: z.boolean().optional().default(false),
   // gh prints "" when no review is required
   reviewDecision: z.union([z.enum(REVIEW_DECISIONS), z.literal(''), z.null()]).optional(),
-  mergedAt: z.string().nullable().optional()
+  mergedAt: z.string().nullable().optional(),
+  baseRefName: z.string().max(250).optional()
 })
 
-/** `gh pr view --json number,url,state,isDraft,reviewDecision,mergedAt` → TaskPr, or null when it is not one. */
+/** `gh pr view --json number,url,state,isDraft,reviewDecision,mergedAt,baseRefName` → TaskPr, or null when it is not one. */
 export function parsePr(stdout: string, now: Date): TaskPr | null {
   let raw: unknown
   try { raw = JSON.parse(stdout) } catch { return null }
@@ -49,7 +50,24 @@ export function parsePr(stdout: string, now: Date): TaskPr | null {
   if (!r.success) return null
   const d = r.data
   const merged = d.mergedAt && !d.mergedAt.startsWith('0001-') ? d.mergedAt : null
-  return { number: d.number, url: d.url, state: d.state, isDraft: !!d.isDraft, reviewDecision: d.reviewDecision ? d.reviewDecision : null, mergedAt: merged, checkedAt: now.toISOString() }
+  return { number: d.number, url: d.url, state: d.state, isDraft: !!d.isDraft, reviewDecision: d.reviewDecision ? d.reviewDecision : null, mergedAt: merged, checkedAt: now.toISOString(), ...(d.baseRefName ? { base: d.baseRefName } : {}) }
+}
+
+export type CreatePr = { kind: 'created'; url: string } | { kind: 'exists' } | { kind: 'missing' } | { kind: 'error'; message: string }
+/**
+ * PLANS.md §2.6: opens the plan's pull request (`gh pr create --head <hive/…> --base <main>`). Main only, after the
+ * branch was pushed through the guarded push; never a draft, never a merge.
+ */
+export async function createPr(gh: GhRunner, cwd: string, q: { head: string; base: string; title: string; body: string }): Promise<CreatePr> {
+  const r = await gh(['pr', 'create', '--head', q.head, '--base', q.base, '--title', q.title, '--body', q.body], { cwd, timeoutMs: 60_000 })
+  if (r.missing) return { kind: 'missing' }
+  const text = `${r.stdout}\n${r.stderr}`
+  if (r.code === 0) {
+    const url = text.match(/https?:\/\/\S+\/pull\/\d+/)?.[0]
+    return url ? { kind: 'created', url } : { kind: 'error', message: 'gh did not print the pull request URL' }
+  }
+  if (/already exists/i.test(text)) return { kind: 'exists' }
+  return { kind: 'error', message: text.trim().split('\n').filter(Boolean).pop()?.slice(0, 300) || `gh exited ${r.code}` }
 }
 
 /** The newest review asking for changes, from `gh pr view --json reviews`. */

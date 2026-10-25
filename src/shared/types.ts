@@ -615,6 +615,8 @@ export interface ExperimentalFlags {
   vaultAI?: boolean
   /** DEPARTMENTS.md §0.8: departments, agents and the company board. Only takes effect with `companies` on. */
   departments?: boolean
+  /** PLANS.md §0: Plans (goal → milestones → tasks run by a head agent). Needs `companies` and `departments`. */
+  plans?: boolean
 }
 
 /**
@@ -657,6 +659,10 @@ export interface StatusSnapshot {
   schedulesPaused: boolean
   nextFire: NextFire | null
   last24h: { passed: number; failed: number }
+  /** COMPANY.md §7: last24h per company (Personal for unstamped runs); a focused company's status bar shows its own. */
+  last24hByCompany?: Record<Id, { passed: number; failed: number }>
+  /** COMPANY.md §7: running (sessions + runs) and queued runs per company; a focused company's status bar shows its own. */
+  activeByCompany?: Record<Id, { running: number; queued: number }>
   /** Failed runs that ended after the window was last focused (tray shows ✕). Reset on window focus. */
   unseenFailures: number
   /** LIVE.md §4.5: open asks + unseen idle live session roots (A3). Absent until main implements it. */

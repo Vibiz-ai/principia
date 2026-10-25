@@ -113,6 +113,8 @@ export interface DiskDeps {
   worktrees: WorktreeManager | null
   /** git for Clean Up's own check (worktreeVerdict). */
   git: GitRunner
+  /** A done or canceled task's worktree, removed the way the task's Remove Worktree… does (TaskWorkService). */
+  removeTaskWorktree?(taskId: Id): Promise<unknown>
   now?: () => Date
 }
 
@@ -126,6 +128,18 @@ export class DiskUsageService {
   }
   private companyOfRun(): Map<string, string> {
     return new Map(tryAll<{ id: string; c: string | null }>(this.d.db, 'SELECT id, company_id AS c FROM runs').map((r) => [r.id, r.c || PERSONAL_COMPANY_ID]))
+  }
+  /**
+   * Worktree folder name -> company, for the rows a run id does not name: task worktrees (`task-<identifier>`, row
+   * run_id = the task id) belong to their task's company (QA: they were counted under no company).
+   */
+  private companyOfWorktreeDir(): Map<string, string> {
+    const rows = tryAll<{ path: string; c: string | null }>(
+      this.d.db,
+      `SELECT w.path, COALESCE(r.company_id, t.company_id) AS c FROM worktrees w
+         LEFT JOIN runs r ON r.id = w.run_id LEFT JOIN company_tasks t ON t.id = w.run_id ORDER BY w.created_at`
+    )
+    return new Map(rows.filter((r) => r.c).map((r) => [path.basename(r.path), r.c as string]))
   }
   private companyOfSession(): Map<string, string> {
     return new Map(tryAll<{ id: string; c: string | null }>(this.d.db, 'SELECT id, company_id AS c FROM sessions').map((r) => [r.id, r.c || PERSONAL_COMPANY_ID]))
@@ -150,6 +164,7 @@ export class DiskUsageService {
     const p = this.d.paths
     const runs = this.companyOfRun()
     const sessions = this.companyOfSession()
+    const wtDirs = this.companyOfWorktreeDir()
     const slugs = new Map(this.d.companySlugs().map((c) => [c.slug, c.id]))
     const byCo = new Map<string, DiskCompany>()
     const bucket = (id: string | null): DiskCompany => {
@@ -160,7 +175,7 @@ export class DiskUsageService {
     }
     const budget = { left: MAX_ENTRIES }
     const jobs: { file: string; companyId: string | null; kind: DiskKind }[] = []
-    for (const e of children(path.join(p.userData, 'worktrees'))) jobs.push({ file: path.join(p.userData, 'worktrees', e.name), companyId: runs.get(e.name) ?? null, kind: 'worktrees' })
+    for (const e of children(path.join(p.userData, 'worktrees'))) jobs.push({ file: path.join(p.userData, 'worktrees', e.name), companyId: runs.get(e.name) ?? wtDirs.get(e.name) ?? null, kind: 'worktrees' })
     for (const e of children(p.artifactsRoot)) jobs.push({ file: path.join(p.artifactsRoot, e.name), companyId: runs.get(e.name) ?? sessions.get(e.name) ?? null, kind: 'artifacts' })
     for (const e of children(p.runLogsDir)) jobs.push({ file: path.join(p.runLogsDir, e.name), companyId: runs.get(e.name) ?? null, kind: 'logs' })
     for (const e of children(p.sessionLogsDir)) jobs.push({ file: path.join(p.sessionLogsDir, e.name), companyId: sessions.get(e.name.replace(/\.log$/, '')) ?? null, kind: 'logs' })
@@ -214,6 +229,38 @@ export class DiskUsageService {
         at: w.created_at
       })
     }
+    // task worktrees (WORKTREE.md) stay 'active' while their task is open; once it is done or canceled (an archived
+    // plan's milestone, say) they are offered here too, with the same check, and go through the task's own Remove
+    type TW = Omit<W, 'run_status' | 'title' | 'task_status'> & { task_status: string; ident: string | null; task_title: string | null }
+    const tws = tryAll<TW>(
+      this.d.db,
+      `SELECT w.*, t.company_id, t.status AS task_status, json_extract(t.data, '$.identifier') AS ident, json_extract(t.data, '$.title') AS task_title
+       FROM worktrees w JOIN company_tasks t ON t.id = w.run_id
+       WHERE w.status = 'active' AND w.removed_at IS NULL AND t.status IN ('done', 'canceled') ORDER BY w.created_at`
+    )
+    for (const w of tws) {
+      if (!w.path.startsWith(root) || !fs.existsSync(w.path)) continue
+      let reason: string | null = null
+      if (!this.d.worktrees) reason = 'worktrees are unavailable'
+      else {
+        try {
+          reason = await worktreeVerdict(this.d.git, w)
+        } catch {
+          reason = 'could not check'
+        }
+      }
+      out.push({
+        id: `tw:${w.run_id}`,
+        kind: 'worktree',
+        companyId: w.company_id || PERSONAL_COMPANY_ID,
+        title: `${w.ident ? `${w.ident} · ` : ''}${w.task_title ?? 'Task'} (${w.task_status === 'canceled' ? 'canceled' : 'done'})`,
+        path: w.path,
+        bytes: await sizeOf(w.path),
+        selectable: reason === null,
+        reason,
+        at: w.created_at
+      })
+    }
     const cutoff = this.now().getTime() - OLD_LOG_DAYS * 86_400_000
     const runs = new Map(
       tryAll<{ id: string; status: string; ended_at: string | null; created_at: string; company_id: string | null; title: string }>(this.d.db, 'SELECT id, status, ended_at, created_at, company_id, title FROM runs').map((r) => [r.id, r])
@@ -255,7 +302,12 @@ export class DiskUsageService {
         continue
       }
       try {
-        if (it.kind === 'worktree') {
+        if (it.kind === 'worktree' && id.startsWith('tw:')) {
+          // the task's own Remove Worktree… (it records the removal on the task); never discards work
+          if (this.d.removeTaskWorktree) await this.d.removeTaskWorktree(id.slice(3))
+          else if (this.d.worktrees) await this.d.worktrees.removeTask(id.slice(3))
+          else throw new Error('worktrees are unavailable')
+        } else if (it.kind === 'worktree') {
           if (!this.d.worktrees) throw new Error('worktrees are unavailable')
           // no run-wide sweep: long after the run, "branches created during the run" would include later runs' and the
           // founder's branches; only this worktree and its own never-pushed branch go

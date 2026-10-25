@@ -134,7 +134,7 @@ function General(): React.JSX.Element {
       <SRow label="Retry scheduled runs once at the usage-limit reset" desc="A scheduled run that stops on a usage limit gets exactly one retry when the limit resets (in 1 hour when the CLI doesn’t say).">
         <Switch checked={s.autoRetryRateLimit ?? true} onChange={(v) => void updateSettings({ autoRetryRateLimit: v })} label="Retry scheduled runs at the usage-limit reset" />
       </SRow>
-      <SRow label="Flag a step or session as Stalled? after N minutes without output" desc="Working agents with no output and no activity get an amber “Stalled?” badge and one notification. Principia never stops them.">
+      <SRow label="Flag a step or session as Stalled? after N minutes without output" desc="Working agents with no output and no activity get a cyan “Stalled?” badge and one notification. Principia never stops them.">
         <Stepper value={s.stallMinutes ?? 10} min={1} max={240} onChange={(v) => void updateSettings({ stallMinutes: Math.min(240, Math.max(1, v)) })} label="Stalled after minutes" />
       </SRow>
       <SRow label="Pause all schedules">
@@ -611,7 +611,8 @@ function Data(): React.JSX.Element {
  */
 function ExperimentalSection(): React.JSX.Element {
   const flags = useStore((st) => st.settings?.experimental) ?? {}
-  const set = (patch: { companies?: boolean; departments?: boolean }): void => void updateSettings({ experimental: { ...flags, ...patch } })
+  const set = (patch: { companies?: boolean; departments?: boolean; plans?: boolean }): void => void updateSettings({ experimental: { ...flags, ...patch } })
+  const board = !!flags.companies && !!flags.departments
   return (
     <>
       <div className="sgroup__title">Experimental</div>
@@ -620,6 +621,9 @@ function ExperimentalSection(): React.JSX.Element {
       </SRow>
       <SRow label="Departments and the company board" desc="Departments, agent seats and one task board per company. Agents start work on their own only where you turn Autopilot on. Needs Companies.">
         <Switch checked={!!flags.companies && !!flags.departments} disabled={!flags.companies} onChange={(v) => set({ departments: v })} label="Departments" />
+      </SRow>
+      <SRow label="Plans" desc="Turn one goal into milestones and tasks a head agent runs at the pace you pick, one worktree per milestone, ending in a pull request you merge. Task briefs stay on either way. Needs Departments.">
+        <Switch checked={board && !!flags.plans} disabled={!board} onChange={(v) => set({ plans: v })} label="Plans" />
       </SRow>
     </>
   )

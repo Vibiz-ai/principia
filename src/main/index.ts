@@ -343,6 +343,7 @@ if (!app.requestSingleInstanceLock()) {
       secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
       company: h.companyBridge(),
       chat: (req) => h.safe(() => h.chatContext(req), null),
+      worktreeGuard: (cwd, p) => h.worktrees?.guardEnvForPath(cwd, p) ?? null,
       trustFolder: (cwd, env) => {
         if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
       },

@@ -96,8 +96,8 @@ export const DEFAULT_SETTINGS: Settings = {
   trackTasks: 'auto'
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
-// departments stays absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
-const DEFAULT_EXPERIMENTAL: Required<Omit<ExperimentalFlags, 'departments'>> = { companies: false, vault: false, vaultAI: false }
+// departments and plans stay absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
+const DEFAULT_EXPERIMENTAL: Required<Omit<ExperimentalFlags, 'departments' | 'plans'>> = { companies: false, vault: false, vaultAI: false }
 
 /**
  * COMPANY.md §1.4: rows written by an older build (NULL company_id) read as Personal. Every company filter and stamp
@@ -588,6 +588,16 @@ export class Store {
       )
       .get(since) as { passed: number | null; failed: number | null }
     return { passed: r.passed ?? 0, failed: r.failed ?? 0 }
+  }
+  /** countEndedSince per company (an unstamped run is Personal's), for the focused company's status bar. */
+  countEndedSinceByCompany(since: string): Record<Id, { passed: number; failed: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT COALESCE(NULLIF(company_id, ''), '${PERSONAL_COMPANY_ID}') AS c, SUM(status = 'passed') AS passed, SUM(status = 'failed') AS failed
+         FROM runs WHERE ended_at >= ? GROUP BY c`
+      )
+      .all(since) as { c: string; passed: number | null; failed: number | null }[]
+    return Object.fromEntries(rows.map((r) => [r.c, { passed: r.passed ?? 0, failed: r.failed ?? 0 }]))
   }
 
   // ---------- schedules (config columns; fire-state belongs to the engine) ----------

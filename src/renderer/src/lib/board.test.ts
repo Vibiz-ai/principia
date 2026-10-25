@@ -46,6 +46,9 @@ describe('board lanes', () => {
   it('filters by company, department, agent, search and the Backlog toggle', () => {
     const tasks = [task('1', { departmentId: 'dep_m' }), task('2', { status: 'backlog' }), task('3', { companyId: 'co_b', title: 'Logo' }), task('4', { agentId: 'agt_copy' })]
     expect(filterTasks(tasks, { companyId: 'co_a', showBacklog: false }, ctx).map((t) => t.id)).toEqual(['1', '4'])
+    // a plan's tasks wait in Backlog for the plan pilot and show with the toggle off (PLANS.md QA: an approved plan looked empty)
+    const planned = task('5', { status: 'backlog', plan: { planId: 'plan_x', milestoneId: 'pm_1', planTaskId: 'pt_1', role: 'task' } })
+    expect(filterTasks([...tasks, planned], { companyId: 'co_a', showBacklog: false }, ctx).map((t) => t.id)).toEqual(['1', '4', '5'])
     // the agent's department counts for a task with none of its own
     expect(filterTasks(tasks, { departmentId: 'dep_m' }, ctx).map((t) => t.id)).toEqual(['1', '4'])
     expect(filterTasks(tasks, { agentId: 'agt_copy' }, ctx).map((t) => t.id)).toEqual(['4'])

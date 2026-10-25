@@ -177,6 +177,10 @@ describe('provenance', () => {
     ]
     expect(runsFrom(rows).map((r) => r.runId)).toEqual(['r_1', 'r_2'])
   })
+  it('an older task run titled by its raw <principia-role> frame never shows the frame (QA)', () => {
+    const rows = [{ provenance: prov({ runId: 'r_9', runTitle: '<principia-role department="Development" agent="Engineer"> You are…' }), createdAt: '2026-10-01T00:00:00Z' }]
+    expect(runsFrom(rows)[0].title).not.toMatch(/principia/)
+  })
 })
 
 describe('misc', () => {

@@ -1,6 +1,7 @@
 /** Portable company context and durable work. Credentials never belong in a Passport. */
 import type { AgentPersona } from './personas'
 import type { TaskWork } from './taskWork'
+import type { TaskBrief, TaskPlanLink, TaskProof } from './plans'
 export const TASK_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled'] as const
 export type TaskStatus = typeof TASK_STATUSES[number]
 /** DEPARTMENTS.md §1.3: `agent` (task_create from a run) and `schedule` (a task-mode schedule's standing card). */
@@ -94,6 +95,12 @@ export interface CompanyOverview {
 export interface CompanyTaskInput extends Partial<TaskBoardFields> {
   title: string; description: string; companyId: string; repoId: string | null; status: TaskStatus; priority: 0 | 1 | 2 | 3 | 4;
   source: TaskSource; sourceUrl: string | null; externalId: string | null; assigneeProfileId: string | null; parentId: string | null; dependencyIds: string[]
+  /** PLANS.md §1: the living brief (absent on old rows: briefOf reads the description as its Context) */
+  brief?: TaskBrief | null
+  /** PLANS.md §1: screenshots, test results, links attached as proof */
+  proof?: TaskProof[]
+  /** PLANS.md §2: the plan this task belongs to */
+  plan?: TaskPlanLink | null
 }
 /** Stored tasks. Rows written before departments lack the TaskBoardFields; read them through withTaskDefaults. */
 export interface CompanyTask extends CompanyTaskInput { id: string; identifier: string; runId: string | null; createdAt: string; updatedAt: string }

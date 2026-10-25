@@ -10,6 +10,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type DB } from '../db'
 import { WorktreeManager, gitRunner } from '../worktrees'
+import { REQUEST_SCHEMAS } from '../ipcSchemas'
 import { DiskUsageService, sizeOf } from './disk'
 
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x', GIT_CONFIG_NOSYSTEM: '1', HOME: os.tmpdir() } as Record<string, string>
@@ -95,6 +96,29 @@ d('disk per company and Clean Up…', () => {
     expect(du.partial).toBe(false)
   })
 
+  it('task worktrees count under their task\'s company and are offered once the task is done or canceled (QA)', async () => {
+    db.prepare("INSERT INTO company_passports (id, data) VALUES ('co_acme', '{}')").run()
+    const task = (id: string, ident: string, status: string) =>
+      db.prepare('INSERT INTO company_tasks (id, company_id, status, data) VALUES (?, ?, ?, ?)').run(id, 'co_acme', status, JSON.stringify({ identifier: ident, title: `Task ${ident}`, status }))
+    task('task_open', 'PRN-1', 'in_progress')
+    task('task_gone', 'PRN-2', 'canceled')
+    const open = await wm.ensureTask({ taskId: 'task_open', identifier: 'PRN-1', title: 'open', repo })
+    const gone = await wm.ensureTask({ taskId: 'task_gone', identifier: 'PRN-2', title: 'gone', repo })
+    fs.writeFileSync(path.join(open.path, 'big.bin'), Buffer.alloc(30_000))
+    const du = await svc.measure(true)
+    expect(du.companies.find((c) => c.companyId === 'co_acme')!.byKind.worktrees).toBeGreaterThanOrEqual(30_000)
+    expect(du.companies.find((c) => c.companyId === null)).toBeUndefined()
+    const items = await svc.cleanupItems()
+    expect(items.map((i) => i.id)).toEqual(['tw:task_gone'])
+    expect(items[0]).toMatchObject({ selectable: true, companyId: 'co_acme', title: 'PRN-2 · Task PRN-2 (canceled)' })
+    // the ids the dialog sends back must pass the IPC schema (QA: 'usage:cleanup: ids.0: invalid item')
+    expect(REQUEST_SCHEMAS['usage:cleanup'].safeParse({ ids: items.map((i) => i.id) }).success).toBe(true)
+    const res = await svc.cleanup(['tw:task_gone'])
+    expect(res).toMatchObject({ removed: 1, failed: [] })
+    expect(fs.existsSync(gone.path)).toBe(false)
+    expect(fs.existsSync(open.path)).toBe(true)
+  })
+
   it('a clean finished worktree is selectable, a dirty one is greyed; removing frees it and git forgets it', async () => {
     run('r_0000000002', 'co_acme', 'failed')
     run('r_0000000003', 'co_acme', 'failed')
@@ -109,6 +133,7 @@ d('disk per company and Clean Up…', () => {
     expect(a).toMatchObject({ selectable: true, reason: null, companyId: 'co_acme' })
     expect(a.bytes).toBeGreaterThan(0)
     expect(b).toMatchObject({ selectable: false, reason: 'uncommitted changes' })
+    expect(REQUEST_SCHEMAS['usage:cleanup'].safeParse({ ids: items.map((i) => i.id) }).success).toBe(true)
     // a greyed item is refused even when asked for
     const res = await svc.cleanup([a.id, b.id])
     expect(res.removed).toBe(1)

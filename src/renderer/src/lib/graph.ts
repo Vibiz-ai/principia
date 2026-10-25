@@ -73,7 +73,7 @@ export interface CardData extends Record<string, unknown> {
   agentId?: string | null
   /** The root agent is waiting on the user (open ask, or an unseen "your turn"): amber flag, same as the hub. */
   waiting?: boolean
-  /** The root agent is working but silent for Settings.stallMinutes: amber "Stalled?" badge (never auto-killed). */
+  /** The root agent is working but silent for Settings.stallMinutes: cyan "Stalled?" badge (never auto-killed). */
   stalled?: boolean
   /** Approval card diff (AUTHORING.md §2.2): added green, removed red ghost, changed amber. */
   diff?: 'added' | 'removed' | 'changed'

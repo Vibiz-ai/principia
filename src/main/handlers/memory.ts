@@ -65,7 +65,8 @@ function vaultRef(kind: 'entity' | 'fact' | 'relation', id: string): string {
 export function overview(h: Hive, companyId?: string): MemoryOverview {
   const m = svc(h)
   if (m.vaultMode()) return vaultOverview(h, m, companyId)
-  const core = overviewCore(m.store)
+  const within = companyRepoIds(h, companyId)
+  const core = overviewCore(m.store, within)
   const repos = core.repos.map((r) => ({
     repoId: r.repoId,
     repoName: h.store.getRepo(r.repoId)?.name ?? r.repoName ?? r.repoId,
@@ -84,11 +85,24 @@ export function overview(h: Hive, companyId?: string): MemoryOverview {
     agentWritesPaused: core.agentWritesPaused,
     counts: core.counts,
     repos,
-    defaultRepoId: repos[0]?.repoId ?? h.settings().lastRepoId ?? null,
+    defaultRepoId: repos[0]?.repoId ?? lastRepoWithin(h, within),
     lastSeq: core.lastSeq,
     dbPath: m.paths.dbPath,
     dbBytes
   }
+}
+
+/**
+ * COMPANY.md §3: the repositories one company owns, for scoping v1 memory reads. undefined = no company asked (All
+ * mode, every repo). A repo with no stamp is Personal's.
+ */
+export function companyRepoIds(h: Hive, companyId: string | null | undefined): string[] | undefined {
+  if (!companyId) return undefined
+  return h.store.listRepos().filter((r) => (r.companyId ?? PERSONAL_COMPANY_ID) === companyId).map((r) => r.id)
+}
+function lastRepoWithin(h: Hive, within: string[] | undefined): string | null {
+  const last = h.settings().lastRepoId ?? null
+  return last && (!within || within.includes(last)) ? last : (within?.[0] ?? null)
 }
 
 /** The overview in vault mode: index counts for one company (or every company), no per-repo picker. */
@@ -188,14 +202,14 @@ export function registerMemoryHandlers(h: Hive): void {
   /** The company a v1-shaped vault edit lands in: the request's, else Personal. */
   const companyOf = (q: { companyId?: string | null } | undefined) => q?.companyId ?? PERSONAL_COMPANY_ID
   handle('memory:overview', (q) => overview(h, q?.companyId ?? undefined))
-  handle('memory:graph', (q) => (isPassportGraphRequest(q) ? wrap(() => graphOp(rt(h), q)) : graphQuery(svc(h).store, q, redact)))
+  handle('memory:graph', (q) => (isPassportGraphRequest(q) ? wrap(() => graphOp(rt(h), q)) : graphQuery(svc(h).store, q, redact, companyRepoIds(h, q.companyId))))
   handle('memory:entity', ({ id }) => {
     const d = entityDetail(svc(h).store, id, redact)
     if (!d) throw new HiveError('not_found', 'Memory entity not found')
     return d
   })
-  handle('memory:search', (q) => searchPage(svc(h).store, q, redact))
-  handle('memory:facts', (q) => factsQuery(svc(h).store, q, redact))
+  handle('memory:search', (q) => searchPage(svc(h).store, q, redact, companyRepoIds(h, q.companyId)))
+  handle('memory:facts', (q) => factsQuery(svc(h).store, q, redact, companyRepoIds(h, q.companyId)))
   handle('memory:mutate', async (req) => {
     const m = svc(h)
     if (m.vaultMode()) return wrapAsync(() => vaultMutate(m.passport(), companyOf(req), req))
@@ -232,7 +246,7 @@ export function registerMemoryHandlers(h: Hive): void {
     h.memory?.flush()
     return overview(h)
   })
-  handle('memory:export', async ({ scope }, sender) => {
+  handle('memory:export', async ({ scope, companyId }, sender) => {
     const m = svc(h)
     const win = BrowserWindow.fromWebContents(sender)
     const opts: Electron.SaveDialogOptions = {
@@ -242,7 +256,7 @@ export function registerMemoryHandlers(h: Hive): void {
     }
     const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
     if (r.canceled || !r.filePath) return null
-    const lines = exportLines(m.store, scope, redact)
+    const lines = exportLines(m.store, scope, redact, companyRepoIds(h, companyId))
     fs.writeFileSync(r.filePath, lines.join('\n') + (lines.length ? '\n' : ''), { mode: 0o600 })
     return { path: r.filePath }
   })

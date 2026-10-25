@@ -1,4 +1,5 @@
 /** Interactive PTY sessions (CONTRACT §6). PTYs live in main; window close/reopen never touches them. */
+import { PERSONAL_COMPANY_ID } from '../shared/company'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentProfile, Id, Session } from '../shared/types'
@@ -58,6 +59,11 @@ export interface SessionDeps {
   emitUpdated(s: Session): void
   onExited?(s: Session): void
   killGroup?(pid: number, signal: NodeJS.Signals): boolean
+  /**
+   * WORKTREE.md §3: the push guard env (core.hooksPath, the shims first on `path`) for a cwd inside an active Hive
+   * worktree (a task's own); null elsewhere. A chat in a task worktree is guarded like the task's headless turns.
+   */
+  worktreeGuard?(cwd: string, path: string | undefined): Record<string, string> | null
   /** Pre-accepts Claude Code's folder-trust prompt for Hive-owned / user-added folders (see claudeTrust.ts). */
   trustFolder?(cwd: string, env: Record<string, string>): void
   /** Whether the agent CLI has a stored conversation for this id. Unknown/absent = assume it exists. */
@@ -201,6 +207,15 @@ export class SessionManager {
 
   runningCount(): number {
     return this.live.size
+  }
+  /** Live sessions per company (Personal for unstamped ones), for a focused company's status bar. */
+  liveCountByCompany(): Record<Id, number> {
+    const out: Record<Id, number> = {}
+    for (const id of this.live.keys()) {
+      const c = this.d.store.getSession(id)?.companyId || PERSONAL_COMPANY_ID
+      out[c] = (out[c] ?? 0) + 1
+    }
+    return out
   }
   liveCountForRepo(repoId: Id): number {
     let n = 0
@@ -357,9 +372,20 @@ export class SessionManager {
       profile,
       hive: { ARTIFACTS_DIR: artifactsDir, HIVE_SESSION_ID: id, HIVE_USER_DATA: this.d.paths.userData, ...(this.d.reaper?.tag(id) ?? {}) }
     })
-    // Picking a folder in Hive is the trust decision; Hive's scratch dir and company workspaces are Hive's own. Without
-    // this Claude opens on "Quick safety check" with "No, exit" preselected and the first Return kills the session.
-    if (profile.adapter === 'claude' && (repoId || workspace || cwd === this.d.paths.scratchDir)) {
+    // WORKTREE.md §3: a session in a task worktree gets the same shims and hooksPath as the task's headless turns
+    let guarded = false
+    try {
+      const guard = this.d.worktreeGuard?.(cwd, env.PATH) ?? null
+      if (guard) {
+        Object.assign(env, guard)
+        guarded = true
+      }
+    } catch {
+      /* the worktree-local core.hooksPath still guards pushes */
+    }
+    // Picking a folder in Hive is the trust decision; Hive's scratch dir, company workspaces and worktrees are Hive's own.
+    // Without this Claude opens on "Quick safety check" with "No, exit" preselected and the first Return kills it.
+    if (profile.adapter === 'claude' && (repoId || workspace || guarded || cwd === this.d.paths.scratchDir)) {
       try {
         this.d.trustFolder?.(cwd, env)
         // the company's other repo folders a chat may reach are trusted the same way (the company owns them)

@@ -13,7 +13,7 @@ import type { ToolDef, ToolResult } from '../../memory/server/tools'
 import { AUTHOR_SERVER_INSTRUCTIONS, AUTHOR_TOOLS, type AuthorTool } from '../../../shared/authoring'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackWorkTool } from '../../../shared/slack'
 import { CHAT_COMPANY_SERVER_INSTRUCTIONS, CHAT_COMPANY_TOOL, CHAT_COMPANY_TOOL_DEF, PROPOSAL_WAIT_S, type ChatCompanyTool } from '../../../shared/chatCompany'
-import { callTaskTool, CHAT_TASK_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS_PROACTIVE, COMPANY_TOOL_DEFS, COMPANY_TOOLS, isBoardTool, SESSION_TASK_TOOLS, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS } from '../../company/taskToolDefs'
+import { BRIEF_SERVER_INSTRUCTIONS, isBriefTool, callTaskTool, CHAT_TASK_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS_PROACTIVE, COMPANY_TOOL_DEFS, COMPANY_TOOLS, isBoardTool, SESSION_TASK_TOOLS, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS } from '../../company/taskToolDefs'
 
 export const MAX_ARGS_BYTES = 256 * 1024
 export const DEFAULT_WAIT_S = 600
@@ -498,7 +498,8 @@ export function listedHiveTools(env: Record<string, string | undefined>): string
     ...(sets.has('author') ? AUTHOR_TOOLS : []),
     ...(sets.has('slack') ? SLACK_TOOLS : []),
     ...(sets.has('work') ? SLACK_WORK_TOOLS : []),
-    ...(sets.has('task') ? TASK_TOOLS : []),
+    // PLANS.md §1: the brief tools only where a task is held; a chat gets no brief tools
+    ...(sets.has('task') ? TASK_TOOLS.filter((t) => !!taskId || !isBriefTool(t)) : []),
     // PROACTIVE.md §3: a session holding no task moves the tasks it tracks
     ...(sets.has('task') && !taskId ? SESSION_TASK_TOOLS : []),
     ...(sets.has('company') ? COMPANY_TOOLS : []),
@@ -528,7 +529,7 @@ export function buildAuthorHandlers(env: NodeJS.ProcessEnv): McpHandlers {
     serverInfo: { name: 'hive', version: '1' },
     instructions: () =>
       usable
-        ? [sets.has('author') ? AUTHOR_SERVER_INSTRUCTIONS : '', sets.has('author') && companyId ? AUTHOR_COMPANY_NOTE : '', sets.has('slack') ? SLACK_SERVER_INSTRUCTIONS : '', sets.has('work') ? SLACK_WORK_INSTRUCTIONS : '', sets.has('task') ? (taskId ? TASK_SERVER_INSTRUCTIONS : CHAT_TASK_SERVER_INSTRUCTIONS) : '', sets.has('company') ? (proactive ? COMPANY_SERVER_INSTRUCTIONS_PROACTIVE : COMPANY_SERVER_INSTRUCTIONS) : '', sets.has('newco') ? CHAT_COMPANY_SERVER_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || 'No Hive tools are enabled here.'
+        ? [sets.has('author') ? AUTHOR_SERVER_INSTRUCTIONS : '', sets.has('author') && companyId ? AUTHOR_COMPANY_NOTE : '', sets.has('slack') ? SLACK_SERVER_INSTRUCTIONS : '', sets.has('work') ? SLACK_WORK_INSTRUCTIONS : '', sets.has('task') ? (taskId ? TASK_SERVER_INSTRUCTIONS : CHAT_TASK_SERVER_INSTRUCTIONS) : '', sets.has('task') && taskId ? BRIEF_SERVER_INSTRUCTIONS : '', sets.has('company') ? (proactive ? COMPANY_SERVER_INSTRUCTIONS_PROACTIVE : COMPANY_SERVER_INSTRUCTIONS) : '', sets.has('newco') ? CHAT_COMPANY_SERVER_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || 'No Hive tools are enabled here.'
         : 'Hive authoring is not available in this process.',
     listTools: () => (usable ? names.map((t) => defs[t]) : []),
     callTool: (name, args, ctx) => {

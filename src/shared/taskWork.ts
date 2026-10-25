@@ -17,6 +17,8 @@ export interface TaskPr {
   reviewDecision: ReviewDecision | null
   mergedAt: string | null
   checkedAt: string
+  /** the branch it merges into (gh's baseRefName); absent on rows read before it was asked for */
+  base?: string | null
 }
 
 /** What the GitHub CLI said on the last check: null = not checked yet. */
@@ -90,7 +92,9 @@ export const workGone = (w: TaskWork | null | undefined): boolean => !!w && !!w.
  * A task can be Started into a worktree: it has a repository its company owns (Personal included: its repos are the
  * unowned ones), it is not closed, and it has no live or queued binding.
  */
-export function canStartWork(t: { repoId: string | null; status: string; work?: TaskWork | null }, companyRepoIds: readonly string[]): boolean {
+export function canStartWork(t: { repoId: string | null; status: string; work?: TaskWork | null; plan?: unknown }, companyRepoIds: readonly string[]): boolean {
+  // PLANS.md: a plan's tasks work in their milestone's worktree; they start from the plan, never into one of their own
+  if (t.plan) return false
   if (!t.repoId || !companyRepoIds.includes(t.repoId)) return false
   if (t.status === 'done' || t.status === 'canceled' || t.status === 'in_progress') return false
   return !workStarted(t.work) && !workQueued(t.work)

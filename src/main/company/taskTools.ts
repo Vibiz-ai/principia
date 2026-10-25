@@ -29,7 +29,9 @@ import { HiveError } from '../../shared/errors'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
-import { COMPANY_LIMITS, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { CRITERION_STATES, EDITABLE_SECTIONS, PROOF_KINDS, briefOf, proofOf } from '../../shared/plans'
+import { BriefStore, briefReminder, checkProofRef, decide, editSection, setCriterion } from './brief'
 export { callTaskTool, isTaskTool, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS, type TaskTool } from './taskToolDefs'
 
 /** §6 caps on agent-filed tasks. */
@@ -73,6 +75,11 @@ export interface TaskToolsDeps {
   createDepartment?: (input: { companyId: string; name: string; key?: string; does: string; doesNot: string }) => { id: string; key: string; name: string }
   now?: () => Date
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
+  /**
+   * PLANS.md §1 task_attach_proof: the folders a proof file may come from (the task's worktree, its run's artifacts).
+   * Absent = the caller run's artifacts dir, its worktree row and the cwd Principia gave the run.
+   */
+  proofRoots?: (task: BoardTask, caller: TaskCaller) => string[]
 }
 
 /** A handoff waiting for its run end. */
@@ -115,6 +122,11 @@ const ARGS = {
     agentId: idArg.optional(),
     reason: z.string().trim().min(1).max(TASK_LIMITS.reason)
   }).refine(a => !!a.departmentKey || !!a.agentId, { message: 'Name a departmentKey or an agentId' }),
+  task_brief_edit: z.strictObject({ section: z.enum(EDITABLE_SECTIONS), mode: z.enum(['replace', 'append']).default('replace'), text: z.string().trim().min(1).max(BRIEF_TOOL_LIMITS.text) }),
+  task_criterion: z.strictObject({ id: z.string().trim().min(1).max(500), state: z.enum(CRITERION_STATES), reason: z.string().trim().max(500).optional() })
+    .refine(a => (a.state !== 'deferred' && a.state !== 'not_done') || !!a.reason, { message: "a 'deferred' or 'not_done' criterion needs a reason (say why)", path: ['reason'] }),
+  task_decide: z.strictObject({ text: z.string().trim().min(1).max(1000), why: z.string().trim().min(1, 'say why').max(1000) }),
+  task_attach_proof: z.strictObject({ kind: z.enum(PROOF_KINDS), title: z.string().trim().min(1).max(200), ref: z.string().trim().min(1).max(4000) }),
   company_departments: z.strictObject({}),
   company_file_task: z.strictObject({
     title: z.string().trim().min(1).max(TASK_LIMITS.title),
@@ -169,10 +181,12 @@ function addWake(w: PendingWake | null, reason: string): PendingWake {
 export class TaskTools {
   private readonly handoffs = new Map<string, PendingHandoff>()
   readonly harvester: ReportHarvester
+  readonly briefs: BriefStore
   private sessionTaskColumn: boolean | null = null
 
   constructor(private readonly d: TaskToolsDeps) {
     this.harvester = new ReportHarvester({ company: d.company, redact: d.redact, now: d.now })
+    this.briefs = new BriefStore(d.company, () => this.now())
   }
   /** sessions.task_id exists (healed by openDatabase); read on first use, so building the toolset touches no db */
   private get sessionTaskCol(): boolean {
@@ -278,6 +292,10 @@ export class TaskTools {
       case 'task_ask': out = this.ask(caller, parseArgs(ARGS.task_ask, args)); break
       case 'task_create': { const a = parseArgs(ARGS.task_create, args); out = caller.kind === 'session' && !caller.taskId ? this.track(caller, a, hints.callId ?? null) : this.create(caller, a, hints.callId ?? null); break }
       case 'task_handoff': out = this.handoff(caller, parseArgs(ARGS.task_handoff, args)); break
+      case 'task_brief_edit': out = this.briefEdit(caller, parseArgs(ARGS.task_brief_edit, args)); break
+      case 'task_criterion': out = this.criterion(caller, parseArgs(ARGS.task_criterion, args)); break
+      case 'task_decide': out = this.decision(caller, parseArgs(ARGS.task_decide, args)); break
+      case 'task_attach_proof': out = this.attachProof(caller, parseArgs(ARGS.task_attach_proof, args)); break
       case 'company_departments': parseArgs(ARGS.company_departments, args); out = this.departmentsOf(caller); break
       case 'company_file_task': out = this.fileTask(caller, parseArgs(ARGS.company_file_task, args), hints.callId ?? null); break
       case 'company_create_department': out = this.createDepartment(caller, parseArgs(ARGS.company_create_department, args)); break
@@ -326,7 +344,10 @@ export class TaskTools {
         description: clip(t.description, 4000), sourceUrl: t.sourceUrl, parent: t.parentId,
         dependencies: deps.map(x => ({ identifier: x.identifier, title: clip(x.title, 120), status: x.status, ...(x.doneNote ? { doneNote: clip(x.doneNote, 500) } : {}) })),
         subtasks: children.map(x => ({ identifier: x.identifier, title: clip(x.title, 120), status: x.status })),
-        report: t.report, ask: t.ask, ...(t.doneNote ? { doneNote: clip(t.doneNote, 1000) } : {}), handoffs: t.handoffs
+        report: t.report, ask: t.ask, ...(t.doneNote ? { doneNote: clip(t.doneNote, 1000) } : {}), handoffs: t.handoffs,
+        // PLANS.md §1: the brief (revisions left out: who changed what is for the inspector)
+        brief: (({ revisions: _r, ...b }) => ({ ...b, context: clip(b.context, 2000), decisions: b.decisions.slice(-10) }))(briefOf(t)),
+        proof: proofOf(t).map(p => ({ id: p.id, kind: p.kind, title: p.title }))
       },
       activity
     }
@@ -365,7 +386,8 @@ export class TaskTools {
     this.handoffs.delete(t.id)
     this.harvester.forget(t.id)
     this.changed(t.companyId)
-    return { ok: true, task: t.identifier, outcome: a.outcome, appliedAt: 'run end', detail: a.outcome === 'review' ? 'A human reviews and approves the task; you cannot mark it done.' : 'The task waits for the human with your reason.' }
+    const remind = this.reportReminder(t, caller)
+    return { ok: true, task: t.identifier, outcome: a.outcome, appliedAt: 'run end', detail: a.outcome === 'review' ? 'A human reviews and approves the task; you cannot mark it done.' : 'The task waits for the human with your reason.', ...(remind ? { brief: remind } : {}) }
   }
 
   private ask(caller: TaskCaller, a: z.infer<typeof ARGS.task_ask>): Record<string, unknown> {
@@ -620,6 +642,63 @@ export class TaskTools {
       detail: capped ? `${t.identifier} was already handed off ${MAX_HANDOFFS} times: at run end it waits for the human (handoff_cap).` : `End your turn now. ${label} takes the task when your run ends.` }
   }
 
+  // ---------- PLANS.md §1: the brief ----------
+
+  /** The author of a brief edit: the task's seat, never what the arguments say. */
+  private author(caller: TaskCaller): string { return `agent:${caller.agentId ?? 'agent'}` }
+  private briefEdit(caller: TaskCaller, a: z.infer<typeof ARGS.task_brief_edit>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => editSection(b, a.section, a.mode, this.redact(a.text), this.author(caller), at))
+    this.changed(t.companyId)
+    const b = briefOf(next)
+    return { ok: true, task: t.identifier, section: a.section, ...(a.section === 'criteria' ? { criteria: b.criteria } : a.section === 'questions' ? { questions: b.questions } : { length: (b[a.section] as string).length }) }
+  }
+  private criterion(caller: TaskCaller, a: z.infer<typeof ARGS.task_criterion>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => setCriterion(b, a.id, a.state, a.reason ? this.redact(a.reason) : undefined, this.author(caller), at))
+    this.changed(t.companyId)
+    const b = briefOf(next)
+    return { ok: true, task: t.identifier, open: b.criteria.filter(c => c.state === 'open').map(c => c.id), criteria: b.criteria.length }
+  }
+  private decision(caller: TaskCaller, a: z.infer<typeof ARGS.task_decide>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => decide(b, this.redact(a.text), this.redact(a.why), this.author(caller), at))
+    this.changed(t.companyId)
+    return { ok: true, task: t.identifier, decisions: briefOf(next).decisions.length }
+  }
+  private attachProof(caller: TaskCaller, a: z.infer<typeof ARGS.task_attach_proof>): Record<string, unknown> {
+    const t = this.own(caller)
+    const ref = checkProofRef(a.kind, a.ref, this.proofRoots(t, caller), s => this.redact(s))
+    const out = this.briefs.attach(t.id, { kind: a.kind, title: this.redact(a.title), ref }, this.author(caller))
+    this.changed(t.companyId)
+    return { ok: true, task: t.identifier, proof: { id: out.proof.id, kind: out.proof.kind, title: out.proof.title }, total: proofOf(out.task).length }
+  }
+  /** PLANS.md §1: the brief this turn has not written yet, as advice in task_report's result (never an error). */
+  private reportReminder(t: BoardTask, caller: TaskCaller): string {
+    try {
+      const since = caller.kind === 'run' ? ((this.db.prepare('SELECT started_at AS s FROM runs WHERE id=?').get(caller.holderId) as { s: string | null } | undefined)?.s ?? null) : null
+      return briefReminder(t, since, this.author(caller))
+    } catch { return '' }
+  }
+  private proofRoots(t: BoardTask, caller: TaskCaller): string[] {
+    if (this.d.proofRoots) return this.d.proofRoots(t, caller)
+    const roots: string[] = []
+    if (caller.kind !== 'run') return roots
+    const run = this.db.prepare('SELECT artifacts_dir AS dir, target_json AS target FROM runs WHERE id=?').get(caller.holderId) as { dir: string | null; target: string | null } | undefined
+    // where the agent works comes first (a relative proof path is relative to it), the run's artifacts last
+    // WORKTREE.md / PLANS.md §2.4: the task's own worktree, or its milestone's (a plan task works in its parent's)
+    try {
+      const parent = t.plan?.role === 'task' && t.parentId ? this.c.task(t.parentId) : null
+      const w = t.work ?? (parent?.plan?.role === 'milestone' ? parent.work : null)
+      if (w?.worktreePath && !w.removedAt) roots.push(w.worktreePath)
+    } catch { /* no worktree */ }
+    try {
+      const wt = this.db.prepare("SELECT path FROM worktrees WHERE run_id=? AND status IN ('creating','active','kept') ORDER BY created_at DESC LIMIT 1").get(caller.holderId) as { path: string } | undefined
+      if (wt?.path) roots.push(wt.path)
+    } catch { /* older db */ }
+    if (run?.dir) roots.push(run.dir)
+    return roots
+  }
   // ---------- run end ----------
 
   /**
