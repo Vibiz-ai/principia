@@ -135,6 +135,8 @@ export const REMOTE_ROUTES = {
   approveTask: 'POST /api/c/:companyId/tasks/:taskId/approve',
   sendBackTask: 'POST /api/c/:companyId/tasks/:taskId/send-back',
   answerTask: 'POST /api/c/:companyId/tasks/:taskId/answer',
+  /** Not needed: the task is canceled and leaves Needs you (reopen it from the Board on the Mac) */
+  cancelTask: 'POST /api/c/:companyId/tasks/:taskId/cancel',
   chats: 'GET /api/c/:companyId/chats',
   session: 'GET /api/c/:companyId/sessions/:sessionId',
   sessionSend: 'POST /api/c/:companyId/sessions/:sessionId/send',

@@ -394,6 +394,10 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     await api.handle('approveTask', { companyId: 'co_a', taskId: 'ta_rev' }, {}, dev)
     expect(d.calls.find((c) => c.channel === 'tasks:approve')?.req).toEqual({ id: 'ta_rev', doneNote: 'Approved: Seven posts are ready.' })
     await expect(api.handle('approveTask', { companyId: 'co_a', taskId: 'ta_run' }, {}, dev)).rejects.toMatchObject({ status: 409 })
+    // Not needed: a task waiting on you is canceled (status only); one that does not wait on you is refused
+    await api.handle('cancelTask', { companyId: 'co_a', taskId: 'ta_rev' }, {}, dev)
+    expect(d.calls.find((c) => c.channel === 'tasks:update')?.req).toEqual({ id: 'ta_rev', patch: { status: 'canceled' } })
+    await expect(api.handle('cancelTask', { companyId: 'co_a', taskId: 'ta_run' }, {}, dev)).rejects.toMatchObject({ status: 409 })
     // no "always allow" from the phone, in a chat either
     await expect(api.handle('sessionAnswer', { companyId: 'co_a', sessionId: 'se_a' }, { requestId: 'r1', decision: { kind: 'allowAlways', suggestion: 0 } }, dev)).rejects.toMatchObject({ status: 400 })
   })

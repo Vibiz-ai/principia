@@ -31,7 +31,9 @@ import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, 
 export const PHONE_CHANNELS = [
   'company:list', 'agents:list', 'asks:list', 'sessions:list', 'tasks:list', 'tasks:get', 'companyAgents:list',
   'departments:list', 'repos:list', 'runs:list', 'settings:get', 'chat:snapshot', 'forum:state', 'forum:messages', 'forum:thread', 'app:dashboard',
-  'asks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:answer', 'company:pause', 'chat:send', 'chat:interrupt',
+  'asks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:answer',
+  // Not needed only: the handler sends { status: 'canceled' } and nothing else
+  'tasks:update', 'company:pause', 'chat:send', 'chat:interrupt',
   'chat:answer', 'agents:reply', 'tasks:comment', 'tasks:create', 'tasks:start', 'forum:post', 'forum:markRead',
   // read only: Principia's open suggestions count in Needs you (deciding one stays on the Mac)
   'orchestrator:suggestions'
@@ -189,6 +191,13 @@ export class PhoneApi implements RemoteApi {
         if (!t.ask) throw new HttpError(409, 'There is no question to answer on this task')
         if (t.ask.answer) throw new HttpError(409, 'That question was answered already')
         await this.h.invoke('tasks:answer', { id: t.id, answer: body('answerTask', raw).text })
+        return phoneNeeds(await this.load(), companyId)
+      }
+      case 'cancelTask': {
+        // Not needed (the Mac's Needs you): only a task that waits on you, and only to canceled; it can be reopened
+        const t = this.task(d, companyId, params.taskId)
+        if (!phoneNeeds(d, companyId).tasks.some((x) => x.taskId === t.id && x.kind !== 'idea')) throw new HttpError(409, 'It is not waiting for you anymore')
+        await this.h.invoke('tasks:update', { id: t.id, patch: { status: 'canceled' } })
         return phoneNeeds(await this.load(), companyId)
       }
       case 'chats':

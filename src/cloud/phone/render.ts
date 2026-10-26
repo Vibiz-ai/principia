@@ -7,6 +7,7 @@
 import { h, type VNode } from '../console/dom'
 import { bust } from '../console/render'
 import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskNeed, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
+import { md } from './markdown'
 import { ago, chatLines, headline, type ChatLine, type ChatReplica, type Tab } from './model'
 
 export interface Actions {
@@ -18,6 +19,8 @@ export interface Actions {
   answerAsk(askId: string, optionId: string | null): void
   approve(taskId: string): void
   sendBack(taskId: string): void
+  /** Not needed: cancel a task that waits on you (it leaves Needs you; reopen it from the Board on the Mac) */
+  notNeeded(taskId: string): void
   /** the queued messages go now: the turn stops and they follow (the Mac's Send now) */
   sendNow(): void
   /** insert @handle in the composer */
@@ -184,6 +187,7 @@ function taskCard(t: PhoneTaskNeed, v: View, a: Actions, now: number): VNode {
             h('div', { class: 'free' }, h('textarea', { class: 'inp', rows: '2', 'data-k': ans, placeholder: 'Your answer', on: { input: (e: Event) => a.draft(ans, (e.target as HTMLTextAreaElement).value) } }), btn('Send', () => a.answerTask(t.taskId, null), { kind: 'primary', disabled: busy || !(v.drafts[ans] ?? '').trim() }))
           )
         : null,
+    t.kind !== 'idea' ? h('button', { type: 'button', class: 'link', disabled: busy, on: { click: () => a.notNeeded(t.taskId) } }, 'Not needed') : null,
     t.agentId ? h('button', { type: 'button', class: 'link', on: { click: () => a.open({ kind: 'agent', id: t.agentId! }) } }, 'Open the conversation ›') : null
   )
 }
@@ -247,7 +251,7 @@ function chatLine(l: ChatLine, v: View, a: Actions): VNode {
     case 'me':
       return h('div', { class: `msg me${l.queued ? ' queued' : ''}` }, h('p', null, l.text))
     case 'say':
-      return h('div', { class: 'msg say' }, h('p', null, l.text), l.streaming ? h('span', { class: 'caret', 'aria-hidden': 'true' }) : null)
+      return h('div', { class: 'msg say' }, md(l.text), l.streaming ? h('span', { class: 'caret', 'aria-hidden': 'true' }) : null)
     case 'thinking':
       return h('div', { class: 'tool' }, tile('run'), 'Thinking')
     case 'tool':
@@ -300,7 +304,7 @@ function chatLine(l: ChatLine, v: View, a: Actions): VNode {
         'div',
         { class: 'card gate' },
         h('p', { class: 'kicker' }, 'The plan'),
-        h('p', { class: 'q pre' }, l.plan),
+        h('div', { class: 'q' }, md(l.plan)),
         l.open ? h('div', { class: 'opts' }, btn('Approve the plan', () => a.chatAnswer(l.requestId, { kind: 'approvePlan' }), { kind: 'primary', disabled: busy }), btn('Keep planning', () => a.chatAnswer(l.requestId, { kind: 'rejectPlan' }), { kind: 'ghost', disabled: busy })) : h('p', { class: 'sub' }, l.outcome ?? '')
       )
     case 'notice':
@@ -333,7 +337,7 @@ function threadItem(i: PhoneThreadItem, v: View, a: Actions, now: number): VNode
       return h(
         'div',
         { class: 'msg say' },
-        h('p', null, i.text),
+        md(i.text),
         i.card === 'review' ? reviewButtons(i.taskId, v, a, true) : null,
         i.card === 'ask' ? h('div', { class: 'free' }, h('textarea', { class: 'inp', rows: '1', 'data-k': ans, placeholder: 'Your answer', on: { input: (e: Event) => a.draft(ans, (e.target as HTMLTextAreaElement).value) } }), btn('Send', () => a.answerTask(i.taskId, null), { kind: 'primary', disabled: busy || !(v.drafts[ans] ?? '').trim(), small: true })) : null,
         h('span', { class: 'tm' }, ago(i.at, now))
@@ -377,7 +381,7 @@ function roomMsg(author: string, text: string, at: string, kind: string, by: Map
   const m = by.get(author)
   if (kind === 'system') return h('div', { class: 'end' }, text)
   const mine = author === me
-  return h('div', { class: `msg ${mine ? 'me' : 'say'}${reply ? ' reply' : ''}` }, mine ? null : h('span', { class: 'author' }, `${reply ? '↳ ' : ''}${m ? `${m.name}${m.role ? ` · ${m.role}` : ''}` : 'Someone'}`), h('p', null, text), h('span', { class: 'tm' }, ago(at, now)))
+  return h('div', { class: `msg ${mine ? 'me' : 'say'}${reply ? ' reply' : ''}` }, mine ? null : h('span', { class: 'author' }, `${reply ? '↳ ' : ''}${m ? `${m.name}${m.role ? ` · ${m.role}` : ''}` : 'Someone'}`), mine ? h('p', null, text) : md(text), h('span', { class: 'tm' }, ago(at, now)))
 }
 
 // ---------- shells ----------

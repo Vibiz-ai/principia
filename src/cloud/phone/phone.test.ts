@@ -131,6 +131,8 @@ describe('screens', () => {
     }
     const t = renderNeeds({ ...baseView(), tab: 'needs', needs }, noop)
     expect(btns(t)).toEqual(expect.arrayContaining(['Allow', 'Deny', 'Approve', 'Send back', 'Yes', 'No', 'Send']))
+    // every task that waits on you can be turned down (Not needed), as on the Mac
+    expect(btns(t).filter((b) => b === 'Not needed')).toHaveLength(2)
     expect(findAll(t, (n) => n.tag === 'textarea')).toHaveLength(1)
     // a short lettered tag, then the task's title in plain type (long titles stay readable)
     expect(findAll(t, (n) => n.attrs.class === 'kicker').map(textOf)).toEqual(['Ready for your OK', 'A question'])

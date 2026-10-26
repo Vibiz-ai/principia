@@ -44,7 +44,7 @@ import { attempt, closeSession, companyName, departmentsOn, getState, navigate, 
 import { focusAgent, goNextNeedsYou, useNeeds, useSeenSet, useWorking } from '../state/live'
 import { usePendingDrafts } from '../state/authoring'
 import { deskAgents } from '../state/desk'
-import { hive, nativeMenu } from '../lib/hive'
+import { confirmNative, hive, nativeMenu } from '../lib/hive'
 import type { LiveItem } from '../lib/companyModel'
 import { claudeSignedOut, useClaudeAuth } from '../state/claudeAuth'
 import { Icon } from '../components/Icon'
@@ -285,6 +285,11 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
     }
   }
   const approve = (): Promise<void> => run(() => hive.tasks.approve({ id: task.id, doneNote: `Approved: ${firstLine(task.report?.summary ?? task.title, 200)}` }), 'Approve', `Approved ${task.title}`)
+  // every row can be turned down, not only accepted: the task is canceled (reopen it from the Board)
+  const notNeeded = async (): Promise<void> => {
+    const ok = await confirmNative({ message: `Cancel “${task.title}”?`, detail: `${who ? `${who.name} stops on it and it` : 'It'} leaves Needs you. You can reopen it from the Board.`, confirmLabel: 'Cancel task', destructive: true, suppressKey: 'needs-you-not-needed' })
+    if (ok) await run(() => hive.tasks.update({ id: task.id, patch: { status: 'canceled' } }), 'Not needed', `Canceled ${task.title}`)
+  }
   const assign = async (): Promise<void> => {
     const list = deskAgents(task.companyId, getState()).filter((a) => !a.paused)
     if (!list.length) return toast('Nobody can take it: hire or resume an agent first.')
@@ -351,6 +356,9 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
             Assign…
           </Button>
         )}
+        <Button size="sm" variant="ghost" disabled={busy} title="Cancel this task: it leaves Needs you (reopen it from the Board)" onClick={() => void notNeeded()}>
+          Not needed
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => openBoard(task.companyId, { taskId: task.id })}>
           Open
         </Button>

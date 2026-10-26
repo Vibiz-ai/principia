@@ -353,6 +353,15 @@ const actions: Actions = {
       if (st.route.open?.kind === 'agent') await loadAgent(st.route.open.id)
     })
   },
+  notNeeded(taskId) {
+    if (settling()) return
+    const t = st.needs?.tasks.find((x) => x.taskId === taskId)
+    if (!window.confirm(`Cancel “${t?.title ?? 'this task'}”? It leaves Needs you. You can reopen it from the Board on your Mac.`)) return
+    void busy(`task:${taskId}`, async () => {
+      setNeeds(await api.call<PhoneNeeds>('cancelTask', { params: { ...cid(), taskId }, body: {} }))
+      say('Canceled')
+    })
+  },
   sendBack(taskId) {
     const key = `back:${taskId}`
     const text = (st.drafts[key] ?? '').trim()

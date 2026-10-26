@@ -129,6 +129,9 @@ function countTools(blocks: ChatBlock[]): number {
   return blocks.reduce((n, b) => n + (b.t === 'tool' ? 1 + countTools(b.children) : b.t === 'group' ? b.tools.length : 0), 0)
 }
 
+/** Dividers the Mac adds when a chat is rebuilt from its transcript (a hand-back from the terminal, a resume). */
+export const REPLAY_NOTICES: ReadonlySet<string> = new Set(['From the terminal', 'Back from the terminal', 'Resumed this conversation'])
+
 /** The chat as phone rows: the desktop's blocks, flattened; subagent work is one line with its count. */
 export function chatLines(items: readonly ChatItem[]): ChatLine[] {
   const out: ChatLine[] = []
@@ -161,6 +164,8 @@ export function chatLines(items: readonly ChatItem[]): ChatLine[] {
           out.push({ t: 'planCard', id: it.id, requestId: it.requestId, plan: it.plan, open: it.state === 'open', outcome: it.state === 'approved' ? 'Plan approved' : it.state === 'rejected' ? 'Kept planning' : it.state === 'expired' ? 'Expired' : null })
           break
         case 'notice':
+          // the Mac's replay dividers ("From the terminal") mean nothing on the phone
+          if (REPLAY_NOTICES.has(it.text)) break
           out.push({ t: 'notice', id: it.id, tone: it.tone, text: it.text })
           break
         case 'turnEnd': {

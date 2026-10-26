@@ -1,0 +1,95 @@
+# docs/IOS.md: the native Principia phone app. `xcodegen generate` here makes Principia.xcodeproj (not committed).
+name: Principia
+options:
+  bundleIdPrefix: ai.principia
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # a personal device build: set your own team here or in Xcode (Signing & Capabilities); never commit it
+    DEVELOPMENT_TEAM: ""
+targets:
+  Principia:
+    type: application
+    platform: iOS
+    sources:
+      - path: Principia
+    info:
+      path: Principia/Info.plist
+      properties:
+        CFBundleDisplayName: Principia
+        CFBundleName: Principia
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIUserInterfaceStyle: Dark
+        UIAppFonts: [Cinzel-Medium.ttf, Cinzel-SemiBold.ttf]
+        NSCameraUsageDescription: Principia uses the camera to scan the pairing code your Mac shows.
+        NSFaceIDUsageDescription: Principia can ask for Face ID before it shows your company.
+        UIBackgroundModes: [remote-notification]
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.principia.phone.pair
+            CFBundleURLSchemes: [principia]
+        NSAppTransportSecurity:
+          # the Mac's Phone server on this Mac's loopback (simulator testing); the tunnel is https
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.principia.phone
+        PRODUCT_NAME: Principia
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_PREVIEWS: YES
+        GENERATE_INFOPLIST_FILE: NO
+  PrincipiaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PrincipiaTests
+    dependencies:
+      - target: Principia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.principia.phone.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Principia.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Principia
+        BUNDLE_LOADER: $(TEST_HOST)
+  PrincipiaLiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PrincipiaLiveUITests
+    dependencies:
+      - target: Principia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.principia.phone.liveuitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Principia
+schemes:
+  PrincipiaLive:
+    build:
+      targets:
+        Principia: all
+        PrincipiaLiveUITests: [test]
+    test:
+      targets: [PrincipiaLiveUITests]
+  Principia:
+    build:
+      targets:
+        Principia: all
+        PrincipiaTests: [test]
+    test:
+      targets: [PrincipiaTests]
