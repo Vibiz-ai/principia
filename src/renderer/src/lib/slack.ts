@@ -438,13 +438,13 @@ export function replyPhrase(mode: SlackReplyMode, autoChannels: string[], n: Par
   return `auto-replies in ${autoChannels.length ? list(autoChannels.map(nm.channel)) : '(no channels)'}`
 }
 
-/** The approval card's reply-mode row (§9.5): own row, amber for auto, limits spelled out. */
-export function replyModeRow(mode: SlackReplyMode, autoChannels: string[], maxPerThread: number, n: Partial<Namer> = {}): { tone: 'neutral' | 'amber'; text: string } {
+/** The approval card's reply-mode row (§9.5): own row, caution tone for auto, limits spelled out. */
+export function replyModeRow(mode: SlackReplyMode, autoChannels: string[], maxPerThread: number, n: Partial<Namer> = {}): { tone: 'neutral' | 'caution'; text: string } {
   const nm = { ...defaultNamer, ...n }
   if (mode === 'draft') return { tone: 'neutral', text: 'Replies: as drafts you approve (Needs you)' }
   if (mode === 'none') return { tone: 'neutral', text: 'Replies: none' }
   const where = autoChannels.includes('*') ? 'any conversation where it is tagged or DMed' : autoChannels.length ? autoChannels.map(nm.channel).join(', ') : '(no channels)'
-  return { tone: 'amber', text: `Replies: AUTO-POSTS in ${where} (no approval) · 1 post per run · max ${maxPerThread} per thread and ${SLACK_AUTO_LIMITS.perChannelPerHour} per channel per hour` }
+  return { tone: 'caution', text: `Replies: AUTO-POSTS in ${where} (no approval) · 1 post per run · max ${maxPerThread} per thread and ${SLACK_AUTO_LIMITS.perChannelPerHour} per channel per hour` }
 }
 
 export interface TriggerProblem {

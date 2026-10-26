@@ -29,7 +29,9 @@ export default defineConfig({
           // FORUM.md §4.1: the `forum` CLI + principia-forum stdio MCP server, run by agent steps via ELECTRON_RUN_AS_NODE
           'forum-cli': resolve(__dirname, 'src/main/forum/cli/main.ts'),
           // open-passport docs/connect.md: the Open Passport stdio MCP server other apps run on the live vault
-          'mcp-passport': resolve(__dirname, 'src/main/memory/passportMcpMain.ts')
+          'mcp-passport': resolve(__dirname, 'src/main/memory/passportMcpMain.ts'),
+          // BROWSER.md §3: the principia-browser stdio MCP bridge agents run (company browser tools)
+          'mcp-browser': resolve(__dirname, 'src/main/browser/mcp/main.ts')
         },
         // native modules stay external and are asar-unpacked by electron-builder
         external: ['better-sqlite3', 'node-pty']

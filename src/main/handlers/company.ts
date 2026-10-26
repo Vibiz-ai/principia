@@ -6,6 +6,16 @@ import { baseChildEnv } from '../loginEnv'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { registerPassportStubs } from './passportStubs'
+import { BrowserWindow, dialog, nativeImage } from 'electron'
+import type { CompanyPassport } from '../../shared/company'
+import { CompanyLogoStore, type Shrink } from '../company/logoStore'
+import { planBoardStart } from '../company/planBoard'
+import { setCompanyPaused } from '../company/pauseCompany'
+import { newCompanyAutopilotOn } from '../company/newCompany'
+import { log } from '../log'
+import { notify } from '../notify'
+import { usageSummary } from '../usage/summary'
+import { capReached } from '../../shared/spend'
 /** The departments store the handlers write through (one per Hive; stateless over the same db as h.company). */
 const deptStores=new WeakMap<Hive,DepartmentStore>()
 export function departmentStoreFor(h: Hive): DepartmentStore {
@@ -38,6 +48,28 @@ export function createTaskGuarded(h: Hive, task: CompanyTaskInput): BoardTask {
   if(!boardOff) departmentStoreFor(h).assertTaskCreate(task)
   return h.company.createTask(task)
 }
+/** Electron's decoder for the big rasters (png/jpeg); anything it cannot read is stored as it is. */
+const shrinkImage: Shrink = (buf, _ext, max) => {
+  const img = nativeImage.createFromBuffer(buf)
+  if (img.isEmpty()) return null
+  const { width, height } = img.getSize()
+  if (Math.max(width, height) <= max) return null
+  const small = width >= height ? img.resize({ width: max, quality: 'best' }) : img.resize({ height: max, quality: 'best' })
+  return { buf: small.toPNG(), ext: 'png' }
+}
+const logoStores=new WeakMap<Hive,CompanyLogoStore>()
+/** The company logos (rail coin, sidebar chips): copies in `<userData>/companies/<slug>/logo/`. */
+export function logoStoreFor(h: Hive): CompanyLogoStore {
+  let s=logoStores.get(h)
+  if(!s){
+    s=new CompanyLogoStore(h.company.scope.companiesRoot,{
+      reposOf:(c)=>c.repoIds.map(id=>h.store.getRepo(id)).filter(r=>!!r&&r.exists).map(r=>({name:r!.name,path:r!.path})),
+      shrink:shrinkImage
+    })
+    logoStores.set(h,s)
+  }
+  return s
+}
 export function registerCompanyHandlers(h: Hive): void {
   const c=h.company
   const changed=(domain:'company'|'tasks'|'departments')=>emit('data:changed',{domain})
@@ -55,12 +87,61 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('company:list',q=>c.listPassports({includeArchived:!!q?.includeArchived}))
   handle('company:save',({id,passport})=>{const p=c.savePassport(passport,id);changed('company');reposChanged();return p})
   // COMPANY.md §7
-  handle('company:create',input=>{const p=c.create(input);changed('company');reposChanged();return p})
+  // AUTOPILOT.md §7: a new company starts with Autopilot on (it has no work yet, so nothing starts by itself; the
+  // limits stay: tasks at once, the monthly cap, Pause). Existing companies keep their switch.
+  handle('company:create',input=>{const p=newCompanyAutopilotOn(c,c.create(input));changed('company');reposChanged();return p})
   handle('company:update',({id,patch})=>{const p=c.update(id,patch);changed('company');return p})
   handle('company:archive',({id,archived})=>{const p=c.archive(id,archived??true);changed('company');return p})
   handle('company:reorder',({ids})=>{const list=c.reorder(ids);changed('company');return list})
   handle('company:assignRepo',({repoId,companyId})=>{const p=c.assignRepo(repoId,companyId);changed('company');emit('data:changed',{domain:'repos'});return p})
   handle('company:overview',()=>c.overview())
+  // five doors A4: one company only. The starter is the same human start as tasks:start (dispatcher, else the engine)
+  const pauseOne=async(id:string,paused:boolean)=>{
+    const res=await setCompanyPaused({
+      company:c,
+      cancelRun:(runId)=>h.engine.runs.cancel(runId),
+      startTask:(taskId)=>{ if(h.dispatcher) h.dispatcher.runNow(taskId); else c.startTask(taskId,undefined,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId})) },
+      schedules:(companyId)=>h.store.listSchedules(companyId).filter(s=>s.enabled).length,
+      log
+    },id,paused)
+    changed('company');changed('departments');changed('tasks');h.statusChanged()
+    // the resumed company's queue may move again (autopilot), and nothing else's
+    if(!paused) void h.dispatcher?.pump(id)
+    return res
+  }
+  handle('company:pause',({id,paused})=>pauseOne(id,paused))
+  // five doors §4.8: a company that reaches its monthly cap pauses (this company only), checked when a run ends
+  h.runHooks.push(run=>{
+    if(!run.companyId||!['passed','failed','canceled'].includes(run.status)) return
+    const co=c.listPassports().find(x=>x.id===run.companyId)
+    if(!co?.monthlyCap||co.pausedAt) return
+    const month=usageSummary({db:h.db,companyName:(id)=>c.listPassports({includeArchived:true}).find(x=>x.id===id)?.name??id},{range:'month',companyId:co.id})
+    if(!capReached(month.total.usd,co.monthlyCap)) return
+    void pauseOne(co.id,true).then(()=>{
+      log.info('company paused at its monthly cap',{companyId:co.id,cap:co.monthlyCap,usd:month.total.usd})
+      notify({title:`${co.name} paused at its monthly cap`,body:`This month's pay-as-you-go value reached $${co.monthlyCap}. Other companies keep running. Raise the cap or resume in Spend.`,sound:false})
+    },(e)=>log.warn('cap pause failed',{companyId:co.id,error:String(e)}))
+  })
+  const logos=logoStoreFor(h)
+  handle('company:logos',()=>logos.list(c.listPassports()))
+  handle('company:logoCandidates',({id})=>logos.candidates(c.passport(id)))
+  handle('company:setLogo',async({id,pick},sender)=>{
+    const co:CompanyPassport=c.passport(id)
+    let out
+    if(pick.kind==='candidate') out=logos.setCandidate(co,pick.path)
+    else if(pick.kind==='none') out=logos.setNone(co)
+    else if(pick.kind==='auto') out=logos.setAuto(co)
+    else if(pick.kind==='emblem') out=logos.setEmblem(co,pick.variant,pick.keepDetected===true)
+    else {
+      const win=BrowserWindow.fromWebContents(sender)
+      const opts:Electron.OpenDialogOptions={title:`Logo for ${co.name}`,buttonLabel:'Use as Logo',properties:['openFile'],filters:[{name:'Images',extensions:['svg','png','webp','jpg','jpeg','gif','ico']}]}
+      const r=win?await dialog.showOpenDialog(win,opts):await dialog.showOpenDialog(opts)
+      if(r.canceled||!r.filePaths[0]) return null
+      out=logos.setFile(co,r.filePaths[0])
+    }
+    changed('company')
+    return out
+  })
   registerPassportStubs()
   handle('company:export',({id})=>JSON.parse(h.vault.redact(JSON.stringify(c.exportPassport(id)))))
   handle('company:previewImport',({json})=>c.previewImport(json))
@@ -71,9 +152,9 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('tasks:update',({id,patch})=>{noBoardFields(patch);if(!boardOff())d.assertTaskPatch(c.task(id),patch);const t=c.updateTask(id,patch);changed('tasks');return t})
   handle('tasks:get',({id})=>c.detail(id))
   // §3.4: a board Run goes through the dispatcher (task link, seat, time cap, task tools, session capture, wake reset)
-  handle('tasks:start',({id,profileId})=>{const t=h.dispatcher?h.dispatcher.runNow(id,profileId):c.startTask(id,profileId,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId}));changed('tasks');h.statusChanged();return t})
+  handle('tasks:start',async({id,profileId})=>{if(c.task(id).plan){const pt=await planBoardStart(id);changed('tasks');h.statusChanged();return pt};const t=h.dispatcher?h.dispatcher.runNow(id,profileId):c.startTask(id,profileId,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId}));changed('tasks');h.statusChanged();return t})
   // a human comment: by 'human' so its wake resets the guard (§3.5)
-  handle('tasks:comment',({id,message})=>{const a=c.activity(id,'comment',h.vault.redact(message),'human');changed('tasks');return a})
+  handle('tasks:comment',({id,message,by})=>{const a=c.activity(id,'comment',h.vault.redact(message),by??'human');changed('tasks');return a})
   // DEPARTMENTS.md §10: departments and agent seats. tasks:assign … board:autopilot are registered by the board handlers.
   handle('departments:list',q=>{gate();return d.list(q?.companyId,{includeArchived:!!q?.includeArchived})})
   handle('departments:save',input=>{const dep=actions.save(input);changed('departments');return dep})
@@ -86,3 +167,4 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('companyAgents:pause',({id})=>{gate();const a=d.pauseAgent(id);changed('departments');return a})
   handle('companyAgents:resume',({id})=>{gate();const a=d.resumeAgent(id);changed('departments');return a})
 }
+

@@ -306,6 +306,11 @@
   line-height: 0;
 }
 .rm-medallion > svg { display: block; flex: none; overflow: visible; grid-area: 1 / 1; }
+/* a company logo inside the rings: round crop on the dark ground; dark transparent logos sit on a white disc */
+.rm-medallion__logo { grid-area: 1 / 1; display: grid; place-items: center; border-radius: 50%; overflow: hidden; pointer-events: none; }
+.rm-medallion__logo img { display: block; width: 78%; height: 78%; object-fit: contain; }
+.rm-medallion__logo--fill img { width: 100%; height: 100%; object-fit: cover; }
+.rm-medallion__logo--backed { background: rgba(255, 255, 255, 0.94); }
 /* working tiles: all faintly lit at rest (reduced motion keeps them static at .6) */
 .rm-medallion .rm-wk { opacity: .6; }
 /* failed: a red square tessera at the bottom right with a rail-coloured gap */

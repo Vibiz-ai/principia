@@ -4,6 +4,7 @@ import type { MemoryEntity, MemoryScopeFilter } from '@shared/memory'
 import { fuzzyFilter } from '../../lib/fuzzy'
 import { hive } from '../../lib/hive'
 import { entityHue } from '../../lib/memory'
+import { scopeCompanyId } from '../../state/store'
 
 export type EntityPick = { entity: MemoryEntity } | { newName: string }
 
@@ -39,7 +40,7 @@ export function EntityPicker({
     if (query.length < 2) return setRemote([])
     const my = ++seq.current
     const t = setTimeout(() => {
-      hive.memory.search({ scope, query, limit: 10 }).then(
+      hive.memory.search(scopeCompanyId() ? { scope, query, limit: 10, companyId: scopeCompanyId() } : { scope, query, limit: 10 }).then(
         (hits) => my === seq.current && setRemote(hits.map((h) => h.entity)),
         () => undefined
       )

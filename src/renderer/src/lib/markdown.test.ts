@@ -149,3 +149,11 @@ describe('renderMarkdown on empty and legacy notes', () => {
     expect(b.some((x) => x.t === 'code' && x.text.includes('[[Not A Link]]'))).toBe(true)
   })
 })
+
+describe('ordered list numbers (CHAT-UI.md QA: "1. 1. 1.")', () => {
+  it('an ordered item keeps its own number when paragraphs split the list', () => {
+    const blocks = renderMarkdown('1. First caption\n\n#coffee #ethiopia\n\n2. Second caption\n\n#roast\n\n3. Third')
+    const nums = blocks.flatMap((b) => (b.t === 'list' ? b.items.map((i) => i.num) : []))
+    expect(nums).toEqual([1, 2, 3])
+  })
+})

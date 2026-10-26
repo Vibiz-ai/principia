@@ -87,7 +87,7 @@ export function SlackDraftCard({ draft: d, hotkeys = false, compact = false, inT
   return (
     <div ref={ref} className={`sdraft ${compact ? 'sdraft--compact' : ''} ${open ? '' : 'is-closed'} ${d.status === 'failed' ? 'is-failed' : ''}`} role="group" aria-label={draftTitle(d)}>
       <div className="sdraft__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="sdraft__title">{draftTitle(d)}</span>
         <span className="text-tertiary sdraft__who">
           {d.ownerLabel} · <RelativeTime iso={d.createdAt} />

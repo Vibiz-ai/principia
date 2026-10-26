@@ -14,11 +14,13 @@ import { Button, Loading, Sheet, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { CompanyChooser, useScope } from '../components/CompanyChip'
 import { PassportConnect } from '../components/passport/PassportConnect'
-import { companyLabel, isPersonal, reposOf, useCompanyData } from '../lib/company'
+import { companyInitials, companyLabel, isPersonal, railLookAlikes, reposOf, useCompanyData } from '../lib/company'
+import { parseRgb, type Rgb } from '../lib/companyModel'
+import { prefixHint, taskPrefixProblem } from '../lib/settingsModel'
 import { confirmNative, errorMessage, hive, nativeMenu } from '../lib/hive'
 import { findHubNote, HUB_CATEGORY, hubFieldOps, hubFieldText, opFailures, type HubField } from '../lib/scope'
 import { relative } from '../lib/time'
-import { CompanyAvatar } from '../shell/CompanyRail'
+import { CompanyAvatar, RailMark } from '../shell/CompanyRail'
 import {
   addRepos,
   archiveCompany,
@@ -27,8 +29,10 @@ import {
   companyName,
   navigate,
   openCompanyPassport,
+  openLogoPicker,
   openNewCompany,
   refreshCompanies,
+  refreshTasks,
   toast,
   updateCompany,
   useStore
@@ -44,8 +48,20 @@ const CONTEXT_FIELDS = [
   { key: 'context', label: 'Business context', hint: 'Decisions, operating knowledge, useful references and facts an agent should know.', placeholder: 'What context should travel with every task?' },
   { key: 'constraints', label: 'Boundaries & decisions', hint: 'Approval requirements, spending limits, promises and actions an agent must not take.', placeholder: 'Where should an agent stop and ask?' }
 ] as const satisfies readonly { key: HubField; label: string; hint: string; placeholder: string }[]
-const COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-other)']
-const COLOR_NAMES = ['Blue', 'Cyan', 'Green', 'Purple', 'Pink', 'Grey']
+// cool colours only (no warm hues); Indigo is the accent the first companies were seeded with
+const COLORS = ['var(--accent)', 'var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-other)']
+const COLOR_NAMES = ['Indigo', 'Blue', 'Cyan', 'Green', 'Purple', 'Sky', 'Grey']
+
+/** A colour token ("var(--series-1)") as the RGB it paints, read from the theme; the rail look-alike check uses it. */
+function themeRgb(color: string): Rgb | null {
+  const v = /^var\((--[\w-]+)\)$/.exec(color.trim())
+  if (!v) return parseRgb(color)
+  try {
+    return parseRgb(getComputedStyle(document.documentElement).getPropertyValue(v[1]!))
+  } catch {
+    return null
+  }
+}
 
 function profileOf(c: CompanyPassport): Profile {
   // legacy rows may carry NULL profile columns: the form always works on strings
@@ -57,9 +73,13 @@ export function PassportView(): React.JSX.Element {
   const { active, companies, multi } = useScope()
   const { loading, error, reload } = useCompanyData()
   const [importing, setImporting] = useState(false)
-  const target = view.name === 'company' ? view.companyId : undefined
-  const create = view.name === 'company' && !!view.create
-  const nonce = view.name === 'company' ? view.nonce : undefined
+  // Settings → Company carries what the old `company` route did (lib/nav resolveView)
+  const own = view.name === 'company' || (view.name === 'settings' && (view.section === 'company' || view.section === 'repos' || view.section === 'danger')) ? view : null
+  // five doors step 4: Settings › This company splits the old page into General, Repositories and Danger zone
+  const part: CompanyPart = view.name === 'settings' && (view.section === 'repos' || view.section === 'danger') ? view.section : 'general'
+  const target = own?.companyId
+  const create = !!own?.create
+  const nonce = own?.nonce
   // the view's company, else the focused one; a Personal-only user always edits Personal
   const companyId = target ?? (active !== 'all' ? active : multi ? null : (companies[0]?.id ?? null))
   const company = companyId ? companies.find((c) => c.id === companyId) : undefined
@@ -76,10 +96,10 @@ export function PassportView(): React.JSX.Element {
   return (
     <div className="view company-view">
       {company ? (
-        <CompanySettings key={company.id} company={company} importButton={importButton} />
+        <CompanySettings key={company.id} company={company} importButton={importButton} part={part} />
       ) : (
         <>
-          <Toolbar title="Company Settings">
+          <Toolbar title="Company settings">
             {importButton}
             <Button variant="primary" icon="plus" onClick={openNewCompany}>
               New Company
@@ -99,8 +119,8 @@ export function PassportView(): React.JSX.Element {
             <div className="scroll view__body">
               <CompanyChooser
                 title="Pick a company"
-                text={target ? 'That company is archived or no longer exists. Pick another one.' : 'Settings belong to one company: its name and colour, profile, repositories, Passport folder and export.'}
-                onPick={(id) => void navigate({ name: 'company', companyId: id })}
+                text={target ? 'That company is archived or no longer exists. Pick another one.' : 'Settings belong to one company: its name and colour, profile, repositories, Knowledge folder and export.'}
+                onPick={(id) => void navigate({ name: 'settings', section: 'company', companyId: id, nonce: Date.now() })}
               />
             </div>
           )}
@@ -114,7 +134,7 @@ export function PassportView(): React.JSX.Element {
             setImporting(false)
             void refreshCompanies().catch(() => undefined)
             toast(`Imported ${c.name}`)
-            void navigate({ name: 'company', companyId: c.id })
+            void navigate({ name: 'settings', section: 'company', companyId: c.id, nonce: Date.now() })
           }}
         />
       )}
@@ -165,7 +185,10 @@ function useHubNote(company: CompanyPassport): { status: VaultStatus | null; not
   return { status, note, reload: load }
 }
 
-function CompanySettings({ company: c, importButton }: { company: CompanyPassport; importButton: React.ReactNode }): React.JSX.Element {
+export type CompanyPart = 'general' | 'repos' | 'danger'
+const PART_TITLE: Record<CompanyPart, string> = { general: 'General', repos: 'Repositories', danger: 'Danger zone' }
+
+function CompanySettings({ company: c, importButton, part }: { company: CompanyPassport; importButton: React.ReactNode; part: CompanyPart }): React.JSX.Element {
   const allRepos = useStore((s) => s.repos)
   const companies = useStore((s) => s.companies)
   const repos = useMemo(() => reposOf(allRepos, c.id), [allRepos, c.id])
@@ -246,7 +269,7 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
       a.download = `${c.slug || c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'company'}.passport.json`
       a.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
-      toast('Passport export prepared')
+      toast('Knowledge export prepared')
     } catch (e) {
       setMessage(errorMessage(e))
     } finally {
@@ -285,10 +308,10 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
       return
     }
     if (op === 'default') {
-      const ok = await confirmNative({ message: 'Use the default Passport folder?', detail: 'Principia stops using the custom folder. Its notes stay where they are.', confirmLabel: 'Use Default' }).catch(() => false)
+      const ok = await confirmNative({ message: 'Use the default Knowledge folder?', detail: 'Principia stops using the custom folder. Its notes stay where they are.', confirmLabel: 'Use Default' }).catch(() => false)
       if (!ok) return
     }
-    const res = await attempt(() => hive.memory.vault(op === 'pick' ? { op: 'setPath', companyId: c.id, pick: true } : { op: 'setPath', companyId: c.id, path: null }), 'Passport folder')
+    const res = await attempt(() => hive.memory.vault(op === 'pick' ? { op: 'setPath', companyId: c.id, pick: true } : { op: 'setPath', companyId: c.id, path: null }), 'Knowledge folder')
     if (res) {
       await refreshCompanies().catch(() => undefined)
       hub.reload()
@@ -297,14 +320,16 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
 
   return (
     <>
-      <Toolbar title="Company Settings" sub={<span className="company-toolbar-meta">{companyLabel(c, true)}</span>}>
-        {importButton}
-        <Button icon="download" disabled={busy || dirty} title={dirty ? 'Save your changes before exporting' : 'Export the Passport for any agent or tool'} onClick={() => void exportMenu()}>
+      <Toolbar title={PART_TITLE[part]} sub={<span className="company-toolbar-meta">{companyLabel(c, true)}</span>}>
+        {part === 'general' && importButton}
+        {part === 'general' && <Button icon="download" disabled={busy || dirty} title={dirty ? 'Save your changes before exporting' : 'Export what this company’s agents know, as a file any agent or tool can load'} onClick={() => void exportMenu()}>
           Export
-        </Button>
-        <Button icon="passport" onClick={() => openCompanyPassport(c.id)}>
-          Open Passport
-        </Button>
+        </Button>}
+        {part === 'general' && (
+          <Button icon="knowledge" onClick={() => openCompanyPassport(c.id)} title="What this company's agents know: brand voice, audience, notes (⌘5)">
+            Open Knowledge
+          </Button>
+        )}
       </Toolbar>
       {message && (
         <div className="company-error" role="alert">
@@ -313,14 +338,19 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
       )}
       <div className="passport-document-scroll">
         <div className="passport-document">
-          <div className="passport-document-header">
-            <CompanyAvatar company={{ name: name || c.name, color: c.color }} size={58} className="cs-avatar" />
+          {part === 'general' && <div className="passport-document-header">
+            <CompanyAvatar company={{ id: c.id, name: name || c.name, color: c.color, railLabel: c.railLabel }} size={58} className="cs-avatar" />
             <div>
               <div className="passport-eyebrow">
                 COMPANY SETTINGS {personal && <span>RESERVED</span>}
               </div>
               <h1>{companyLabel(c, true)}</h1>
               <p>{dirty ? 'Unsaved changes' : c.updatedAt ? `Updated ${relative(c.updatedAt)}` : ''}</p>
+              {!personal && (
+                <button type="button" className="link-btn cs-logo-btn" onClick={() => openLogoPicker(c.id)}>
+                  Change logo…
+                </button>
+              )}
             </div>
             <div className="passport-context-meter" title={`${filled} of 7 profile fields filled`}>
               <strong>
@@ -329,8 +359,9 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
               </strong>
               <small>profile fields</small>
             </div>
-          </div>
+          </div>}
 
+          {part === 'general' && <>
           <section className="passport-section">
             <div className="passport-section-title">
               <span>01</span>
@@ -349,6 +380,8 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
                 ))}
               </div>
             </div>
+            {!personal && <TaskPrefixField company={c} />}
+            {!personal && <RailTagFields company={c} />}
           </section>
 
           <section className="passport-section">
@@ -359,11 +392,11 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
             <p className="passport-section-description">
               {hub.note ? (
                 <>
-                  These fields are sections of the <strong>{hub.note.detail.note.title}</strong> note in this company’s Passport. Saving adds new lines and keeps the old ones in its History.
-                  {readOnly && ` ${hub.status?.readOnlyReason ?? 'The Passport is read-only right now.'}`}
+                  These fields are sections of the <strong>{hub.note.detail.note.title}</strong> note in this company’s Knowledge. Saving adds new lines and keeps the old ones in its History.
+                  {readOnly && ` ${hub.status?.readOnlyReason ?? 'Knowledge is read-only right now.'}`}
                 </>
               ) : (
-                'Every agent of this company gets this context. Once the Passport folder exists, these fields live in its company note.'
+                'Every agent of this company gets this context. Once the Knowledge folder exists, these fields live in its company note.'
               )}
             </p>
             {CONTEXT_FIELDS.map((field) => (
@@ -393,14 +426,16 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
             </div>
           </section>
 
+          </>}
+          {part === 'repos' && <>
           <section className="passport-section">
             <div className="passport-section-title">
-              <span>03</span>
+              <span>01</span>
               <h2>Repositories</h2>
             </div>
             <p className="passport-section-description">
               {personal
-                ? 'Repositories no company owns. Sessions and runs in them use Personal’s keys and Passport.'
+                ? 'Repositories no company owns. Sessions and runs in them use Personal’s keys and Knowledge.'
                 : 'Each repository belongs to one company, so agents never mix businesses. Moving one changes future runs and sessions only.'}
             </p>
             <div className="company-checklist cs-repos">
@@ -423,12 +458,14 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
             </div>
           </section>
 
+          </>}
+          {part === 'general' && <>
           <section className="passport-section">
             <div className="passport-section-title">
-              <span>04</span>
-              <h2>Passport folder</h2>
+              <span>03</span>
+              <h2>Knowledge folder</h2>
             </div>
-            <p className="passport-section-description">The company’s memory, as Markdown notes you can open in Obsidian. Only this company’s agents read and write it.</p>
+            <p className="passport-section-description">Where this company’s Knowledge is kept on this Mac, as plain notes you can open in any notes app. Only this company’s agents read and write it.</p>
             <div className="cs-vault">
               <Icon name="folder" size={15} />
               <span className="cs-vault__path selectable mono">{hub.status?.root ?? (c.vaultPath || `companies/${c.slug}/Passport (in Principia’s data folder)`)}</span>
@@ -451,21 +488,48 @@ function CompanySettings({ company: c, importButton }: { company: CompanyPasspor
                 Open in Obsidian
               </Button>
             </div>
-            {!hub.status && <p className="company-help">The Passport folder isn’t available in this build yet.</p>}
+            {!hub.status && <p className="company-help">The Knowledge folder isn’t available in this build yet.</p>}
             {hub.status?.exists && <PassportCloudSync companyId={c.id} />}
           </section>
 
           {hub.status?.exists && <PassportConnect companyId={c.id} />}
+          </>}
 
-          <footer className="passport-document-footer">
-            <Icon name="shield" size={15} />
-            <p>Exports contain company context only. Repository paths and connections stay on this Mac. Keep API keys and passwords in Keys.</p>
-            {!personal && (
-              <Button variant="ghost" onClick={() => void archiveCompany(c)}>
-                Archive Company…
-              </Button>
-            )}
-          </footer>
+
+          {part === 'danger' && (
+            <section className="passport-section">
+              <div className="passport-section-title">
+                <span>01</span>
+                <h2>Export</h2>
+              </div>
+              <p className="passport-section-description">Everything {c.name}’s agents know, as one file (an Open Passport) any agent or tool can load. Repository paths and connections stay on this Mac. Keep API keys and passwords in Keys &amp; secrets.</p>
+              <div className="cs-actions cs-actions--start">
+                <Button icon="download" disabled={busy} onClick={() => void exportMenu()}>
+                  Export Knowledge…
+                </Button>
+              </div>
+            </section>
+          )}
+          {part === 'danger' && (
+            <section className="passport-section">
+              <div className="passport-section-title">
+                <span>02</span>
+                <h2>Archive {personal ? '' : c.name}</h2>
+              </div>
+              <p className="passport-section-description">
+                {personal
+                  ? 'Personal holds what no company owns, so it can’t be archived.'
+                  : `Archiving takes ${c.name} off the rail and the sidebar. Nothing is deleted: its repositories, chats, runs, keys and knowledge stay, and you can bring it back from Settings › Storage › Archived companies.`}
+              </p>
+              {!personal && (
+                <div className="cs-actions cs-actions--start">
+                  <Button variant="destructive" onClick={() => void archiveCompany(c)}>
+                    Archive {c.name}…
+                  </Button>
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </>
@@ -513,7 +577,7 @@ function PassportCloudSync({ companyId }: { companyId: string }): React.JSX.Elem
       setCfg(r.config)
       const s = r.sync
       const parts = [s?.pulled ? `pulled revision ${s.pulled.to}${s.pulled.conflicts ? ` (${s.pulled.conflicts} to review in the Inbox)` : ''}` : null, s?.pushed ? `published revision ${s.pushed.revision}` : null].filter(Boolean)
-      toast(parts.length ? `Passport synced: ${parts.join(', ')}` : 'Passport already up to date')
+      toast(parts.length ? `Knowledge synced: ${parts.join(', ')}` : 'Knowledge already up to date')
     })
   return (
     <div className="cs-sync">
@@ -567,7 +631,7 @@ function PassportCloudSync({ companyId }: { companyId: string }): React.JSX.Elem
         </div>
       ) : (
         <>
-          <p className="company-help">Off. Publish this Passport to an Open Passport host so other tools and cloud runners use the same memory, and pull back what they learn.</p>
+          <p className="company-help">Off. Publish this company’s Knowledge to an Open Passport host so other tools and cloud runners use the same memory, and pull back what they learn.</p>
           <div className="cs-actions cs-actions--start">
             <Button size="sm" onClick={() => setEditing(true)}>
               Connect a Host…
@@ -798,5 +862,98 @@ function PassportImport({ companies, onClose, onImported }: { companies: Company
         )}
       </div>
     </Sheet>
+  )
+}
+
+/**
+ * Five doors E14: how this company looks on the rail. A short label (1-3 letters or digits) replaces the initials, the
+ * colour above tints the tile, and "This company is a client" adds the tag to its hover label. When another company
+ * would look the same, it says which, so an agency with five "HD" clients can tell them apart.
+ */
+function RailTagFields({ company: c }: { company: CompanyPassport }): React.JSX.Element {
+  const companies = useStore((s) => s.companies)
+  const [v, setV] = useState(c.railLabel ?? '')
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => setV(c.railLabel ?? ''), [c.railLabel])
+  const preview = { ...c, railLabel: v || undefined }
+  const same = railLookAlikes(preview, companies, themeRgb)
+  const commit = async (): Promise<void> => {
+    const next = v.trim().toUpperCase()
+    if (next === (c.railLabel ?? '')) return
+    try {
+      setError(null)
+      await updateCompany(c.id, { railLabel: next || null })
+    } catch (e) {
+      setError(errorMessage(e))
+      setV(c.railLabel ?? '')
+    }
+  }
+  return (
+    <div className="company-field cs-rail">
+      On the rail
+      <div className="cs-rail__row">
+        <RailMark company={preview} size={32} />
+        <input
+          className="mono cs-prefix"
+          aria-label="Rail label"
+          value={v}
+          maxLength={3}
+          spellCheck={false}
+          placeholder={companyInitials(c.name)}
+          onChange={(e) => (setV(e.target.value.toUpperCase().replace(/[^\p{L}\p{N}]/gu, '')), setError(null))}
+          onBlur={() => void commit()}
+          onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+        />
+        <label className="cs-rail__client">
+          <input type="checkbox" checked={!!c.client} onChange={(e) => void updateCompany(c.id, { client: e.target.checked })} /> This company is a client
+        </label>
+      </div>
+      <small className={error ? 'cs-prefix__err' : undefined}>
+        {error ?? (same.length ? `${same.map((o) => o.name).join(', ')} ${same.length === 1 ? 'looks' : 'look'} the same on the rail: the same letters in almost the same colour. Change the label or the colour.` : 'Up to 3 letters or digits instead of the initials. Hover the rail to see the full name.')}
+      </small>
+    </div>
+  )
+}
+
+/**
+ * Five doors step 2's per-company task prefix, editable (step 4): NW-12, LA-3. 2 to 5 letters or digits, starting with
+ * a letter, never another company's or Personal's PRN. Renaming keeps every task's number (NC-12 becomes NW-12).
+ */
+function TaskPrefixField({ company: c }: { company: CompanyPassport }): React.JSX.Element {
+  const companies = useStore((s) => s.companies)
+  const [v, setV] = useState(c.taskPrefix ?? '')
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => setV(c.taskPrefix ?? ''), [c.taskPrefix])
+  const problem = taskPrefixProblem(v, c.id, companies)
+  const commit = async (): Promise<void> => {
+    const next = v.trim().toUpperCase()
+    if (!next || next === c.taskPrefix) return setV(c.taskPrefix ?? '')
+    if (problem) return setError(problem)
+    setError(null)
+    try {
+      await hive.company.update({ id: c.id, patch: { taskPrefix: next } })
+      await Promise.all([refreshCompanies(), refreshTasks().catch(() => undefined)])
+      toast(`${c.name}’s tasks are numbered ${next}-1, ${next}-2… now`)
+    } catch (e) {
+      setError(errorMessage(e))
+      setV(c.taskPrefix ?? '')
+    }
+  }
+  return (
+    <label className="company-field">
+      Task prefix
+      <input
+        className="mono cs-prefix"
+        value={v}
+        maxLength={5}
+        spellCheck={false}
+        placeholder={c.taskPrefix || prefixHint(c.name)}
+        aria-invalid={!!problem}
+        onChange={(e) => (setV(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')), setError(null))}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+      />
+      <small className={error || problem ? 'cs-prefix__err' : undefined}>{error ?? problem ?? `Tasks read ${(v || c.taskPrefix || prefixHint(c.name)).toUpperCase()}-12. Changing it keeps every task’s number.`}</small>
+    </label>
   )
 }

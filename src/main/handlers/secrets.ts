@@ -4,6 +4,7 @@ import { HiveError } from '../../shared/errors'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { CompanySecrets, KeyNamespaces } from '../db/companySecrets'
+import { LINEAR_KEY_WRITE_ONLY, isWriteOnlyKey } from '../../shared/linear'
 
 /** Clipboard holding a secret is cleared after 60 s if it still holds that value (SPEC A11, fixed). */
 const CLIPBOARD_CLEAR_MS = 60_000
@@ -36,8 +37,11 @@ export function registerSecretHandlers(h: Hive): void {
     changed()
     return m
   })
-  handle('secrets:reveal', ({ name, companyId }) => ({ value: keys.reveal(companyId, name) }))
+  // LINEAR.md §6: the Linear sync key never goes back to the renderer
+  const readable = (name: string, companyId: string | null | undefined) => { if (isWriteOnlyKey(name, companyId)) throw new HiveError('forbidden', LINEAR_KEY_WRITE_ONLY) }
+  handle('secrets:reveal', ({ name, companyId }) => { readable(name, companyId); return { value: keys.reveal(companyId, name) } })
   handle('secrets:copy', async ({ name, companyId }) => {
+    readable(name, companyId)
     const value = keys.reveal(companyId, name)
     await clipboard.writeText(value)
     setTimeout(async () => {

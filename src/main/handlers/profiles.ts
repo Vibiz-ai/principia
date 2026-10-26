@@ -1,6 +1,8 @@
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
-import { resolveLoginEnv } from '../loginEnv'
+import { baseChildEnv, resolveLoginEnv } from '../loginEnv'
+import { defaultGhExec } from '../onboarding/github'
+import { parseClaudeAuth, type ClaudeAuthStatus } from '../../shared/providerAuth'
 
 export function registerProfileHandlers(h: Hive): void {
   handle('profiles:list', () => h.store.listProfiles())
@@ -28,5 +30,19 @@ export function registerProfileHandlers(h: Hive): void {
     const list = await h.engine.providers.list({ refresh: !!req?.refresh })
     h.ensureSeeds()
     return list
+  })
+  // five doors E12: the real Claude check (`claude auth status --json`), cached for a minute; Recheck refreshes it
+  let authMemo: { at: number; v: ClaudeAuthStatus } | null = null
+  handle('providers:claudeAuth', async (req) => {
+    if (!req?.refresh && authMemo && Date.now() - authMemo.at < 60_000) return authMemo.v
+    const claude = (await h.engine.providers.list({ refresh: !!req?.refresh })).find((p) => p.id === 'claude')
+    let v: ClaudeAuthStatus
+    if (!claude?.available || !claude.binPath) v = parseClaudeAuth({ code: null, stdout: '', missing: true })
+    else {
+      const r = await defaultGhExec(claude.binPath, ['auth', 'status', '--json'], { env: baseChildEnv(), timeoutMs: 10_000, outputCap: 16 * 1024 }).promise
+      v = parseClaudeAuth({ code: r.code, stdout: r.stdout, timedOut: r.timedOut, missing: !!r.spawnError && /ENOENT/.test(r.spawnError) })
+    }
+    authMemo = { at: Date.now(), v }
+    return v
   })
 }

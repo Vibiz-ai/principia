@@ -19,9 +19,14 @@ export function openAskRuns(asks: Record<Id, Ask> | Iterable<Ask>): Set<Id> {
 export interface LaneContext {
   openRuns: Set<Id>
   agentsById: Map<Id, CompanyAgent>
+  /**
+   * Five doors A4: companies paused as a whole. Their seats are paused by the company pause, which is waiting, not
+   * missing: a task assigned to one stays To do instead of turning into a new Needs you item.
+   */
+  pausedCompanies?: ReadonlySet<Id>
 }
-export function laneContext(asks: Record<Id, Ask>, agents: CompanyAgent[]): LaneContext {
-  return { openRuns: openAskRuns(asks), agentsById: new Map(agents.map((a) => [a.id, a])) }
+export function laneContext(asks: Record<Id, Ask>, agents: CompanyAgent[], pausedCompanies?: ReadonlySet<Id>): LaneContext {
+  return { openRuns: openAskRuns(asks), agentsById: new Map(agents.map((a) => [a.id, a])), pausedCompanies }
 }
 
 /** The task's seat, only when it belongs to the task's company: a seat of another company never counts (§0.3). */
@@ -32,7 +37,8 @@ function seatOf(t: CompanyTask, ctx: LaneContext): CompanyAgent | undefined {
 function laneInputs(t: CompanyTask, ctx: LaneContext): [boolean, boolean] {
   const openLiveAsk = t.status === 'in_progress' && !!t.runId && ctx.openRuns.has(t.runId)
   const agent = seatOf(t, ctx)
-  return [openLiveAsk, !t.agentId || (!!agent && agentActive(agent))]
+  const held = !!agent && !agent.archivedAt && !!ctx.pausedCompanies?.has(t.companyId)
+  return [openLiveAsk, !t.agentId || (!!agent && (agentActive(agent) || held))]
 }
 
 /** laneOf with the renderer's live inputs. A task whose agent row is gone counts as having no eligible agent. */

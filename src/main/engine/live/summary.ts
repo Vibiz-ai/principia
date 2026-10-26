@@ -8,6 +8,8 @@ import { memoryToolLine } from '../memory'
 export const ACTIVITY_MAX = 120
 export const SUMMARY_MAX = 200
 export const DETAIL_MAX = 4096
+/** An answer with a ```principia-graph block (DIAGRAMS.md §6): the block is up to 32 KB, plus the prose around it. */
+const DIAGRAM_DETAIL_MAX = 40 * 1024
 
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
 export const clip = (s: string, n: number): string => {
@@ -19,7 +21,9 @@ export const clipDetail = (s: string | null | undefined): string | null => {
   if (s == null) return null
   const t = String(s)
   if (!t.trim()) return null
-  return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX - 1)}…` : t
+  // DIAGRAMS.md §6: an answer holding a principia-graph block keeps up to 40 KB, so the block arrives whole
+  const max = t.includes('```principia-graph') ? DIAGRAM_DETAIL_MAX : DETAIL_MAX
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
 }
 export const firstLine = (s: string): string => (s.split('\n').find((l) => l.trim()) ?? '').trim()
 

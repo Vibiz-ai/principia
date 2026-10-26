@@ -1,0 +1,5 @@
+Principia.xcodeproj/
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/

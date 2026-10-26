@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { lookSchema, personaSchema } from '../../shared/onboarding'
+import { taskWorkSchema } from './taskWorkSchema'
+import { taskBriefShape } from './briefSchemas'
 import { AGENT_DATA_DEFAULTS, AGENT_LIMITS, BLOCK_REASONS, DEPARTMENT_DATA_DEFAULTS, DEPARTMENT_LIMITS, DEPARTMENT_PRESET_KEYS, TASK_ASK_KINDS, TASK_SOURCES, TASK_STATUSES } from '../../shared/company'
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/)
 const context = z.string().max(30_000)
@@ -8,10 +10,17 @@ const name = z.string().trim().min(1).max(160)
 export const colorSchema = z.string().max(64).regex(/^(#[0-9a-fA-F]{3,8}|var\(--[a-z0-9-]+\))$/, 'Use a colour token or a hex colour')
 /** absolute, no NUL; null resets to `<userData>/companies/<slug>/Passport` */
 const vaultPath = z.string().min(1).max(4096).refine(s=>!s.includes('\0')&&(s.startsWith('/')||/^[A-Za-z]:[\\/]/.test(s)),'Use an absolute folder path').nullable()
-export const passportInputSchema = z.object({ name, mission: context, brandVoice: context, audience: context, products: context, goals: context, context, constraints: context, repoIds: z.array(id).max(500), color: colorSchema.optional(), vaultPath: vaultPath.optional() }).strict()
+export const passportInputSchema = z.object({ name, mission: context, brandVoice: context, audience: context, products: context, goals: context, context, constraints: context, repoIds: z.array(id).max(500), color: colorSchema.optional(), vaultPath: vaultPath.optional(), taskPrefix: z.string().min(1).max(8).optional() }).strict()
 export const passportExportSchema = z.object({format: z.literal('principia-passport'), version: z.literal(1), passport: passportInputSchema.omit({repoIds:true,vaultPath:true})}).strict()
 export const companyCreateSchema = z.object({ name, color: colorSchema.optional(), vaultPath: vaultPath.optional(), repoIds: z.array(id).max(500).optional(), mission: context.optional(), brandVoice: context.optional(), audience: context.optional(), products: context.optional(), goals: context.optional(), context: context.optional(), constraints: context.optional() }).strict()
-export const companyUpdateSchema = z.object({ name: name.optional(), color: colorSchema.optional(), sortOrder: z.number().int().min(0).max(100_000).optional(), vaultPath: vaultPath.optional() }).strict()
+/** "@northwind.coffee", "diego-ledgerly": an account handle as the service shows it (letters, digits, . _ -) */
+const handle = z.string().trim().min(1).max(64).regex(/^@?[A-Za-z0-9._][A-Za-z0-9._-]{0,62}$/, 'Use the account name as the service shows it')
+export const companyUpdateSchema = z.object({ name: name.optional(), color: colorSchema.optional(), sortOrder: z.number().int().min(0).max(100_000).optional(), vaultPath: vaultPath.optional(), taskPrefix: z.string().min(1).max(8).optional(),
+  account: z.object({ kind: z.enum(['instagram', 'github']), handle: handle.nullable() }).strict().optional(),
+  monthlyCap: z.number().finite().min(1).max(100_000).nullable().optional(),
+  // five doors E14: the rail label (1-3 letters or digits) and the client tag
+  railLabel: z.string().trim().min(1).max(3).regex(/^[\p{L}\p{N}]+$/u, 'Use 1 to 3 letters or digits').nullable().optional(),
+  client: z.boolean().optional() }).strict()
 export const companyReorderSchema = z.array(id).max(1000)
 export const assignRepoSchema = z.object({ repoId: id, companyId: id }).strict()
 const iso = z.string().min(1).max(40).refine(s=>!Number.isNaN(Date.parse(s)),'invalid date')
@@ -28,11 +37,19 @@ const taskBoardShape = {
   pendingWake: z.object({ reasons: z.array(short(4000)).max(50), count: z.number().int().min(0).max(10_000) }).strict().nullable(),
   agentSessionId: short(200).nullable(),
   autoWakes: z.object({ windowStart: iso.nullable(), n: z.number().int().min(0).max(10_000), at: z.array(iso).max(20).optional() }).strict(),
-  handoffs: z.number().int().min(0).max(100)
+  handoffs: z.number().int().min(0).max(100),
+  /** WORKTREE.md: written by main only (taskWork.ts); the renderer's task channels omit it */
+  work: taskWorkSchema.nullable(),
+  /** LINEAR.md §3 */
+  labels: z.array(z.string().trim().min(1).max(80)).max(50),
+  estimate: z.number().min(0).max(1000).nullable(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date').nullable()
 }
 const taskBaseShape = {
   title:z.string().trim().min(1).max(240), description:z.string().max(50_000), companyId:id, repoId:id.nullable(), status:z.enum(TASK_STATUSES), priority:z.union([z.literal(0),z.literal(1),z.literal(2),z.literal(3),z.literal(4)]),
-  source:z.enum(TASK_SOURCES), sourceUrl:z.string().url().max(4000).refine(s=>/^https?:\/\//.test(s),'Use an HTTP or HTTPS source link').nullable(), externalId:z.string().trim().min(1).max(500).nullable(), assigneeProfileId:id.nullable(), parentId:id.nullable(), dependencyIds:z.array(id).max(100)
+  source:z.enum(TASK_SOURCES), sourceUrl:z.string().url().max(4000).refine(s=>/^https?:\/\//.test(s),'Use an HTTP or HTTPS source link').nullable(), externalId:z.string().trim().min(1).max(500).nullable(), assigneeProfileId:id.nullable(), parentId:id.nullable(), dependencyIds:z.array(id).max(100),
+  // PLANS.md §1 (optional: older rows parse unchanged)
+  ...taskBriefShape
 }
 /** Strict, and every §1.3 field is optional with a default, so rows written before departments parse unchanged. */
 export const taskInputSchema = z.object({
@@ -40,7 +57,8 @@ export const taskInputSchema = z.object({
   departmentId: taskBoardShape.departmentId.default(null), agentId: taskBoardShape.agentId.default(null), blockReason: taskBoardShape.blockReason.default(null),
   ask: taskBoardShape.ask.default(null), report: taskBoardShape.report.default(null), doneNote: taskBoardShape.doneNote.default(null), routing: taskBoardShape.routing.default(null),
   pendingWake: taskBoardShape.pendingWake.default(null), agentSessionId: taskBoardShape.agentSessionId.default(null),
-  autoWakes: taskBoardShape.autoWakes.default(()=>({windowStart:null,n:0})), handoffs: taskBoardShape.handoffs.default(0)
+  autoWakes: taskBoardShape.autoWakes.default(()=>({windowStart:null,n:0})), handoffs: taskBoardShape.handoffs.default(0), work: taskBoardShape.work.default(null),
+  labels: taskBoardShape.labels.default(()=>[]), estimate: taskBoardShape.estimate.default(null), dueDate: taskBoardShape.dueDate.default(null)
 }).strict()
 /**
  * tasks:update patches. zod 4 applies defaults inside .partial(), so `taskInputSchema.partial()` would reset every

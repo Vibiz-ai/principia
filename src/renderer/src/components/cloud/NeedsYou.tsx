@@ -3,7 +3,8 @@
  * pane's Needs you card and in Home's Needs you (marked with the cloud line), answerable inline in both. Agent text
  * is rendered as text (React escapes it), never as HTML.
  */
-import { useEffect, useState, type ReactElement } from 'react'
+import { mixedListLabel } from '@shared/spend'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { CloudAsk, PassportProposal } from '@shared/cloud'
 import { Button } from '../ui'
 import { agentParts, askAnswer, openAsks } from '../../lib/cloud'
@@ -17,11 +18,13 @@ const clock = (iso: string): string => {
   return Number.isFinite(d.getTime()) ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : ''
 }
 
-export function AskRow({ ask, companyName, mark }: { ask: CloudAsk; companyName: string; mark?: boolean }): ReactElement {
+export function AskRow({ ask, companyName, mark, mixed }: { ask: CloudAsk; companyName: string; mark?: boolean; /** pm-review B6: a list that mixes companies */ mixed?: boolean }): ReactElement {
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const who = agentParts(ask.agentName)
+  const companies = useStore((s) => s.companies)
+  const others = useMemo(() => companies.filter((c) => !c.archivedAt).map((c) => c.name), [companies])
   const send = async (input: { option?: string; text?: string }): Promise<void> => {
     const p = askAnswer(ask, input)
     if (!p) return
@@ -52,7 +55,7 @@ export function AskRow({ ask, companyName, mark }: { ask: CloudAsk; companyName:
         <div className="cl-opts">
           {ask.options.map((o) => (
             <button key={o} type="button" className="cl-opt" disabled={busy} onClick={() => void send({ option: o })}>
-              {o}
+              {mixed ? mixedListLabel(o, companyName, { prompt: ask.question, others }) : o}
             </button>
           ))}
           <button type="button" className="cl-opt cl-opt--ghost" disabled={busy} onClick={() => setOpen(!open)}>
@@ -97,7 +100,7 @@ export function ProposalRow({ companyId, companyName, proposals, mark }: { compa
       <span className="cl-ring" aria-hidden="true" />
       <div className="cl-ask__body">
         <div className="cl-who">
-          <b>{companyName} Passport</b>
+          <b>{companyName} Knowledge</b>
           <span className="cl-co">from cloud agents</span>
           {mark && <CloudMark size={13} title="From your cloud" className="cl-ask__mark" />}
         </div>
@@ -144,7 +147,7 @@ export function NeedsYouCard(): ReactElement {
       ) : (
         <>
           {open.map((a) => (
-            <AskRow key={a.id} ask={a} companyName={nameOf(a.companyId)} />
+            <AskRow key={a.id} ask={a} companyName={nameOf(a.companyId)} mixed />
           ))}
           {props.map(([cid, list]) => (
             <ProposalRow key={cid} companyId={cid} companyName={nameOf(cid)} proposals={list} />
@@ -178,7 +181,7 @@ export function CloudNeedsYou({ companyId }: { companyId?: string }): ReactEleme
         <CloudMark size={14} /> From your cloud
       </div>
       {open.map((a) => (
-        <AskRow key={a.id} ask={a} companyName={nameOf(a.companyId)} mark />
+        <AskRow key={a.id} ask={a} companyName={nameOf(a.companyId)} mark mixed={!companyId} />
       ))}
       {props.map(([cid, list]) => (
         <ProposalRow key={cid} companyId={cid} companyName={nameOf(cid)} proposals={list} mark />

@@ -20,6 +20,7 @@ describe('full screen top bands', () => {
 
   it('marks the band with has-switcher whenever the switcher renders', () => {
     const tsx = readFileSync(join(__dirname, 'Sidebar.tsx'), 'utf8')
-    expect(tsx).toMatch(/sidebar__drag drag[^`]*\$\{focusedCompany \? 'has-switcher' : ''\}`\}>\{focusedCompany && <CompanySwitcher/)
+    // five doors: the company header sits in the band whenever the rail does (focused and All companies)
+    expect(tsx).toMatch(/sidebar__drag drag \$\{multi \? 'has-rail has-switcher' : ''\}`\}>\{multi && <CompanyHeader/)
   })
 })

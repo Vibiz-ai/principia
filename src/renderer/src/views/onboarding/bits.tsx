@@ -4,6 +4,7 @@
  * Styles in styles/onboarding.css; the Roman line art (stroke tiers, corner lozenges) in styles/roman.css.
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { autonomyPhrase } from '../../lib/desk'
 import type { AdapterId } from '@shared/types'
 import {
   KEY_PROVIDERS,
@@ -42,7 +43,8 @@ export interface Choice<T extends string> {
   value: T
   title: string
   desc: string
-  kbd: string
+  /** a key hint on the card (five doors step 5 shows none on Start: arrows and ↵ still work) */
+  kbd?: string
 }
 
 /** ←/→ or 1/2 move the choice, the card's letter picks it; ↵ is left to the flow (continue). */
@@ -84,7 +86,7 @@ export function ChoiceGroup<T extends string>({ choices, value, onChange, label,
             onClick={() => onChange(c.value)}
             onKeyDown={(e) => onKey(e, i)}
           >
-            <span className="ob-kbd ob-choice__kbd">{c.kbd}</span>
+            {c.kbd && <span className="ob-kbd ob-choice__kbd">{c.kbd}</span>}
             <span className="ob-choice__title">{c.title}</span>
             <span className="ob-choice__desc">{c.desc}</span>
           </button>
@@ -520,7 +522,8 @@ export function PlanDepartmentCard({ group, plan, h }: { group: PlanGroup; plan:
           include={a.include}
           lead={<span className="provider-dot" style={{ background: `var(--provider-${a.adapter as AdapterId})` }} />}
           sub={ROLE_LINE[a.role]}
-          end={<Chip tone={a.auto ? 'ok' : 'neutral'}>{a.auto ? 'Works on its own' : 'Asks first'}</Chip>}
+          // five doors §2.7: the same phrase the Team card and the agent page show for this agent
+          end={<Chip tone={a.auto ? 'ok' : 'neutral'}>{autonomyPhrase({ auto: a.auto, role: `${a.name} ${a.role}`, department: dept?.name ?? null })}</Chip>}
           h={h}
         />
       ))}
@@ -551,7 +554,7 @@ export function PlanDepartmentCard({ group, plan, h }: { group: PlanGroup; plan:
             include={s.include}
             end={
               <>
-                {cost ? <Chip tone="warn">{cost}</Chip> : free ? <Chip>free</Chip> : null}
+                {cost ? <Chip tone="warn">{cost}</Chip> : free ? <Chip>On your Claude plan</Chip> : null}
                 <Chip tone="sched">Off until you start</Chip>
               </>
             }

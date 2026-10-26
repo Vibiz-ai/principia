@@ -155,12 +155,12 @@ describe('Needs you (VOICE.md §3.6)', () => {
     expect(out).toMatch(/<svg[^>]*class="rm-la rm-bust[^"]*"[^>]*width="24"/)
     // list avatars (16 to 28 px) carry the faint --rm-ln-3 ring (VOICE.md §5.4)
     expect(out).toMatch(/<circle class="rm-bust__ring"[^>]*stroke-opacity="0.2"/)
-    // the detail line: reason chip, identifier, title
+    // the detail line: reason chip and title (no task code without a repository, C7)
     expect(out).toContain('Question')
-    expect(out).toContain('PRN-1')
+    expect(out).not.toContain('PRN-1')
     expect(out).toContain('Pick a draft 1')
     // aria-labels are plain
-    expect(out).toContain('aria-label="Marcus, Copywriter, needs you: Pick a draft 1 · Question · PRN-1"')
+    expect(out).toContain('aria-label="Marcus, Copywriter, needs you: Pick a draft 1 · Question"')
     expect(out).not.toMatch(/aria-label="[^"]*Ave/)
   })
 
@@ -374,20 +374,21 @@ describe('Portfolio (VOICE.md §3.8, §5.3, §5.6, §5.8)', () => {
     expect(out).toContain('Set up your first business')
   })
 
-  it('several businesses: cards with the card tablet (seal 36) and a medallion; section header unchanged', async () => {
+  it('several businesses: cards with a medallion, money and Spend, no Passport tablet; section header unchanged', async () => {
     await withState({ companies: [company('co_a', 'Sunday Bakery'), company('co_b', 'Acme Studio'), company('co_personal', 'Personal', { system: 'personal' })], extra: { activeCompanyId: 'all' } })
     const { PortfolioView } = await import('../../views/PortfolioView')
     const out = html(createElement(PortfolioView))
-    expect(out).toContain('rm-pp--card') // the line-art passport (VOICE.md §5.3; was the travertine rm-tablet)
-    // interpuncts are their own --rm-ln-2 span now (VOICE.md §5.3 item 4)
-    expect(out).toContain('SVNDAY<span class="rm-pp__dot">·</span>')
-    expect(out).toContain('rm-medallion')
+    // design §4.8: the Business Passport tablet moved to each company's Knowledge page; cards read Knowledge, not Passport
+    expect(out).not.toContain('rm-pp--card')
+    expect(out).not.toMatch(/PASSPORT/)
+    expect(out).toContain('Knowledge')
+    expect(out).toContain('rail-mark')
+    expect(out).toContain('Spend by company')
     expect(out).toContain('Needs you across companies')
     expect(out).toContain('Nothing needs you.')
     await withState({ tone: 'plain', companies: [company('co_a', 'Sunday Bakery'), company('co_b', 'Acme Studio')], extra: { activeCompanyId: 'all' } })
     const plain = html(createElement(PortfolioView))
-    expect(plain).toContain('SUNDAY<span class="rm-pp__dot">·</span>')
-    expect(plain).toContain('rm-medallion')
+    expect(plain).toContain('rail-mark')
     expect(plain).not.toContain('Otium')
   })
 

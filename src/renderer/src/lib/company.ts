@@ -1,12 +1,14 @@
 import { useCallback, useMemo } from 'react'
+import { shortCompanyName } from '@shared/spend'
 import type { CompanyPassport, CompanyTask, TaskSource, TaskStatus } from '@shared/company'
 import type { Id } from '@shared/types'
 import { activeCompany, departmentsOn, refreshCompanies, refreshTasks, useStore } from '../state/store'
-import { companyBadges, isMultiCompany, liveItems, taskCounts, type ActiveCompany, type CompanyBadge, type LiveItem, type TaskCounts } from './companyModel'
-import { laneContext } from './departments'
+import { badgesFromTruth, isMultiCompany, itemsFromTruth, taskCounts, type ActiveCompany, type CompanyBadge, type LiveItem, type TaskCounts } from './companyModel'
+import { laneContext, type LaneContext } from './departments'
+import { useLiveTruth } from '../state/live'
 
 export const STATUS_LABEL: Record<TaskStatus, string> = { triage: 'Triage', backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review', blocked: 'Blocked', done: 'Done', canceled: 'Canceled' }
-export const SOURCE_LABEL: Record<TaskSource, string> = { manual: 'Principia', github: 'GitHub', slack: 'Slack', sentry: 'Sentry', posthog: 'PostHog', agent: 'Agent', schedule: 'Schedule' }
+export const SOURCE_LABEL: Record<TaskSource, string> = { manual: 'Principia', github: 'GitHub', slack: 'Slack', sentry: 'Sentry', posthog: 'PostHog', agent: 'Agent', schedule: 'Schedule', linear: 'Linear' }
 export const PRIORITIES = ['No priority', 'Urgent', 'High', 'Normal', 'Low'] as const
 
 /**
@@ -34,31 +36,35 @@ export function useActiveCompany(): { active: ActiveCompany; company: CompanyPas
   return { active, company, scopeId: active === 'all' ? undefined : active, multi }
 }
 
-/** Live per-company badges (rail, sidebar groups, Other companies, portfolio): no IPC, computed from agents/asks. */
+/**
+ * Live per-company badges (rail, header, portfolio): a slice of the one live source (state/live.ts truthOf), so the
+ * rail tile, the sidebar Home badge and the status bar always show the same numbers. Needs you includes board tasks.
+ */
 export function useCompanyBadges(): { byCompany: Record<Id, CompanyBadge>; total: CompanyBadge } {
   const companies = useStore((s) => s.companies)
-  const agents = useStore((s) => s.agents)
-  const asks = useStore((s) => s.asks)
-  const seenIdle = useStore((s) => s.seenIdle)
-  const sessions = useStore((s) => s.sessions)
   const overview = useStore((s) => s.companyOverview)
-  return useMemo(
-    () => companyBadges({ companies, agents: Object.values(agents), asks: Object.values(asks), seen: new Set(Object.keys(seenIdle)), sessions, overview }),
-    [companies, agents, asks, seenIdle, sessions, overview]
-  )
+  const truth = useLiveTruth()
+  return useMemo(() => badgesFromTruth(truth, companies, overview), [truth, companies, overview])
 }
 
 /** Needs-you rows (and with `working`, live working roots) across companies, or one company's. */
 export function useLiveItems(opts: { working?: boolean; companyId?: Id } = {}): LiveItem[] {
-  const agents = useStore((s) => s.agents)
-  const asks = useStore((s) => s.asks)
-  const seenIdle = useStore((s) => s.seenIdle)
-  const sessions = useStore((s) => s.sessions)
+  const truth = useLiveTruth()
   const { working, companyId } = opts
-  return useMemo(
-    () => liveItems({ agents: Object.values(agents), asks: Object.values(asks), seen: new Set(Object.keys(seenIdle)), sessions, working, companyId }),
-    [agents, asks, seenIdle, sessions, working, companyId]
-  )
+  return useMemo(() => itemsFromTruth(truth, { working, companyId }), [truth, working, companyId])
+}
+
+/** Five doors A4: the companies paused as a whole (their seats wait; their tasks keep their lanes). */
+export function usePausedCompanies(): ReadonlySet<Id> {
+  const companies = useStore((s) => s.companies)
+  return useMemo(() => new Set(companies.filter((c) => c.pausedAt).map((c) => c.id)), [companies])
+}
+/** laneOf's renderer inputs with the paused rule; every Board, Home and sidebar count uses this one. */
+export function useLaneContext(): LaneContext {
+  const asks = useStore((s) => s.asks)
+  const agents = useStore((s) => s.companyAgents)
+  const paused = usePausedCompanies()
+  return useMemo(() => laneContext(asks, agents, paused), [asks, agents, paused])
 }
 
 /**
@@ -68,9 +74,21 @@ export function useLiveItems(opts: { working?: boolean; companyId?: Id } = {}): 
 export function useTaskCounts(): Record<Id, TaskCounts> {
   const on = useStore((s) => departmentsOn(s))
   const tasks = useStore((s) => s.tasks)
-  const asks = useStore((s) => s.asks)
-  const agents = useStore((s) => s.companyAgents)
-  return useMemo(() => (on ? taskCounts(tasks, laneContext(asks, agents)) : {}), [on, tasks, asks, agents])
+  const ctx = useLaneContext()
+  return useMemo(() => (on ? taskCounts(tasks, ctx) : {}), [on, tasks, ctx])
 }
 
 export * from './companyModel'
+
+/**
+ * A company's short name for buttons ("Pause Northwind"): its first word, or as many words as it takes when another
+ * company starts the same way ("Pause Harbor Dental Kids" beside Harbor Dental Group). shared/spend.shortCompanyName.
+ */
+export function useCompanyShortName(companyId: Id | null | undefined, fallback = 'company'): string {
+  const companies = useStore((s) => s.companies)
+  return useMemo(() => {
+    const c = companies.find((x) => x.id === companyId)
+    if (!c) return fallback
+    return shortCompanyName(c.name, companies.filter((x) => !x.archivedAt).map((x) => x.name)) || fallback
+  }, [companies, companyId, fallback])
+}

@@ -184,7 +184,8 @@ export async function runMigration(deps: MigrationDeps, opts: { dryRun: boolean 
     const mapChanges = companies.filter((c) => !skip(c.id) && migrationFileChanged(views.get(c.id)!.root, c.id, plan, events))
     for (const c of companies) {
       if (skip(c.id)) continue
-      reports.get(c.id)!.hubNote = !!views.get(c.id)!.hub || hubs.get(c.id)!.ops.length > 0 || !views.get(c.id)!.exists
+      // a hub note counts only when this run writes one (an existing hub with nothing to add is not work to offer)
+      reports.get(c.id)!.hubNote = hubs.get(c.id)!.ops.length > 0 || !views.get(c.id)!.exists
     }
     const anyWork = live.creates.length + live.appends.length + live.proposals.length + hubWrites + liveEvents.length + mapChanges.length > 0
 

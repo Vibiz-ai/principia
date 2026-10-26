@@ -154,7 +154,7 @@ describe('Ready step: only what was made', () => {
     expect(b[0]).toContain('is waiting on the board')
     expect(b[0]).not.toContain('Site builder')
     expect(b[2]).toContain('Company Settings')
-    expect(b.join(' ')).not.toContain('passport has')
+    expect(b.join(' ')).not.toContain('Knowledge has')
     expect(launchFacts([])).toBeNull()
   })
 
@@ -162,7 +162,7 @@ describe('Ready step: only what was made', () => {
     const facts = launchFacts([step('passport', 'done', [1, 2, 3, 4, 5, 6].map((i) => ({ kind: 'note' as const, id: `n${i}` })))])!
     expect(facts.passport).toBe(true)
     const b = nextSteps({ plan: plan(), name: 'Acme', repoNames: [], passport: true, notes: facts.notes })
-    expect(b[2]).toBe('Your passport has 6 notes about Acme. Agents read them before every task. Edit them under Passport.')
+    expect(b[2]).toBe('Knowledge has 6 notes about Acme. Agents read them before every task. Edit them under Knowledge.')
   })
 
   it('never says an ask-first agent starts on its own', () => {
@@ -187,7 +187,7 @@ describe('Ready step copy', () => {
     expect(b).toHaveLength(3)
     expect(b[0]).toBe('Once you start, the Site builder works on “Draft a one-page landing page”. You\'ll see the result in Needs you.')
     expect(b[1]).toBe('Everything agents make lands in review. Nothing is posted, sent or paid without you.')
-    expect(b[2]).toBe('Your passport has 5 notes about Sunday Bakery. Agents read them before every task. Edit them under Passport.')
+    expect(b[2]).toBe('Knowledge has 5 notes about Sunday Bakery. Agents read them before every task. Edit them under Knowledge.')
     const noFlags = nextSteps({ plan: { ...plan(), agents: [] }, name: 'Acme', repoNames: ['acme-web'], passport: false })
     expect(noFlags[0]).toContain('is waiting on the board')
     expect(noFlags[2]).toContain('Company Settings')
@@ -385,5 +385,14 @@ describe('passport tablet meta', () => {
     expect(late[2]!.value).toBe('Website · Social')
     const insta = passportMeta({ ...base, step: 'name', answers: { ...base.answers, siteUrl: '', instagram: '@sundaybakery' } } as never, [])
     expect(insta).toEqual([{ label: 'Instagram', value: '@sundaybakery' }])
+  })
+})
+
+describe('five doors step 5: the opening question has no step counter', () => {
+  it('Step 1 is the page after "Where does your business live today?"', async () => {
+    const { showsProgress } = await import('./model')
+    expect(showsProgress('start')).toBe(false)
+    expect(showsProgress('name')).toBe(true)
+    expect(showsProgress('ready')).toBe(false)
   })
 })

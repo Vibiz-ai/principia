@@ -11,11 +11,15 @@ import { ADAPTER_IDS } from '../../shared/types'
 import { DEFAULT_ADAPTERS, type Adapter } from './adapters'
 import { Execution, ensureRunDirs } from './executor'
 import { StallMonitor, stallThresholdMs } from './live/stall'
-import { attachGateway } from '../gateway/attach'
-import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
-import { AUTHOR_TOOLS, authorAttachable } from './authoring'
+import { attachGateway, GATEWAY_TOOLS } from '../gateway/attach'
+import { attachForum } from '../forum/attach'
+import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, codexSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
+import { AUTHOR_TOOLS, CODEX_AUTHOR_HINT, authorAttachable } from './authoring'
+import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT, CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { join } from 'node:path'
 import { LIVE_HOOKS } from './live/attach'
+import { listedHiveTools } from '../author/server/tools'
+import { principiaOps, principiaOpsReminder } from '../company/principiaOps'
 import { liveProcs } from './process'
 import { detectProviders, resolveBin, sameProviders } from './providers'
 import { createScheduler, describeWhen, previewWhen } from './scheduler'
@@ -99,6 +103,21 @@ export interface EngineOverrides {
   taskMinuteMs?: number
   /** Harness fallback filter (ExecDeps.harnessFallback). Absent = the desktop's rule. */
   harnessFallback?: (runId: string, to: AdapterId) => boolean
+}
+
+/**
+ * A prompt run's title source. A framed prompt (a board task turn, a Forum reply: `<principia-role …>` first, or after
+ * one plain line) is named by
+ * its task's Title line, else by the first text outside the frames, never by the frame itself.
+ */
+export function framedPromptTitle(prompt: string): string {
+  const text = prompt.trim()
+  // a Forum reply starts with one plain line ("Forum reply in #general") before its frames: framed all the same
+  if (!/^<principia-[a-z]/i.test(text) && !/^[^\n]*\n\s*<principia-[a-z]/i.test(text)) return text
+  const title = /<principia-task\b[^>]*>\s*Title:[ \t]*([^\n]*)/i.exec(text)?.[1]?.trim()
+  if (title) return title
+  const rest = text.replace(/<principia-([a-z-]+)\b[^>]*>[\s\S]*?<\/principia-\1>/gi, '').trim()
+  return rest.split('\n').map((l) => l.trim()).find(Boolean) ?? 'Task turn'
 }
 
 export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides = {}): Engine {
@@ -190,6 +209,9 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       if (co.enforced()) throw new HiveError('bad_request', problem)
       ctx.log.warn('engine: company guard (not enforced)', { companyId, problem })
     }
+    // five doors A4: a paused company starts nothing, whatever started it (schedule, retry, task, a click)
+    const paused = co.pausedName?.(companyId) ?? null
+    if (paused) throw new HiveError('conflict', `${paused} is paused. Resume it to start work.`)
     return companyId
   }
 
@@ -225,7 +247,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       if (!target.prompt?.trim()) throw new HiveError('validation', 'Prompt is empty', [{ path: 'prompt', message: 'Prompt is empty' }])
       if (!ctx.getProfile(target.profileId)) throw new HiveError('not_found', `Agent profile ${target.profileId} not found`)
       if (target.repoId && !ctx.getRepo(target.repoId)) throw new HiveError('not_found', `Repository ${target.repoId} not found`)
-      const oneLine = target.prompt.trim().replace(/\s+/g, ' ')
+      const oneLine = (opts.title?.trim() || framedPromptTitle(target.prompt)).replace(/\s+/g, ' ')
       title = oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine
     } else if (target.kind === 'workflow') {
       const wf = ctx.getWorkflow(target.workflowId)
@@ -323,6 +345,20 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     log: ctx.log,
     now,
     board: ctx.company?.boards?.schedules ?? null,
+    // five doors A4: one paused company's schedules hold (logged as skipped); every other company's keep their time
+    companyPaused: (sch) => {
+      const co = ctx.company
+      if (!co?.pausedName) return null
+      try {
+        return co.pausedName(co.resolve({ scheduleId: sch.id }))
+      } catch {
+        return null
+      }
+    },
+    runCompanyPaused: (r) => {
+      const co = ctx.company
+      return co?.pausedName && r.companyId ? co.pausedName(r.companyId) : null
+    },
     paused: (() => {
       try {
         return !!ctx.getSettings().schedulesPaused
@@ -385,12 +421,33 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         const grant = opts.memory && opts.spawnTag ? { ...opts.memory, server: { ...opts.memory.server, env: { ...opts.memory.server.env, ...opts.spawnTag } } } : (opts.memory ?? null)
         let mcp: McpAttachment | null = null
         const memOk = !!grant && memoryTransport(profile.adapter) === 'mcp' && !!a.mcpAttach && grant.toolNames.length > 0
-        // AUTHORING.md §1.1 (PO1, PO7): the `hive` server, interactive claude only, in ONE per-spawn config with hivemem
+        // AUTHORING.md §1.1 (PO1, PO7): the `hive` server, interactive claude and codex panes, with hivemem (claude: ONE
+        // per-spawn config; codex: -c overrides)
         const author = opts.author && authorAttachable(profile.adapter, 'interactive') ? opts.author : null
         const authorSpec = author ? { ...author, env: { ...author.env, ...(opts.spawnTag ?? {}) } } : null
         const authorDir = opts.authorSpawnDir ?? opts.live?.dir ?? null
         let authored = false
-        if (authorSpec && authorDir) {
+        let memAttached = false
+        // codex lists only the hive tools it may call without a prompt (claude prompts in the pane for the rest)
+        let codexHiveTools: string[] | null = null
+        if (authorSpec && profile.adapter === 'codex') {
+          try {
+            const allowed = new Set<string>(opts.authorTools?.length ? opts.authorTools : AUTHOR_TOOLS)
+            // "start a company from this chat" stays the codex button (CHAT_COMPANY_CODEX_HINT)
+            codexHiveTools = listedHiveTools(authorSpec.env ?? {}).filter((t) => allowed.has(t) && t !== CHAT_COMPANY_TOOL)
+            mcp = codexSessionMcpAttach([
+              ...(memOk ? [{ server: grant!.server, toolNames: grant!.toolNames }] : []),
+              // an authoring write waits for the founder's click on the card (up to 3300 s)
+              { server: authorSpec, toolNames: codexHiveTools, toolTimeoutSec: Math.ceil(Number(MCP_TOOL_TIMEOUT_MS) / 1000) }
+            ])
+            authored = codexHiveTools.length > 0
+            memAttached = memOk
+          } catch (e) {
+            ctx.log.warn('engine: codex session hive MCP attach failed; memory only', { error: String(e) })
+            mcp = null
+            codexHiveTools = null
+          }
+        } else if (authorSpec && authorDir) {
           try {
             const path = memOk ? join(grant!.spawnDir, `${grant!.grantId}.mcp.json`) : join(authorDir, 'hive.mcp.json')
             const tools = opts.authorTools?.length ? opts.authorTools : AUTHOR_TOOLS
@@ -400,6 +457,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
             ])
             writeMcpFiles(mcp.files)
             authored = true
+            memAttached = memOk
           } catch (e) {
             ctx.log.warn('engine: session hive MCP attach failed; memory only', { error: String(e) })
             mcp = null
@@ -409,16 +467,42 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           try {
             mcp = a.mcpAttach!(grant!)
             writeMcpFiles(mcp.files)
+            memAttached = true
           } catch (e) {
             ctx.log.warn('engine: session memory MCP attach failed', { grantId: grant!.grantId, error: String(e) })
             mcp = null
           }
         }
+        let gatewayOn = false
         if (profile.adapter === 'claude' || profile.adapter === 'codex') {
           const gwCwd = opts.cwd ?? ctx.paths.scratchDir
           const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
-          if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) writeMcpFiles(mcp.files) }
+          if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) { writeMcpFiles(mcp.files); gatewayOn = true } }
         }
+        // BROWSER.md §3: the company browser for company panes (claude, codex), its own token
+        let browserTools: string[] = []
+        if (opts.companyId && ctx.browser && (profile.adapter === 'claude' || profile.adapter === 'codex')) {
+          try {
+            const spec = ctx.browser.attachment({ companyId: opts.companyId, agent: profile.adapter === 'codex' ? 'Codex' : 'Claude', sessionKey: `pane:${opts.spawnTag?.HIVE_SPAWN_ID ?? opts.freshAgentSessionId ?? opts.resumeAgentSessionId ?? Date.now().toString(36)}` })
+            const dir = opts.live?.dir ?? authorDir ?? (grant ? grant.spawnDir : null) ?? join(ctx.paths.scratchDir, 'mcp-browser')
+            if (spec) {
+              const att = attachForum(profile.adapter, spec, ctx.browser.toolNames(), mcp, join(dir, 'browser.mcp.json'))
+              if (att) {
+                writeMcpFiles(att.files)
+                mcp = att
+                browserTools = ctx.browser.toolNames()
+              }
+            }
+          } catch (e) {
+            ctx.log.warn('engine: session browser MCP attach failed; no browser for this pane', { error: String(e) })
+          }
+        }
+        // PROACTIVE.md §1: the "Use Principia" section, from the tools this pane really has (company panes only)
+        const proactive = !!opts.companyId && ctx.getSettings().proactiveAgents !== false && (profile.adapter === 'claude' || profile.adapter === 'codex')
+        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? codexHiveTools ?? listedHiveTools(authorSpec.env ?? {}) : []), ...(gatewayOn ? GATEWAY_TOOLS : []), ...browserTools]
+        // Settings → "Track work as tasks" (absent = when it helps)
+        const track = ctx.getSettings().trackTasks ?? 'auto'
+        const ops = proactive ? principiaOps({ tools: paneTools, kind: authorSpec?.env?.HIVE_TASK_ID ? 'task' : opts.chatBrief?.trim() ? 'chat' : 'session', track }) : ''
         const memoryBrief = ctx.secrets.redact([
           // nobody harvests an interactive pane's output (PASSPORT.md §7.6 is headless steps only)
           grant ? agentBrief(grant, !!mcp && memOk, { harvest: false }) : '',
@@ -426,17 +510,28 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           // department chat or task session adds the department slot (DEPARTMENTS.md §7)
           opts.companyId ? ctx.passportContext?.(opts.cwd ?? '', opts.companyId, opts.departmentId ?? null) ?? '' : opts.cwd ? ctx.passportContext?.(opts.cwd) ?? '' : '',
           // DEPARTMENTS.md §9: what this chat is told about the company's repos, departments, agents and tasks
-          opts.chatBrief?.trim() ?? ''
+          opts.chatBrief?.trim() ?? '',
+          // shared/chatCompany.ts: "start a new company from this chat" (claude: the tool; codex: the button)
+          profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : '',
+          // claude gets AUTHOR_HINT in --append-system-prompt; codex reads it here (developer_instructions)
+          profile.adapter === 'codex' && codexHiveTools?.some((t) => t.startsWith('hive_workflow')) ? CODEX_AUTHOR_HINT : '',
+          ops
         ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []
         const env: Record<string, string> = { ...(mcp?.env ?? {}) }
-        // A5 for panes: an authoring write waits for the user's click (up to 3300 s); per spawn only
-        if (authored) env.MCP_TOOL_TIMEOUT = MCP_TOOL_TIMEOUT_MS
+        // A5 for panes: an authoring write waits for the user's click (up to 3300 s); per spawn only (codex: tool_timeout_sec)
+        if (authored && profile.adapter === 'claude') env.MCP_TOOL_TIMEOUT = MCP_TOOL_TIMEOUT_MS
         if (opts.live && a.hooksAttach && LIVE_HOOKS[profile.adapter]) {
           try {
             const gm = profile.adapter === 'gemini' && mcp && memOk && grant ? { server: grant.server, toolNames: grant.toolNames } : null
-            const h = a.hooksAttach({ dir: opts.live.dir, hookCommand: opts.live.hookCommand }, { headless: false, gate: false, mcp: gm })
+            // PROACTIVE.md §4: claude re-reads the rules on resume / compact; under "Always" only, a one-time gentle
+            // reminder at the end of an untracked multi-step turn (never under the default: the founder may just want to work)
+            const boardTools = track === 'always' && paneTools.some((t) => t === 'task_create' || t === 'company_file_task')
+            const h = a.hooksAttach(
+              { dir: opts.live.dir, hookCommand: opts.live.hookCommand },
+              { headless: false, gate: false, mcp: gm, ...(ops ? { context: ctx.secrets.redact(principiaOpsReminder(ops)) } : {}), ...(ops && boardTools ? { nudge: true } : {}) }
+            )
             if (h.warning) ctx.log.warn(`engine: ${h.warning}`)
             writeMcpFiles(h.files)
             hookArgs = h.args
@@ -455,7 +550,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           ...(mcp ? { mcpArgs: mcp.args } : {}),
           ...(memoryBrief ? { memoryBrief } : {}),
           ...(hookArgs.length ? { hookArgs } : {}),
-          ...(authored ? { authorHint: true } : {}),
+          ...(authored && profile.adapter === 'claude' ? { authorHint: true } : {}),
           ...(opts.initialPrompt?.trim() ? { initialPrompt: opts.initialPrompt } : {}),
           ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {})
         })

@@ -62,11 +62,11 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
   return (
     <section className="passport-section">
       <div className="passport-section-title">
-        <span>05</span>
+        <span>04</span>
         <h2>Use in other apps</h2>
       </div>
       <p className="passport-section-description">
-        One memory for the business, in the AI apps your team already uses. They load the company card first (about 300 tokens) and search the rest only when they need it. What they want to remember waits in the Inbox for you.
+        One memory for the business, in the AI apps your team already uses (Claude Desktop, ChatGPT, Cursor). They read a short company summary first and look up the rest only when they need it. Anything they want to remember waits for your OK.
       </p>
       {error && (
         <div className="company-error" role="alert">
@@ -84,7 +84,7 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
             </button>
           </div>
           {tab === 'hosted' && !info.hosted ? (
-            <p className="company-help">ChatGPT and Claude.ai connect to a URL, so the Passport needs a host first. Set one under Passport folder → Cloud sync, then come back here for the URL. They sign in with your owner key and you choose what they may see.</p>
+            <p className="company-help">ChatGPT and Claude.ai connect to a URL, so Knowledge needs a host first. Set one under Knowledge folder → Cloud sync, then come back here for the URL. They sign in with your owner key and you choose what they may see.</p>
           ) : (
             <>
               {tab === 'hosted' && info.hosted && (
@@ -109,10 +109,16 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
               {current && (
                 <div className="op-connect-snippet">
                   <p className="company-help">
-                    {current.where}
+                    {/* a config file path is for whoever wires it by hand: it sits with the setup text */}
+                    {/^[~/]/.test(current.where) ? `Principia can add it to ${current.label} for you.` : current.where}
                     {current.app === 'chatgpt' ? '. A workspace admin may need to turn on developer mode first; ChatGPT asks before each write.' : ''}
                   </p>
-                  <pre className="selectable mono">{current.text}</pre>
+                  {/* the raw config (JSON with paths on this Mac) is for whoever wires it by hand: folded away by default */}
+                  <details className="op-connect-raw">
+                    <summary>Show the setup text</summary>
+                    {/^[~/]/.test(current.where) && <p className="company-help mono selectable">{current.where}</p>}
+                    <pre className="selectable mono">{current.text}</pre>
+                  </details>
                   <div className="cs-actions cs-actions--start">
                     <Button size="sm" icon="copy" onClick={() => void copy(current.text, `${current.label} config`)}>
                       Copy
@@ -134,7 +140,7 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
           )}
           <div className="cs-actions cs-actions--start">
             <Button size="sm" icon="upload" onClick={() => setImporting(true)}>
-              Import into Passport…
+              Import into Knowledge…
             </Button>
             {info.queued > 0 && (
               <Button
@@ -190,7 +196,7 @@ export function PassportImportSources({ companyId, onClose }: { companyId: strin
   const ready = kind === 'url' ? /^https?:\/\/\S+\.\S+/.test(url.trim()) : kind === 'text' ? text.trim().length > 10 : true
   return (
     <Sheet
-      title="Import into Passport"
+      title="Import into Knowledge"
       width={620}
       onCancel={() => !busy && onClose()}
       primaryLabel={result ? 'Done' : busy ? 'Reading…' : kind === 'export' || kind === 'folder' ? 'Choose…' : 'Import'}
@@ -209,7 +215,7 @@ export function PassportImportSources({ companyId, onClose }: { companyId: strin
               {result.filed
                 ? `${result.filed} suggestions are waiting in the Inbox (from ${result.candidates} things found in ${result.documents} ${result.kind === 'url' ? 'pages' : 'documents'}).`
                 : result.candidates
-                  ? 'Nothing new: everything found is already in the Inbox or the Passport.'
+                  ? 'Nothing new: everything found is already in the Inbox or in Knowledge.'
                   : 'Nothing that looks like lasting company memory was found.'}
               {result.known ? ` ${result.known} were already known.` : ''}
               {result.dropped ? ` ${result.dropped} weaker ones were left out.` : ''}

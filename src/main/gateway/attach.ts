@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import type { McpServerSpec } from '../../shared/engine'
 import type { AdapterId } from '../../shared/types'
 import type { McpAttachment } from '../engine/memory'
+/** The gateway server's two tools (gateway/main.ts); the "Use Principia" rules name them when the spawn has them. */
+export const GATEWAY_TOOLS = ['principia_list_tools', 'principia_call_tool'] as const
 /** Keep harness-native approval policies; external tools are never automatically pre-approved. */
 export function attachGateway(adapter: AdapterId, server: McpServerSpec, previous: McpAttachment | null, dir: string): McpAttachment | null {
   if (adapter === 'codex') {

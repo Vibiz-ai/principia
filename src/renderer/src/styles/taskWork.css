@@ -1,0 +1,63 @@
+/* WORKTREE.md: Start, the Work section, the gone banner, the board card badge and the task strip. White line art on
+   dark; greys, with colour only for meaning (PR open / changes requested / merged). */
+
+.work-start { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 2px 0 14px; }
+.work-start__btn.btn { background: transparent; color: var(--text-primary); border: 1px solid rgba(255, 255, 255, 0.82); box-shadow: none; }
+.work-start__btn.btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); border-color: #fff; }
+.work-start__sub { font-size: var(--text-xs); color: var(--text-tertiary); }
+.work-start--state { flex-direction: row; }
+
+.work-pr-chip { display: inline-flex; align-items: center; flex: none; font-size: var(--text-xs); border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border-strong); color: var(--text-secondary); white-space: nowrap; }
+.work-pr-chip--running { color: var(--status-running); border-color: rgba(76, 156, 255, 0.45); background: var(--status-running-soft); }
+.work-pr-chip--passed { color: var(--status-success); border-color: rgba(62, 207, 142, 0.45); background: var(--status-success-soft); }
+.work-pr-chip--failed { color: var(--status-failed); border-color: rgba(242, 92, 92, 0.45); background: var(--status-failed-soft); }
+.work-pr-chip--idle { color: var(--text-tertiary); }
+
+.work-section { border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+.work-section__row { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--text-secondary); }
+.work-section__branch { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+.work-section__path { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-section__note { font-size: var(--text-xs); color: var(--text-tertiary); line-height: 1.5; }
+.work-section__note--failed { color: var(--status-failed); }
+.work-section__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.work-section__actions .link-btn { font-size: var(--text-xs); }
+.work-branch-glyph { flex: none; color: var(--text-secondary); }
+
+.work-gone { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--text-primary); border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 6px; padding: 9px 11px; }
+.work-gone__actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--text-tertiary); }
+
+.work-card-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+.task-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 14px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface-0); color: var(--text-secondary); font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.task-strip:hover { background: var(--row-hover); }
+.task-strip__id { font-family: var(--font-mono); color: var(--text-primary); flex: none; }
+.task-strip__title { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.task-strip__branch { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 2 auto; }
+.task-strip__open { margin-left: auto; flex: none; color: var(--text-tertiary); }
+.task-strip:hover .task-strip__open { color: var(--text-primary); }
+/* A1: a disabled action (Merge… while an agent works, Remove Worktree…) reads as unavailable; its wrapper keeps the tooltip */
+.work-section__actions .link-btn:disabled { color: var(--text-tertiary); cursor: not-allowed; text-decoration: none; }
+.work-section__merge { display: inline-flex; }
+
+/* Five doors step 5 (design §4.5): the inspector's branch block, stepper and one next step */
+.work-flow { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 14px; }
+.work-flow__props { display: grid; grid-template-columns: 74px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }
+.work-flow__props dt { color: var(--text-tertiary); }
+.work-flow__props dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.work-flow__mono { font-family: var(--font-mono); font-size: 11.5px; }
+.work-flow__dim { color: var(--text-tertiary); }
+.work-steps { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); margin: 2px 0 0; padding: 0; position: relative; }
+.work-steps__step { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 11px; color: var(--text-tertiary); }
+.work-steps__step + .work-steps__step::before { content: ''; position: absolute; top: 5px; right: 50%; width: 100%; height: 1px; background: var(--border-strong); z-index: 0; }
+.work-steps__step.is-done + .work-steps__step::before { background: var(--status-success); }
+.work-steps__dot { position: relative; z-index: 1; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface-0); }
+.work-steps__step.is-done { color: var(--text-secondary); }
+.work-steps__step.is-done .work-steps__dot { background: var(--status-success); border-color: var(--status-success); }
+.work-steps__step.is-current { color: var(--text-primary); }
+.work-steps__step.is-current .work-steps__dot { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.work-flow__next { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.5; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px; }
+.work-flow__next--connectGithub, .work-flow__next--openPr { border-color: rgba(110, 140, 255, 0.45); background: var(--accent-soft); color: var(--text-primary); }
+.work-flow__glyph { flex: none; color: var(--text-secondary); font-size: 10px; line-height: 18px; }
+.work-flow__next--connectGithub .work-flow__glyph, .work-flow__next--openPr .work-flow__glyph { color: var(--accent); }
+.work-flow__actions { display: flex; gap: 6px; align-items: center; }
+.work-flow__blocked { font-size: var(--text-xs); color: var(--text-tertiary); }

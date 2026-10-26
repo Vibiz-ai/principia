@@ -5,6 +5,10 @@
  *
  * - eligible = not paused or archived, `autonomy:'auto'`, headless, in a company with autopilot on and fewer than
  *   maxInFlight tasks in flight, and with no task in flight of its own;
+ * - the exception (startsWithoutAutopilot): a schedule's standing card with a queued fire (the founder turned the
+ *   schedule on) and a task whose question the founder just answered start on any active headless seat with autopilot
+ *   off too (still never on a paused company, past
+ *   maxInFlight, on a busy seat or past the wake guard);
  * - its next task = its highest-priority `todo` task, oldest first (priority 1 urgent … 4 low, 0 none last);
  * - the claim is a compare-and-set on the status mirror inside one transaction with CompanyStore.startTask, so two
  *   pumps, or a pump and a human Run, can never both start the agent: the loser skips or gets "<Agent> is busy on <ID>".
@@ -18,7 +22,7 @@
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, agentActive, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, agentActive, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -26,6 +30,7 @@ import { CompanyStore, type TaskRunLink } from './index'
 import { needsSuggestion, queueCountsFrom, route, routedActivity, routingInUse, shouldReroute, suggestRoute, type ModelCall, type RouteContext } from './router'
 
 export const DISPATCH_TICK_MS = 60_000
+
 const HOUR_MS = 3_600_000
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
@@ -35,7 +40,7 @@ type PtySize = { cols: number; rows: number }
 /** What the dispatcher needs from the session manager (h.sessions) for "Open as session" and "Take over" (§4.4). */
 export interface DispatcherSessions {
   /** `taskDepartmentId`: the task's department, so the pane's Passport block carries its slot (DEPARTMENTS.md §7) */
-  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null; task?: boolean; taskDepartmentId?: string | null }): Session
+  create(req: { companyId: string; profileId: string; repoId: string | null; cols: number; rows: number; title: string; initialPrompt: string; resumeAgentSessionId: string | null; task?: boolean; taskDepartmentId?: string | null; taskId?: string }): Session
   isLive(id: string): boolean
   kill(id: string): Promise<unknown>
 }
@@ -157,12 +162,18 @@ export class Dispatcher {
     let changed = false
     try { changed = this.c.heal(companyId).length > 0 } catch (err) { this.warn('heal failed', { companyId, error: String(err) }) }
     const started: string[] = []
-    if (this.autopilotRoom(companyId) > 0) {
+    if (this.roomFor(companyId, false) > 0) {
       for (const agent of this.c.departments.listAgents({ companyId })) {
-        if (this.autopilotRoom(companyId) <= 0) break
-        if (!this.seatEligible(agent) || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
+        if (this.roomFor(companyId, false) <= 0) break
+        if (!agentActive(agent) || agent.data.mode === 'session' || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
+        // autopilot picks any todo task of an auto seat; without it, work the founder already said go to still starts:
+        // a schedule's queued fire (they turned the schedule on) and the answer they just gave to a question
+        const auto = this.seatEligible(agent) && this.autopilotRoom(companyId) > 0
         for (const t of this.queueOf(agent)) {
-          const r = this.claim(t.id, agent)
+          if (!auto && !startsWithoutAutopilot(t)) continue
+          // five doors C9: a task the founder paused waits for their Start (a comment from them wakes it again)
+          if (this.heldByYou(t.id)) continue
+          const r = this.claim(t.id, agent, !auto)
           if (r !== 'skipped') changed = true
           if (r === 'started') started.push(t.id)
           // one start (or one failed start) per agent per pump; a parked task lets the next one through
@@ -174,15 +185,19 @@ export class Dispatcher {
     return started
   }
   /** Room left under maxInFlight, 0 when autopilot is off or the company is archived. */
-  private autopilotRoom(companyId: string): number {
+  private autopilotRoom(companyId: string): number { return this.roomFor(companyId, true) }
+  /** Room left under maxInFlight (0 when archived or paused, and with `autopilot` also when autopilot is off). */
+  private roomFor(companyId: string, autopilot: boolean): number {
     const company = this.c.scope.get(companyId)
     if (!company || company.archivedAt) return 0
+    // five doors A4: autopilot reads "Off while paused" and starts nothing until the company resumes
+    if (this.c.isPaused(companyId)) return 0
     const s = this.c.boardSettings(companyId)
-    if (!s.autopilot) return 0
+    if (autopilot && !s.autopilot) return 0
     return s.maxInFlight - this.inFlight(companyId)
   }
   private inFlight(companyId: string): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress'").get(companyId) as { n: number }).n
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL").get(companyId) as { n: number }).n
   }
   /** A Take over between its cancel and its session: the seat is the human's, not free for the next task. */
   private takingOver(agentId: string): boolean {
@@ -196,9 +211,15 @@ export class Dispatcher {
   private seatEligible(a: CompanyAgent): boolean {
     return agentActive(a) && a.data.autonomy === 'auto' && a.data.mode !== 'session'
   }
+  /** "Pause this task": the task's latest activity is the founder's pause (Start or a comment of theirs comes after it). */
+  private heldByYou(taskId: string): boolean {
+    const last = this.db.prepare('SELECT kind, actor FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(taskId) as { kind: string; actor: string | null } | undefined
+    return last?.kind === 'paused' && last.actor === 'human'
+  }
   /** The seat's todo tasks, highest priority first, oldest first. */
   private queueOf(agent: CompanyAgent): BoardTask[] {
-    const rows = this.db.prepare("SELECT seq, data FROM company_tasks WHERE company_id=? AND agent_id=? AND status='todo' ORDER BY seq").all(agent.companyId, agent.id) as { seq: number; data: string }[]
+    // a plan's tasks are the plan pilot's (PLANS.md §2.4): never picked here, even in To do
+    const rows = this.db.prepare("SELECT seq, data FROM company_tasks WHERE company_id=? AND agent_id=? AND status='todo' AND json_extract(data,'$.plan') IS NULL ORDER BY seq").all(agent.companyId, agent.id) as { seq: number; data: string }[]
     return rows.map(r => ({ seq: r.seq, t: this.c.task(JSON.parse(r.data).id as string) }))
       .sort((a, b) => rank(a.t.priority) - rank(b.t.priority) || a.seq - b.seq).map(x => x.t)
   }
@@ -207,7 +228,7 @@ export class Dispatcher {
    * §3.3 claim + §3.4 start, in one transaction: the wake guard, the compare-and-set, a `woke` activity, startTask as
    * the system (autopilot gate re-checked there) and the guard count. A lost race changes nothing ('skipped').
    */
-  private claim(taskId: string, agent: CompanyAgent): 'started' | 'parked' | 'skipped' | 'failed' {
+  private claim(taskId: string, agent: CompanyAgent, scheduled = false): 'started' | 'parked' | 'skipped' | 'failed' {
     let runId: string | null = null
     try {
       return this.db.transaction(() => {
@@ -220,7 +241,7 @@ export class Dispatcher {
         if (!this.cas(t.id, agent.id)) return 'skipped'
         const reasons = t.pendingWake?.reasons.length ? t.pendingWake.reasons : ['Assigned: this task is yours.']
         this.c.activity(t.id, 'woke', `Woke ${agent.name}: ${clip(reasons.join(' · '))}`)
-        this.c.startTask(t.id, undefined, this.starter(agent, id => { runId = id }), { actor: 'system' })
+        this.c.startTask(t.id, undefined, this.starter(agent, id => { runId = id }), { actor: 'system', consented: scheduled })
         this.c.patchInFlight(t.id, { autoWakes: guard })
         return 'started' as const
       })()
@@ -281,7 +302,7 @@ export class Dispatcher {
   private starter(agent: CompanyAgent | null, onRun?: (runId: string) => void) {
     return (target: RunTarget, companyId: string, link: TaskRunLink): Run => {
       const run = this.d.startRun(target, {
-        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId,
+        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null,
         runMinutes: agent?.data.limits?.runMinutes ?? null
       })
       onRun?.(run.id)
@@ -291,7 +312,7 @@ export class Dispatcher {
 
   // ---------- human starts ----------
 
-  /** "Run now": a human start (no autopilot gate); one in flight per agent ("Copywriter is busy on PRN-12"). */
+  /** "Run now": a human start (no autopilot gate); one in flight per agent ("Copywriter is busy on NC-12"). */
   runNow(taskId: string, profileId?: string): BoardTask {
     const t = this.c.task(taskId)
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
@@ -302,6 +323,14 @@ export class Dispatcher {
   }
 
   // ---------- wakes ----------
+
+  /**
+   * A schedule fire on its standing card while the last fire's result waits in review or was accepted: back to todo for
+   * this fire's turn (like a follow-up turn, §3.5). The report stays in the activity; the founder turned the schedule on.
+   */
+  reopenForFire(taskId: string, scheduleName: string): boolean {
+    return this.moveRaw(taskId, ['in_review', 'done'], { status: 'todo', blockReason: null }, 'woke', `Schedule "${clip(scheduleName, 80)}" fired again: the next turn starts (the last report stays above)`)
+  }
 
   /**
    * A wake for a task (human comment, Slack follow-up, schedule fire on a standing card). Agent wakes are dropped
@@ -318,6 +347,23 @@ export class Dispatcher {
     this.d.onChange?.(t.companyId)
     void this.pump(t.companyId)
     return out
+  }
+
+  /**
+   * ORCHESTRATOR.md §2: Principia's own wake for a task (a teammate's question for its seat, the answer to a question it
+   * asked). Like a system wake: coalesced into pendingWake while in flight, queued for the next turn otherwise; and a
+   * task its run left in review or blocked by the agent gets its follow-up turn now (same guard, autopilot and seat gates
+   * as a run end). Never throws.
+   */
+  addWake(taskId: string, reason: string): BoardTask | null {
+    try {
+      const out = this.wake(taskId, reason, 'system')
+      if (out && out.status !== 'in_progress') this.followUp(this.c.task(taskId))
+      return out
+    } catch (err) {
+      this.warn('wake failed', { taskId, error: String(err) })
+      return null
+    }
   }
 
   /** runHooks: every run.updated. At a task run's end: sync (idempotent), capture the session, follow up, pump. */
@@ -352,7 +398,7 @@ export class Dispatcher {
    * may start automatically and the guard allows it (else it parks blocked(limit)).
    */
   private followUp(t: BoardTask): void {
-    if (this.disposed || !t.pendingWake?.count || (t.ask && !t.ask.answer)) return
+    if (this.disposed || !t.pendingWake?.count || (t.ask && !t.ask.answer) || t.plan) return
     const from = t.status === 'in_review' ? 'in_review' : t.status === 'blocked' && t.blockReason === 'agent' ? 'blocked' : null
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
     if (!from || !agent || !this.d.enabled() || !this.seatEligible(agent) || this.autopilotRoom(t.companyId) <= 0 || this.busyOn(agent.id)) return
@@ -405,7 +451,7 @@ export class Dispatcher {
         const p = target as Extract<RunTarget, { kind: 'prompt' }>
         session = sessions.create({ companyId, profileId: p.profileId, repoId: p.repoId ?? null, cols: size.cols, rows: size.rows,
           title: clip(`${t.identifier} · ${t.title}`, 80), initialPrompt: p.prompt, resumeAgentSessionId: link.resumeSessionId,
-          task: true, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
+          task: true, taskId: t.id, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
         return leaseRun(session.id, 'queued', target, companyId)
       }, { actor: 'human' })
     } catch (err) {
@@ -422,6 +468,8 @@ export class Dispatcher {
   /** "Take over": cancel the headless run (no follow-up), then open a session that resumes its conversation. */
   async takeover(taskId: string, size: PtySize): Promise<{ task: BoardTask; session: Session }> {
     const t = this.c.task(taskId)
+    // a plan task runs in its milestone's worktree; a session would run in the checkout (PLANS.md §2.4)
+    if (t.plan) fail(`${t.identifier} belongs to a plan and runs in its milestone's worktree, so it cannot be taken over as a session. Let the run finish, or stop it.`)
     if (t.status !== 'in_progress') fail('This task is not running')
     if (this.leaseOf(taskId)) fail('This task is already open as a session')
     const run = t.runId ? this.c.store.getRun(t.runId) : null
@@ -480,6 +528,21 @@ export class Dispatcher {
       if (this.d.sessions.isLive(r.sessionId) || this.leaseOf(r.taskId) !== r.sessionId) continue
       try { this.endLease(r.taskId, 'canceled', 'The session closed before Submit for review or Park') } catch (err) { this.warn('closing a session lease failed', { taskId: r.taskId, error: String(err) }) }
     }
+    // PROACTIVE.md §3: a chat closed while it still had tracked work in progress: the task waits for the human. AGENT
+    // CHAT: so does an agent's task its chat had moved to in progress
+    const tracked = this.db.prepare("SELECT id, run_id FROM company_tasks WHERE status='in_progress' AND run_id IS NOT NULL AND json_extract(data,'$.externalId') LIKE 'track:%'").all() as { id: string; run_id: string }[]
+    let agentHeld: { id: string; run_id: string }[] = []
+    try { agentHeld = this.db.prepare("SELECT t.id AS id, t.run_id AS run_id FROM company_tasks t JOIN sessions s ON s.id=t.run_id WHERE t.status='in_progress' AND s.company_agent_id IS NOT NULL").all() as { id: string; run_id: string }[] } catch { /* older db */ }
+    const chatHeld = new Set(agentHeld.map(r => r.id))
+    for (const r of [...tracked, ...agentHeld.filter(r => !tracked.some(x => x.id === r.id))]) {
+      if (this.d.sessions.isLive(r.run_id)) continue
+      try {
+        const t = this.c.task(r.id)
+        if (trackedBy(t) !== r.run_id && !(chatHeld.has(r.id) && t.runId === r.run_id)) continue
+        const out = this.c.park(r.id, 'no_report', 'The chat closed before it finished this task')
+        this.d.onChange?.(out.companyId)
+      } catch (err) { this.warn('parking a tracked task failed', { taskId: r.id, error: String(err) }) }
+    }
   }
   private endLease(taskId: string, status: 'passed' | 'canceled', reason: string | null): BoardTask {
     const sid = this.leaseOf(taskId) ?? fail('This task is not open as a session')
@@ -499,6 +562,8 @@ export class Dispatcher {
     if (!this.d.enabled()) return
     try {
       const t = this.c.task(taskId)
+      // PROACTIVE.md §3: a chat's own tracked task stays with the chat until a human assigns it
+      if (trackedBy(t) && !t.agentId) return
       const ctx = this.routeContext(t.companyId)
       if (!routingInUse(t, ctx) || !shouldReroute(prev, t)) return
       const d = route(t, ctx)
@@ -619,6 +684,13 @@ export class HookedCompanyStore extends CompanyStore {
     this.fire(h => h.updated(prev, next))
     return this.task(next.id)
   }
+  /** LINEAR.md: a tracker's change routes and pumps like an edit */
+  override applyRemote(...args: Parameters<CompanyStore['applyRemote']>): BoardTask {
+    const prev = this.task(args[0])
+    const next = super.applyRemote(...args)
+    this.fire(h => h.updated(prev, next))
+    return this.task(next.id)
+  }
   override activity(...args: Parameters<CompanyStore['activity']>): ReturnType<CompanyStore['activity']> {
     const a = super.activity(...args)
     if (a.kind === 'comment') this.fire(h => h.commented(a.taskId, a.message, a.by))
@@ -633,6 +705,8 @@ export function taskRunBridge(o: {
   toolset: () => ((req: Parameters<NonNullable<TaskRunBridge['toolset']>>[0]) => TaskToolset | null) | null
   /** the redacted Passport block of a company, with a department slot (hive.passportContext) */
   passport?: (companyId: string, departmentId: string | null) => string | null
+  /** WORKTREE.md: the Started task's worktree (taskWork.ts) */
+  workdir?: TaskRunBridge['workdir']
 }): TaskRunBridge {
   return {
     companyOf: taskId => { try { return o.company().task(taskId).companyId } catch { return null } },
@@ -646,6 +720,7 @@ export function taskRunBridge(o: {
       if (t.runId === e.runId && t.status === 'in_progress') c.patchInFlight(t.id, { agentSessionId: e.agentSessionId })
     },
     timeLimit: e => o.company().expectStop(e.taskId, 'limit'),
+    ...(o.workdir ? { workdir: o.workdir } : {}),
     ...(o.passport ? {
       passportContext: (e: { taskId: string; companyId: string }) => {
         let departmentId: string | null = null

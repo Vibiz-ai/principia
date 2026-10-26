@@ -277,6 +277,20 @@ export function historyPlace(h: Pick<ClaudeHistorySession, 'cwd' | 'repoId'>, re
   return home && (h.cwd === home || h.cwd.startsWith(`${home}/`)) ? `~${h.cwd.slice(home.length)}` : tildify(h.cwd)
 }
 
+/**
+ * Five doors A1 (the leak gate): inside a company, Claude sessions outside Principia show only when they ran in one of
+ * that company's repositories (by id, or a folder at or under its path). A folder no company owns belongs to Personal,
+ * the catch-all, and to All companies (scope undefined); never to another company's Home.
+ */
+export function historyInScope<T extends Pick<ClaudeHistorySession, 'cwd' | 'repoId'>, R extends Pick<Repo, 'id' | 'path'>>(items: readonly T[], scope: string | undefined, repos: readonly R[], ownerOf: (repo: R) => string, personal: boolean): T[] {
+  if (!scope) return [...items]
+  const under = (cwd: string, path: string): boolean => cwd === path || cwd.startsWith(path.endsWith('/') ? path : `${path}/`)
+  return items.filter((h) => {
+    const repo = (h.repoId ? repos.find((r) => r.id === h.repoId) : undefined) ?? (h.cwd ? repos.filter((r) => under(h.cwd!, r.path)).sort((a, b) => b.path.length - a.path.length)[0] : undefined)
+    return repo ? ownerOf(repo) === scope : personal
+  })
+}
+
 export interface HistoryGroup {
   key: string
   label: string

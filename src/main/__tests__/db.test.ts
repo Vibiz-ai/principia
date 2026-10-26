@@ -222,6 +222,10 @@ d('EngineStore', () => {
     expect(detail.workflow!.name).toBe('snap')
     expect(detail.steps).toHaveLength(1)
     expect(store.countEndedSince('2026-10-15T00:00:00.000Z')).toEqual({ passed: 1, failed: 0 })
+    // per company (QA: a focused company's status bar showed every company's 24h); unstamped = Personal
+    expect(store.countEndedSinceByCompany('2026-10-15T00:00:00.000Z')).toEqual({ co_personal: { passed: 1, failed: 0 } })
+    db.prepare("UPDATE runs SET company_id = 'co_beta' WHERE id = 'r_1'").run()
+    expect(store.countEndedSinceByCompany('2026-10-15T00:00:00.000Z')).toEqual({ co_beta: { passed: 1, failed: 0 } })
   })
   it('a run that fails at the gate gets startedAt = endedAt; a started run keeps its startedAt', () => {
     const es = createEngineStore(db, { describe: () => () => 'sentence' })

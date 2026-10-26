@@ -39,3 +39,5 @@
 .portfolio-empty .rm-mosaic-empty { gap: 14px; }
 .portfolio-empty p { margin: 0; max-width: 380px; font-size: var(--text-md); line-height: 1.55; color: var(--text-secondary); }
 .portfolio__none { margin-bottom: 16px; }
+.portfolio__scope-note { font-size: var(--text-xs); }
+.pcard__client { font-size: 10px; color: var(--text-tertiary); border: 1px solid var(--border-strong); border-radius: 999px; padding: 0 6px; margin-left: 6px; vertical-align: 2px; }

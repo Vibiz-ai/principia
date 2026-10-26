@@ -92,6 +92,32 @@ CREATE TABLE IF NOT EXISTS forum_invites (
   revoked_at TEXT
 );
 CREATE INDEX IF NOT EXISTS forum_invites_company ON forum_invites(company_id, created_at);
+CREATE TABLE IF NOT EXISTS forum_agent_wakes (
+  id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL,
+  thread_seq INTEGER NOT NULL,
+  message_seq INTEGER NOT NULL,
+  channel_id TEXT NOT NULL,
+  from_member TEXT NOT NULL,
+  to_member TEXT NOT NULL,
+  from_agent TEXT,
+  to_agent TEXT,
+  from_run TEXT,
+  to_run TEXT,
+  depth INTEGER NOT NULL,
+  chain TEXT NOT NULL DEFAULT '[]',
+  via TEXT NOT NULL,
+  why TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  refusal TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  answered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS forum_agent_wakes_company ON forum_agent_wakes(company_id, created_at);
+CREATE INDEX IF NOT EXISTS forum_agent_wakes_thread ON forum_agent_wakes(thread_seq);
+CREATE INDEX IF NOT EXISTS forum_agent_wakes_to_run ON forum_agent_wakes(to_run) WHERE to_run IS NOT NULL;
+CREATE INDEX IF NOT EXISTS forum_agent_wakes_from_run ON forum_agent_wakes(from_run) WHERE from_run IS NOT NULL;
 `
 
 export function ensureForumSchema(db: Database.Database): void {

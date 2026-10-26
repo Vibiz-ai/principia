@@ -28,6 +28,7 @@ import {
 } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ensureForumSchema } from './schema'
+import { findTeammate, type Teammate } from './roster'
 import { parseRefArg, parseText } from './refs'
 import * as policy from './policy'
 
@@ -146,7 +147,8 @@ export class ForumStore {
       reactions: d.reactions ?? {},
       ...(d.ask ? { ask: d.ask } : {}),
       ...(d.proposal ? { proposal: d.proposal } : {}),
-      origin: r.origin
+      origin: r.origin,
+      ...(r.origin.startsWith('principia:') ? { via: 'principia' as const } : {})
     }
   }
 
@@ -166,6 +168,32 @@ export class ForumStore {
   memberByHandle(companyId: string, handle: string): ForumMember | null {
     const r = this.db.prepare('SELECT * FROM forum_members WHERE company_id=? AND handle=?').get(companyId, handle.replace(/^@/, '').toLowerCase()) as MemberRow | undefined
     return r ? this.toMember(r) : null
+  }
+  /**
+   * ORCHESTRATOR.md §1.1: this company's active agent teammates (handle, name, role, department), in seat order.
+   * Only this company's seats: a name never resolves to another company's agent.
+   */
+  roster(companyId: string): Teammate[] {
+    const deps = new Map(this.d.directory.departments(companyId).map((d) => [d.id, d] as const))
+    const seats = new Map(this.d.directory.agents(companyId).map((a) => [a.id, a] as const))
+    const out: Teammate[] = []
+    for (const m of this.members(companyId)) {
+      if (m.kind !== 'agent' || m.status !== 'active' || !m.agentId) continue
+      const a = seats.get(m.agentId)
+      if (!a || a.archivedAt) continue
+      const dep = a.departmentId ? deps.get(a.departmentId) : null
+      out.push({ memberId: m.id, agentId: m.agentId, handle: m.handle, name: m.name, role: a.name, department: dep && !dep.archivedAt ? dep.name : null })
+    }
+    return out
+  }
+  /** An active agent member of this company by @handle, else by name or role ("Marcus, Brand Voice Writer"). */
+  agentByName(companyId: string, raw: string): ForumMember | null {
+    const h = raw.trim().replace(/^[@#]/, '').toLowerCase()
+    const byHandle = h ? this.memberByHandle(companyId, h) : null
+    if (byHandle?.kind === 'agent' && byHandle.status === 'active') return byHandle
+    const t = findTeammate(this.roster(companyId), raw)
+    const m = t ? this.member(t.memberId) : null
+    return m && m.companyId === companyId ? m : null
   }
   memberForAgent(agentId: string): ForumMember | null {
     const r = this.db.prepare('SELECT * FROM forum_members WHERE agent_id=?').get(agentId) as MemberRow | undefined
@@ -595,16 +623,23 @@ export class ForumStore {
     return msg
   }
 
-  /** A system line ("Marcus joined #growth") authored by the company owner, kind 'system'. */
-  systemPost(channelId: string, text: string, threadSeq?: number): ForumMessage | null {
+  /**
+   * A system line ("Marcus joined #growth") authored by the company owner, kind 'system'. ORCHESTRATOR.md §5: with an
+   * `origin` of `principia:…` it reads as Principia's own line (the chief of staff's digest); `opKey` makes it idempotent.
+   */
+  systemPost(channelId: string, text: string, threadSeq?: number, opts: { origin?: string; opKey?: string } = {}): ForumMessage | null {
     const r = this.channelRow(channelId)
     const owner = this.db.prepare("SELECT id FROM forum_members WHERE company_id=? AND role='owner' LIMIT 1").get(r.company_id) as { id: string } | undefined
     if (!owner) return null
+    if (opts.opKey) {
+      const prev = this.db.prepare("SELECT seq FROM forum_messages WHERE company_id=? AND json_extract(data,'$.opKey')=?").get(r.company_id, opts.opKey) as { seq: number } | undefined
+      if (prev) return this.message(prev.seq)
+    }
     const id = forumId('fmsg')
     const at = this.iso()
     const info = this.db
-      .prepare("INSERT INTO forum_messages(id,company_id,channel_id,thread_seq,author_id,kind,text,created_at,origin,data) VALUES (?,?,?,?,?,'system',?,?,'local','{}')")
-      .run(id, r.company_id, r.id, threadSeq ?? null, owner.id, this.redact(text).slice(0, 1000), at)
+      .prepare("INSERT INTO forum_messages(id,company_id,channel_id,thread_seq,author_id,kind,text,created_at,origin,data) VALUES (?,?,?,?,?,'system',?,?,?,?)")
+      .run(id, r.company_id, r.id, threadSeq ?? null, owner.id, this.redact(text).slice(0, 1000), at, opts.origin ?? 'local', JSON.stringify(opts.opKey ? { opKey: opts.opKey } : {}))
     const msg = this.message(Number(info.lastInsertRowid))
     this.emit({ kind: 'message', companyId: r.company_id, message: msg })
     return msg

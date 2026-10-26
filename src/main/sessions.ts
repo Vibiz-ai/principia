@@ -1,4 +1,5 @@
 /** Interactive PTY sessions (CONTRACT §6). PTYs live in main; window close/reopen never touches them. */
+import { PERSONAL_COMPANY_ID } from '../shared/company'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentProfile, Id, Session } from '../shared/types'
@@ -15,6 +16,7 @@ import { TailBuffer, trimToLineStart } from './tailBuffer'
 import { stripAnsi } from './engine/live/pty'
 import { log } from './log'
 import type { ChatPlacement } from './company/chatContext'
+import type { PtyHostInfo } from './chat/chatHub'
 
 export const SESSION_TAIL_CHARS = 1024 * 1024 // in-memory replay tail
 /** What a pane replays on attach: enough for the visible screen + recent history, without parsing 1 MB on every remount. */
@@ -33,11 +35,15 @@ export interface PtyLike {
   write(d: string): void
   resize(cols: number, rows: number): void
   kill(signal?: string): void
+  /** CHAT-UI.md §3.1: a chat session stops its own (changing) processes; never signal its pid group directly. */
+  readonly selfKill?: boolean
 }
 export type PtySpawn = (
   file: string,
   args: string[],
-  opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
+  opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> },
+  /** CHAT-UI.md §3.1: who the pane is for (the chat hub decides chat or terminal for Claude panes) */
+  host?: PtyHostInfo
 ) => PtyLike
 
 export interface SessionDeps {
@@ -58,6 +64,11 @@ export interface SessionDeps {
   emitUpdated(s: Session): void
   onExited?(s: Session): void
   killGroup?(pid: number, signal: NodeJS.Signals): boolean
+  /**
+   * WORKTREE.md §3: the push guard env (core.hooksPath, the shims first on `path`) for a cwd inside an active Hive
+   * worktree (a task's own); null elsewhere. A chat in a task worktree is guarded like the task's headless turns.
+   */
+  worktreeGuard?(cwd: string, path: string | undefined): Record<string, string> | null
   /** Pre-accepts Claude Code's folder-trust prompt for Hive-owned / user-added folders (see claudeTrust.ts). */
   trustFolder?(cwd: string, env: Record<string, string>): void
   /** Whether the agent CLI has a stored conversation for this id. Unknown/absent = assume it exists. */
@@ -88,6 +99,8 @@ export interface SessionDeps {
    * workspace with the Passport block only.
    */
   chat?(req: { companyId: Id; departmentId: Id | null; adapter: AgentProfile['adapter'] }): ChatPlacement | null
+  /** AGENT CHAT: an agent's chat options from its seat (Restart rebuilds the brief); null = the agent is gone. */
+  agentChat?(companyAgentId: Id): AgentChatSpawn | null
   author?: {
     /** `chat`: a chat (no task, no repo): the company tools are listed (DEPARTMENTS.md §9) */
     server(sessionId: Id, liveDir: string, companyId?: Id | null, opts?: { chat?: boolean }): McpServerSpec | null
@@ -127,7 +140,7 @@ interface Live {
   reaping: boolean
 }
 
-export interface CreateOptions extends SessionCreateRequest {
+export interface CreateOptions extends Omit<SessionCreateRequest, 'initialPrompt'> {
   fromRunId?: Id | null
   resumeAgentSessionId?: string | null
   freshAgentSessionId?: string | null
@@ -148,6 +161,26 @@ export interface CreateOptions extends SessionCreateRequest {
    */
   task?: boolean
   taskDepartmentId?: Id | null
+  /**
+   * AGENT CHAT: the standing chat of a company agent. The session row is stamped with it, the agent's brief (persona,
+   * role, instructions, autonomy, Principia's team context) joins the chat brief, the agent's department adds its
+   * Passport slot, and the pane always opens as a chat. Main-only.
+   */
+  companyAgentId?: Id | null
+  agentBrief?: string | null
+  agentDepartmentId?: Id | null
+  /** chat or terminal for this pane (absent: Settings › Open chats as) */
+  mode?: 'chat' | 'terminal' | null
+}
+
+/** AGENT CHAT: how an agent's chat is spawned again (Restart): its profile, folder, title and brief, fresh from its seat. */
+export interface AgentChatSpawn {
+  profileId: Id
+  companyId: Id
+  cwd: string
+  title: string
+  agentBrief: string
+  agentDepartmentId: Id | null
 }
 
 /**
@@ -201,6 +234,15 @@ export class SessionManager {
 
   runningCount(): number {
     return this.live.size
+  }
+  /** Live sessions per company (Personal for unstamped ones), for a focused company's status bar. */
+  liveCountByCompany(): Record<Id, number> {
+    const out: Record<Id, number> = {}
+    for (const id of this.live.keys()) {
+      const c = this.d.store.getSession(id)?.companyId || PERSONAL_COMPANY_ID
+      out[c] = (out[c] ?? 0) + 1
+    }
+    return out
   }
   liveCountForRepo(repoId: Id): number {
     let n = 0
@@ -311,11 +353,11 @@ export class SessionManager {
     } catch {
       channel = null // live wiring never blocks a session
     }
-    // AUTHORING.md §1.1: claude panes with a live channel get the `hive` server (its mailbox is this live dir)
+    // AUTHORING.md §1.1: claude and codex panes with a live channel get the `hive` server (its mailbox is this live dir)
     let author: McpServerSpec | null = null
-    if (profile.adapter === 'claude' && channel && this.d.author) {
+    if ((profile.adapter === 'claude' || profile.adapter === 'codex') && channel && this.d.author) {
       try {
-        author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId) })
+        author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId || !!req.companyAgentId) })
       } catch {
         author = null // authoring never blocks a session
       }
@@ -338,8 +380,9 @@ export class SessionManager {
         ...(this.d.reaper ? { spawnTag: this.d.reaper.tag(id) } : {}),
         ...(initialPrompt ? { initialPrompt } : {}),
         // DEPARTMENTS.md §7, §9: the department slot (department chats, task sessions) and the chat's brief and folders
-        ...(department || req.taskDepartmentId ? { departmentId: department?.id ?? req.taskDepartmentId ?? null } : {}),
-        ...(chat?.brief ? { chatBrief: chat.brief } : {}),
+        ...(department || req.taskDepartmentId || req.agentDepartmentId ? { departmentId: department?.id ?? req.taskDepartmentId ?? req.agentDepartmentId ?? null } : {}),
+        // AGENT CHAT: the agent's own brief first (who it is), then what the chat is told about the company
+        ...(chat?.brief || req.agentBrief?.trim() ? { chatBrief: [req.agentBrief?.trim() ?? '', chat?.brief ?? ''].filter(Boolean).join('\n\n') } : {}),
         ...(chat?.addDirs.length ? { addDirs: chat.addDirs } : {}),
         // per-session dir: the config names this session's live dir, so it must never be shared between panes
         ...(author && this.d.author && channel ? { author, authorTools: this.d.author.tools, authorSpawnDir: channel.dir } : {})
@@ -357,9 +400,20 @@ export class SessionManager {
       profile,
       hive: { ARTIFACTS_DIR: artifactsDir, HIVE_SESSION_ID: id, HIVE_USER_DATA: this.d.paths.userData, ...(this.d.reaper?.tag(id) ?? {}) }
     })
-    // Picking a folder in Hive is the trust decision; Hive's scratch dir and company workspaces are Hive's own. Without
-    // this Claude opens on "Quick safety check" with "No, exit" preselected and the first Return kills the session.
-    if (profile.adapter === 'claude' && (repoId || workspace || cwd === this.d.paths.scratchDir)) {
+    // WORKTREE.md §3: a session in a task worktree gets the same shims and hooksPath as the task's headless turns
+    let guarded = false
+    try {
+      const guard = this.d.worktreeGuard?.(cwd, env.PATH) ?? null
+      if (guard) {
+        Object.assign(env, guard)
+        guarded = true
+      }
+    } catch {
+      /* the worktree-local core.hooksPath still guards pushes */
+    }
+    // Picking a folder in Hive is the trust decision; Hive's scratch dir, company workspaces and worktrees are Hive's own.
+    // Without this Claude opens on "Quick safety check" with "No, exit" preselected and the first Return kills it.
+    if (profile.adapter === 'claude' && (repoId || workspace || guarded || cwd === this.d.paths.scratchDir)) {
       try {
         this.d.trustFolder?.(cwd, env)
         // the company's other repo folders a chat may reach are trusted the same way (the company owns them)
@@ -372,7 +426,13 @@ export class SessionManager {
     const rows = clamp(req.rows, 5, 300, 32)
     let pty: PtyLike
     try {
-      pty = this.d.spawnPty(spec.file, spec.args, { name: 'xterm-256color', cols, rows, cwd, env })
+      pty = this.d.spawnPty(spec.file, spec.args, { name: 'xterm-256color', cols, rows, cwd, env }, {
+        sessionId: id,
+        adapter: profile.adapter,
+        codeWork: !!repoId || guarded,
+        resumeId: req.resumeAgentSessionId ?? null,
+        mode: req.companyAgentId ? 'chat' : (req.mode ?? null)
+      })
     } catch (e) {
       if (memory) this.d.memory?.release(memory.grantId)
       channel?.close()
@@ -407,7 +467,8 @@ export class SessionManager {
       fromRunId: req.fromRunId ?? null,
       agentSessionId: spec.agentSessionId ?? req.resumeAgentSessionId ?? null,
       ...(companyId ? { companyId } : {}),
-      ...(department ? { departmentId: department.id } : {})
+      ...(department ? { departmentId: department.id } : {}),
+      ...(req.companyAgentId ? { companyAgentId: req.companyAgentId } : {})
     }
     this.d.store.insertSession({ ...session, logPath })
     if (repoId) this.d.store.updateSettings({ lastRepoId: repoId })
@@ -647,7 +708,7 @@ export class SessionManager {
       }
     }
     const exited = new Promise<void>((resolve) => live.exitWaiters.push(resolve))
-    if (!killGroup(live.pty.pid, 'SIGHUP')) {
+    if (live.pty.selfKill || !killGroup(live.pty.pid, 'SIGHUP')) {
       try {
         live.pty.kill('SIGHUP')
       } catch {
@@ -655,7 +716,10 @@ export class SessionManager {
       }
     }
     const hard = setTimeout(() => {
-      if (!live.exited) killGroup(live.pty.pid, 'SIGKILL')
+      if (!live.exited) {
+        if (live.pty.selfKill) live.pty.kill('SIGKILL')
+        else killGroup(live.pty.pid, 'SIGKILL')
+      }
     }, KILL_GRACE_MS)
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, KILL_TIMEOUT_MS))
     await Promise.race([exited, timeout])
@@ -744,6 +808,28 @@ export class SessionManager {
     // found". Start fresh under the same id instead so later restarts keep resuming the same conversation.
     const conv = s.agentSessionId
     const resumable = !!conv && (this.d.conversationExists?.(s.adapter, conv) ?? true)
+    // AGENT CHAT: the agent's chat comes back as itself (its brief rebuilt from the seat, same conversation)
+    if (s.companyAgentId) {
+      const a = this.d.agentChat?.(s.companyAgentId)
+      if (!a) throw new HiveError('not_found', 'That agent is no longer on the team')
+      // the seat moved to another harness: its old conversation cannot be resumed there, a new one starts
+      const same = this.d.store.getProfile(a.profileId)?.adapter === s.adapter
+      return this.create({
+        profileId: a.profileId,
+        companyId: a.companyId,
+        cwd: a.cwd,
+        chat: true,
+        title: s.title || a.title,
+        companyAgentId: s.companyAgentId,
+        agentBrief: a.agentBrief,
+        agentDepartmentId: a.agentDepartmentId,
+        cols: s.cols,
+        rows: s.rows,
+        memory: this.d.memory?.lastMode(id) ?? 'off',
+        resumeAgentSessionId: same && resumable ? conv : null,
+        freshAgentSessionId: same && !resumable && s.adapter === 'claude' ? conv : null
+      })
+    }
     return this.create({
       profileId: profile,
       adapter: profile ? undefined : s.adapter,
@@ -779,7 +865,10 @@ export class SessionManager {
     let n = 0
     for (const l of this.live.values()) {
       if (l.exited) continue
-      if (killGroup(l.pty.pid, 'SIGKILL')) n++
+      if (l.pty.selfKill) {
+        l.pty.kill('SIGKILL')
+        n++
+      } else if (killGroup(l.pty.pid, 'SIGKILL')) n++
     }
     return n
   }

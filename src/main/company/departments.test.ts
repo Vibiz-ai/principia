@@ -88,6 +88,15 @@ describe('departments', () => {
 })
 
 describe('company agents', () => {
+  it('a new agent in another company gets a name no other company uses (no shared Marcus across clients)', () => {
+    const p = profile()
+    const da = d.save({ companyId: acme.id, name: 'Marketing' })
+    const db2 = d.save({ companyId: beta.id, name: 'Marketing' })
+    const a = d.saveAgent({ companyId: acme.id, departmentId: da.id, kind: 'profile', refId: p.id, name: 'Copywriter' })
+    const b = d.saveAgent({ companyId: beta.id, departmentId: db2.id, kind: 'profile', refId: p.id, name: 'Copywriter' })
+    expect(a.data.persona?.name).toBe('Marcus')
+    expect(b.data.persona?.name).toBe('Ovid')
+  })
   it('creates a profile agent with data defaults and merges limits on update', () => {
     const dep = d.save({ companyId: acme.id, name: 'Marketing' })
     const p = profile()
@@ -207,8 +216,9 @@ describe('agent personas (VOICE.md §4)', () => {
     expect(a.name).toBe('Copywriter')
     // stored: a re-read gives the same face
     expect(d.agent(a.id).data.persona).toEqual(a.data.persona)
-    // another company starts over; an archived agent frees its name
-    expect(save({ companyId: beta.id }).data.persona?.name).toBe('Junia')
+    // another company avoids the names this one uses (five doors: clients never seem to share an agent); an archived
+    // agent frees its name
+    expect(save({ companyId: beta.id }).data.persona?.name).toBe('Seneca')
     d.archiveAgent(b.id)
     expect(save({ departmentId: mkt.id }).data.persona?.name).toBe('Ovid')
   })
@@ -352,7 +362,7 @@ describe('task schema and IPC contract', () => {
   })
   it('declares and validates every §10 channel', () => {
     const channels = ['departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets', 'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
-      'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'board:autopilot'] as const
+      'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'tasks:pause', 'board:autopilot'] as const
     for (const ch of channels) { expect(INVOKE_CHANNELS).toContain(ch); expect(REQUEST_SCHEMAS[ch]).toBeDefined() }
     expect(REQUEST_SCHEMAS['tasks:approve'].safeParse({ id: 'task_1', doneNote: '  ' }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:assign'].safeParse({ id: 'task_1' }).success).toBe(false)

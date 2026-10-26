@@ -384,6 +384,8 @@ CREATE INDEX IF NOT EXISTS claude_history_session ON claude_history(session_id);
 `
 
 export const AUTHORING_ADDED_COLUMNS: [table: string, column: string, ddl: string][] = [
+  // WORKTREE.md A3: frozen at the run end, the branches this run created (only these may be deleted later)
+  ['run_refs', 'created_json', 'TEXT'],
   ['workflows', 'origin_json', 'TEXT'],
   ['workflows', 'worktree_json', 'TEXT'],
   ['runs', 'outcome', 'TEXT'],
@@ -655,6 +657,8 @@ export const COMPANY_ADDED_COLUMNS: [table: string, column: string, ddl: string]
   ['sessions', 'task_id', 'TEXT'],
   // §9: the department of a department chat (NULL = not one)
   ['sessions', 'department_id', 'TEXT'],
+  // AGENT CHAT: the company agent whose standing chat this session is (NULL = not one)
+  ['sessions', 'company_agent_id', 'TEXT'],
   ['workflows', 'department_id', 'TEXT'],
   ['schedules', 'department_id', 'TEXT'],
   ['slack_triggers', 'department_id', 'TEXT'],
@@ -676,4 +680,109 @@ CREATE INDEX IF NOT EXISTS artifacts_company ON artifacts(company_id, created_at
 CREATE INDEX IF NOT EXISTS company_tasks_status ON company_tasks(company_id, status);
 CREATE INDEX IF NOT EXISTS company_tasks_agent  ON company_tasks(agent_id, status);
 CREATE INDEX IF NOT EXISTS runs_task         ON runs(task_id);
+`
+
+/**
+ * ORCHESTRATOR.md §1.3, §2: what Principia did after each run (once per run), the mailbox between agents and the daily
+ * budget of cheap model calls. Still schema v2 (older builds ignore these tables).
+ */
+export const DDL_ORCHESTRATOR = /* sql */ `
+CREATE TABLE IF NOT EXISTS orch_run_reports (     -- (M) one row per run: its report and every action or skip
+  run_id       TEXT PRIMARY KEY,
+  company_id   TEXT NOT NULL,
+  mode         TEXT NOT NULL,                      -- shadow | on
+  source       TEXT NOT NULL,                      -- fence | file | extracted | mcp | none | pending
+  report_json  TEXT,
+  actions_json TEXT NOT NULL DEFAULT '[]',
+  created_at   TEXT NOT NULL,
+  applied_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS orch_run_reports_company ON orch_run_reports(company_id, created_at);
+CREATE TABLE IF NOT EXISTS orch_mailbox (         -- (M) a question from one agent to another, through the Forum
+  id            TEXT PRIMARY KEY,
+  company_id    TEXT NOT NULL,
+  message_id    TEXT NOT NULL,                     -- the ask card in the Forum
+  ref           TEXT NOT NULL,
+  from_agent    TEXT,
+  from_run      TEXT,
+  from_task     TEXT,
+  to_member     TEXT NOT NULL,
+  to_agent      TEXT,
+  question      TEXT NOT NULL,
+  blocking      INTEGER NOT NULL DEFAULT 0,
+  delivery      TEXT NOT NULL,                     -- task (pendingWake on its in-flight task) | seat (a reply run) | none
+  status        TEXT NOT NULL,                     -- open | answered | refused
+  answer        TEXT,
+  created_at    TEXT NOT NULL,
+  answered_at   TEXT,
+  asked_seen_run  TEXT,                            -- the target run whose context showed the question
+  answer_seen_run TEXT                             -- the asker run whose context showed the answer
+);
+CREATE INDEX IF NOT EXISTS orch_mailbox_message ON orch_mailbox(message_id);
+CREATE INDEX IF NOT EXISTS orch_mailbox_to ON orch_mailbox(to_agent, status);
+CREATE INDEX IF NOT EXISTS orch_mailbox_from ON orch_mailbox(from_agent, status);
+CREATE TABLE IF NOT EXISTS orch_budget (          -- (M) cheap model calls per company per UTC day
+  company_id TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  calls      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (company_id, day)
+);
+CREATE TABLE IF NOT EXISTS orch_decisions (       -- (M) one batch the chief of staff handled (Activity)
+  id             TEXT PRIMARY KEY,
+  company_id     TEXT NOT NULL,
+  event_ids      TEXT NOT NULL DEFAULT '[]',
+  events_json    TEXT NOT NULL DEFAULT '[]',      -- the batch's event kinds
+  mode           TEXT NOT NULL,                    -- rules | model
+  note           TEXT,
+  decisions_json TEXT NOT NULL DEFAULT '[]',      -- every decision and what happened to it
+  cost_tokens    INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS orch_decisions_company ON orch_decisions(company_id, created_at);
+CREATE TABLE IF NOT EXISTS orch_suggestions (     -- (M) a routine, connection or task Principia suggests (Needs you)
+  id          TEXT PRIMARY KEY,
+  company_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL,                       -- routine | connection | task
+  fingerprint TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '',
+  data_json   TEXT NOT NULL DEFAULT '{}',
+  status      TEXT NOT NULL,                       -- open | accepted | dismissed | expired
+  created_at  TEXT NOT NULL,
+  decided_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS orch_suggestions_company ON orch_suggestions(company_id, status);
+CREATE INDEX IF NOT EXISTS orch_suggestions_print ON orch_suggestions(company_id, fingerprint);
+CREATE TABLE IF NOT EXISTS orch_usage (           -- (M) Principia's own cheap calls (usage source 'orchestrator')
+  id          TEXT PRIMARY KEY,
+  company_id  TEXT NOT NULL,
+  purpose     TEXT NOT NULL,                       -- coordinator | extract
+  cli         TEXT NOT NULL,
+  model       TEXT,
+  tokens_in   INTEGER NOT NULL DEFAULT 0,
+  tokens_out  INTEGER NOT NULL DEFAULT 0,
+  cost_usd    REAL,
+  at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS orch_usage_company ON orch_usage(company_id, at);
+`
+
+/**
+ * REMOTE.md RA2: the paired phones, kept across restarts. Only the SHA-256 of a device token is stored (never the token);
+ * prev_hash is the token before the last rotation, accepted until prev_until (a lost answer never signs a phone out).
+ * Revoke and "Sign out all phones" set revoked_at and clear both hashes. Still schema v2 (older builds ignore it).
+ */
+export const DDL_PHONE = /* sql */ `
+CREATE TABLE IF NOT EXISTS phone_devices (        -- (M)
+  id           TEXT PRIMARY KEY,                  -- 'dev_…'
+  name         TEXT NOT NULL,
+  token_hash   TEXT,                              -- sha256(token), hex; NULL once revoked
+  prev_hash    TEXT,
+  prev_until   TEXT,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT,
+  expires_at   TEXT NOT NULL,                     -- last use + 90 days
+  revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS phone_devices_active ON phone_devices(revoked_at);
 `

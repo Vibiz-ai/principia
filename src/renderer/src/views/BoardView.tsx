@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LANE_LABELS, TASK_SOURCES, TASK_STATUSES, type CompanyAgent, type CompanyPassport, type CompanyTask, type CompanyTaskInput, type Department, type TaskDetail, type TaskLane, type TaskSource, type TaskStatus } from '@shared/company'
+import { TASK_SOURCES, TASK_STATUSES, type CompanyAgent, type CompanyPassport, type CompanyTask, type CompanyTaskInput, type Department, type TaskDetail, type TaskSource, type TaskStatus } from '@shared/company'
 import type { Id } from '@shared/types'
 import { Button, IconButton, Loading, Pill, Switch, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
@@ -7,17 +7,22 @@ import { TaskPriority, TaskSourceBadge, TaskStatusIcon } from '../components/Tas
 import { TaskCard } from '../components/board/TaskCard'
 import { TaskEditor } from '../components/board/TaskEditor'
 import { TaskInspector } from '../components/board/TaskInspector'
-import { PRIORITIES, SOURCE_LABEL, STATUS_LABEL, useCompanyData } from '../lib/company'
-import { BOARD_LANES, TASK_DRAG_TYPE, agentDrop, autopilotToggle, dropSeats, filterTasks, keptDepartmentFilter, laneColumns, laneDrop, laneText, swimlanes, type AutopilotView, type DropAction, type DropResult } from '../lib/board'
-import { departmentsOf, laneContext, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
-import { errorMessage, hive, useHiveEvent } from '../lib/hive'
+import { QuickCreate, type QuickCreateHandle } from '../components/board/QuickCreate'
+import { BOARD_COLUMNS, COLUMN_GLYPH, COLUMN_LABEL, boardColumns, columnDrop, type BoardColumn } from '../lib/boardFlow'
+import { LinearBanner, LinearSheet } from '../components/board/LinearSheet'
+import { linearLine, startedInLinear, useLinear } from '../lib/linear'
+import { PRIORITIES, SOURCE_LABEL, STATUS_LABEL, useCompanyData, useLaneContext } from '../lib/company'
+import { BOARD_LANES, TASK_DRAG_TYPE, agentDrop, autopilotToggle, dropSeats, filterTasks, keptDepartmentFilter, laneColumns, laneText, swimlanes, type AutopilotView, type DropAction, type DropResult } from '../lib/board'
+import { departmentsOf, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
+import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { relative } from '../lib/time'
-import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, saveJson, toast, useStore } from '../state/store'
+import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, requestAutopilot, saveJson, toast, useStore } from '../state/store'
 import { CompanyChip, useScope } from '../components/CompanyChip'
 import { AgentBust, agentLabel, agentNameNow, useAgentName } from '../shell/DepartmentGroup'
 import { LatinLine, MosaicEmpty } from '../components/roman'
 import { latinLine, useCopy, useTone } from '../lib/voice'
 import '../styles/board.css'
+import { TextWithLinks } from '../components/DeepLinkButton'
 
 /**
  * DEPARTMENTS.md §9: the company Board (TasksView re-exports it). With experimental.departments off it renders
@@ -42,14 +47,14 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const { companies, tasks: allTasks, loading, error, reload } = useCompanyData()
   const { scope, chips } = useScope()
   const view = useStore((s) => s.view)
-  const asks = useStore((s) => s.asks)
   const allAgents = useStore((s) => s.companyAgents)
   const allDepartments = useStore((s) => s.departments)
-  const ctx = useMemo(() => laneContext(asks, allAgents), [asks, allAgents])
+  const ctx = useLaneContext()
   const fixedDep = fixedDepartmentId ? allDepartments.find((d) => d.id === fixedDepartmentId) : undefined
   // the department page is its department's company; otherwise the active company (All mode: every company)
   const companyId = fixedDep?.companyId ?? scope
   const company = companyId ? (companies.find((c) => c.id === companyId) ?? null) : null
+  const code = useStore((s) => !!company && s.repos.some((r) => r.companyId === company.id))
   const [layout, setLayout] = usePref<Layout>('hive.boardLayout', 'kanban')
   const [showBacklog, setShowBacklog] = usePref('hive.boardBacklog', false)
   const [lanesByDept, setLanesByDept] = usePref('hive.boardSwimlanes', false)
@@ -61,12 +66,22 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const [selected, setSelected] = useState<string | null>(linked?.taskId ?? null)
   const [creating, setCreating] = useState(false)
   const [dragOver, setDragOver] = useState<string | null>(null)
+  const quick = useRef<QuickCreateHandle>(null)
+  // LINEAR.md §6: out of sight until wanted (the ⋯ menu); a connected company's cards carry their issue chip
+  const linear = useLinear(company?.id ?? null)
+  const [linearSheet, setLinearSheet] = useState(false)
+  const links = linear.status?.connected ? linear.status.links : null
   // a card or department picked elsewhere (sidebar, Needs you, Home, hub) arrives through the view
   useEffect(() => {
     if (embedded || view.name !== 'tasks') return
     if (view.taskId) setSelected(view.taskId)
     setDepFilter(view.departmentId ?? null)
   }, [view, embedded])
+  // ⌘K "New task: …": the quick create row, its title typed (a nonce, so the same words twice still land)
+  const quickSeed = !embedded && view.name === 'tasks' ? view.quick : undefined
+  useEffect(() => {
+    if (quickSeed) quick.current?.seed(quickSeed.title)
+  }, [quickSeed?.nonce])
   useEffect(() => { if (fixedDepartmentId) setDepFilter(fixedDepartmentId) }, [fixedDepartmentId])
   const tasks = useMemo(() => (companyId ? allTasks.filter((t) => t.companyId === companyId) : allTasks), [allTasks, companyId])
   // a task or filter of the company we just left no longer applies (a department filter kept on another company
@@ -79,7 +94,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     if (!fixedDepartmentId) setDepFilter((d) => keptDepartmentFilter(d, companyId, allDepartments))
   }, [companyId])
   const filtered = useMemo(() => filterTasks(tasks, { departmentId: depFilter, agentId: agentFilter, search, showBacklog }, ctx), [tasks, depFilter, agentFilter, search, showBacklog, ctx])
-  const departments = useMemo(() => (companyId ? departmentsOf(allDepartments, companyId) : allDepartments.filter((d) => !d.archivedAt)), [allDepartments, companyId])
+  const departments = useMemo(() => (companyId ? departmentsOf(allDepartments, companyId) : allDepartments.filter((d) => !d.archivedAt && companies.some((c) => c.id === d.companyId))), [allDepartments, companyId, companies])
   const seats = useMemo(() => dropSeats(allAgents, companyId, depFilter), [allAgents, companyId, depFilter])
   const depById = useMemo(() => new Map(allDepartments.map((d) => [d.id, d])), [allDepartments])
   // an archived department's board (its page's Board button) keeps its filter visible instead of a blank "All"
@@ -93,7 +108,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     const a: DropAction = r.action
     try {
       if (a.kind === 'assign') { const seat = agentById.get(a.agentId); await hive.tasks.assign({ id: t.id, agentId: a.agentId, ...(a.departmentId ? { departmentId: a.departmentId } : {}) }); toast(`${t.identifier} assigned to ${seat ? agentNameNow(seat).name : 'the agent'}`) }
-      else if (a.kind === 'unpark') { await hive.tasks.unpark({ id: t.id }); toast(`Unparked ${t.identifier}`) }
+      else if (a.kind === 'unpark') { await hive.tasks.unpark({ id: t.id }); toast(`${t.title} is back in the queue`) }
       else await hive.tasks.update({ id: t.id, patch: { status: a.status } })
       reload()
     } catch (e) { toast(errorMessage(e), 'error') } // the card stays where it was: it renders from the store
@@ -107,32 +122,56 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   const card = (t: CompanyTask): React.JSX.Element => {
     const agent = t.agentId ? agentById.get(t.agentId) : undefined
     const depId = taskDepartment(t, ctx)
-    return <TaskCard key={t.id} task={t} agent={agent} department={depId ? depById.get(depId) : null} reason={taskReason(t, ctx)} chips={chips && !companyId} selected={selected === t.id} onOpen={open} />
+    return <TaskCard key={t.id} task={t} agent={agent} department={depId ? depById.get(depId) : null} reason={taskReason(t, ctx)} chips={chips && !companyId} selected={selected === t.id} linear={links?.[t.id] ?? null} onOpen={open} />
   }
-  const column = (lane: TaskLane, list: CompanyTask[], key: string): React.JSX.Element => {
-    const shown = lane === 'done' ? list.slice(0, DONE_SHOWN) : list
-    return <section key={key} className={`board-col board-col--${lane} ${dragOver === key ? (lane === 'working' || lane === 'needs_you' ? 'is-refusing' : 'is-over') : ''}`} aria-label={LANE_LABELS[lane]} {...dropZone(key, (t) => laneDrop(t, lane, ctx))}>
-      <div className="board-col__head"><h2>{LANE_LABELS[lane]}</h2><span>{list.length}</span></div>
-      <div className="board-col__cards">{shown.map(card)}{!list.length && <div className="task-board-empty">{lane === 'working' ? 'Nothing running' : lane === 'needs_you' ? 'Nothing waiting on you' : 'No tasks'}</div>}{list.length > shown.length && <div className="board-muted board-col__more">{list.length - shown.length} older</div>}</div>
+  // five doors step 5: To do · Working · Needs you · Done (Inbox and Queued are both To do); quick create tops To do
+  const column = (col: BoardColumn, list: CompanyTask[], key: string, withQuick = false): React.JSX.Element => {
+    const shown = col === 'done' ? list.slice(0, DONE_SHOWN) : list
+    return <section key={key} className={`board-col board-col--${col} ${dragOver === key ? (col === 'working' || col === 'needs_you' ? 'is-refusing' : 'is-over') : ''}`} aria-label={COLUMN_LABEL[col]} {...dropZone(key, (t) => columnDrop(t, col, ctx))}>
+      <div className="board-col__head"><span className={`board-col__glyph board-col__glyph--${col}`} aria-hidden>{COLUMN_GLYPH[col]}</span><h2>{COLUMN_LABEL[col]}</h2><span>{list.length}</span></div>
+      <div className="board-col__cards">{withQuick && company && <QuickCreate key={company.id} ref={quick} company={company} tasks={tasks} defaultDepartmentId={depFilter} onMore={() => setCreating(true)} onCreated={(t) => { setSelected(t.id); setSearch(''); reload() }} />}{shown.map(card)}{!list.length && !withQuick && <div className="task-board-empty">{col === 'working' ? 'Nothing running' : col === 'needs_you' ? 'Nothing waiting on you' : 'No tasks'}</div>}{list.length > shown.length && <div className="board-muted board-col__more">{list.length - shown.length} older</div>}</div>
     </section>
   }
 
-  const counts = useMemo(() => { const c = laneColumns(filtered, ctx); return { working: c.working.length, needs: c.needs_you.length } }, [filtered, ctx])
+  // a task in progress only in Linear is not an agent working here
+  // (in All mode no Linear links are loaded: a task in progress with no run of ours is never an agent working here)
+  const counts = useMemo(() => { const c = laneColumns(filtered, ctx); const ours = c.working.filter((t) => !!t.runId && !startedInLinear(t, links?.[t.id])); const rest = c.working.filter((t) => !ours.includes(t)); return { working: ours.length, elsewhere: rest.length, inLinear: rest.length > 0 && rest.every((t) => t.source === 'linear' || !!links?.[t.id]), needs: c.needs_you.length } }, [filtered, ctx, links])
   // VOICE.md §3.7, §5.8: a board with no tasks at all (the company's, or the department's when embedded) gets the
   // amphora mosaic, one sentence and New task; a filter that hides everything keeps the empty columns
   const nothing = fixedDepartmentId ? !tasks.some((t) => taskDepartment(t, ctx) === fixedDepartmentId) : tasks.length === 0
-  const newTask = (): void => (companies.length ? setCreating(true) : openNewCompany())
+  // C and New task: the quick create row when it is on screen (kanban, one company), else the full sheet
+  const newTask = (): void => {
+    if (!companies.length) return openNewCompany()
+    if (quick.current && !nothing) return quick.current.focus()
+    setCreating(true)
+  }
+  // C on the Board opens New task (Linear's key), unless you are typing, a sheet or the palette is open, or a modifier is held
+  const newTaskRef = useRef(newTask)
+  newTaskRef.current = newTask
+  useEffect(() => {
+    if (embedded) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== 'c' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat || e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest('.xterm'))) return
+      if (document.querySelector('.sheet-layer, .palette-layer, [role=dialog]')) return
+      e.preventDefault()
+      newTaskRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [embedded])
   // a failed company load shows its error and Retry, not "create your first company" over companies that exist
   const body = loading ? <Loading label="Loading the board…" /> : !companies.length && error ? null : !companies.length ? <CompanyEmpty icon="passport" title="Give your work a company." text="Create a Passport with your business context, then turn ideas, issues and conversations into work your agents can do." action={<Button variant="primary" icon="passport" onClick={openNewCompany}>Create your first company</Button>} /> : nothing ? <BoardEmpty onNew={newTask} /> : layout === 'list' ? <BoardList tasks={filtered} ctx={ctx} depById={depById} agentById={agentById} chips={chips && !companyId} selected={selected} onOpen={open} /> : lanesByDept ? <div className="board-swimlanes">
     {swimlanes(filtered, depFilter ? allDepartments.filter((d) => d.id === depFilter) : departments, ctx).map((s) => <div key={s.department?.id ?? 'none'} className="board-swimlane">
       <div className="board-swimlane__head">{s.department ? <><span className="board-dot" style={{ background: s.department.color ?? 'var(--series-other)' }} />{s.department.name}{chips && !companyId && <CompanyChip companyId={s.department.companyId} />}</> : 'No department'}<span className="board-muted">{s.count}</span></div>
-      <div className="board-columns">{BOARD_LANES.map((l) => column(l, s.columns[l], `${s.department?.id ?? 'none'}:${l}`))}</div>
+      <div className="board-columns">{(() => { const c = boardColumns(BOARD_LANES.flatMap((l) => s.columns[l]), ctx); return BOARD_COLUMNS.map((l) => column(l, c[l], `${s.department?.id ?? 'none'}:${l}`)) })()}</div>
     </div>)}
-  </div> : <div className="board-columns">{(() => { const c = laneColumns(filtered, ctx); return BOARD_LANES.map((l) => column(l, c[l], l)) })()}</div>
+  </div> : <div className="board-columns">{(() => { const c = boardColumns(filtered, ctx); return BOARD_COLUMNS.map((l) => column(l, c[l], l, l === 'todo' && !embedded)) })()}</div>
 
   const filterBar = <div className="task-filterbar board-filterbar">
     <label className="company-search"><Icon name="search" size={14} /><input aria-label="Search tasks" placeholder="Search tasks…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
-    {!fixedDepartmentId && (departments.length > 0 || !!filterDep) && <select aria-label="Filter by department" value={depFilter ?? ''} onChange={(e) => setDepFilter(e.target.value || null)}><option value="">All departments</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}{filterDep?.archivedAt && <option value={filterDep.id}>{filterDep.name} (archived)</option>}</select>}
+    {!fixedDepartmentId && (departments.length > 0 || !!filterDep) && <select aria-label="Filter by department" value={depFilter ?? ''} onChange={(e) => setDepFilter(e.target.value || null)}><option value="">All departments</option>{departments.map((d) => <option key={d.id} value={d.id}>{!companyId && companies.length > 1 ? `${d.name} · ${companies.find((c) => c.id === d.companyId)?.name ?? ''}` : d.name}</option>)}{filterDep?.archivedAt && <option value={filterDep.id}>{filterDep.name} (archived)</option>}</select>}
     {seats.length > 0 && <div className="board-seats" role="group" aria-label="Agents: click to filter, drop a card to assign">{seats.map((a) => <SeatDrop key={a.id} agent={a} color={a.departmentId ? (depById.get(a.departmentId)?.color ?? null) : null} active={agentFilter === a.id} over={dragOver === `agent:${a.id}`} onClick={() => setAgentFilter((x) => (x === a.id ? null : a.id))} zone={dropZone(`agent:${a.id}`, (t) => agentDrop(t, a))} />)}</div>}
     <span className="flex1" />
     <button type="button" className={`hchip ${showBacklog ? 'is-on' : ''}`} aria-pressed={showBacklog} onClick={() => setShowBacklog(!showBacklog)}>Backlog</button>
@@ -140,20 +179,47 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     <div className="task-layout-toggle" role="group" aria-label="Board layout"><IconButton icon="grid" label="Kanban layout" aria-pressed={layout === 'kanban'} onClick={() => setLayout('kanban')} /><IconButton icon="list" label="List layout" aria-pressed={layout === 'list'} onClick={() => setLayout('list')} /></div>
   </div>
 
-  const editor = creating && <TaskEditor board companies={companies} tasks={tasks} defaultCompanyId={companyId ?? companies[0]?.id} defaultDepartmentId={depFilter} lockCompany={!!companyId} onClose={() => setCreating(false)} onSaved={(task) => { setCreating(false); if (embedded) openBoard(task.companyId, { taskId: task.id }); else { setSelected(task.id); setSearch('') } reload() }} />
+  const linearMenu = async (): Promise<void> => {
+    if (!company) return
+    const s = linear.status
+    const id = await nativeMenu(s?.connected
+      ? [
+          { id: 'line', label: `${linearLine(s)}${s.team ? ` · ${s.team.key}` : ''}`, enabled: false },
+          { id: 'sync', label: 'Sync Now', enabled: !s.syncing },
+          { id: 'autosync', label: 'Autosync', type: 'checkbox', checked: s.autosync, enabled: s.state !== 'auth' },
+          { type: 'separator' },
+          { id: 'reconnect', label: s.state === 'auth' ? 'Reconnect…' : 'Linear Settings…' },
+          { id: 'disconnect', label: 'Disconnect…' }
+        ]
+      : [{ id: 'connect', label: 'Sync with Linear…' }])
+    try {
+      if (id === 'connect' || id === 'reconnect') setLinearSheet(true)
+      else if (id === 'sync') { const r = await hive.linear.sync({ companyId: company.id }); toast(r.state === 'ok' ? `Synced with Linear · ${r.linkedCount} linked` : (r.message ?? 'Linear sync failed'), r.state === 'ok' ? 'info' : 'error'); reload() }
+      else if (id === 'autosync') { const r = await hive.linear.setAutosync({ companyId: company.id, on: !s?.autosync }); toast(r.autosync ? 'Autosync on' : 'Autosync off') }
+      else if (id === 'disconnect') {
+        const ok = await confirmNative({ message: `Disconnect ${company.name} from Linear?`, detail: 'Principia forgets the key and unlinks the tasks. The tasks stay here, and nothing changes in Linear.', confirmLabel: 'Disconnect' }).catch(() => false)
+        if (ok) { await hive.linear.disconnect({ companyId: company.id }); toast('Disconnected from Linear') }
+      }
+    } catch (e) { toast(errorMessage(e), 'error') }
+    linear.reload()
+  }
+  const editor = creating && <TaskEditor board trackerFields={!!links} companies={companies} tasks={tasks} defaultCompanyId={companyId ?? companies[0]?.id} defaultDepartmentId={depFilter} lockCompany={!!companyId} onClose={() => setCreating(false)} onSaved={(task) => { setCreating(false); if (embedded) openBoard(task.companyId, { taskId: task.id }); else { setSelected(task.id); setSearch('') } reload() }} />
   if (embedded) return <div className="board board--embedded">{!nothing && filterBar}{error && <div className="company-error" role="alert">{error}<Button size="sm" onClick={reload}>Retry</Button></div>}<div className="board-main">{body}</div>{editor}</div>
   return <div className="view company-view board">
-    <Toolbar title="Board" sub={<span className="company-toolbar-meta">{counts.working} working · {counts.needs} {counts.needs === 1 ? 'needs' : 'need'} you</span>}>
-      {company && <AutopilotSwitch key={company.id} company={company} />}
+    <Toolbar title="Board" sub={<span className="company-toolbar-meta">{!code && company ? 'Your team’s to-do list · ' : ''}{counts.working} working{counts.elsewhere > 0 ? ` · ${counts.elsewhere} in progress ${counts.inLinear ? 'in Linear' : 'with no agent on it'}` : ''} · {counts.needs} {counts.needs === 1 ? 'needs' : 'need'} you</span>}>
+      {/* design §5 row 10: the Autopilot switch lives in Automations › Autopilot only (and the company menu) */}
       <Button icon="plus" variant="primary" onClick={newTask}>{companies.length ? 'New task' : 'Create a company'}</Button>
+      {company && <IconButton icon="more" label="Board options" title={linear.status?.connected ? linearLine(linear.status) : 'Board options'} onClick={() => void linearMenu()} />}
     </Toolbar>
+    <LinearBanner status={linear.status} onReconnect={() => setLinearSheet(true)} />
     {filterBar}
     {error && <div className="company-error" role="alert">{error}<Button size="sm" onClick={reload}>Retry</Button></div>}
     <div className={`task-workspace ${selected ? 'has-detail' : ''}`}>
       <div className="task-main board-main">{body}</div>
-      {selected && <TaskInspector key={selected} id={selected} tasks={tasks} companies={companies} onClose={() => setSelected(null)} onSaved={reload} onSelect={setSelected} />}
+      {selected && <TaskInspector key={selected} id={selected} tasks={tasks} companies={companies} linear={links?.[selected] ?? null} onClose={() => setSelected(null)} onSaved={reload} onSelect={setSelected} />}
     </div>
     {editor}
+    {linearSheet && company && <LinearSheet companyId={company.id} companyName={company.name} status={linear.status} onClose={() => setLinearSheet(false)} onConnected={() => { linear.reload(); reload() }} />}
   </div>
 }
 
@@ -187,33 +253,40 @@ function AgentCell({ agent }: { agent: CompanyAgent }): React.JSX.Element {
  * The company's Autopilot switch (default off, §0.6): assignment wakes `auto` agents only with it on. Round-trips
  * through board:autopilot; the pill links to the live hub where the dispatcher's runs show.
  */
-function AutopilotSwitch({ company }: { company: CompanyPassport }): React.JSX.Element {
+export function AutopilotSwitch({ company }: { company: CompanyPassport }): React.JSX.Element {
   const [state, setView] = useState<AutopilotView>({ pending: null, busy: false })
   const on = state.pending ?? !!company.autopilot
   const busy = state.busy
   // the company row catches up (data:changed company); drop the optimistic value once it does
   useEffect(() => setView((v) => ({ ...v, pending: null })), [company.autopilot])
-  const toggle = useMemo(() => autopilotToggle((q) => hive.board.autopilot(q), company.id, setView), [company.id])
+  // AUTOPILOT.md §7: on goes through "N tasks will start"; a no keeps the switch where main has it
+  const toggle = useMemo(() => autopilotToggle(async (q) => (await requestAutopilot(q)) ?? { companyId: q.companyId, autopilot: !q.on, maxInFlight: company.maxInFlight ?? 3 }, company.id, setView), [company.id, company.maxInFlight])
   const flip = (next: boolean): void => {
     void toggle.flip(next).then(
-      (s) => { if (!s) return; toast(s.autopilot ? `Autopilot on for ${company.name}: auto agents start assigned work, up to ${s.maxInFlight} at once` : `Autopilot off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
+      (s) => { if (!s) return; toast(s.autopilot ? `Auto-start on for ${company.name}: agents set to work on their own start assigned work, up to ${s.maxInFlight} at once` : `Auto-start off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
       (e: unknown) => toast(errorMessage(e), 'error')
     )
   }
+  // A4: a paused company starts nothing, so its switch reads "Off while paused" and is greyed out (as in the company menu)
+  if (company.pausedAt) return <div className="board-autopilot is-held" title={`Resume ${company.name} to turn Auto-start on`}>
+    <label className="board-autopilot__label"><span>Auto-start: off while paused</span><Switch checked={false} onChange={() => undefined} disabled label={`Auto-start for ${company.name}: off while paused`} /></label>
+  </div>
   return <div className="board-autopilot">
-    {on && <button type="button" className="board-autopilot__pill" onClick={() => void navigate({ name: 'agents' })} title="See what the agents are doing"><Pill tone="running">Autopilot on</Pill></button>}
-    <label className="board-autopilot__label"><span>Autopilot</span><Switch checked={on} onChange={flip} disabled={busy} label={`Autopilot for ${company.name}`} /></label>
+    {on && <button type="button" className="board-autopilot__pill" onClick={() => void navigate({ name: 'agents' })} title="See what the agents are doing"><Pill tone="running">Auto-start on</Pill></button>}
+    <label className="board-autopilot__label"><span>Auto-start</span><Switch checked={on} onChange={flip} disabled={busy} label={`Auto-start for ${company.name}`} /></label>
   </div>
 }
 
 /** List view: id, title, department, agent, lane/reason, priority, source, updated. */
 function BoardList({ tasks, ctx, depById, agentById, chips, selected, onOpen }: { tasks: CompanyTask[]; ctx: LaneContext; depById: Map<Id, Department>; agentById: Map<Id, CompanyAgent>; chips: boolean; selected: string | null; onOpen: (t: CompanyTask) => void }): React.JSX.Element {
   const rows = useMemo(() => { const c = laneColumns(tasks, ctx); return BOARD_LANES.flatMap((l) => c[l]) }, [tasks, ctx])
+  const repos = useStore((s) => s.repos)
+  const codeCo = (co: Id): boolean => repos.some((r) => r.companyId === co)
   if (!rows.length) return <CompanyEmpty icon="tasks" title="No tasks in this view." text="Try another filter or create a new task." />
   return <table className="board-list">
     <thead><tr><th>ID</th><th>Title</th><th>Department</th><th>Agent</th><th>Lane</th><th>Priority</th><th>Source</th><th>Updated</th></tr></thead>
     <tbody>{rows.map((t) => { const depId = taskDepartment(t, ctx); const d = depId ? depById.get(depId) : undefined; const a = t.agentId ? agentById.get(t.agentId) : undefined; return <tr key={t.id} className={selected === t.id ? 'is-selected' : ''} onClick={() => onOpen(t)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onOpen(t)} aria-label={`${t.identifier}: ${t.title}`}>
-      <td className="task-identifier">{chips && <CompanyChip companyId={t.companyId} avatarOnly size={14} />} {t.identifier}</td>
+      <td className="task-identifier">{chips && <CompanyChip companyId={t.companyId} avatarOnly size={14} />} {codeCo(t.companyId) ? t.identifier : ''}</td>
       <td className="board-list__title">{t.title}</td>
       <td>{d ? <><span className="board-dot" style={{ background: d.color ?? 'var(--series-other)' }} />{d.name}</> : <span className="board-muted">—</span>}</td>
       <td>{a ? <AgentCell agent={a} /> : <span className="board-muted">Unassigned</span>}</td>
@@ -249,7 +322,7 @@ function LegacyTasksView(): React.JSX.Element {
   const groups = TASK_STATUSES.map((status) => ({ status, items: filtered.filter((t) => t.status === status) })).filter((g) => g.items.length || board && ['todo', 'in_progress', 'in_review', 'done'].includes(g.status))
   const active = tasks.filter((t) => !['done', 'canceled'].includes(t.status)).length
   return <div className="view company-view">
-    <Toolbar title="Tasks" sub={<span className="company-toolbar-meta">{active} open</span>}>
+    <Toolbar title="Board" sub={<span className="company-toolbar-meta">{active} open</span>}>
       <Button icon="plus" variant="primary" onClick={() => companies.length ? setCreating(true) : openNewCompany()}>{companies.length ? 'New task' : 'Create a company'}</Button>
     </Toolbar>
     <div className="task-filterbar">
@@ -310,7 +383,7 @@ function LegacyTaskInspector({ id, tasks, companies, onClose, onSaved }: { id: s
     {error && <div className="company-error" role="alert">{error}</div>}
     {!task ? <Loading label="Loading task…" /> : <div className="task-inspector-scroll">
       <div className="task-detail-company"><Icon name="passport" size={12} />{companies.find((c) => c.id === task.companyId)?.name}</div>
-      <h2>{task.title}</h2><p className="task-description selectable">{task.description || 'No description yet. Add the outcome and acceptance criteria in Edit task.'}</p>
+      <h2>{task.title}</h2><p className="task-description selectable">{task.description ? <TextWithLinks text={task.description} /> : 'No description yet. Add the outcome and acceptance criteria in Edit task.'}</p>
       <div className="task-properties">
         <label><span>Status</span><div><TaskStatusIcon status={task.status} /><select aria-label="Task status" disabled={busy || task.status === 'in_progress'} value={task.status} onChange={(e) => void mutate(() => hive.tasks.update({ id, patch: { status: e.target.value as TaskStatus } }))}>{TASK_STATUSES.filter((s) => s !== 'in_progress' || task.status === 'in_progress').map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select></div></label>
         <label><span>Priority</span><div><TaskPriority priority={task.priority} /><select aria-label="Task priority" value={task.priority} disabled={busy || task.status === 'in_progress'} onChange={(e) => void mutate(() => hive.tasks.update({ id, patch: { priority: Number(e.target.value) as CompanyTaskInput['priority'] } }))}>{PRIORITIES.map((p, i) => <option key={p} value={i}>{p}</option>)}</select></div></label>
@@ -325,7 +398,7 @@ function LegacyTaskInspector({ id, tasks, companies, onClose, onSaved }: { id: s
         {task.status !== 'in_progress' && <><select aria-label="Agent for task" value={profileId || task.assigneeProfileId || ''} disabled={busy} onChange={(e) => setProfileId(e.target.value)}><option value="">Default available agent</option>{activeProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><Button icon="play" variant="primary" disabled={busy || !!runDisabledReason} title={runDisabledReason} onClick={() => void mutate(() => hive.tasks.start({ id, profileId: profileId || task.assigneeProfileId || activeProfiles[0]?.id }))}>{busy ? 'Starting…' : task.runId ? 'Run again' : 'Run agent'}</Button>{runDisabledReason && <small>{runDisabledReason}</small>}</>}
         {task.runId && <Button icon="external" onClick={() => void navigate({ name: 'run', runId: task.runId! })}>Open agent run</Button>}
       </section>
-      <section className="task-detail-section task-activity"><h3>Activity</h3>{detail.activity.map((a) => <div key={a.id} className="task-activity-item"><span className="task-activity-dot" /><div><p className="selectable">{a.message}</p><time dateTime={a.createdAt}>{relative(a.createdAt)}</time></div></div>)}
+      <section className="task-detail-section task-activity"><h3>Activity</h3>{detail.activity.map((a) => <div key={a.id} className="task-activity-item"><span className="task-activity-dot" /><div><p className="selectable"><TextWithLinks text={a.message} /></p><time dateTime={a.createdAt}>{relative(a.createdAt)}</time></div></div>)}
         <form onSubmit={(e) => { e.preventDefault(); if (comment.trim()) void mutate(async () => { await hive.tasks.comment({ id, message: comment.trim() }); setComment('') }) }}><textarea aria-label="Add task comment" placeholder="Add a note or decision…" value={comment} onChange={(e) => setComment(e.target.value)} rows={3} maxLength={8000} /><Button type="submit" disabled={busy || !comment.trim()}>Add comment</Button></form>
       </section>
     </div>}

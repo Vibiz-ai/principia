@@ -154,6 +154,12 @@ export interface PickPersonaInput {
   role?: PlanAgentRole
   /** persona names already taken in the company (compared case-insensitively) */
   used: ReadonlySet<string>
+  /**
+   * names other companies' agents already have: avoided while a free name is left, so an agency's clients never seem
+   * to share one Marcus (five doors round 2, Priya). Soft: when every name is used somewhere, a repeat across companies
+   * beats a numeral; within one company names stay unique.
+   */
+  avoid?: ReadonlySet<string>
   /** companyId + ':' + agentRef; only the look depends on it */
   seed: string
 }
@@ -171,6 +177,13 @@ export function pickPersona(i: PickPersonaInput): AgentPersona {
   for (const n of i.used) used.add(n.trim().toLowerCase())
   const dept = i.departmentKey && DEPT_POOLS[i.departmentKey] ? DEPT_POOLS[i.departmentKey] : NO_DEPT_POOL
   const order = [...(i.role ? ROLE_POOLS[i.role] ?? [] : []), ...dept, ...PERSONAS.map((d) => d.key)]
+  if (i.avoid?.size) {
+    const avoid = new Set([...i.avoid].map((n) => n.trim().toLowerCase()))
+    for (const key of order) {
+      const def = BY_KEY.get(key)
+      if (def && !used.has(def.name.toLowerCase()) && !avoid.has(def.name.toLowerCase())) return persona(def, i.seed)
+    }
+  }
   for (const key of order) {
     const def = BY_KEY.get(key)
     if (def && !used.has(def.name.toLowerCase())) return persona(def, i.seed)
@@ -268,6 +281,22 @@ export function resolvePersonas(
       out.set(a.id, p)
       if (!a.archivedAt) used.add(p.name.toLowerCase())
     }
+  }
+  return out
+}
+
+/** The names every other company's non-archived agents are shown with: pickPersona's `avoid` for a new agent. */
+export function personaNamesElsewhere(
+  companyId: string | null,
+  agents: readonly PersonaAgentLike[],
+  departments: readonly PersonaDepartmentLike[] = []
+): Set<string> {
+  const others = agents.filter((a) => a.companyId !== companyId && !a.archivedAt)
+  const resolved = resolvePersonas(others, departments)
+  const out = new Set<string>()
+  for (const a of others) {
+    const p = resolved.get(a.id)
+    if (p) out.add(p.name.toLowerCase())
   }
   return out
 }

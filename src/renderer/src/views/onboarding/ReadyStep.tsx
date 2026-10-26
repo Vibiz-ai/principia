@@ -9,12 +9,13 @@ import { departmentsEnabled } from '@shared/company'
 import { Button, Switch } from '../../components/ui'
 import { LatinLine, PassportTablet } from '../../components/roman'
 import BeamBorder from '../../components/ui/border-beam'
-import { useCopy, usePersonasOn, useTone } from '../../lib/voice'
+import { useCopy, usePersonasOn } from '../../lib/voice'
 import { draftGoals } from '../../state/onboarding'
 import { updateSettings, useStore } from '../../state/store'
 import { Chip, NextSteps, StepTitle, useReducedMotion, Voiced } from './bits'
-import { installedAdapters, start, useFlowLocal } from './actions'
-import { autonomyLine, launchFacts, nextSteps, passportMeta, readySchedules, summaryParts, wantsCeremony } from './model'
+import { landOnHome, useFlowLocal } from './actions'
+import { ClaudeCheck } from './ClaudeCheck'
+import { autonomyLine, launchFacts, nextSteps, passportMeta, readySchedules, summaryParts } from './model'
 
 /** ⌘↵ on Ready = Start now (the flow calls it). */
 export const readyKeys: { start: (() => void) | null } = { start: null }
@@ -26,7 +27,6 @@ export function ReadyStep({ color }: { color?: string } = {}): React.JSX.Element
   const mode = useStore((s) => s.onboarding?.mode)
   const result = useFlowLocal((s) => s.result)
   const copy = useCopy()
-  const tone = useTone()
   const personasOn = usePersonasOn()
   const reduced = useReducedMotion()
   // the seal draws once, when the step first appears (a re-render never replays it)
@@ -44,18 +44,15 @@ export function ReadyStep({ color }: { color?: string } = {}): React.JSX.Element
   useEffect(() => {
     setChecked(new Set(schedules.filter((s) => !s.costly).map((s) => s.id)))
   }, [schedules])
-  const go = (autopilot: boolean): void => {
+  // five doors step 5 (design §6.7): nothing starts here. The company opens on Home, which asks "Your team is ready.
+  // Start the first week?"; the schedules ticked below are turned on with that answer
+  const go = (): void => {
     if (busy) return
     setBusy(true)
-    void start({
-      autopilot,
-      scheduleRefs: autopilot ? schedules.filter((s) => checked.has(s.id)).map((s) => s.ref) : [],
-      // VOICE.md §8: only Start now, only in playful
-      ceremony: wantsCeremony(autopilot, tone)
-    }).finally(() => setBusy(false))
+    void landOnHome({ scheduleRefs: schedules.filter((s) => checked.has(s.id)).map((s) => s.ref) }).finally(() => setBusy(false))
   }
   useEffect(() => {
-    readyKeys.start = () => go(true)
+    readyKeys.start = () => go()
     return () => {
       readyKeys.start = null
     }
@@ -84,24 +81,18 @@ export function ReadyStep({ color }: { color?: string } = {}): React.JSX.Element
       </div>
       <div className="ob-startbox">
         <div className="ob-q ob-q--flush">
-          {copy('ob.ready.q')} <LatinLine k="fortes" className="ob-q__latin" />
+          {copy('ob.ready.next')} <LatinLine k="fortes" className="ob-q__latin" />
         </div>
         <div className="ob-row-inline">
-          <Button variant="primary" kbd="⌘↵" onClick={() => go(true)} disabled={busy} data-autofocus="">
-            {copy('ob.ready.start')}
-          </Button>
-          <Button onClick={() => go(false)} disabled={busy}>
-            {copy('ob.ready.review')}
+          <Button variant="primary" kbd="⌘↵" onClick={go} disabled={busy} data-autofocus="">
+            {copy('ob.ready.open', { name })}
           </Button>
         </div>
         {auto && <div className="ob-hint">{auto}</div>}
-        {/* main keeps Autopilot off with no agent CLI: say so, rather than let Start now look like it ran anything */}
-        {agentsCreated && installedAdapters(status).length === 0 && (
-          <div className="ob-warn">Install Claude Code so agents can work. Until then Autopilot stays off and tasks wait on the board.</div>
-        )}
+        <ClaudeCheck />
         {schedules.length > 0 && (
           <>
-            <div className="ob-label">Also turn on schedules</div>
+            <div className="ob-label">Turn on with the first week</div>
             {schedules.map((s) => (
               <label key={s.id} className="ob-prow ob-prow--flush">
                 <input
@@ -118,7 +109,7 @@ export function ReadyStep({ color }: { color?: string } = {}): React.JSX.Element
                 <span className="ob-prow__main">
                   <span className="ob-prow__name">{s.label}</span>
                 </span>
-                <span className="ob-prow__end">{s.cost ? <Chip tone="warn">{s.cost}</Chip> : <Chip>free</Chip>}</span>
+                <span className="ob-prow__end">{s.cost ? <Chip tone="warn">{s.cost}</Chip> : <Chip title="Uses your Claude plan. No extra charge from Principia.">on your plan</Chip>}</span>
               </label>
             ))}
           </>

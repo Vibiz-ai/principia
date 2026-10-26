@@ -9,6 +9,7 @@ import { createCompanyBridge } from './companyBridge'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge } from './company/dispatcher'
 import { recurringBoards } from './company/recurring'
 import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../shared/company'
+import { activeByCompany } from './statusCounts'
 import { chatPlacement, type ChatPlacement } from './company/chatContext'
 import { routeModelCall } from './company/routeCall'
 import type { CompanyBridge, Engine, ProcessReaper, StepOutputEvent, TaskRunBridge, TaskToolset } from '../shared/engine'
@@ -92,6 +93,10 @@ export class Hive {
   /** Live agents (LIVE.md): agents/asks repository, session wiring, notifications. */
   live!: LiveStore
   sessionLive!: SessionLiveHub
+  /** CHAT-UI.md §3: Claude sessions shown as a chat (absent in tests and before boot) */
+  chats?: import('./chat/chatHub').ChatHub
+  /** AGENT CHAT: each company agent's standing chat */
+  agentChats?: import('./chat/agentChat').AgentChats
   notifier!: NeedsYouNotifier
   /** What the renderer shows (ui:visibleOwner): suppresses notifications, marks idle sessions seen (A3). */
   visibleOwner: { sessionId: Id | null; runId: Id | null } = { sessionId: null, runId: null }
@@ -107,7 +112,11 @@ export class Hive {
   private leftoverCache: LeftoverProcess[] = []
   /** AUTHORING.md: `hive` tool broker, worktree per run, notify nodes, Claude history (null until wired / on failure). */
   author: AuthorBroker | null = null
+  /** shared/chatCompany.ts: the "start a company from this chat" cards (author/wire.ts). */
+  chatProposals: import('./company/chatProposals').ChatProposals | null = null
   worktrees: WorktreeManager | null = null
+  /** WORKTREE.md: a task's own worktree, branch and PR (company/taskWork.ts; null until wired) */
+  taskWork: import('./company/taskWork').TaskWorkService | null = null
   notifyNode: NotifyNode | null = null
   history: ClaudeHistory | null = null
   /** SLACK.md: the Slack connector service (null until wired / on failure). */
@@ -117,6 +126,18 @@ export class Hive {
   forum: ForumService | null = null
   /** DASHBOARDS.md: department dashboards (null until wired / on failure). */
   dashboards: DashboardService | null = null
+  /** ORCHESTRATOR.md: Principia's own layer between runs (null until startOrchestrator / on failure). */
+  orchestrator: import('./orchestrator/wire').Orchestrator | null = null
+  /** AUTOPILOT.md §6: autopilot playbooks (company/playbooks.ts; null until registerPlaybookHandlers / on failure). */
+  playbooks: import('./company/playbooks').Playbooks | null = null
+  /** PASSPORT.md §12: the suggestion pipeline (run report facts become proposals through it); null without memory. */
+  memorySuggest: import('./memory/vault/suggest').SuggestionPipeline | null = null
+  /** LINEAR.md: optional Linear sync per company (null until wired / on failure). */
+  linear: import('./company/sync/service').LinearSyncService | null = null
+  /** REMOTE.md: Phone (off at every launch; null until wired / on failure). */
+  remote: import('./remote/service').RemoteService | null = null
+  /** BROWSER.md: the company browser (views + agent endpoint); null = unavailable */
+  browser: import('./browser/wire').BrowserWiring | null = null
   private cloudWiring: CloudWiring | null = null
   /** CLOUD.md §4.1: this Mac's link to a Principia Cloud workspace (built on first use; idle until paired). */
   get cloud(): CloudWiring {
@@ -135,6 +156,10 @@ export class Hive {
   private blockerId: number | null = null
   private outBuf = new Map<string, { runId: Id; stepId: Id; chunk: string; timer: NodeJS.Timeout }>()
   private shuttingDown = false
+  /** the app is quitting (nothing new starts) */
+  get quitting(): boolean {
+    return this.shuttingDown
+  }
   shutdownDone = false
   forceQuit = false
 
@@ -168,7 +193,8 @@ export class Hive {
         company: () => this.company,
         dispatcher: () => this.dispatcher,
         toolset: () => this.taskToolset,
-        passport: (companyId, departmentId) => this.passportContext('', companyId, departmentId)
+        passport: (companyId, departmentId) => this.passportContext('', companyId, departmentId),
+        workdir: (e) => this.taskWork?.workdir(e.taskId) ?? Promise.resolve(null)
       }),
       // §8: task-mode schedules and Slack triggers comment on their card and wake through the dispatcher (queued until it exists)
       boards: recurringBoards({
@@ -194,7 +220,11 @@ export class Hive {
       cancelRun: (id) => this.engine.runs.cancel(id),
       enabled: () => departmentsEnabled(this.settings().experimental),
       sessions: {
-        create: (req) => this.sessions.create(req),
+        // WORKTREE.md: a Started task opens as a session in its own worktree, never the founder's checkout
+        create: ({ taskId, ...req }) => {
+          const cwd = taskId ? this.taskWork?.sessionCwd(taskId) : null
+          return this.sessions.create(cwd ? { ...req, repoId: null, cwd } : req)
+        },
         isLive: (id) => this.sessions.isLive(id),
         kill: (id) => this.sessions.kill(id)
       },
@@ -267,7 +297,9 @@ export class Hive {
       tasks: boardOn && req.departmentId ? c.listTasks(company.id) : [],
       departmentId: req.departmentId,
       // the `hive` server (claude panes) lists company_file_task while the board is on
-      fileTool: boardOn && req.adapter === 'claude'
+      fileTool: boardOn && req.adapter === 'claude',
+      // PROACTIVE.md §2
+      proactive: this.settings().proactiveAgents !== false
     })
     if (req.departmentId && !placed.department) return null
     return placed
@@ -288,14 +320,28 @@ export class Hive {
   status(): StatusSnapshot {
     const active = this.store.listRuns({ status: ['queued', 'running'], limit: 1000 })
     const s = this.settings()
-    const next: NextFire | null = s.schedulesPaused ? null : (this.safe(() => this.engine.scheduler.nextRuns(1), [])[0] ?? null)
+    // five doors: "Next" is per company, and a paused company has none (its schedules hold until it resumes)
+    const byCompany: Record<Id, NextFire> = {}
+    let next: NextFire | null = null
+    if (!s.schedulesPaused) {
+      const companyOf = new Map(this.safe(() => this.store.listSchedules(), []).map((x) => [x.id, (x as { companyId?: Id | null }).companyId || PERSONAL_COMPANY_ID]))
+      for (const n of this.safe(() => this.engine.scheduler.nextRuns(500), [])) {
+        const co = companyOf.get(n.scheduleId) ?? PERSONAL_COMPANY_ID
+        if (this.safe(() => this.company.isPaused(co), false)) continue
+        next ??= n
+        byCompany[co] ??= n
+      }
+    }
     return {
       runningSessions: this.sessions.runningCount(),
       runningRuns: active.filter((r) => r.status === 'running').length,
       queuedRuns: active.filter((r) => r.status === 'queued').length,
       schedulesPaused: s.schedulesPaused,
       nextFire: next,
+      nextFireByCompany: byCompany,
       last24h: this.store.countEndedSince(new Date(Date.now() - 86400_000).toISOString()),
+      last24hByCompany: this.safe(() => this.store.countEndedSinceByCompany(new Date(Date.now() - 86400_000).toISOString()), {}),
+      activeByCompany: this.safe(() => activeByCompany(active, this.sessions.liveCountByCompany()), {}),
       unseenFailures: this.unseenFailures,
       needsYou: this.live ? this.safe(() => this.live.needsYouCount(), 0) : 0
     }
@@ -305,6 +351,8 @@ export class Hive {
   initLive(): void {
     this.notifier = new NeedsYouNotifier({
       notify: (n) =>
+        // Settings › Notifications › "Tell me when something needs me" (Needs you still lists it either way)
+        this.settings().notifyNeedsYou !== false &&
         notify({
           title: n.title,
           body: n.body,
@@ -840,6 +888,7 @@ export class Hive {
     this.windows.quitting = true
     // DEPARTMENTS.md §3: before the engine cancels its runs, so their run ends start nothing new during the quit
     this.dispatcher?.dispose()
+    this.taskWork?.dispose()
     const timeout = new Promise<void>((r) => setTimeout(r, 6000))
     await Promise.race([
       Promise.all([
@@ -853,6 +902,10 @@ export class Hive {
     this.dispatcher?.dispose()
     // SLACK.md §2.3: close the socket with 1000, no retries
     await this.slack?.stop().catch(() => undefined)
+    // REMOTE.md RA1: quitting is Turn off (tunnel, server, every phone signed out)
+    await this.remote?.stop().catch(() => undefined)
+    this.browser?.host.dispose()
+    await this.browser?.service.stop().catch(() => undefined)
     for (const t of this.sessionRetries.values()) clearTimeout(t)
     this.sessionRetries.clear()
     // CONTRACT §13: nothing tagged by this Hive outlives it (dev servers, watchers, leftovers nobody stopped)
@@ -881,3 +934,4 @@ export class Hive {
     return this.settings().launchAtLogin && os.uptime() < 180
   }
 }
+

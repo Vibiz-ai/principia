@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { AgentProfile } from '../../shared/types'
 import type { EngineContext } from '../../shared/engine'
 import type { Adapter } from './adapters'
@@ -46,4 +47,12 @@ export function childKeyNames(ctx: EngineContext, adapter: Adapter, profile: Age
   const names = secretSelection(adapter, profile, secretNames)
   if (!names.length || !ctx.secrets.names) return []
   return (companyId ? ctx.secrets.names(names, companyId) : ctx.secrets.names(names)).filter((n) => profile?.useApiKeyAuth || !adapter.authEnv.includes(n))
+}
+
+/**
+ * ORCHESTRATOR.md §1.2: where one step may write its run report ($PRINCIPIA_RUN_REPORT), next to the step's log.
+ * Main reads the same path at run end (orchestrator/apply.ts).
+ */
+export function runReportPath(runLogsDir: string, runId: string, stepId: string): string {
+  return join(runLogsDir, runId, `${stepId}.report.json`)
 }

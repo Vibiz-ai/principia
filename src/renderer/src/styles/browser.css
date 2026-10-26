@@ -1,0 +1,56 @@
+/* BROWSER.md §6: the company browser dock and panel. Cool neutrals only; the agent's activity uses the running blue. */
+.browser-dock { position: relative; flex: none; display: flex; min-width: 360px; height: 100%; background: var(--surface-0); border-left: 1px solid var(--border); }
+.browser-dock-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
+.browser-dock-grip:hover, body.is-resizing-dock .browser-dock-grip { background: var(--accent-soft); }
+/* no room beside the page: on top of its right side (sheets and the palette still sit above it) */
+.browser-dock.is-over { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-drawer); box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35); }
+body.is-dock-tight .shell > .sidebar { display: none; }
+/* the window buttons sit over the page's toolbar once the sidebar has stepped aside (as when it is collapsed) */
+body.is-dock-tight .shell.has-rail .toolbar { padding-left: 28px; }
+body.is-resizing-dock { cursor: col-resize; user-select: none; }
+
+.bp { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.bp-bar { height: var(--toolbar-h, 44px); flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
+.bp-bar > * { -webkit-app-region: no-drag; }
+.bp-address { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; background: var(--surface-1); border: 1px solid var(--border); color: var(--text-tertiary); }
+.bp-address:focus-within { border-color: var(--border-focus); }
+.bp-address input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text-primary); font: inherit; font-size: 12.5px; }
+
+.bp-tabs { flex: none; display: flex; align-items: center; gap: 2px; padding: 4px 8px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: none; }
+.bp-co { flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; margin-right: 4px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-secondary); font-size: 11.5px; }
+.bp-tab { display: flex; align-items: center; max-width: 180px; min-width: 0; border-radius: 6px; color: var(--text-secondary); }
+.bp-tab.is-active { background: var(--surface-2); color: var(--text-primary); }
+.bp-tab:hover { background: var(--surface-3); }
+.bp-tab-main { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 4px 4px 8px; background: none; border: 0; color: inherit; font: inherit; font-size: 12px; cursor: default; }
+.bp-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tab-x { display: grid; place-items: center; width: 18px; height: 18px; margin-right: 3px; border-radius: 4px; background: none; border: 0; color: var(--text-tertiary); opacity: 0; }
+.bp-tab:hover .bp-tab-x, .bp-tab.is-active .bp-tab-x { opacity: 1; }
+.bp-tab-x:hover { background: var(--surface-3); color: var(--text-primary); }
+.bp-spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--text-tertiary); border-top-color: var(--status-running); animation: bp-spin 0.8s linear infinite; flex: none; }
+@keyframes bp-spin { to { transform: rotate(360deg); } }
+
+.bp-status { flex: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.bp-who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-who--quiet { color: var(--text-tertiary); }
+.bp.is-agent .bp-who { color: var(--text-primary); }
+.bp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status-running); box-shadow: 0 0 0 3px var(--status-running-soft); animation: bp-pulse 1.4s ease-in-out infinite; flex: none; }
+@keyframes bp-pulse { 50% { opacity: 0.45; } }
+.bp.is-takeover .bp-status { background: var(--accent-soft); }
+
+/* the native page view sits exactly over this box; it shows through when nothing is open */
+.bp-live { position: relative; flex: 1; min-height: 120px; background: var(--term-bg); }
+.bp.is-agent .bp-live { box-shadow: inset 0 0 0 2px var(--status-running-soft); }
+.bp.is-takeover .bp-live { box-shadow: inset 0 0 0 2px var(--accent); }
+.bp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-secondary); }
+.bp-empty p { margin: 0; max-width: 320px; }
+.bp-muted { color: var(--text-tertiary); font-size: 12px; }
+
+.bp-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+.bp-dl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); min-width: 0; }
+.bp-dl span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dl.is-cancelled, .bp-dl.is-interrupted { color: var(--text-tertiary); }
+.bp-shots { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+.bp-shot { flex: none; width: 96px; height: 60px; padding: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface-1); cursor: zoom-in; }
+.bp-shot:hover { border-color: var(--accent); }
+.bp-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+.btn.is-browsing { box-shadow: inset 0 0 0 1px var(--status-running); }

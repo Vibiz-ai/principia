@@ -5,6 +5,7 @@
  */
 
 import type { MemoryMode, MemoryTransport } from './memory'
+import type { AgentCollabSettings } from './collab'
 import type { AgentEvent, AgentNode as LiveAgentNode, Ask } from './live'
 import type { NotifySlackTarget, SlackRunContext, SlackTrigger } from './slack'
 
@@ -147,6 +148,11 @@ export interface Session extends CompanyStamped {
    * the sidebar, and its context carries the department's charter, agents and open tasks. Absent / null = not one.
    */
   departmentId?: Id | null
+  /**
+   * AGENT CHAT: the company agent (seat) this is the standing chat of: one per agent, resumed across restarts, shown as
+   * the agent's conversation (Chats, the agent page). Absent / null = not one.
+   */
+  companyAgentId?: Id | null
 }
 
 // ---------- workflows ----------
@@ -564,6 +570,8 @@ export interface Settings {
   slackAlertUserId?: string | null
   /** SLACK.md §10.3: mirror Needs-you alerts to the alert user's Slack DM. Default false. */
   slackMirrorNeedsYou?: boolean
+  /** Settings › Notifications: a Mac notification when something needs you (an ask, a finished turn). Absent = true. */
+  notifyNeedsYou?: boolean
   /** SLACK.md §6.2: backfill window in days. Default 7, 0..90. */
   slackBackfillDays?: number
   /** SLACK.md §6.3: gap-filled messages newer than this still trigger. Default 10, 0..120. */
@@ -572,6 +580,17 @@ export interface Settings {
   slackAutoPaused?: boolean
   /** Marketplace: https link to a remote index.json, listed next to the built-in catalog. Default null. */
   marketplaceUrl?: string | null
+  /**
+   * REMOTE.md RA6: Settings › App › Phone › "Phone app address", the hosted phone app the pairing link opens and the one
+   * origin the Phone server accepts cross-origin. null (default): the official address (PHONE_SITE_URL); '': none (the
+   * Mac's own page).
+   */
+  phoneSiteUrl?: string | null
+  /**
+   * REMOTE.md RA8: "Turn Phone on when Principia starts" (Phone and its tunnel). null (default): on once at least one
+   * phone is paired, off otherwise.
+   */
+  phoneAutoStart?: boolean | null
   /** COMPANY.md §1.3, §8.6: the renderer's active company (UI state only; main never reads it). Default 'all'. */
   activeCompanyId?: Id | 'all'
   /** COMPANY.md §8.3: All-mode sidebar groups, companyId -> expanded. Missing = default (expanded). */
@@ -585,6 +604,62 @@ export interface Settings {
   tone?: 'playful' | 'plain'
   /** VOICE.md §0: "Agent names and busts". Off shows the role label and the department-colour initial. Absent = true. */
   personas?: boolean
+  /** AGENT-COLLAB.md §2: agents asking agents and its guards. Absent fields = DEFAULT_AGENT_COLLAB (src/shared/collab.ts). */
+  agentCollab?: Partial<AgentCollabSettings>
+  /**
+   * ORCHESTRATOR.md §6: Principia's own layer between runs (context before, report applied after, the mailbox), the
+   * same on every harness. Absent fields = DEFAULT_ORCHESTRATOR (src/shared/orchestrator.ts). Gated by the board flags.
+   */
+  orchestrator?: Partial<import('./orchestrator').OrchestratorSettings>
+  /**
+   * AUTOPILOT.md §4: per company, what each enabled autopilot created (its schedules and workflows), so Pause and Remove
+   * act on exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.
+   */
+  autopilots?: Record<Id, import('./autopilot').CompanyAutopilots>
+  /**
+   * Automations › Routines: per company, the schedule (and workflow) each routine's "Turn on" created, so Turn off
+   * removes exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.
+   */
+  routines?: Record<Id, import('./routines').CompanyRoutines>
+  /**
+   * Home suggestions (lib/nudges.ts): per company, the suggestions the person dismissed for good, by id, with when.
+   * UI state only. Absent = none.
+   */
+  nudges?: Record<Id, Record<string, string>>
+  /**
+   * PROACTIVE.md: agents and chats use Principia on their own (track and file tasks, read and write memory, ask
+   * teammates) without being asked. Off: the passive wording, and filing waits for a yes. Absent = true.
+   */
+  proactiveAgents?: boolean
+  /**
+   * PROACTIVE.md §3: "Track work as tasks". off: chats never open tasks for their own work unasked; auto (default): when
+   * one message asks for two or more separate things or multi-step work; always: every multi-step turn, with a one-time
+   * gentle reminder at the end of an untracked one. Absent = 'auto'.
+   */
+  trackTasks?: TrackTasks
+  /**
+   * Five doors (design §3): the sidebar's PINNED section and More items, per company ('all' for All companies). UI
+   * state only: main never reads it. Absent = the registry defaults (Forum "Show when active", the rest in More).
+   */
+  sidebarNav?: Record<string, SidebarPrefs>
+  /** CHAT-UI.md §4.4: Claude sessions open as a chat or a terminal. auto: chats as Chat, repo/worktree sessions as Terminal. Absent = 'auto'. */
+  openChatsAs?: import('./chat').OpenChatsAs
+  /** Five doors step 5: one-time notices the person dismissed, by id ("things-moved"), with when. UI state only. */
+  notices?: Record<string, string>
+  /**
+   * Five doors step 5: a company just set up whose first week waits for "Your team is ready. Start the first week?" on
+   * its Home: the onboarding journal and the schedules the Ready step ticked. Removed once answered. UI state only.
+   */
+  firstWeek?: Record<Id, { journalId: string; scheduleRefs: string[] }>
+}
+export type TrackTasks = 'off' | 'auto' | 'always'
+/** A More item's place in the sidebar: always in PINNED, in PINNED only while it has something for you, or in More. */
+export type NavVisibility = 'always' | 'active' | 'hidden'
+export interface SidebarPrefs {
+  /** More item keys and `dept:<id>` refs set to Always show, in the order they were pinned */
+  pins?: string[]
+  /** More item key -> visibility, only where it differs from the registry default */
+  visibility?: Record<string, NavVisibility>
 }
 export interface ExperimentalFlags {
   /** company guards throw (on) or warn and still stamp (off) */
@@ -595,6 +670,8 @@ export interface ExperimentalFlags {
   vaultAI?: boolean
   /** DEPARTMENTS.md §0.8: departments, agents and the company board. Only takes effect with `companies` on. */
   departments?: boolean
+  /** PLANS.md §0: Plans (goal → milestones → tasks run by a head agent). Needs `companies` and `departments`. */
+  plans?: boolean
 }
 
 /**
@@ -629,6 +706,8 @@ export interface AppInfo {
   dbPath: string
   safeStorageAvailable: boolean
   loginShellPath: string | null // resolved $PATH, null if resolution failed
+  /** five doors E12: the account's full name for the greeting (absent from older mains) */
+  userName?: string | null
 }
 export interface StatusSnapshot {
   runningSessions: number
@@ -636,7 +715,13 @@ export interface StatusSnapshot {
   queuedRuns: number
   schedulesPaused: boolean
   nextFire: NextFire | null
+  /** Five doors: the next fire of each company (a paused company has none). nextFire is the earliest of these. */
+  nextFireByCompany?: Record<Id, NextFire>
   last24h: { passed: number; failed: number }
+  /** COMPANY.md §7: last24h per company (Personal for unstamped runs); a focused company's status bar shows its own. */
+  last24hByCompany?: Record<Id, { passed: number; failed: number }>
+  /** COMPANY.md §7: running (sessions + runs) and queued runs per company; a focused company's status bar shows its own. */
+  activeByCompany?: Record<Id, { running: number; queued: number }>
   /** Failed runs that ended after the window was last focused (tray shows ✕). Reset on window focus. */
   unseenFailures: number
   /** LIVE.md §4.5: open asks + unseen idle live session roots (A3). Absent until main implements it. */

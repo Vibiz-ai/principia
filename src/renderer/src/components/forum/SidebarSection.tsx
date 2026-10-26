@@ -1,6 +1,6 @@
 /**
  * FORUM.md §8: the Forum in the app sidebar (focused mode). A "Forum" section: channels with something new first
- * (bold = unread, amber count = mentions), then DMs with busts; at most 7 rows, the rest live in the Forum view.
+ * (bold = unread, accent count = mentions), then DMs with busts; at most 7 rows, the rest live in the Forum view.
  * `useForumBadge` feeds the NAV row's count (mentions + unread DMs).
  */
 import { useEffect, useMemo } from 'react'
@@ -18,6 +18,12 @@ export function useForumBadge(companyId: string | null, enabled: boolean): numbe
     void loadForum(companyId)
   }, [companyId, enabled])
   return useMemo(() => (channels ? unreadTotals(channels).mentions : 0), [channels])
+}
+
+/** New messages in the company's Forum rooms (agents talking among themselves counts): the sidebar shows Forum then. */
+export function useForumUnread(companyId: string | null): number {
+  const channels = useForum((s) => (companyId ? s.byCompany[companyId]?.state?.channels : undefined))
+  return useMemo(() => (channels ? unreadTotals(channels).unread : 0), [channels])
 }
 
 export function ForumSidebarSection({ companyId }: { companyId: string }): React.JSX.Element | null {

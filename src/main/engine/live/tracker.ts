@@ -70,6 +70,8 @@ export interface AgentTracker {
   hook(e: HookEvent): LiveOp[]
   /** Hive answered this ask (asks:answer). `summary` goes into the agent's timeline. */
   answered(gateId: string, summary: string): LiveOp[]
+  /** The root's title changed (a chat titled by its first message). */
+  retitle(title: string): LiveOp[]
   /** The ask's 60-min timer fired. */
   expire(gateId: string): LiveOp[]
   /** Close an ask without an answer (run canceled, gate withdrawn). */
@@ -561,11 +563,11 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
           gateId: e.requestId,
           kind: 'permission',
           channel: 'stdio',
-          title: permissionTitle(e.toolName, e.input),
+          title: e.title ?? permissionTitle(e.toolName, e.input),
           detail: e.description,
           toolName: e.toolName,
           toolInput: e.input,
-          options: PERMISSION_HEADLESS
+          options: e.options ?? PERMISSION_HEADLESS
         })
         break
       }
@@ -956,6 +958,13 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
     answered(gateId, summary) {
       const ops: LiveOp[] = []
       resolveAsk(gateId, ops, 'hive', 'answered', summary)
+      return ops
+    },
+    retitle(title) {
+      const ops: LiveOp[] = []
+      if (!title || root.title === title) return ops
+      root.title = title
+      upsert(root, ops)
       return ops
     },
     expire(gateId) {

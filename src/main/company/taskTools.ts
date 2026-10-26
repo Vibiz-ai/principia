@@ -22,18 +22,20 @@
  */
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { MAX_HANDOFFS, TASK_ASK_KINDS, type BlockReason, type BoardTask, type CompanyAgent, type Department, type PendingWake, type TaskAsk, type TaskReport, type TaskStatus } from '../../shared/company'
+import { MAX_HANDOFFS, TASK_ASK_KINDS, TRACK_PREFIX, trackedBy, type BlockReason, type BoardTask, type CompanyAgent, type Department, type PendingWake, type TaskAsk, type TaskReport, type TaskStatus } from '../../shared/company'
 import type { LiveOwner, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import type { Run } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
-import { COMPANY_LIMITS, isCompanyTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, CONNECTIONS_TOOL, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { CRITERION_STATES, EDITABLE_SECTIONS, PROOF_KINDS, briefOf, proofOf } from '../../shared/plans'
+import { BriefStore, briefReminder, checkProofRef, decide, editSection, setCriterion } from './brief'
 export { callTaskTool, isTaskTool, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS, type TaskTool } from './taskToolDefs'
 
 /** §6 caps on agent-filed tasks. */
-export const TASK_CREATE_CAPS = { perTask: 4, perCompanyPerHour: 10 } as const
+export const TASK_CREATE_CAPS = { perTask: 4, perCompanyPerHour: 10, trackedPerSessionPerHour: 12 } as const
 const HOUR_MS = 3_600_000
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
 const clip = (s: string, n: number) => s.length > n ? `${s.slice(0, n - 1)}…` : s
@@ -52,6 +54,8 @@ export interface TaskCaller {
   agentId: string | null
   /** the caller's run or session still holds its task (in flight on it): writes are allowed */
   holdsTask: boolean
+  /** AGENT CHAT: the agent whose standing chat this session is (it moves the tasks assigned to that agent) */
+  chatAgentId?: string | null
 }
 /** Line fields the server adds (HIVE_TASK_COMPANY_ID / HIVE_COMPANY_ID, HIVE_TASK_ID), as cross-checks only. */
 export interface TaskLineHints { companyId?: string | null; taskId?: string | null; callId?: string | null }
@@ -70,9 +74,19 @@ export interface TaskToolsDeps {
    */
   pump?: (companyId: string) => void
   /** §9 company_create_department: departments:save as the UI does it (department note, data:changed). Absent = departments.save. */
+  /**
+   * task_create {agent}: the active agent of this company that `raw` names (@handle, name, role), else the teammates to
+   * pick from. Only ever inside `companyId`. Absent = the field is refused.
+   */
+  teammate?: (companyId: string, raw: string) => { agentId: string } | { teammates: string[] }
   createDepartment?: (input: { companyId: string; name: string; key?: string; does: string; doesNot: string }) => { id: string; key: string; name: string }
   now?: () => Date
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
+  /**
+   * PLANS.md §1 task_attach_proof: the folders a proof file may come from (the task's worktree, its run's artifacts).
+   * Absent = the caller run's artifacts dir, its worktree row and the cwd Principia gave the run.
+   */
+  proofRoots?: (task: BoardTask, caller: TaskCaller) => string[]
 }
 
 /** A handoff waiting for its run end. */
@@ -83,7 +97,7 @@ const idArg = z.string().trim().min(1).max(64)
 const ARGS = {
   task_get: z.strictObject({ id: idArg.optional() }),
   task_list: z.strictObject({ scope: z.enum(['mine', 'department', 'open']).default('mine'), limit: z.number().int().min(1).max(TASK_LIST_MAX).default(20) }),
-  task_comment: z.strictObject({ text: z.string().trim().min(1).max(TASK_LIMITS.comment) }),
+  task_comment: z.strictObject({ id: idArg.optional(), text: z.string().trim().min(1).max(TASK_LIMITS.comment) }),
   task_report: z.strictObject({
     outcome: z.enum(['review', 'blocked']),
     summary: z.string().trim().min(1).max(TASK_LIMITS.summary),
@@ -98,13 +112,29 @@ const ARGS = {
     title: z.string().trim().min(1).max(TASK_LIMITS.title),
     description: z.string().max(TASK_LIMITS.description).default(''),
     departmentKey: z.string().trim().min(1).max(80).optional(),
-    blocksCurrent: z.boolean().default(false)
+    agent: z.string().trim().min(1).max(120).optional(),
+    blocksCurrent: z.boolean().default(false),
+    parent: idArg.optional(),
+    start: z.boolean().default(false)
   }),
+  task_update: z.strictObject({
+    id: idArg,
+    status: z.enum(['in_progress', 'in_review', 'blocked']).optional(),
+    note: z.string().trim().min(1).max(TASK_LIMITS.summary).optional(),
+    title: z.string().trim().min(1).max(TASK_LIMITS.title).optional(),
+    description: z.string().max(TASK_LIMITS.description).optional()
+  }).refine(a => a.status !== undefined || a.note !== undefined || a.title !== undefined || a.description !== undefined, { message: 'Nothing to update' })
+    .refine(a => a.status !== 'blocked' || !!a.note, { message: "A 'blocked' update needs a note saying why", path: ['note'] }),
   task_handoff: z.strictObject({
     departmentKey: z.string().trim().min(1).max(80).optional(),
     agentId: idArg.optional(),
     reason: z.string().trim().min(1).max(TASK_LIMITS.reason)
   }).refine(a => !!a.departmentKey || !!a.agentId, { message: 'Name a departmentKey or an agentId' }),
+  task_brief_edit: z.strictObject({ section: z.enum(EDITABLE_SECTIONS), mode: z.enum(['replace', 'append']).default('replace'), text: z.string().trim().min(1).max(BRIEF_TOOL_LIMITS.text) }),
+  task_criterion: z.strictObject({ id: z.string().trim().min(1).max(500), state: z.enum(CRITERION_STATES), reason: z.string().trim().max(500).optional() })
+    .refine(a => (a.state !== 'deferred' && a.state !== 'not_done') || !!a.reason, { message: "a 'deferred' or 'not_done' criterion needs a reason (say why)", path: ['reason'] }),
+  task_decide: z.strictObject({ text: z.string().trim().min(1).max(1000), why: z.string().trim().min(1, 'say why').max(1000) }),
+  task_attach_proof: z.strictObject({ kind: z.enum(PROOF_KINDS), title: z.string().trim().min(1).max(200), ref: z.string().trim().min(1).max(4000) }),
   company_departments: z.strictObject({}),
   company_file_task: z.strictObject({
     title: z.string().trim().min(1).max(TASK_LIMITS.title),
@@ -159,10 +189,12 @@ function addWake(w: PendingWake | null, reason: string): PendingWake {
 export class TaskTools {
   private readonly handoffs = new Map<string, PendingHandoff>()
   readonly harvester: ReportHarvester
+  readonly briefs: BriefStore
   private sessionTaskColumn: boolean | null = null
 
   constructor(private readonly d: TaskToolsDeps) {
     this.harvester = new ReportHarvester({ company: d.company, redact: d.redact, now: d.now })
+    this.briefs = new BriefStore(d.company, () => this.now())
   }
   /** sessions.task_id exists (healed by openDatabase); read on first use, so building the toolset touches no db */
   private get sessionTaskCol(): boolean {
@@ -177,15 +209,17 @@ export class TaskTools {
   // ---------- engine side (TaskRunBridge.toolset, onStepOutput) ----------
 
   /**
-   * §6: the toolset of one headless step of a task run (claude only: Codex, Gemini and Cursor get the prompt and the
-   * fenced report). The env only decides what hivemem lists; the broker resolves every call from the step's live dir.
+   * §6: the toolset of one headless step of a task run (claude, codex; gemini behind MCP_VERIFIED; Cursor has no
+   * per-run MCP flag and keeps the prompt and the fenced report). The env only decides what hivemem lists; the broker resolves every call from the step's live dir.
    */
   toolset(req: Parameters<NonNullable<TaskRunBridge['toolset']>>[0]): TaskToolset | null {
-    if (req.adapter !== 'claude' || !this.d.enabled()) return null
+    // claude and codex (MCP verified); gemini once its MCP attach is verified (the executor checks MCP_VERIFIED too)
+    if ((req.adapter !== 'claude' && req.adapter !== 'codex' && req.adapter !== 'gemini') || !this.d.enabled()) return null
     let t: BoardTask
     try { t = this.c.task(req.taskId) } catch { return null }
     if (req.companyId && req.companyId !== t.companyId) return null
-    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS] }
+    // connections_list rides on the same server: where the founder connects a tool this task needs
+    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS, CONNECTIONS_TOOL] }
   }
   /** EngineContext.onStepOutput (hive.stepOutputHooks): the fenced report of a passed step (§4.5). */
   harvest(e: HarvestStep): TaskReport | null {
@@ -219,13 +253,17 @@ export class TaskTools {
     }
     const row = this.db.prepare(`SELECT company_id${this.sessionTaskCol ? ', task_id' : ''} FROM sessions WHERE id=?`).get(owner.sessionId) as { company_id: string | null; task_id?: string | null } | undefined
     if (!row) fail('Unknown session')
+    let chatAgentId: string | null = null
+    try { chatAgentId = (this.db.prepare('SELECT company_agent_id AS a FROM sessions WHERE id=?').get(owner.sessionId) as { a: string | null } | undefined)?.a ?? null } catch { /* older db */ }
     let taskId = row!.task_id ?? null
-    taskId ??= (this.db.prepare("SELECT id FROM company_tasks WHERE run_id=? AND status='in_progress' LIMIT 1").get(owner.sessionId) as { id: string } | undefined)?.id ?? null
+    // PROACTIVE.md §3: a chat's own tracked task (runId = the chat) never makes the chat a task session; nor does a
+    // task an agent's chat moved to in progress (AGENT CHAT: the chat stays the agent's chat)
+    if (!chatAgentId) taskId ??= (this.db.prepare("SELECT id FROM company_tasks WHERE run_id=? AND status='in_progress' AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%' LIMIT 1").get(owner.sessionId) as { id: string } | undefined)?.id ?? null
     const t = taskId ? this.c.task(taskId) : null
     const companyId = t?.companyId ?? this.c.companyOf({ sessionId: owner.sessionId }).id
     // a session row of one company never holds another company's task
     if (t && row!.company_id && row!.company_id !== t.companyId) fail('This session belongs to another company')
-    return { kind: 'session', holderId: owner.sessionId, companyId, taskId: t?.id ?? null, agentId: t?.agentId ?? null, holdsTask: !!t && t.status === 'in_progress' && t.runId === owner.sessionId }
+    return { kind: 'session', holderId: owner.sessionId, companyId, taskId: t?.id ?? null, agentId: t?.agentId ?? null, holdsTask: !!t && t.status === 'in_progress' && t.runId === owner.sessionId, chatAgentId }
   }
   /**
    * The broker's checks (§6) on top of resolveCaller: the line's company and task must be the caller's, and a write
@@ -240,9 +278,14 @@ export class TaskTools {
       if (tool === 'company_file_task' && caller.taskId) fail('You are working on a task: use task_create or task_handoff instead')
       return
     }
+    // PROACTIVE.md §3: task_update moves a task a chat (a session holding no task) tracks
+    if (isSessionTaskTool(tool)) {
+      if (caller.kind !== 'session' || caller.taskId) fail('task_update is for chats; report on your task with task_report')
+      return
+    }
     if (!TASK_MUTATIONS.has(tool)) return
-    // task_create from a session that holds no task files a top-level task of its company
-    if (tool === 'task_create' && caller.kind === 'session' && !caller.taskId) return
+    // task_create from a session that holds no task tracks a task of its company; task_comment {id} notes on one
+    if ((tool === 'task_create' || tool === 'task_comment') && caller.kind === 'session' && !caller.taskId) return
     if (!caller.taskId) fail('You are not working on a task')
     if (!caller.holdsTask) fail(`${this.c.task(caller.taskId!).identifier} is no longer yours to change (its run or session ended)`)
   }
@@ -256,11 +299,16 @@ export class TaskTools {
     switch (tool) {
       case 'task_get': out = this.get(caller, parseArgs(ARGS.task_get, args).id); break
       case 'task_list': { const a = parseArgs(ARGS.task_list, args); out = this.list(caller, a.scope, a.limit); break }
-      case 'task_comment': out = this.comment(caller, parseArgs(ARGS.task_comment, args).text); break
+      case 'task_comment': { const a = parseArgs(ARGS.task_comment, args); out = caller.kind === 'session' && !caller.taskId ? this.chatComment(caller, a.id, a.text) : this.comment(caller, a.text, a.id); break }
+      case 'task_update': out = this.update(caller, parseArgs(ARGS.task_update, args)); break
       case 'task_report': out = this.report(caller, parseArgs(ARGS.task_report, args)); break
       case 'task_ask': out = this.ask(caller, parseArgs(ARGS.task_ask, args)); break
-      case 'task_create': out = this.create(caller, parseArgs(ARGS.task_create, args), hints.callId ?? null); break
+      case 'task_create': { const a = parseArgs(ARGS.task_create, args); out = caller.kind === 'session' && !caller.taskId ? this.track(caller, a, hints.callId ?? null) : this.create(caller, a, hints.callId ?? null); break }
       case 'task_handoff': out = this.handoff(caller, parseArgs(ARGS.task_handoff, args)); break
+      case 'task_brief_edit': out = this.briefEdit(caller, parseArgs(ARGS.task_brief_edit, args)); break
+      case 'task_criterion': out = this.criterion(caller, parseArgs(ARGS.task_criterion, args)); break
+      case 'task_decide': out = this.decision(caller, parseArgs(ARGS.task_decide, args)); break
+      case 'task_attach_proof': out = this.attachProof(caller, parseArgs(ARGS.task_attach_proof, args)); break
       case 'company_departments': parseArgs(ARGS.company_departments, args); out = this.departmentsOf(caller); break
       case 'company_file_task': out = this.fileTask(caller, parseArgs(ARGS.company_file_task, args), hints.callId ?? null); break
       case 'company_create_department': out = this.createDepartment(caller, parseArgs(ARGS.company_create_department, args)); break
@@ -271,11 +319,8 @@ export class TaskTools {
 
   /** A task of the caller's company by id or identifier; another company's reads as not found. */
   private find(companyId: string, ref: string): BoardTask {
-    const byId = this.db.prepare('SELECT id FROM company_tasks WHERE id=? AND company_id=?').get(ref, companyId) as { id: string } | undefined
-    if (byId) return this.c.task(byId.id)
-    const m = /^PRN-(\d+)$/i.exec(ref)
-    const bySeq = m ? this.db.prepare('SELECT id FROM company_tasks WHERE seq=? AND company_id=?').get(Number(m[1]), companyId) as { id: string } | undefined : undefined
-    return bySeq ? this.c.task(bySeq.id) : fail('Task not found in this company')
+    // five doors step 2: NC-12 inside the company (and a Personal task's old PRN-<seq>)
+    return this.c.findTask(companyId, ref) ?? fail('Task not found in this company')
   }
   private own(caller: TaskCaller): BoardTask {
     const t = this.c.task(caller.taskId ?? fail('You are not working on a task'))
@@ -309,7 +354,10 @@ export class TaskTools {
         description: clip(t.description, 4000), sourceUrl: t.sourceUrl, parent: t.parentId,
         dependencies: deps.map(x => ({ identifier: x.identifier, title: clip(x.title, 120), status: x.status, ...(x.doneNote ? { doneNote: clip(x.doneNote, 500) } : {}) })),
         subtasks: children.map(x => ({ identifier: x.identifier, title: clip(x.title, 120), status: x.status })),
-        report: t.report, ask: t.ask, ...(t.doneNote ? { doneNote: clip(t.doneNote, 1000) } : {}), handoffs: t.handoffs
+        report: t.report, ask: t.ask, ...(t.doneNote ? { doneNote: clip(t.doneNote, 1000) } : {}), handoffs: t.handoffs,
+        // PLANS.md §1: the brief (revisions left out: who changed what is for the inspector)
+        brief: (({ revisions: _r, ...b }) => ({ ...b, context: clip(b.context, 2000), decisions: b.decisions.slice(-10) }))(briefOf(t)),
+        proof: proofOf(t).map(p => ({ id: p.id, kind: p.kind, title: p.title }))
       },
       activity
     }
@@ -329,8 +377,9 @@ export class TaskTools {
     return { scope, total: rows.length, tasks: rows.slice(0, limit).map(t => this.summary(t)) }
   }
 
-  private comment(caller: TaskCaller, text: string): Record<string, unknown> {
+  private comment(caller: TaskCaller, text: string, ref?: string): Record<string, unknown> {
     const t = this.own(caller)
+    if (ref && this.find(caller.companyId, ref).id !== t.id) fail(`You can only comment on your current task (${t.identifier})`)
     const body = this.redact(text).trim()
     if (!body) fail('The comment is empty after redaction')
     // by 'agent': an agent comment never wakes anyone (§0.7)
@@ -347,7 +396,8 @@ export class TaskTools {
     this.handoffs.delete(t.id)
     this.harvester.forget(t.id)
     this.changed(t.companyId)
-    return { ok: true, task: t.identifier, outcome: a.outcome, appliedAt: 'run end', detail: a.outcome === 'review' ? 'A human reviews and approves the task; you cannot mark it done.' : 'The task waits for the human with your reason.' }
+    const remind = this.reportReminder(t, caller)
+    return { ok: true, task: t.identifier, outcome: a.outcome, appliedAt: 'run end', detail: a.outcome === 'review' ? 'A human reviews and approves the task; you cannot mark it done.' : 'The task waits for the human with your reason.', ...(remind ? { brief: remind } : {}) }
   }
 
   private ask(caller: TaskCaller, a: z.infer<typeof ARGS.task_ask>): Record<string, unknown> {
@@ -361,6 +411,7 @@ export class TaskTools {
   }
 
   private create(caller: TaskCaller, a: z.infer<typeof ARGS.task_create>, callId: string | null): Record<string, unknown> {
+    if (a.parent || a.start) fail('parent and start are for chats; your subtasks always belong to your current task')
     const parent = caller.taskId ? this.own(caller) : null
     if (a.blocksCurrent && !parent) fail('blocksCurrent needs a current task')
     // one level deep: a subtask never files subtasks of its own
@@ -379,12 +430,23 @@ export class TaskTools {
       if (n >= TASK_CREATE_CAPS.perTask) fail(`${parent.identifier} already has ${n} agent-filed subtasks (limit ${TASK_CREATE_CAPS.perTask})`)
     }
     const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
-    const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=?").get(caller.companyId, since) as { n: number }).n
+    const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(caller.companyId, since) as { n: number }).n
     if (hour >= TASK_CREATE_CAPS.perCompanyPerHour) fail(`Agents filed ${hour} tasks in this company in the last hour (limit ${TASK_CREATE_CAPS.perCompanyPerHour}). Mention the follow-up in your report instead.`)
     let dep: Department | null = null
     if (a.departmentKey) {
       dep = this.c.departments.byKey(caller.companyId, a.departmentKey.toLowerCase())
       if (!dep || dep.archivedAt || dep.companyId !== caller.companyId) fail(`No department "${a.departmentKey}" in this company. Known: ${this.c.departments.list(caller.companyId).map(d => d.key).join(', ') || 'none'}`)
+    }
+    let agentId: string | null = null
+    if (a.agent) {
+      if (!this.d.teammate) fail('Naming a teammate is not available here: leave agent out')
+      const found = this.d.teammate!(caller.companyId, a.agent)
+      if (!('agentId' in found)) fail(`No teammate "${clip(a.agent, 80)}" in this company (teammates: ${found.teammates.join(', ') || 'none'})`)
+      const agent = this.c.departments.listAgents({ companyId: caller.companyId }).find(x => x.id === (found as { agentId: string }).agentId && !x.archivedAt)
+      if (!agent || agent.companyId !== caller.companyId) fail(`No teammate "${clip(a.agent, 80)}" in this company`)
+      if (dep && agent!.departmentId && agent!.departmentId !== dep.id) fail(`${agent!.name} is not in ${a.departmentKey}`)
+      agentId = agent!.id
+      if (!dep && agent!.departmentId) dep = this.c.departments.get(agent!.departmentId)
     }
     const company = this.c.passport(caller.companyId)
     const repoId = parent?.repoId && company.repoIds.includes(parent.repoId) ? parent.repoId : null
@@ -392,7 +454,7 @@ export class TaskTools {
       const t = this.c.createTask({
         companyId: caller.companyId, title: clip(this.redact(a.title), TASK_LIMITS.title), description: this.redact(a.description), repoId,
         status: dep ? 'todo' : 'triage', priority: parent?.priority ?? 0, source: 'agent', sourceUrl: null, externalId,
-        assigneeProfileId: null, parentId: parent?.id ?? null, dependencyIds: [], departmentId: dep?.id ?? null
+        assigneeProfileId: null, parentId: parent?.id ?? null, dependencyIds: [], departmentId: dep?.id ?? null, ...(agentId ? { agentId } : {})
       })
       if (a.blocksCurrent && parent) this.addDependency(parent, t.id)
       return t
@@ -404,6 +466,82 @@ export class TaskTools {
     return { ok: true, task: this.summary(t), parent: parent?.identifier ?? null, blocksCurrent: !!(a.blocksCurrent && parent),
       ...(a.blocksCurrent && parent ? { detail: `${parent.identifier} waits for ${t.identifier} after this turn and resumes once it is done.` } : {}) }
   }
+  // ---------- PROACTIVE.md §3: the tasks a chat tracks for its own work ----------
+
+  /** AGENT CHAT: the task is assigned to the agent whose chat this is (its chat works on it like a run would). */
+  private agentOwns(caller: TaskCaller, t: BoardTask): boolean {
+    return !!caller.chatAgentId && t.agentId === caller.chatAgentId && t.companyId === caller.companyId
+  }
+  /** A task of the caller's company this chat tracks (task_create from the chat), or one assigned to its agent. */
+  private tracked(caller: TaskCaller, ref: string): BoardTask {
+    const t = this.find(caller.companyId, ref)
+    if (trackedBy(t) !== caller.holderId && !this.agentOwns(caller, t)) fail(`${t.identifier} is not tracked by this chat. Comment on tasks you track, filed or are assigned; file new work with task_create or company_file_task.`)
+    return t
+  }
+  /**
+   * task_create from a chat: a task the chat itself works on, never routed to an agent (the dispatcher skips it).
+   * `parent` (a task this chat tracks) groups several; `start` moves it to in_progress at once. Replays of the same tool
+   * call return the first task; at most trackedPerSessionPerHour per chat.
+   */
+  private track(caller: TaskCaller, a: z.infer<typeof ARGS.task_create>, callId: string | null): Record<string, unknown> {
+    if (a.blocksCurrent) fail('blocksCurrent needs a current task')
+    const db = this.db
+    const externalId = `${TRACK_PREFIX}${caller.holderId}:${callId ? clip(callId, 120) : randomBytes(8).toString('hex')}`
+    const replay = callId ? db.prepare('SELECT id FROM company_tasks WHERE company_id=? AND source_key=?').get(caller.companyId, `agent:external:${externalId}`) as { id: string } | undefined : undefined
+    if (replay) return { ok: true, task: this.summary(this.c.task(replay.id)), replayed: true }
+    const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
+    const n = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.externalId') LIKE ? AND json_extract(data,'$.createdAt')>=?").get(caller.companyId, `${TRACK_PREFIX}${caller.holderId}:%`, since) as { n: number }).n
+    if (n >= TASK_CREATE_CAPS.trackedPerSessionPerHour) fail(`This chat opened ${n} tasks in the last hour (limit ${TASK_CREATE_CAPS.trackedPerSessionPerHour}). Group the rest under one task.`)
+    const parent = a.parent ? this.tracked(caller, a.parent) : null
+    if (parent?.parentId) fail(`${parent.identifier} is already a subtask; tasks go one level deep`)
+    let dep: Department | null = null
+    if (a.departmentKey) {
+      dep = this.c.departments.byKey(caller.companyId, a.departmentKey.toLowerCase())
+      if (!dep || dep.archivedAt || dep.companyId !== caller.companyId) fail(`No department "${a.departmentKey}" in this company. Known: ${this.c.departments.list(caller.companyId).map(d => d.key).join(', ') || 'none'}`)
+    } else {
+      // a department chat's tasks belong to its department
+      let depId: string | null = null
+      try { depId = (db.prepare('SELECT department_id FROM sessions WHERE id=?').get(caller.holderId) as { department_id: string | null } | undefined)?.department_id ?? null } catch { /* older db */ }
+      dep = depId ? this.c.departments.get(depId) : parent?.departmentId ? this.c.departments.get(parent.departmentId) : null
+      if (dep && (dep.archivedAt || dep.companyId !== caller.companyId)) dep = null
+    }
+    const created = this.c.createTask({
+      companyId: caller.companyId, title: clip(this.redact(a.title), TASK_LIMITS.title), description: this.redact(a.description), repoId: null,
+      status: 'todo', priority: 0, source: 'agent', sourceUrl: null, externalId,
+      assigneeProfileId: null, parentId: parent?.id ?? null, dependencyIds: [], departmentId: dep?.id ?? null
+    })
+    let t = this.c.task(created.id)
+    if (a.start) t = this.c.moveTracked(t.id, caller.holderId, 'in_progress', null)
+    if (parent) this.c.activity(parent.id, 'comment', `Opened ${t.identifier}: ${clip(t.title, 200)}`, 'agent')
+    this.changed(caller.companyId)
+    return { ok: true, task: this.summary(t), parent: parent?.identifier ?? null, tracked: true,
+      detail: `${t.identifier} is yours to work on here: task_update it to in_progress when you start, in_review once built and checked. Only the founder marks it done.` }
+  }
+  /** task_update: move, retitle or rewrite a task this chat tracks. */
+  private update(caller: TaskCaller, a: z.infer<typeof ARGS.task_update>): Record<string, unknown> {
+    let t = this.tracked(caller, a.id)
+    if (a.title !== undefined || a.description !== undefined) {
+      t = this.c.editTracked(t.id, caller.holderId, { ...(a.title !== undefined ? { title: this.redact(a.title) } : {}), ...(a.description !== undefined ? { description: this.redact(a.description) } : {}) }, this.agentOwns(caller, t) ? caller.chatAgentId : null)
+    }
+    const note = a.note ? this.redact(a.note).trim() : null
+    if (a.status) t = this.c.moveTracked(t.id, caller.holderId, a.status, note, this.agentOwns(caller, t) ? caller.chatAgentId : null)
+    else if (note) this.c.activity(t.id, 'comment', note, 'agent')
+    this.changed(caller.companyId)
+    return { ok: true, task: this.summary(t), ...(t.status === 'in_review' ? { detail: 'The founder reviews and approves it; you cannot mark it done.' } : {}) }
+  }
+  /** task_comment from a chat: a note on a task this chat tracks or filed (company_file_task). Never wakes anyone. */
+  private chatComment(caller: TaskCaller, ref: string | undefined, text: string): Record<string, unknown> {
+    if (!ref) fail('You are not working on a task: pass the id of a task you track or filed')
+    const t = this.find(caller.companyId, ref!)
+    const mine = trackedBy(t) === caller.holderId || (t.source === 'agent' && !!t.externalId?.startsWith(`${caller.holderId}:`)) || this.agentOwns(caller, t)
+    if (!mine) fail(`${t.identifier} was not opened by this chat; comment on tasks you track, filed or are assigned`)
+    const body = this.redact(text).trim()
+    if (!body) fail('The comment is empty after redaction')
+    this.c.activity(t.id, 'comment', body, 'agent')
+    this.changed(t.companyId)
+    return { ok: true, task: t.identifier }
+  }
+
   // ---------- §9 the company tools of a chat ----------
 
   private departmentsOf(caller: TaskCaller): Record<string, unknown> {
@@ -450,7 +588,7 @@ export class TaskTools {
     const replay = callId ? db.prepare('SELECT id FROM company_tasks WHERE company_id=? AND source_key=?').get(caller.companyId, `agent:external:${externalId}`) as { id: string } | undefined : undefined
     if (replay) return { ok: true, task: this.summary(this.c.task(replay.id)), replayed: true }
     const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
-    const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=?").get(caller.companyId, since) as { n: number }).n
+    const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(caller.companyId, since) as { n: number }).n
     if (hour >= TASK_CREATE_CAPS.perCompanyPerHour) fail(`Agents filed ${hour} tasks in this company in the last hour (limit ${TASK_CREATE_CAPS.perCompanyPerHour}). Ask the user to add it on the Board.`)
     const departments = this.c.departments.list(caller.companyId)
     const known = () => departments.map(d => d.key).join(', ') || 'none'
@@ -529,6 +667,63 @@ export class TaskTools {
       detail: capped ? `${t.identifier} was already handed off ${MAX_HANDOFFS} times: at run end it waits for the human (handoff_cap).` : `End your turn now. ${label} takes the task when your run ends.` }
   }
 
+  // ---------- PLANS.md §1: the brief ----------
+
+  /** The author of a brief edit: the task's seat, never what the arguments say. */
+  private author(caller: TaskCaller): string { return `agent:${caller.agentId ?? 'agent'}` }
+  private briefEdit(caller: TaskCaller, a: z.infer<typeof ARGS.task_brief_edit>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => editSection(b, a.section, a.mode, this.redact(a.text), this.author(caller), at))
+    this.changed(t.companyId)
+    const b = briefOf(next)
+    return { ok: true, task: t.identifier, section: a.section, ...(a.section === 'criteria' ? { criteria: b.criteria } : a.section === 'questions' ? { questions: b.questions } : { length: (b[a.section] as string).length }) }
+  }
+  private criterion(caller: TaskCaller, a: z.infer<typeof ARGS.task_criterion>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => setCriterion(b, a.id, a.state, a.reason ? this.redact(a.reason) : undefined, this.author(caller), at))
+    this.changed(t.companyId)
+    const b = briefOf(next)
+    return { ok: true, task: t.identifier, open: b.criteria.filter(c => c.state === 'open').map(c => c.id), criteria: b.criteria.length }
+  }
+  private decision(caller: TaskCaller, a: z.infer<typeof ARGS.task_decide>): Record<string, unknown> {
+    const t = this.own(caller)
+    const next = this.briefs.edit(t.id, (b, at) => decide(b, this.redact(a.text), this.redact(a.why), this.author(caller), at))
+    this.changed(t.companyId)
+    return { ok: true, task: t.identifier, decisions: briefOf(next).decisions.length }
+  }
+  private attachProof(caller: TaskCaller, a: z.infer<typeof ARGS.task_attach_proof>): Record<string, unknown> {
+    const t = this.own(caller)
+    const ref = checkProofRef(a.kind, a.ref, this.proofRoots(t, caller), s => this.redact(s))
+    const out = this.briefs.attach(t.id, { kind: a.kind, title: this.redact(a.title), ref }, this.author(caller))
+    this.changed(t.companyId)
+    return { ok: true, task: t.identifier, proof: { id: out.proof.id, kind: out.proof.kind, title: out.proof.title }, total: proofOf(out.task).length }
+  }
+  /** PLANS.md §1: the brief this turn has not written yet, as advice in task_report's result (never an error). */
+  private reportReminder(t: BoardTask, caller: TaskCaller): string {
+    try {
+      const since = caller.kind === 'run' ? ((this.db.prepare('SELECT started_at AS s FROM runs WHERE id=?').get(caller.holderId) as { s: string | null } | undefined)?.s ?? null) : null
+      return briefReminder(t, since, this.author(caller))
+    } catch { return '' }
+  }
+  private proofRoots(t: BoardTask, caller: TaskCaller): string[] {
+    if (this.d.proofRoots) return this.d.proofRoots(t, caller)
+    const roots: string[] = []
+    if (caller.kind !== 'run') return roots
+    const run = this.db.prepare('SELECT artifacts_dir AS dir, target_json AS target FROM runs WHERE id=?').get(caller.holderId) as { dir: string | null; target: string | null } | undefined
+    // where the agent works comes first (a relative proof path is relative to it), the run's artifacts last
+    // WORKTREE.md / PLANS.md §2.4: the task's own worktree, or its milestone's (a plan task works in its parent's)
+    try {
+      const parent = t.plan?.role === 'task' && t.parentId ? this.c.task(t.parentId) : null
+      const w = t.work ?? (parent?.plan?.role === 'milestone' ? parent.work : null)
+      if (w?.worktreePath && !w.removedAt) roots.push(w.worktreePath)
+    } catch { /* no worktree */ }
+    try {
+      const wt = this.db.prepare("SELECT path FROM worktrees WHERE run_id=? AND status IN ('creating','active','kept') ORDER BY created_at DESC LIMIT 1").get(caller.holderId) as { path: string } | undefined
+      if (wt?.path) roots.push(wt.path)
+    } catch { /* older db */ }
+    if (run?.dir) roots.push(run.dir)
+    return roots
+  }
   // ---------- run end ----------
 
   /**

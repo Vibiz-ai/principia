@@ -1,6 +1,8 @@
 /**
  * DEPARTMENTS.md §4.5: the report of an inject adapter (Codex, Gemini, Cursor, or a Claude step without the hivetask
- * tools) is the fenced `principia-task-report` JSON block at the end of its output, parsed with zod. A malformed or
+ * tools) is the fenced `principia-task-report` JSON block at the end of its output, parsed with zod. ORCHESTRATOR.md
+ * §1.2: a trailing `principia-run-report` block (the run report contract, on every harness) counts too; its outcome,
+ * summary and evidence map onto the same task report, so the board contract does not change. A malformed or
  * non-trailing block is no report: the run end then follows §1.4 (passed → in_review flagged "no report"), never a loop.
  * The harvest only writes `task.report` while the run still owns the task; CompanyStore.syncRun turns it into the
  * outcome at run end. A report set through task_report / task_ask (MCP) is never overwritten.
@@ -9,6 +11,9 @@ import { z } from 'zod'
 import type { BoardTask, TaskReport } from '../../shared/company'
 import type { CompanyStore } from './index'
 import { TASK_LIMITS } from './taskToolDefs'
+import { RUN_REPORT_FENCE } from '../../shared/orchestrator'
+import { boardOutcome, toRunReport, trailingFence } from '../orchestrator/runReport'
+import { scrubSecrets } from '../forum/teamTools'
 
 export const REPORT_FENCE = 'principia-task-report'
 const reportSchema = z.object({
@@ -18,34 +23,34 @@ const reportSchema = z.object({
 })
 export type HarvestedReport = Omit<TaskReport, 'at'>
 
-/** Output tail the parser looks at (the block is at the end; a huge transcript is never scanned whole). */
-const TAIL = 64 * 1024
 const clip = (s: string, n: number) => s.length > n ? `${s.slice(0, n - 1)}…` : s
 
 /**
- * The trailing fenced report of an agent's output, or null (missing, not at the end, not JSON, wrong shape). Only
- * whitespace may follow the closing fence. Summary and evidence are clipped to the task_report limits.
+ * The trailing fenced report of an agent's output (a task report or a run report), or null (missing, not at the end,
+ * not JSON, wrong shape). Only whitespace may follow the closing fence. Summary and evidence are clipped to the
+ * task_report limits.
  */
 export function parseTaskReport(output: string | null | undefined): HarvestedReport | null {
-  if (!output) return null
-  const tail = output.length > TAIL ? output.slice(-TAIL) : output
-  // the last opening fence; its body runs to a closing fence that only whitespace follows
-  const open = [...tail.matchAll(/(^|\n)[ \t]*(`{3,}|~{3,})[ \t]*principia-task-report[ \t]*\r?\n/g)].pop()
-  if (!open) return null
-  const fence = open[2]
-  const body = tail.slice(open.index! + open[0].length)
-  const close = new RegExp(`\\r?\\n[ \\t]*${fence[0] === '`' ? '`' : '~'}{${fence.length},}[ \\t]*\\s*$`).exec(body)
-  if (!close) return null
+  const f = trailingFence(output, [REPORT_FENCE, RUN_REPORT_FENCE])
+  if (!f) return null
   let json: unknown
   try {
-    json = JSON.parse(body.slice(0, close.index))
+    json = JSON.parse(f.body)
   } catch {
     return null
   }
-  const r = reportSchema.safeParse(json)
-  if (!r.success) return null
-  const evidence = r.data.evidence.map(e => e.trim()).filter(Boolean).slice(0, TASK_LIMITS.evidence).map(e => clip(e, TASK_LIMITS.evidenceItem))
-  return { outcome: r.data.outcome, summary: clip(r.data.summary, TASK_LIMITS.summary), evidence }
+  let data: { outcome: 'review' | 'blocked'; summary: string; evidence: string[] }
+  if (f.name === RUN_REPORT_FENCE) {
+    const run = toRunReport(json)
+    if (!run) return null
+    data = boardOutcome(run)
+  } else {
+    const r = reportSchema.safeParse(json)
+    if (!r.success) return null
+    data = r.data
+  }
+  const evidence = data.evidence.map(e => e.trim()).filter(Boolean).slice(0, TASK_LIMITS.evidence).map(e => clip(e, TASK_LIMITS.evidenceItem))
+  return { outcome: data.outcome, summary: clip(data.summary, TASK_LIMITS.summary), evidence }
 }
 
 /** What the harvester needs from a finished step (EngineContext.onStepOutput's StepOutputEvent). */
@@ -80,7 +85,8 @@ export class ReportHarvester {
     if (!mine && (t.report || (t.ask && !t.ask.answer))) return null
     const parsed = parseTaskReport(e.output)
     if (!parsed) return null
-    const redact = this.d.redact ?? (s => s)
+    // the vault's own values, then the secret shapes it cannot know (a key pasted into the report)
+    const redact = (s: string) => scrubSecrets(this.d.redact ? this.d.redact(s) : s)
     const report: TaskReport = { outcome: parsed.outcome, summary: redact(parsed.summary), evidence: parsed.evidence.map(redact), at: (this.d.now?.() ?? new Date()).toISOString() }
     this.d.company().patchInFlight(t.id, { report })
     this.harvested.set(t.id, e.runId)

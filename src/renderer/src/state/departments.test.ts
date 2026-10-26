@@ -151,14 +151,16 @@ describe('Pause all agents', () => {
     expect(m.getState().companies.find((c) => c.id === 'co_a')?.autopilot).toBe(true)
   })
 
-  it('is in the rail menu only with departments on', async () => {
-    const menu = fakeHive.ui.contextMenu as unknown as { mock: { calls: [{ items: { id?: string }[] }][] } }
+  it('a company tile pauses that company only (A4), with departments on; never every company', async () => {
+    const menu = fakeHive.ui.contextMenu as unknown as { mock: { calls: [{ items: { id?: string; label?: string }[] }][] } }
     m.setState({ settings: flags(true, false) })
     await m.companyContextMenu(COMPANIES[1]!)
-    expect(menu.mock.calls.at(-1)![0].items.some((i) => i.id === 'pauseAgents')).toBe(false)
+    expect(menu.mock.calls.at(-1)![0].items.some((i) => i.id === 'pause')).toBe(false)
     m.setState({ settings: flags(true, true) })
     await m.companyContextMenu(COMPANIES[1]!)
-    expect(menu.mock.calls.at(-1)![0].items.some((i) => i.id === 'pauseAgents')).toBe(true)
+    const items = menu.mock.calls.at(-1)![0].items
+    expect(items.find((i) => i.id === 'pause')?.label).toBe('Pause Acme')
+    expect(items.some((i) => i.id === 'pauseAgents')).toBe(false)
   })
 })
 

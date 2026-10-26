@@ -11,8 +11,10 @@
  *   the task is in flight, and pumps otherwise. Comments are written with the store's hooks held, so they do not each
  *   wake the agent again.
  *
- * Board rules are never relaxed here: nothing moves a task the human holds (in review, parked, done, canceled). The
- * wake is queued on it and the result says what the human has to do.
+ * Board rules are never relaxed here: nothing moves a task the human holds (parked, canceled). The wake is queued on
+ * it and the result says what the human has to do. A schedule is the founder's standing Start: its fire starts the
+ * card with autopilot off and on a manual seat, and a card in review or done takes the fire as its next turn (Turn off,
+ * or canceling the card, is how a routine stops).
  */
 import { PERSONAL_COMPANY_ID, type BoardTask, type CompanyTaskInput, type PendingWake } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
@@ -109,6 +111,24 @@ function waitingFor(c: CompanyStore, t: BoardTask): string | null {
   return null
 }
 
+/**
+ * A schedule's standing card: what keeps this fire from starting now, or null when the dispatcher starts it. The
+ * founder turned the schedule on, so autopilot and a manual seat do not hold it (dispatcher.ts scheduledFire); a
+ * paused company or agent, a session seat and a busy agent do, and the message says what to do in plain words.
+ */
+function scheduleWaiting(c: CompanyStore, t: BoardTask): string | null {
+  if (t.status !== 'todo') return waitingFor(c, t)
+  if (!t.agentId) return waitingFor(c, t)
+  const agent = c.departments.getAgent(t.agentId)
+  if (!agent || agent.archivedAt) return `${t.identifier} has no agent yet; assign one`
+  if (c.isPaused(t.companyId)) return `${c.passport(t.companyId).name} is paused; it runs once you resume`
+  if (agent.pausedAt) return `${agent.name} is paused; resume ${agent.name} to run it`
+  if (agent.data.mode === 'session') return `${agent.name} works in a session; open ${t.identifier} to run it`
+  const busy = c.store.db.prepare("SELECT data FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>? LIMIT 1").get(agent.id, t.id) as { data: string } | undefined
+  if (busy) return `${agent.name} is busy on ${(JSON.parse(busy.data) as { identifier: string }).identifier}; it starts right after`
+  return null
+}
+
 function addWake(w: PendingWake | null, reason: string): PendingWake {
   return { reasons: [...(w?.reasons ?? []), reason.slice(0, WAKE_MAX)].slice(-50), count: (w?.count ?? 0) + 1 }
 }
@@ -147,6 +167,9 @@ export function scheduleBoard(d: RecurringDeps): ScheduleBoard {
       const c = d.company()
       const companyId = s.companyId ?? PERSONAL_COMPANY_ID
       let card = findBySource(c, companyId, 'schedule', s.id)
+      // the last fire's result is in review or was accepted (done): this fire is the card's next turn (the report and
+      // the done note stay in its activity). A canceled card stays the stop; a question waits for its answer.
+      if (card && (card.status === 'done' || (card.status === 'in_review' && (!card.ask || card.ask.answer)))) d.dispatcher()?.reopenForFire(card.id, s.name)
       const created = !card
       if (!card) {
         const t = s.target as RunTarget
@@ -161,7 +184,7 @@ export function scheduleBoard(d: RecurringDeps): ScheduleBoard {
       const when = f.trigger === 'manual' ? 'Run now' : f.trigger === 'catchup' ? `missed slot ${f.label}` : f.label
       quiet(c, () => c.activity(card!.id, 'comment', `Schedule "${s.name}" fired (${when})`, 'system'))
       const { coalesced, task } = wakeOnce(d, c, card.id, `Schedule "${s.name}" fired (${when}): do this fire's work as described in the task.`)
-      return { taskId: task.id, identifier: task.identifier, created, coalesced, waiting: coalesced ? null : waitingFor(c, task) }
+      return { taskId: task.id, identifier: task.identifier, created, coalesced, waiting: coalesced ? null : scheduleWaiting(c, task) }
     }
   }
 }

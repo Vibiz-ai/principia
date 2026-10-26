@@ -76,6 +76,9 @@ export type NormalizedEvent =
       toolUseId: string | null
       description: string | null
       suggestions: unknown[]
+      /** CHAT-UI.md: a chat names the ask like its card and offers the same buttons */
+      title?: string
+      options?: import('../../shared/live').AskOption[]
     }
   /** claude stdin control requests Hive does not handle: answered with an error. */
   | { kind: 'control_unknown'; requestId: string; subtype: string }

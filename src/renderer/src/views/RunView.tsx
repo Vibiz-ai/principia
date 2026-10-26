@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CollabWake, RunConversation } from '@shared/collab'
+import type { OrchAction, RunOrchestration } from '@shared/orchestrator'
+import '../styles/agentTalk.css'
 import type { Artifact, RunDetail, RunStep, RunWorktree } from '@shared/types'
 import type { AgentNode } from '@shared/live'
 import { AgentGlyph, Elapsed, NeedsBadge } from '../components/agents/AgentBits'
@@ -25,6 +28,7 @@ import type { SlackDraft, SlackRunContext } from '@shared/slack'
 import { SlackDraftCard } from '../components/slack/SlackDraftCard'
 import { slackCall } from '../lib/slackApi'
 import { useSlack } from '../state/slack'
+import { TaskStrip } from '../components/board/TaskStrip'
 
 type Tab = 'output' | 'activity' | 'result' | 'prompt'
 
@@ -186,7 +190,7 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
         ) : (
           <Button onClick={() => void rerun(run)}>Re-run</Button>
         )}
-        <Button onClick={() => void navigate({ name: 'canvas', focusRunId: run.id })}>Canvas</Button>
+        <Button onClick={() => void navigate({ name: 'canvas', focusRunId: run.id })} title="See this run in Activity">Activity</Button>
         <IconButton icon="more" label="More" onClick={() => void runMenu()} />
       </Toolbar>
       {run.stopReason === 'rate_limited' && (
@@ -194,11 +198,15 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
           <LimitActions target={runLimitTarget(run)} open />
         </div>
       )}
+      {/* WORKTREE.md: which task this agent is doing */}
+      <TaskStrip taskId={(run as { taskId?: string | null }).taskId} ownerId={run.id} />
       <div className="run">
         <div className="run__left scroll">
           {run.reason && (isNothingToDo(run) ? <div className="callout callout--quiet selectable">Nothing to do · {run.reason}</div> : <div className="callout callout--failed selectable">{run.reason}</div>)}
           {run.worktree && <WorktreeChip wt={run.worktree} />}
           <RunSlackDrafts runId={run.id} />
+          <RunForumConversation runId={run.id} active={active} />
+          <RunPrincipiaAfter runId={run.id} active={active} />
           <div className="run__label">Steps</div>
           {steps.length === 0 && <div className="text-tertiary run__pad">{active ? 'Starting…' : 'No steps recorded.'}</div>}
           {steps.map((s) => {
@@ -527,6 +535,96 @@ function SlackProvenance({ ctx }: { ctx: SlackRunContext }): React.JSX.Element {
     >
       <Icon name="slack" size={11} /> Slack · {ctx.isDm ? `DM with ${ctx.userName}` : `${ctx.channelName.startsWith('#') ? '' : '#'}${ctx.channelName} · ${ctx.userName}`}
     </button>
+  )
+}
+
+/** AGENT-COLLAB.md §5: the conversation this run had with other agents in the Forum (asked, was asked, posted). */
+function RunForumConversation({ runId, active }: { runId: string; active: boolean }): React.JSX.Element | null {
+  const [conv, setConv] = useState<RunConversation | null>(null)
+  const load = useCallback(() => {
+    hive.forum.runConversation({ runId }).then(setConv, () => setConv(null))
+  }, [runId])
+  useEffect(() => load(), [load])
+  // live while the run is going (its asks get answered, its posts land)
+  useHiveEvent('forum:event', (e) => {
+    if (active && e.kind === 'message') load()
+  })
+  if (!conv || (!conv.asked.length && !conv.answered && !conv.messages.length)) return null
+  const cost = (w: CollabWake) => (w.costUsd == null ? '' : ` · ${w.costEstimated ? '~' : ''}$${w.costUsd.toFixed(w.costUsd < 0.01 ? 4 : 2)}`)
+  const threadId = conv.answered?.threadMessageId || conv.asked.find((w) => w.threadMessageId)?.threadMessageId || conv.messages[0]?.threadId || conv.messages[0]?.id
+  return (
+    <div className="run-forum">
+      <div className="run__label">Agent conversation</div>
+      {conv.answered && (
+        <div className="run-forum__wake">
+          Woken by <strong>{conv.answered.fromName}</strong> to answer (hop {conv.answered.depth}, {conv.answered.via}){conv.answered.why ? ` · why: ${conv.answered.why}` : ''} · {conv.answered.status}
+          {cost(conv.answered)}
+        </div>
+      )}
+      {conv.asked.map((w) => (
+        <div key={w.id} className="run-forum__wake">
+          Asked <strong>{w.toName}</strong> (hop {w.depth}, {w.via}) · {w.status === 'refused' ? `refused: ${w.note}` : w.status}
+          {w.why ? ` · why: ${w.why}` : ''}
+          {cost(w)}
+        </div>
+      ))}
+      {conv.messages.length > 0 && (
+        <div className="run-forum__msgs">
+          {conv.messages.map((m) => (
+            <div key={m.id} className="run-forum__msg">
+              <b>{m.authorName}</b> <span>{m.channelName ? `#${m.channelName}` : 'DM'} · {m.ref} · {tooltipTime(m.createdAt)}</span>
+              <p>{m.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {threadId && (
+        <div className="run-forum__open">
+          <Button size="sm" onClick={() => void navigate({ name: 'forum', threadId, channelId: conv.messages[0]?.channelId })}>
+            Open in the Forum
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const ORCH_SOURCE: Record<RunOrchestration['source'], string> = {
+  fence: 'Read the report at the end of the agent\'s answer.',
+  file: 'Read the report file the agent wrote.',
+  extracted: 'The agent left no report, so Principia read its answer. Ideas from it only wait for you; nothing was started.',
+  mcp: 'The agent did this itself with Principia\'s tools. Nothing was left to do.',
+  none: 'The agent left no report.'
+}
+const ORCH_STATUS: Record<OrchAction['status'], string> = { done: 'Done', skipped: 'Skipped', shadow: 'Would do', proposed: 'For you', failed: 'Did not work' }
+
+/** ORCHESTRATOR.md §5: what Principia did with this run's report (or, in trial mode, what it would have done). */
+function RunPrincipiaAfter({ runId, active }: { runId: string; active: boolean }): React.JSX.Element | null {
+  const [o, setO] = useState<RunOrchestration | null>(null)
+  const load = useCallback(() => {
+    hive.orchestrator.forRun({ runId }).then(setO, () => setO(null))
+  }, [runId])
+  useEffect(() => load(), [load, active])
+  // the after-run work lands a moment after the run ends (and may wait on one cheap model call)
+  useHiveEvent('data:changed', (e) => {
+    if (e.domain === 'tasks') load()
+  })
+  if (!o || (!o.actions.length && o.source === 'none')) return null
+  return (
+    <div className="run-forum run-principia">
+      <div className="run__label">Principia after this run</div>
+      <div className="run-forum__wake">
+        {o.mode === 'shadow' && <strong>Trial mode: nothing was done. </strong>}
+        {ORCH_SOURCE[o.source]}
+        {!o.appliedAt && ' Working on it…'}
+      </div>
+      {o.actions.map((a, i) => (
+        <div key={i} className="run-forum__wake run-principia__action">
+          <Pill tone={a.status === 'done' || a.status === 'proposed' ? 'accent' : 'idle'}>{ORCH_STATUS[a.status]}</Pill> <span className="selectable">{a.detail}</span>
+          {a.link && <code className="run-principia__link selectable">{a.link}</code>}
+        </div>
+      ))}
+    </div>
   )
 }
 

@@ -60,7 +60,7 @@ export function ContentStep(): React.JSX.Element | null {
         />
       </div>
       {!wants ? (
-        <p className="ob-hint">Image workflows stay off. Add keys later in Keys.</p>
+        <p className="ob-hint">Image workflows stay off. Turn them on any time in Settings › Keys & secrets.</p>
       ) : (
         <>
           <div className="ob-rows">
@@ -70,9 +70,9 @@ export function ContentStep(): React.JSX.Element | null {
               </span>
               <div className="ob-cap__tx">
                 <div className="ob-row__name">Images</div>
-                <div className="ob-cap__d">Carousels, product photos, ad creatives, thumbnails · 9 workflows with fal, 1 with OpenAI</div>
+                <div className="ob-cap__d">Carousels, product photos, ad creatives, thumbnails · 10 ready-made image workflows</div>
               </div>
-              {ready ? <Chip tone="ok">Ready</Chip> : <Chip tone="warn">Needs a key</Chip>}
+              {ready ? <Chip tone="ok">Ready</Chip> : <Chip tone="warn">Add a key below</Chip>}
             </div>
             <div className="ob-cap is-dis" aria-disabled="true">
               <span className="ob-cap__ic">

@@ -48,7 +48,7 @@ import {
 } from '../../shared/onboarding'
 import { briefForPlan } from '../../shared/onboardingBrief'
 import { finalizePlan, scheduleCostly, validatePlan, type ScreenFn } from '../../shared/onboardingPlan'
-import { pickPersona, type AgentPersona } from '../../shared/personas'
+import { personaNamesElsewhere, pickPersona, type AgentPersona } from '../../shared/personas'
 import type { AgentProfile, ExperimentalFlags, Repo, Schedule, ScheduleInput, Settings } from '../../shared/types'
 import type { CompanyStore } from '../company'
 import { ensureDefaultProfile } from '../db/seed'
@@ -299,7 +299,8 @@ export class LaunchService {
       workflows: workflowsForKeys(present),
       profileAdapters: this.d.profileAdapters().filter((a) => (PLAN_ADAPTERS as readonly string[]).includes(a)),
       hasCode: input.hasCode && (input.repos.length > 0 || !!input.github),
-      departmentsOn: input.enableFlags || departmentsEnabled(flags)
+      departmentsOn: input.enableFlags || departmentsEnabled(flags),
+      personasElsewhere: [...this.personasElsewhere(null)]
     }
     const planInput: PlanInput = {
       hasCode: available.hasCode,
@@ -519,8 +520,16 @@ export class LaunchService {
       (p) => ({ kind: 'company', id: p.id }),
       (p) => {
         if (p.id === PERSONAL_COMPANY_ID) throw new HiveError('internal', 'A business can’t be created as Personal')
+        // AUTOPILOT.md §7: a business set up here gets Autopilot from Start now / 'Start the first week' (start() below),
+        // never at creation: before Start nothing is set to run, so the chip and Home must not say 'Autopilot on'
         j.companyId = p.id
         j.companyName = p.name
+        // pm-review E12: the Instagram the founder named during setup is this company's account (drafts only), so
+        // Connections shows it connected and the Setup chip counts it
+        const ig = prep.input.answers.instagram.trim()
+        if (ig) {
+          try { this.d.company.update(p.id, { account: { kind: 'instagram', handle: ig.startsWith('@') ? ig : `@${ig}` } }) } catch { /* a handle the schema refuses stays a profile line only */ }
+        }
       }
     )
     return 'ok'
@@ -744,17 +753,27 @@ export class LaunchService {
    * included) is kept; an agent whose draft had none is picked again with the real seed (companyId + ':' + ref).
    * Deterministic, so a resumed launch gives the same answer; names stay unique across the plan.
    */
+  /** Names other companies' agents already have (never this one's): a new agent avoids them while any are free. */
+  private personasElsewhere(companyId: string | null): Set<string> {
+    try {
+      const d = this.d.company.departments
+      return personaNamesElsewhere(companyId, d.listAgents(), d.list(undefined, { includeArchived: true }))
+    } catch {
+      return new Set()
+    }
+  }
   private launchPersonas(companyId: string, prep: Prepared, agents: OnboardingPlan['agents']): Map<string, AgentPersona> {
     const drafted = new Set(prep.input.plan.agents.filter((a) => a.persona).map((a) => a.ref))
     const keep = (a: OnboardingPlan['agents'][number]) => !!a.persona && drafted.has(a.ref)
     const used = new Set(agents.filter(keep).map((a) => a.persona!.name.trim().toLowerCase()))
     const out = new Map<string, AgentPersona>()
+    const avoid = this.personasElsewhere(companyId)
     for (const a of agents) {
       if (keep(a)) {
         out.set(a.ref, a.persona!)
         continue
       }
-      const p = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, seed: `${companyId}:${a.ref}` })
+      const p = pickPersona({ departmentKey: a.departmentKey, role: a.role, used, avoid, seed: `${companyId}:${a.ref}` })
       used.add(p.name.toLowerCase())
       out.set(a.ref, p)
     }
@@ -958,6 +977,35 @@ export class LaunchService {
 
   // ---------- start (§7.5) ----------
 
+  /**
+   * AUTOPILOT.md §7: what Start the first week turns on, before it is pressed (never switched on silently): Autopilot
+   * (with tasks at once), the agents that will start work on their own, and the schedules that will start running.
+   * Read-only.
+   */
+  startPreview(req: { journalId: string; scheduleRefs: string[] }): import('../../shared/ipc').OnboardingStartPreview {
+    const j = this.journalOr404(req.journalId)
+    const companyId = this.own(j)
+    const board = this.departmentsOn()
+    const canRun = this.d.profileAdapters().length > 0
+    const deps = new Map(this.d.company.departments.list(companyId).map((d) => [d.id, d.name]))
+    const agents: string[] = []
+    for (const id of j.refs.autoAgents) {
+      const a = this.d.company.departments.getAgent(id)
+      if (!a || a.companyId !== companyId || a.archivedAt) continue
+      const name = a.data.persona?.name || a.name
+      agents.push(a.departmentId && deps.get(a.departmentId) ? `${name} (${deps.get(a.departmentId)})` : name)
+    }
+    const wanted = new Set(req.scheduleRefs)
+    const schedules: { name: string; when: string }[] = []
+    for (const r of j.scheduleRefs) {
+      if (!wanted.has(r.ref)) continue
+      const sch = this.d.store.getSchedule(r.id)
+      if (!sch || (sch.companyId ?? PERSONAL_COMPANY_ID) !== companyId) continue
+      schedules.push({ name: sch.name, when: sch.sentence })
+    }
+    return { autopilot: board && canRun, noAgentCli: !canRun, maxInFlight: START_MAX_IN_FLIGHT, agents: board ? agents : [], schedules }
+  }
+
   async start(req: { journalId: string; autopilot: boolean; scheduleRefs: string[] }): Promise<BoardSettings | null> {
     const j0 = this.journalOr404(req.journalId)
     return this.locked(j0.draftId, async () => {
@@ -981,6 +1029,9 @@ export class LaunchService {
         }
         if (canRun) this.d.company.setAutopilot(companyId, true, START_MAX_IN_FLIGHT)
       }
+      // I'll review first holds Autopilot off (the founder's choice); with no agent CLI every run would fail and park
+      // its task, so it waits off until one is installed
+      if ((!req.autopilot || !canRun) && this.d.company.boardSettings(companyId).autopilot) this.d.company.setAutopilot(companyId, false)
       const wanted = new Set(req.scheduleRefs)
       for (const r of j.scheduleRefs) {
         if (!wanted.has(r.ref)) continue

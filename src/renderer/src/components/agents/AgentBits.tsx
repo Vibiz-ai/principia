@@ -1,11 +1,11 @@
-/** Small shared pieces for live agents: status glyph (amber for Needs you), Needs-you badge, elapsed time. */
+/** Small shared pieces for live agents: status glyph (accent for Needs you), Needs-you badge, elapsed time. */
 import type { AgentNode } from '@shared/live'
 import { span } from '../../lib/time'
 import { elapsedMs, type AgentVisual } from '../../lib/live'
 import { useTick } from '../ui'
 
 const GLYPH: Record<AgentVisual, string> = {
-  needs: '⚑',
+  needs: '◆',
   running: '●',
   queued: '○',
   idle: '○',
@@ -40,7 +40,7 @@ export function NeedsBadge({ count, title }: { count: number; title?: string }):
   if (count <= 0) return null
   return (
     <span className="needs-badge" title={title ?? `${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you`}>
-      ⚑ {count}
+      ◆ {count}
     </span>
   )
 }

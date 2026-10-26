@@ -17,6 +17,13 @@ export function createCompanyBridge(company: CompanyStore, store: { companyGuard
         return null // in-memory db: no company folders
       }
     },
-    repoIds: (companyId) => company.passport(companyId).repoIds
+    repoIds: (companyId) => company.passport(companyId).repoIds,
+    pausedName: (companyId) => {
+      try {
+        return company.isPaused(companyId) ? company.passport(companyId).name : null
+      } catch {
+        return null
+      }
+    }
   }
 }

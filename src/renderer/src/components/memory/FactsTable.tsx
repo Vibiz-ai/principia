@@ -112,7 +112,7 @@ export function FactsTable({
         )}
         <span className="flex1" />
         {onRevertRun && (
-          <Button size="sm" variant="secondary" className="btn--amber" onClick={onRevertRun} title="Invalidate everything this run wrote and restore what it replaced. One-way: restore single items from History.">
+          <Button size="sm" variant="secondary" className="btn--caution" onClick={onRevertRun} title="Invalidate everything this run wrote and restore what it replaced. One-way: restore single items from History.">
             Revert Run…
           </Button>
         )}

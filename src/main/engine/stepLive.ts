@@ -40,6 +40,8 @@ export interface StepLiveOptions {
   activity?: string | null
   /** Called on every hook line (stall detection counts hook activity, CONTRACT §13). */
   onActivity?: () => void
+  /** The run's company (COMPANY.md §3); omitted = looked up from the stored run. */
+  companyId?: Id | null
 }
 
 const repoIdFor = (ctx: EngineContext, cwd: string): Id | null => {
@@ -53,6 +55,15 @@ const repoIdFor = (ctx: EngineContext, cwd: string): Id | null => {
     /* no repos */
   }
   return best?.id ?? null
+}
+
+/** The run's company stamp (a task run carries its task's, COMPANY.md §3); null when the store has none. */
+const runCompany = (ctx: EngineContext, runId: Id): Id | null => {
+  try {
+    return ctx.store.getRun(runId)?.companyId ?? null
+  } catch {
+    return null
+  }
 }
 
 export class StepLive {
@@ -86,6 +97,7 @@ export class StepLive {
       provider: o.provider,
       cwd: o.cwd,
       repoId: repoIdFor(ctx, o.cwd),
+      companyId: o.companyId ?? runCompany(ctx, o.runId),
       log: ctx.log
     })
     this.sink.onCloseStdin(() => this.handle?.end())

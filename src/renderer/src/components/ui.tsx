@@ -345,20 +345,31 @@ export function Sheet({
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onCancel, onPrimary, primaryDisabled])
+  // E13: a sheet takes focus when it opens, so Enter confirms and focus never stays on the button behind it. The
+  // first field when there is one; else the primary button (Enter = it), or Cancel for a destructive sheet; else the
+  // sheet itself, so keys go to the sheet and not to the page
   useEffect(() => {
-    const el = ref.current?.querySelector<HTMLElement>('[data-autofocus], input:not([type=hidden]):not([disabled]), textarea, select')
-    el?.focus()
+    const box = ref.current
+    if (!box) return
+    const field = box.querySelector<HTMLElement>('[data-autofocus], input:not([type=hidden]):not([disabled]), textarea, select')
+    const primary = box.querySelector<HTMLButtonElement>('.sheet__footer [data-sheet-primary]:not(:disabled)')
+    const cancel = box.querySelector<HTMLButtonElement>('.sheet__footer [data-sheet-cancel]')
+    const el = field ?? (destructive ? cancel : (primary ?? cancel)) ?? box
+    el.focus({ preventScroll: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return (
     <div className="sheet-layer" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="sheet" ref={ref} style={width ? { width } : undefined} role="dialog" aria-label={title}>
+      <div className="sheet" ref={ref} tabIndex={-1} style={width ? { width } : undefined} role="dialog" aria-modal="true" aria-label={title}>
         <div className="sheet__title">{title}</div>
         <div className="sheet__body">{children}</div>
         <div className="sheet__footer">
           <div className="sheet__footer-left">{footerLeft}</div>
-          <Button onClick={onCancel}>{cancelLabel}</Button>
+          <Button onClick={onCancel} data-sheet-cancel="">
+            {cancelLabel}
+          </Button>
           {onPrimary && (
-            <Button variant={destructive ? 'destructive' : 'primary'} onClick={onPrimary} disabled={primaryDisabled} title={primaryTitle} kbd="⌘↵">
+            <Button variant={destructive ? 'destructive' : 'primary'} onClick={onPrimary} disabled={primaryDisabled} title={primaryTitle} kbd="⌘↵" data-sheet-primary="">
               {primaryLabel}
             </Button>
           )}

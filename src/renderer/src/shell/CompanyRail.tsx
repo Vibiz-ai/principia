@@ -2,6 +2,7 @@
  * Company rail (COMPANY.md §8.1-8.2): All tile, one avatar per company with live badges, Personal and "+" at the
  * bottom. Shown once there is more than Personal; stays visible when the sidebar is collapsed.
  */
+import { AutopilotMark } from '../components/autopilot/AutopilotChip'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanyPassport } from '@shared/company'
 import type { Id } from '@shared/types'
@@ -11,7 +12,9 @@ import { Medallion } from '../components/roman'
 import { companiesHealth } from '../lib/agentHealth'
 import { t } from '../lib/voice'
 import { nativeMenu } from '../lib/hive'
-import { companyInitials, companyLabel, isPersonal, useCompanyBadges, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
+import { useCompanyLogoUrl, useLogoFit } from '../lib/logo'
+import { companyLabel, isCompanyPaused, isPersonal, railName, railText, useCompanyBadges, useLaneContext, useLiveItems, type CompanyBadge, type LiveItem } from '../lib/company'
+import { needsYouTasks, REASON_LABEL } from '../lib/board'
 import {
   activeCompany,
   closeNewCompany,
@@ -22,6 +25,7 @@ import {
   enterCompany,
   multiCompany,
   openLiveItem,
+  openBoard,
   openNewCompany,
   pauseAllAgents,
   reorderCompanies,
@@ -32,26 +36,41 @@ import {
 
 const COMPANY_DRAG_TYPE = 'application/x-principia-company'
 
-export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'>; size?: number; className?: string }): React.JSX.Element {
+/**
+ * The company's square chip (sidebar group header, chips, settings). With a logo (company:logos) the logo fills the
+ * chip: cropped when it paints its own ground, inset on the dark surface when it is light, on white when it is dark.
+ */
+export function CompanyAvatar({ company, size = 32, className = '' }: { company: Pick<CompanyPassport, 'name' | 'color'> & { id?: Id; railLabel?: string }; size?: number; className?: string }): React.JSX.Element {
+  const logo = useCompanyLogoUrl(company.id)
+  const fit = useLogoFit(logo)
+  if (logo)
+    return (
+      <span className={`co-avatar co-avatar--logo co-avatar--${fit ?? 'plain'} ${className}`} style={{ width: size, height: size }} aria-hidden>
+        <img src={logo} alt="" draggable={false} />
+      </span>
+    )
+  // E14: the company's own rail label ("HDG", "HDK") wherever its chip shows, so look-alike clients differ everywhere
+  const text = railText(company)
+  const wide = text.length > 2
   return (
     <span
-      className={`co-avatar ${className}`}
-      style={{ width: size, height: size, background: company.color || 'var(--series-other)', fontSize: Math.max(9, Math.round(size * 0.38)) }}
+      className={`co-avatar ${wide ? 'co-avatar--wide' : ''} ${className}`}
+      style={{ width: wide ? undefined : size, minWidth: size, height: size, background: company.color || 'var(--series-other)', fontSize: Math.max(wide ? 7 : 9, Math.round(size * (wide ? 0.32 : 0.38))) }}
       aria-hidden
     >
-      {companyInitials(company.name)}
+      {text}
     </span>
   )
 }
 
-/** Row badge: amber needs-you count, else a blue working dot, plus a red square tessera for a failed run in 24 h (VOICE.md §5.6). */
+/** Row badge: accent needs-you count, else a blue working dot, plus a red square tessera for a failed run in 24 h (VOICE.md §5.6). */
 export function CompanyBadgeMark({ badge }: { badge: CompanyBadge | undefined }): React.JSX.Element | null {
   if (!badge) return null
   return (
     <>
       {badge.needsYou > 0 ? (
         <span className="side-row__badge side-row__badge--needs" title={`${badge.needsYou} need${badge.needsYou === 1 ? 's' : ''} you`}>
-          ⚑ {badge.needsYou}
+          ◆ {badge.needsYou}
         </span>
       ) : (
         badge.working > 0 && (
@@ -85,10 +104,14 @@ export function badgeTitle(name: string, b: CompanyBadge | undefined, laurel = f
  */
 export function RailCoin({ company, badge, healthy, size = 32 }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system'>; badge: CompanyBadge | undefined; healthy: boolean; size?: number }): React.JSX.Element {
   const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
   return (
     <span className="rail__coin" aria-hidden>
       <Medallion
         name={company.name}
+        logo={logo}
+        logoFit={fit}
         color={company.color || undefined}
         size={size}
         initial={personal ? 'P' : undefined}
@@ -98,6 +121,25 @@ export function RailCoin({ company, badge, healthy, size = 32 }: { company: Pick
         // a hook for the failed state; the mark itself is the Medallion's red square tessera (no rail dot any more)
         className={badge?.failed ? 'rail__failed' : undefined}
       />
+    </span>
+  )
+}
+
+/**
+ * Five doors E14 (design §2.5): a company on the rail as a monogram tile, so five clients that share initials can be
+ * told apart: its own short label (or its initials) in Geist on its colour at a 34% tint, inside a white line ring.
+ * A logo fills the tile instead. Personal is the person glyph. Working: a thin blue arc; a failed run: the red square.
+ */
+export function RailMark({ company, badge, size = 32 }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system' | 'railLabel'>; badge?: CompanyBadge; size?: number }): React.JSX.Element {
+  const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
+  const text = personal ? '' : railText(company)
+  const working = !!badge?.working && !badge.needsYou
+  return (
+    <span className={`rail-mark ${working ? 'is-working' : ''} ${personal ? 'rail-mark--personal' : ''} ${logo ? `rail-mark--logo rail-mark--${fit ?? 'plain'}` : ''}`} style={{ width: size, height: size, '--co': company.color || 'var(--series-other)', fontSize: Math.max(9, Math.round(size * (text.length > 2 ? 0.3 : 0.36))) } as React.CSSProperties} aria-hidden>
+      {logo ? <img src={logo} alt="" draggable={false} /> : personal ? <Icon name="user" size={Math.round(size * 0.5)} /> : text}
+      {badge?.failed && <i className="rail-mark__failed" />}
     </span>
   )
 }
@@ -151,7 +193,7 @@ export function CompanyRail(): React.JSX.Element | null {
   const armHover = (id: Id, el: HTMLElement): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
     const top = el.getBoundingClientRect().top
-    hoverTimer.current = setTimeout(() => setHover({ id, top }), 350)
+    hoverTimer.current = setTimeout(() => setHover({ id, top }), 120)
   }
   const disarmHover = (): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
@@ -162,14 +204,15 @@ export function CompanyRail(): React.JSX.Element | null {
     const b = byCompany[c.id]
     const draggable = !isPersonal(c)
     const healthy = !!health[c.id]
-    const title = badgeTitle(companyLabel(c, true), b, railLaurel(c, b, healthy))
+    const paused = isCompanyPaused(c)
+    // E14: the accessible name carries the state; the visible name is the styled hover label (never a native tooltip)
+    const title = `${badgeTitle(railName(c), b, railLaurel(c, b, healthy))}${paused ? ' · paused' : ''}`
     return (
       <button
         key={c.id}
         type="button"
         data-company={c.id}
-        className={`rail__tile ${active === c.id ? 'is-active' : ''} ${b?.working && !b.needsYou ? 'is-working' : ''} ${dragged === c.id ? 'is-dragging' : ''} ${dropAt?.id === c.id ? `rail-drop--${dropAt.placement}` : ''}`}
-        title={title}
+        className={`rail__tile ${active === c.id ? 'is-active' : ''} ${paused ? 'is-paused' : ''} ${b?.working && !b.needsYou ? 'is-working' : ''} ${dragged === c.id ? 'is-dragging' : ''} ${dropAt?.id === c.id ? `rail-drop--${dropAt.placement}` : ''}`}
         aria-label={title}
         aria-current={active === c.id ? 'true' : undefined}
         draggable={draggable}
@@ -184,6 +227,8 @@ export function CompanyRail(): React.JSX.Element | null {
         }}
         onMouseEnter={(e) => armHover(c.id, e.currentTarget)}
         onMouseLeave={disarmHover}
+        onFocus={(e) => armHover(c.id, e.currentTarget)}
+        onBlur={disarmHover}
         onDragStart={(e) => {
           e.dataTransfer.setData(COMPANY_DRAG_TYPE, c.id)
           e.dataTransfer.effectAllowed = 'move'
@@ -211,8 +256,12 @@ export function CompanyRail(): React.JSX.Element | null {
           if (id && id !== c.id) void reorderCompanies(id, c.id, e.clientY < r.top + r.height / 2 ? 'before' : 'after')
         }}
       >
-        <RailCoin company={c} badge={b} healthy={healthy} />
+        <RailMark company={c} badge={b} />
         {b && b.needsYou > 0 && <span className="rail__count">{b.needsYou > 99 ? '99+' : b.needsYou}</span>}
+        {/* A4: the paused mark, grey line art; needs-you items raised before the pause still count */}
+        {paused && <span className="rail__paused" aria-hidden>‖</span>}
+        {/* AUTOPILOT.md §7: a thin ring when Autopilot is on (the same truth as the header chip) */}
+        {!paused && <AutopilotMark company={c} />}
       </button>
     )
   }
@@ -275,10 +324,17 @@ async function allTileMenu(): Promise<void> {
 }
 
 /** Hover: that company's needs-you and working sessions and runs; a click opens the row and enters the company. */
-function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: CompanyPassport | undefined; top: number; onEnter: () => void; onLeave: () => void; onClose: () => void }): React.JSX.Element | null {
+export function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: CompanyPassport | undefined; top: number; onEnter: () => void; onLeave: () => void; onClose: () => void }): React.JSX.Element | null {
   const items = useLiveItems({ working: true, companyId: company?.id })
+  // A2: the badge counts the Board's tasks that wait on you too, so the label lists them (live asks are items already)
+  const tasks = useStore((s) => s.tasks)
+  const ctx = useLaneContext()
+  const taskRows = useMemo(() => (company ? needsYouTasks(tasks, ctx, company.id, { skipLiveAsks: true }) : []), [tasks, ctx, company])
+  const paused = isCompanyPaused(company)
   if (!company) return null
   const shown = items.slice(0, 8)
+  const shownTasks = taskRows.slice(0, Math.max(0, 8 - shown.length))
+  const more = items.length - shown.length + taskRows.length - shownTasks.length
   const open = (it: LiveItem): void => {
     onClose()
     void openLiveItem(it, { enter: true })
@@ -286,25 +342,51 @@ function RailPopover({ company, top, onEnter, onLeave, onClose }: { company: Com
   return (
     <div className="rail-pop" style={{ top: Math.min(top, window.innerHeight - 260) }} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={company.name}>
       <div className="rail-pop__head">
-        <span className="rail__coin" aria-hidden>
-          <Medallion name={company.name} color={company.color || undefined} size={18} initial={isPersonal(company) ? 'P' : undefined} />
-        </span>
+        <RailMark company={company} size={20} />
         <span className="rail-pop__name">{companyLabel(company, true)}</span>
+        {company.client && <span className="rail-pop__tag">client</span>}
+        {paused && <span className="rail-pop__state" title="Nothing in this company starts until you resume it">‖ Paused</span>}
+        {!paused && <AutopilotMark company={company} label />}
       </div>
-      {shown.length === 0 ? (
-        <div className="rail-pop__empty">Nothing running. Click to enter.</div>
+      {shown.length + shownTasks.length === 0 ? (
+        <div className="rail-pop__empty">{paused ? 'Paused. Click to enter and resume.' : 'Nothing running. Click to enter.'}</div>
       ) : (
-        shown.map((it) => (
-          <button key={it.key} type="button" className="rail-pop__row" onClick={() => open(it)}>
-            <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '⚑'}</span>
-            <span className="rail-pop__label">{it.title}</span>
-            {it.detail && <span className="rail-pop__detail">{it.detail}</span>}
-          </button>
-        ))
+        <>
+          {shownTasks.map(({ task, reason }) => (
+            <button
+              key={task.id}
+              type="button"
+              className="rail-pop__row"
+              onClick={() => {
+                onClose()
+                openBoard(company.id, { taskId: task.id })
+              }}
+            >
+              <span className="rail-pop__glyph rail-pop__glyph--needs">◆</span>
+              <span className="rail-pop__label">{task.title}</span>
+              <span className="rail-pop__detail">{REASON_LABEL[reason]}</span>
+            </button>
+          ))}
+          {shown.map((it) => (
+            <button key={it.key} type="button" className="rail-pop__row" onClick={() => open(it)}>
+              <span className={`rail-pop__glyph rail-pop__glyph--${it.kind === 'working' ? 'working' : 'needs'}`}>{it.kind === 'working' ? '●' : '◆'}</span>
+              <span className="rail-pop__label">{it.title}</span>
+              {it.detail && <span className="rail-pop__detail">{it.detail}</span>}
+            </button>
+          ))}
+        </>
       )}
-      {items.length > shown.length && <div className="rail-pop__more">{items.length - shown.length} more</div>}
+      {more > 0 && <div className="rail-pop__more">{more} more</div>}
     </div>
   )
+}
+
+/** A company's coin with its logo (popover head, Portfolio cards); Personal keeps its "P". */
+export function CompanyCoin({ company, size = 18, laurel = false }: { company: Pick<CompanyPassport, 'id' | 'name' | 'color' | 'system'>; size?: number; laurel?: boolean }): React.JSX.Element {
+  const personal = isPersonal(company)
+  const logo = useCompanyLogoUrl(personal ? null : company.id)
+  const fit = useLogoFit(logo)
+  return <Medallion name={company.name} color={company.color || undefined} size={size} laurel={laurel} initial={personal ? 'P' : undefined} logo={logo} logoFit={fit} />
 }
 
 function RailRename({ company, top, onDone }: { company: CompanyPassport | undefined; top: number; onDone: () => void }): React.JSX.Element | null {
@@ -375,6 +457,7 @@ function NewCompanyInner(): React.JSX.Element {
             ))}
           </div>
           <div className="text-tertiary co-new__hint">Its repositories, sessions, keys and Passport stay separate from your other companies.</div>
+          <div className="text-tertiary co-new__hint">It starts with Auto-start on: agents you set to work on their own start what you assign them. Nothing is assigned yet, so nothing starts. Turn it off from the Autopilot chip.</div>
         </div>
       </div>
     </Sheet>

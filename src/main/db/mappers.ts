@@ -75,6 +75,7 @@ export interface SessionRow {
   agent_session_id: string | null
   company_id?: string | null
   department_id?: string | null
+  company_agent_id?: string | null
 }
 export const sessionFromRow = (r: SessionRow): Session => ({
   id: r.id,
@@ -94,7 +95,8 @@ export const sessionFromRow = (r: SessionRow): Session => ({
   fromRunId: r.from_run_id,
   agentSessionId: r.agent_session_id,
   companyId: stamp(r.company_id),
-  ...(r.department_id ? { departmentId: r.department_id } : {})
+  ...(r.department_id ? { departmentId: r.department_id } : {}),
+  ...(r.company_agent_id ? { companyAgentId: r.company_agent_id } : {})
 })
 
 export interface WorkflowRow {
@@ -161,6 +163,8 @@ export interface RunRow {
   trigger_ext?: string | null
   slack_json?: string | null
   company_id?: string | null
+  /** DEPARTMENTS.md §1.2: the agent seat a run belongs to (a task run, or a Forum reply run with no task) */
+  agent_id?: string | null
 }
 /** AUTHORING.md §6: the run's newest worktree row as a RunWorktree JSON object. */
 const WORKTREE_OBJ = `(SELECT json_object('id', w.id, 'runId', w.run_id, 'repoId', w.repo_id, 'repoPath', w.repo_path, 'path', w.path,
@@ -193,7 +197,8 @@ export const runFromRow = (r: RunRow): Run => ({
   worktree: json<Run['worktree']>(r.worktree_obj ?? null, null),
   startedBy: json<Run['startedBy']>(r.started_by_json ?? null, null),
   slack: json<Run['slack']>(r.slack_json ?? null, null),
-  companyId: stamp(r.company_id)
+  companyId: stamp(r.company_id),
+  ...(r.agent_id ? { agentId: r.agent_id } : {})
 })
 /** Snapshots are history and never rewritten; legacy `imessage` reads as `slack` (SLACK.md §7.2.4). */
 export const runSnapshot = (r: RunRow): WorkflowDraft | null => migrateDraftLike(json<WorkflowDraft | null>(r.workflow_json, null))

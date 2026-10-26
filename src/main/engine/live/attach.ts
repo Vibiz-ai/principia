@@ -42,6 +42,13 @@ export interface HooksAttachOptions {
   mcp?: LiveMcp | null
   /** gemini: admin settings path override (tests). */
   geminiAdminPath?: string
+  /**
+   * PROACTIVE.md §4 (claude interactive): text a SessionStart hook adds as context when the conversation is resumed or
+   * compacted (the Principia rules), written next to the settings file.
+   */
+  context?: string | null
+  /** PROACTIVE.md §4 (claude interactive): a Stop hook that blocks the end of a turn once when untracked work happened */
+  nudge?: boolean
 }
 export interface HooksAttachResult extends McpAttachment {
   /** Set when injection was skipped (e.g. unreadable admin settings). */
@@ -70,18 +77,30 @@ export const CLAUDE_HOOK_EVENTS = [
 ] as const
 const CLAUDE_MATCHED = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'Notification'])
 
-/** All hooks observational and async (A1: no gate for interactive sessions). */
-export function claudeHooksSettings(live: LiveSpawn): Record<string, unknown> {
+/** The Principia rules a resumed or compacted pane reads back (PROACTIVE.md §4). */
+export const CLAUDE_CONTEXT_FILE = 'principia-context.md'
+const sq = (v: string): string => `'${v.replace(/'/g, `'\\''`)}'`
+
+/**
+ * All observational hooks async (A1: no gate for interactive sessions). PROACTIVE.md §4 adds two synchronous ones:
+ * SessionStart on resume/compact prints `contextFile` (Claude adds it as context), and Stop answers the one-time nudge.
+ */
+export function claudeHooksSettings(live: LiveSpawn, extra: { contextFile?: string | null; nudge?: boolean } = {}): Record<string, unknown> {
   const h = { type: 'command', command: cmd(live, 'claude'), async: true }
   const hooks: Record<string, unknown[]> = {}
   for (const ev of CLAUDE_HOOK_EVENTS) hooks[ev] = [CLAUDE_MATCHED.has(ev) ? { matcher: '*', hooks: [h] } : { hooks: [h] }]
+  if (extra.contextFile) hooks.SessionStart!.push({ matcher: 'resume|compact', hooks: [{ type: 'command', command: `${live.hookCommand} --context ${sq(extra.contextFile)}`, timeout: 10 }] })
+  if (extra.nudge) hooks.Stop!.push({ hooks: [{ type: 'command', command: `${cmd(live, 'claude')} --nudge`, timeout: 15 }] })
   return { hooks }
 }
 
 export function claudeHooksAttach(live: LiveSpawn, o: HooksAttachOptions): HooksAttachResult {
   if (o.headless) return { args: [], env: {}, files: [] }
   const path = join(live.dir, 'claude-settings.json')
-  return { args: ['--settings', path], env: {}, files: [{ path, content: json(claudeHooksSettings(live)) }] }
+  const contextFile = o.context?.trim() ? join(live.dir, CLAUDE_CONTEXT_FILE) : null
+  const files: McpFile[] = [{ path, content: json(claudeHooksSettings(live, { contextFile, nudge: o.nudge === true })) }]
+  if (contextFile) files.push({ path: contextFile, content: `${o.context!.trim()}\n` })
+  return { args: ['--settings', path], env: {}, files }
 }
 
 // ---------- gemini ----------

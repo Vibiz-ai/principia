@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { nudgeDecision } from './nudge'
 
 export const STDIN_CAP = 1024 * 1024
 export const FIELD_CAP = 2048
@@ -23,13 +24,19 @@ export interface HookArgs {
   dir: string | null
   provider: string
   gate: boolean
+  /** PROACTIVE.md §4: print this file (SessionStart context) and nothing else */
+  context?: string | null
+  /** PROACTIVE.md §4: answer a Stop hook with the one-time nudge */
+  nudge?: boolean
 }
 
 export function parseArgs(argv: string[]): HookArgs {
   const a: HookArgs = { events: null, dir: null, provider: 'unknown', gate: false }
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i]
-    if (k === '--events') a.events = argv[++i] ?? null
+    if (k === '--context') a.context = argv[++i] ?? null
+    else if (k === '--nudge') a.nudge = true
+    else if (k === '--events') a.events = argv[++i] ?? null
     else if (k === '--dir') a.dir = argv[++i] ?? null
     else if (k === '--provider') a.provider = argv[++i] ?? 'unknown'
     else if (k === '--gate') a.gate = true
@@ -46,11 +53,15 @@ function truncDeep(v: unknown, depth = 0): unknown {
   return o
 }
 
+/** DIAGRAMS.md §6: an answer holding a principia-graph block (at most 32 KB) arrives whole, or it can't be drawn. */
+export const DIAGRAM_ANSWER_CAP = 40 * 1024
+const keepsDiagram = (v: unknown): boolean => typeof v === 'string' && v.length <= DIAGRAM_ANSWER_CAP && v.includes('```principia-graph')
+
 /** Truncates the big fields of a hook payload. Non-objects are wrapped as { raw }. */
 export function shrinkPayload(p: unknown): unknown {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return { raw: typeof p === 'string' ? p.slice(0, FIELD_CAP) : p }
   const o: Record<string, unknown> = { ...(p as Record<string, unknown>) }
-  for (const f of TRUNC_FIELDS) if (f in o) o[f] = truncDeep(o[f])
+  for (const f of TRUNC_FIELDS) if (f in o && !(f === 'last_assistant_message' && keepsDiagram(o[f]))) o[f] = truncDeep(o[f])
   return o
 }
 
@@ -151,6 +162,20 @@ export async function runHook(
 ): Promise<number> {
   try {
     const args = parseArgs(argv)
+    // PROACTIVE.md §4: SessionStart (resume / compact) prints the Principia rules file as context; nothing is logged
+    if (args.context) {
+      await readStdin(io.stdin, 500)
+      const text = fs.readFileSync(args.context, 'utf8')
+      if (text.trim()) io.stdout.write(text)
+      return 0
+    }
+    // PROACTIVE.md §4: the Stop hook's one-time "track it" nudge
+    if (args.nudge) {
+      const raw = await readStdin(io.stdin, 2000)
+      const d = nudgeDecision(raw.trim() ? JSON.parse(raw) : {})
+      if (d) io.stdout.write(JSON.stringify(d))
+      return 0
+    }
     if (!args.events) return 0
     const raw = await readStdin(io.stdin)
     let payload: unknown

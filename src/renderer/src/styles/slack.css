@@ -151,7 +151,7 @@
 .ssearch__foot { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: var(--text-xs); }
 
 /* ---------- draft card ---------- */
-.sdraft { border: 1px solid rgba(245, 165, 36, 0.35); background: var(--status-needs-soft); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: var(--text-sm); }
+.sdraft { border: 1px solid rgba(110, 140, 255, 0.35); background: var(--status-needs-soft); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: var(--text-sm); }
 .sdraft--compact { padding: 8px 10px; gap: 6px; }
 .sdraft.is-closed { border-color: var(--border); background: var(--surface-1); opacity: 0.85; }
 .sdraft.is-failed { border-color: rgba(240, 82, 82, 0.45); }
@@ -187,7 +187,7 @@
 .stg-kw { width: 160px; }
 .stg-debounce { display: flex; align-items: center; gap: 8px; }
 .stg-debounce input[type='range'] { width: 180px; accent-color: var(--accent); }
-.stg-auto { margin-top: 8px; padding: 10px; border: 1px solid rgba(245, 165, 36, 0.45); background: var(--status-warning-soft); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
+.stg-auto { margin-top: 8px; padding: 10px; border: 1px solid rgba(110, 140, 255, 0.45); background: var(--status-warning-soft); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
 .stg-auto__title { font-size: var(--text-sm); color: var(--status-warning); font-weight: var(--weight-medium); }
 .stg-auto__limits { font-size: var(--text-xs); color: var(--text-secondary); line-height: var(--leading-normal); }
 .stg-inputs { display: flex; flex-direction: column; gap: 6px; width: 100%; }
@@ -195,7 +195,7 @@
 .stg-input__name { font-size: var(--text-sm); padding-top: 5px; overflow: hidden; text-overflow: ellipsis; }
 .stg-input__val { min-width: 0; }
 .stg-row { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--radius-sm); font-size: var(--text-sm); background: var(--surface-1); border: 1px solid var(--border); }
-.stg-row--amber { background: var(--status-warning-soft); color: var(--status-warning); border-color: rgba(245, 165, 36, 0.45); font-weight: var(--weight-medium); }
+.stg-row--caution { background: var(--status-warning-soft); color: var(--status-warning); border-color: rgba(110, 140, 255, 0.45); font-weight: var(--weight-medium); }
 .stg-preview { display: block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
 .stg-test { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .stg-test__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -208,11 +208,11 @@
 .stg-test__inputs { margin-top: 6px; color: var(--text-primary); }
 .slack-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: var(--radius-full); border: 1px solid var(--border-strong); background: var(--surface-1); color: var(--text-secondary); font-size: var(--text-xs); margin-left: 8px; }
 .slack-chip:hover { color: var(--text-primary); }
-.slack-chip--auto { border-color: rgba(245, 165, 36, 0.45); color: var(--status-warning); background: var(--status-warning-soft); }
+.slack-chip--auto { border-color: rgba(110, 140, 255, 0.45); color: var(--status-warning); background: var(--status-warning-soft); }
 
 /* ---------- approval card + notify editor ---------- */
 .approval__slack { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-1); border: 1px solid var(--border); font-size: var(--text-xs); }
-.approval__slack--auto { background: var(--status-warning-soft); border-color: rgba(245, 165, 36, 0.5); }
+.approval__slack--auto { background: var(--status-warning-soft); border-color: rgba(110, 140, 255, 0.5); }
 .approval__slack-head { display: flex; gap: 6px; align-items: baseline; font-size: var(--text-sm); }
 .approval__slack-tag { flex: none; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-secondary); }
 .approval__slack-mode { font-size: var(--text-sm); }

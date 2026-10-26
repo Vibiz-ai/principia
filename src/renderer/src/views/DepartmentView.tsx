@@ -8,14 +8,13 @@ import {
   AGENT_DATA_DEFAULTS,
   AGENT_LIMITS,
   DEPARTMENT_LIMITS,
-  LANE_LABELS,
-  TASK_LANES,
   type AgentAutonomy,
   type CompanyAgentKind,
   type Department,
   type TaskSource
 } from '@shared/company'
 import type { Id } from '@shared/types'
+import { COLUMN_LABEL, columnOfLane } from '../lib/boardFlow'
 import type { SlackChannel } from '@shared/slack'
 import { Button, EmptyState, IconButton, Pill, Segmented, Sheet, Stepper, Toolbar } from '../components/ui'
 import { Icon } from '../components/Icon'
@@ -52,7 +51,7 @@ const ROUTABLE_SOURCES: TaskSource[] = ['github', 'sentry', 'posthog', 'slack']
 /** cool accents only (VOICE.md §5: no orange, amber or brown) */
 const COLORS = ['var(--accent)', 'var(--series-2)', 'var(--status-success)', 'var(--status-scheduled)', 'var(--status-idle)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
 
-export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter' | 'agents'; nonce?: number }): React.JSX.Element {
+export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }): React.JSX.Element {
   const dep = useStore((s) => departmentById(id, s))
   const allAgents = useStore((s) => s.companyAgents)
   const tasks = useStore((s) => s.tasks)
@@ -254,7 +253,8 @@ function PassportCard({ dep }: { dep: Department }): React.JSX.Element {
   )
 }
 
-function SeatCard({ agentId, color }: { agentId: Id; color: string | null }): React.JSX.Element | null {
+/** One agent seat as a card (Department page and the Team door). */
+export function SeatCard({ agentId, color }: { agentId: Id; color: string | null }): React.JSX.Element | null {
   const agent = useStore((s) => s.companyAgents.find((a) => a.id === agentId))
   const tasks = useStore((s) => s.tasks)
   const profiles = useStore((s) => s.profiles)
@@ -469,13 +469,14 @@ function DepartmentTasks({ dep }: { dep: Department }): React.JSX.Element {
   if (!mine.length) return <p className="dep-card__empty">No tasks in {dep.name} yet.</p>
   return (
     <div className="dep-lanes">
-      {TASK_LANES.filter((l) => l !== 'done').map((lane) => {
-        const items = mine.filter((t) => taskLane(t, ctx) === lane)
+      {(['todo', 'working', 'needs_you'] as const).map((lane) => {
+        // five doors step 5: the Board's words (Inbox and Queued are both To do)
+        const items = mine.filter((t) => columnOfLane(taskLane(t, ctx)) === lane)
         if (!items.length) return null
         return (
-          <div key={lane} className={`dep-lane dep-lane--${lane}`}>
+          <div key={lane} className={`dep-lane dep-lane--${lane === 'todo' ? 'queued' : lane}`}>
             <div className="dep-lane__head">
-              {LANE_LABELS[lane]} <span>{items.length}</span>
+              {COLUMN_LABEL[lane]} <span>{items.length}</span>
             </div>
             {items.map((t) => (
               <button key={t.id} type="button" className="dep-list__row dep-task" onClick={() => openBoard(t.companyId, { taskId: t.id, departmentId: dep.id })}>

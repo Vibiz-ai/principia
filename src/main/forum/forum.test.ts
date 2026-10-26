@@ -218,15 +218,15 @@ describe('invites (§2.2)', () => {
 })
 
 describe('protocol (§4)', () => {
-  it('six tools, strict schemas, a compact schema document', () => {
-    expect(FORUM_TOOLS).toHaveLength(6)
+  it('ten tools (six Forum, forum_ask_agent, three team reads), strict schemas, a compact schema document', () => {
+    expect(FORUM_TOOLS).toHaveLength(10)
     for (const t of FORUM_TOOLS) expect(FORUM_TOOL_DEFS[t].inputSchema.additionalProperties).toBe(false)
     expect(() => parseForumArgs('forum_post', { channel: '#a', text: 'x', extra: 1 })).toThrow(/Invalid arguments/)
     expect(() => parseForumArgs('forum_create_channel', { name: 'Bad Name', purpose: 'long enough purpose' })).toThrow()
     expect(() => parseForumArgs('forum_ask', { question: 'ok?', wait_s: 601 })).toThrow()
     expect(FORUM_ARGS.forum_read.parse({})).toEqual({})
     // budget: the tool list an agent pays for stays small
-    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(5200)
+    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(8000)
   })
   it('parses fenced blocks: ops object, arrays, single ops, junk and caps', () => {
     const out = [
@@ -484,6 +484,22 @@ describe('agent API (§4)', () => {
     expect(s.toTask(m.id, owner.id)).toEqual({ id: 'task_1', identifier: 'PRN-1' })
     expect(created.tasks).toEqual(['write the launch email'])
   })
+
+  it('forum_reply task: a person asked, so the agent files it once, for itself; an agent message never becomes a task', async () => {
+    const s = service()
+    s.store.sync(CO)
+    const owner = s.store.owner(CO)
+    const ch = s.store.channelByName(CO, 'marketing')!.id
+    const m = s.store.post(owner.id, { channelId: ch, text: '@marcus put a short changelog post on the board' })
+    const c = callerFor(s, 'agt_marcus')
+    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'On the Board now.', task: { title: 'Short changelog post' } })).toMatch(/ · filed PRN-1$/)
+    expect(created.tasks).toEqual(['Short changelog post'])
+    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'Again', task: { title: 'Short changelog post' } })).toMatch(/ · already on the Board$/)
+    expect(created.tasks).toHaveLength(1)
+    const mine = s.store.thread(m.id).replies.find((x) => x.text === 'On the Board now.')!
+    expect(await s.api.call(c, 'forum_reply', { to: mine.ref, text: 'x', task: { title: 'Self made' } })).toMatch(/only a person’s request becomes a task/)
+    expect(created.tasks).toHaveLength(1)
+  })
 })
 
 describe('engine bridge, HTTP, CLI and MCP (§3, §4.1)', () => {
@@ -516,7 +532,7 @@ describe('engine bridge, HTTP, CLI and MCP (§3, §4.1)', () => {
     expect(schema.tools.map((t: { name: string }) => t.name)).toEqual([...FORUM_TOOLS])
     // the MCP server and the CLI speak the same endpoint
     const mcp = forumMcpHandlers({ PRINCIPIA_FORUM_URL: url!, PRINCIPIA_FORUM_TOKEN: token })
-    expect(mcp.listTools()).toHaveLength(6)
+    expect(mcp.listTools()).toHaveLength(10)
     const res = await mcp.callTool('forum_read', { channel: '#marketing' })
     expect(res.content[0].text).toMatch(/from http/)
     s.close('st_1')

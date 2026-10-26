@@ -38,7 +38,7 @@ function SlackReplyAsk({ ask, hotkeys = false, compact = false }: { ask: Ask; ho
   return (
     <div className="ask-card ask-card--compact" role="group" aria-label={ask.title}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />
@@ -63,7 +63,7 @@ function ApprovalAsk({ ask, hotkeys = false, compact = false }: { ask: Ask; hotk
   return (
     <div className="ask-card ask-card--compact" role="group" aria-label={ask.title}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />
@@ -128,10 +128,12 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
 
   const input = ask.toolInput != null ? JSON.stringify(ask.toolInput, null, 2) : null
   const pty = ask.channel === 'pty'
+  // CHAT-UI.md: a Claude chat's ask (stdio, on a session) opens the chat, not a terminal
+  const chatAsk = ask.channel === 'stdio' && !!ask.sessionId
   return (
     <div ref={ref} className={`ask-card ${compact ? 'ask-card--compact' : ''} ${open ? '' : 'is-closed'}`} role="group" aria-label={`${providerLabel(ask.provider)} needs you: ${ask.title}`}>
       <div className="ask-card__head">
-        <span className="aglyph aglyph--needs">⚑</span>
+        <span className="aglyph aglyph--needs">◆</span>
         <span className="ask-card__title">{isQuestion ? (ask.question ?? ask.title) : ask.title}</span>
         <span className="ask-card__age">
           <RelativeTime iso={ask.createdAt} />
@@ -181,7 +183,7 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
             .filter((o) => o.kind !== 'choice' && o.kind !== 'allow_always' && o.kind !== 'focus')
             .map((o) => (
               <Button key={o.id} size="sm" variant={o.kind === 'allow' ? 'primary' : 'secondary'} disabled={busy} onClick={() => choose(o)} kbd={hotkeys ? (o.kind === 'allow' ? '⌘↩' : o.kind === 'deny' ? '⌘⌫' : undefined) : undefined}>
-                {LABEL[o.kind] ?? o.label}
+                {o.label || LABEL[o.kind]}
               </Button>
             ))}
           {deny && !isQuestion && !note && !pty && (
@@ -191,8 +193,8 @@ function PlainAskCard({ ask, hotkeys = false, compact = false, onOpen }: { ask: 
           )}
           <span className="flex1" />
           {(pty || ask.kind === 'trust' || ask.sessionId || ask.options.some((o) => o.kind === 'focus')) && (
-            <Button size="sm" variant="ghost" icon="terminal" onClick={openTerminal}>
-              Open terminal
+            <Button size="sm" variant="ghost" icon={chatAsk ? 'chat' : 'terminal'} onClick={openTerminal}>
+              {chatAsk ? 'Open chat' : 'Open terminal'}
             </Button>
           )}
         </div>

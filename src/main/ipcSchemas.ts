@@ -4,16 +4,29 @@ import { assignRepoSchema, companyAgentSaveSchema, companyCreateSchema, companyR
  * handler runs; failures answer `bad_request` with per-field errors. `satisfies` keeps this map exhaustive.
  */
 import { z } from 'zod'
+import { EMBLEM_VARIANTS } from '../shared/chatCompany'
 import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
+import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
+import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
+import { REMOTE_REQUEST_SCHEMAS } from './remote/remoteSchemas'
+import { BROWSER_REQUEST_SCHEMAS } from './browser/schemas'
+import { siteOrigin } from '../shared/remote'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
 import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
 import { AGENT_STATUSES } from '../shared/live'
+import { USAGE_RANGES } from '../shared/usage'
+import { ROUTINE_IDS, type RoutineId } from '../shared/routines'
+import { PLAYBOOK_IDS } from '../shared/autopilotPlaybooks'
 import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
 import { BRIEF_MAX, GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
+/** AUTOPILOT.md §6 */
+const playbookId = z.enum(PLAYBOOK_IDS)
+const playbookLimitsInput = z.object({ maxChanges: z.number().int().min(1).max(5).optional(), budgetCapUsd: z.number().min(1).max(100_000).nullable().optional(), targets: z.array(z.string().max(120)).max(50).optional() }).strict()
+const routineRecord = z.object({ scheduleId: id, workflowId: id.nullable().optional(), onAt: z.string().max(40) }).strict()
 const none = z.unknown().transform(() => undefined)
 const adapter = z.enum(ADAPTER_IDS)
 const iso = z.string().min(1).max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'invalid date')
@@ -151,6 +164,14 @@ const profileFields = {
   secretNames: z.array(z.string().max(128)).max(500),
   useApiKeyAuth: z.boolean()
 }
+const autopilotRecord = z
+  .object({
+    enabledAt: z.string().max(40),
+    paused: z.boolean(),
+    steps: z.record(z.string().regex(/^[a-z_]{1,32}$/), z.object({ scheduleId: id, workflowId: id.nullable().optional() }).strict()).refine((r) => Object.keys(r).length <= 20, 'Too many steps'),
+    publish: z.array(z.enum(['x', 'linkedin', 'instagram', 'tiktok', 'youtube'])).max(5)
+  })
+  .strict()
 const settingsPatch = z
   .object({
     launchAtLogin: z.boolean(),
@@ -173,6 +194,7 @@ const settingsPatch = z
     // SLACK.md §7.1 (imessageHandle removed, SA3: a patch carrying it is rejected by .strict())
     slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
     slackMirrorNeedsYou: z.boolean(),
+    notifyNeedsYou: z.boolean(),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),
@@ -183,14 +205,87 @@ const settingsPatch = z
       .url()
       .refine((u) => u.startsWith('https://'), 'Use an https:// link')
       .nullable(),
+    // REMOTE.md RA6: an https origin (or loopback http, for a phone app served on this Mac); '' = none, null = official
+    phoneSiteUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((u) => u === '' || siteOrigin(u) === u.replace(/\/+$/, ''), 'Use the site address, like https://phone.example.com')
+      .transform((u) => (u === '' ? '' : siteOrigin(u)!))
+      .nullable(),
+    // REMOTE.md RA8: null = the default (on once a phone is paired)
+    phoneAutoStart: z.boolean().nullable(),
     // COMPANY.md §8.6: UI state only (main never reads it to decide anything)
     activeCompanyId: z.union([z.literal('all'), id]),
     expandedCompanies: z.record(id, z.boolean()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
     // COMPANY.md §6: a partial patch, merged into the stored flags
-    experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean() }).partial().strict(),
+    experimental: z.object({ companies: z.boolean(), vault: z.boolean(), vaultAI: z.boolean(), departments: z.boolean(), plans: z.boolean() }).partial().strict(),
     // VOICE.md §0
     tone: z.enum(['playful', 'plain']),
-    personas: z.boolean()
+    personas: z.boolean(),
+    // AGENT-COLLAB.md §2: the guards of agents asking agents (ranges = AGENT_COLLAB_RANGES)
+    agentCollab: z
+      .object({
+        enabled: z.boolean(),
+        maxHops: z.number().int().min(1).max(6),
+        perThread: z.number().int().min(1).max(20),
+        perAgentPerHour: z.number().int().min(1).max(60),
+        perAskerPerHour: z.number().int().min(1).max(60),
+        perCompanyPerDay: z.number().int().min(1).max(500),
+        waitDefaultS: z.number().int().min(0).max(600),
+        waitMaxS: z.number().int().min(0).max(600)
+      })
+      .partial()
+      .strict(),
+    // ORCHESTRATOR.md §6: Principia's own layer between runs (ranges = ORCHESTRATOR_RANGES)
+    orchestrator: z
+      .object({
+        mode: z.enum(['off', 'shadow', 'on']),
+        coordinator: z.enum(['off', 'rules', 'model']),
+        cli: z.enum(['auto', 'claude', 'codex']),
+        callsPerDay: z.number().int().min(0).max(200),
+        extractFallback: z.boolean(),
+        // This company > Team & autonomy > "Principia runs the team"
+        companies: z
+          .record(id, z.object({ mode: z.enum(['off', 'on']), coordinator: z.enum(['off', 'rules', 'model']), callsPerDay: z.number().int().min(0).max(200) }).partial().strict())
+          .refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
+      })
+      .partial()
+      .strict(),
+    // AUTOPILOT.md §4: UI bookkeeping of what each autopilot created
+    autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Automations › Routines: UI bookkeeping of what each routine's Turn on created
+    routines: z
+      .record(id, z.object(Object.fromEntries(ROUTINE_IDS.map((r) => [r, routineRecord])) as Record<RoutineId, typeof routineRecord>).partial().strict())
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Home suggestions dismissed for good, per company (UI state)
+    nudges: z
+      .record(id, z.record(z.string().regex(/^[a-z][a-z0-9:-]{0,80}$/), z.string().max(40)).refine((r) => Object.keys(r).length <= 100, 'Too many suggestions'))
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // PROACTIVE.md
+    proactiveAgents: z.boolean(),
+    trackTasks: z.enum(['off', 'auto', 'always']),
+    // CHAT-UI.md §4.4
+    openChatsAs: z.enum(['auto', 'chat', 'terminal']),
+    // Five doors: the sidebar's pins and More visibility per company ('all' = All companies). UI state only.
+    sidebarNav: z
+      .record(
+        z.union([z.literal('all'), id]),
+        z
+          .object({
+            pins: z.array(z.string().regex(/^(dept:)?[A-Za-z0-9_-]{1,64}$/)).max(50),
+            visibility: z.record(z.string().regex(/^[a-z]{1,32}$/), z.enum(['always', 'active', 'hidden'])).refine((r) => Object.keys(r).length <= 50, 'Too many items')
+          })
+          .partial()
+          .strict()
+      )
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Five doors step 5: one-time notices the person dismissed ("things-moved" → when). UI state only.
+    notices: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,40}$/), z.string().max(40)).refine((r) => Object.keys(r).length <= 50, 'Too many notices'),
+    // Five doors step 5: a company just set up whose first week waits for "Start the first week?" on Home. UI state only.
+    firstWeek: z
+      .record(id, z.object({ journalId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), scheduleRefs: z.array(z.string().regex(/^[a-z][a-z0-9-]{1,30}$/)).max(8) }).strict())
+      .refine((r) => Object.keys(r).length <= 100, 'Too many companies')
   })
   .partial()
   .strict()
@@ -394,11 +489,11 @@ const memoryMutation = z.union([
  * DEPARTMENTS.md §1.3 fields only main writes (run outcome, wake guard, routing, done note). The renderer changes them
  * through the dedicated task channels (assign, answer, approve, sendBack, unpark), never through create/update.
  */
-const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true } as const
+const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true, brief: true, proof: true, plan: true } as const
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
-  'gateway:list': none,
+  'gateway:list': optObj({ companyId: id.optional() }),
   'gateway:remove': z.object({ id: slug }),
   'gateway:test': z.object({ id: slug }),
   // COMPANY.md §6: companyIds limits a connection to those companies' spawns; absent = all companies
@@ -414,6 +509,7 @@ export const REQUEST_SCHEMAS = {
   'settings:get': none,
   'settings:update': settingsPatch,
   'providers:list': optObj({ refresh: z.boolean().optional() }),
+  'providers:claudeAuth': optObj({ refresh: z.boolean().optional() }),
   'repos:list': optObj({ companyId }),
   'repos:pick': optObj({ companyId }),
   'repos:add': z.object({ paths: z.array(absPath).min(1).max(200), companyId }),
@@ -444,7 +540,8 @@ export const REQUEST_SCHEMAS = {
     rows: z.number().int().min(1).max(1000),
     title: z.string().max(200).optional(),
     memory: memoryMode.optional(),
-    departmentId: id.optional()
+    departmentId: id.optional(),
+    initialPrompt: z.string().trim().min(1).max(8000).optional()
   }),
   'sessions:attach': z.object({ id }),
   'sessions:kill': z.object({ id }),
@@ -474,6 +571,19 @@ export const REQUEST_SCHEMAS = {
   'company:reorder': z.object({ ids: companyReorderSchema }).strict(),
   'company:assignRepo': assignRepoSchema,
   'company:overview': none,
+  'company:pause': z.object({ id, paused: z.boolean() }).strict(),
+  'company:logos': none,
+  'company:logoCandidates': z.object({ id }).strict(),
+  'company:setLogo': z.object({
+    id,
+    pick: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('candidate'), path: z.string().min(1).max(4096) }).strict(),
+      z.object({ kind: z.literal('file') }).strict(),
+      z.object({ kind: z.literal('none') }).strict(),
+      z.object({ kind: z.literal('auto') }).strict(),
+      z.object({ kind: z.literal('emblem'), variant: z.enum(EMBLEM_VARIANTS), keepDetected: z.boolean().optional() }).strict()
+    ])
+  }).strict(),
   'company:export': z.object({id}),
   'company:previewImport': z.object({json: z.string().max(300_000)}),
   'company:import': z.object({json: z.string().max(300_000),repoIds:z.array(id).max(500)}),
@@ -501,7 +611,9 @@ export const REQUEST_SCHEMAS = {
   'tasks:update': z.object({id,patch:taskPatchSchema.omit(TASK_SYSTEM_FIELDS)}),
   'tasks:get': z.object({id}),
   'tasks:start': z.object({id,profileId:id.optional()}),
-  'tasks:comment': z.object({id,message:z.string().trim().min(1).max(10_000)}),
+  'tasks:comment': z.object({id,message:z.string().trim().min(1).max(10_000),
+    /** five doors D11: the agent desk's reply, said in the agent's voice; an agent comment never wakes the task */
+    by:z.enum(['human','agent']).optional()}),
   // DEPARTMENTS.md §10
   'departments:list': optObj({ companyId, includeArchived: z.boolean().optional() }),
   'departments:save': departmentSaveSchema,
@@ -523,7 +635,23 @@ export const REQUEST_SCHEMAS = {
   'tasks:openSession': z.object({ id, ...ptySize }).strict(),
   'tasks:takeover': z.object({ id, ...ptySize }).strict(),
   'tasks:stop': z.object({ id }).strict(),
-  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional() }).strict(),
+  'tasks:pause': z.object({ id }).strict(),
+  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional(), confirmed: z.boolean().optional() }).strict(),
+  'board:autopilotPreview': z.object({ companyId: id }).strict(),
+  'playbooks:list': z.object({ companyId: id }).strict(),
+  'playbooks:summary': none,
+  'playbooks:overview': z.object({ companyId: id }).strict(),
+  'playbooks:turnOn': z.object({ companyId: id, playbookId: playbookId, level: z.number().int().min(1).max(3), raise: z.boolean().optional(), limits: playbookLimitsInput.optional() }).strict(),
+  'playbooks:configure': z.object({ companyId: id, playbookId: playbookId, level: z.number().int().min(1).max(3).optional(), raise: z.boolean().optional(), limits: playbookLimitsInput.optional() }).strict(),
+  'playbooks:setPaused': z.object({ companyId: id, playbookId: playbookId, paused: z.boolean() }).strict(),
+  'playbooks:turnOff': z.object({ companyId: id, playbookId: playbookId }).strict(),
+  // WORKTREE.md
+  'taskWork:start': z.object({ id, profileId: id.optional() }).strict(),
+  'taskWork:merge': z.object({ id }).strict(),
+  'taskWork:remove': z.object({ id }).strict(),
+  'taskWork:resolveGone': z.object({ id, choice: z.enum(['cancel', 'backlog', 'keep']) }).strict(),
+  'taskWork:refresh': optObj({}),
+  'taskWork:openEditor': z.object({ id }).strict(),
   // FORUM.md §9 (bounds mirror FORUM_LIMITS; the store re-checks every rule)
   'forum:state': z.object({ companyId: id }).strict(),
   'forum:messages': z.object({ companyId: id, channelId: id, beforeSeq: z.number().int().min(1).optional(), limit: z.number().int().min(1).max(200).optional() }).strict(),
@@ -565,6 +693,12 @@ export const REQUEST_SCHEMAS = {
   'forum:revokeInvite': z.object({ inviteId: id }).strict(),
   'forum:acceptInvite': z.object({ code: z.string().trim().min(8).max(120), name: z.string().trim().min(1).max(60), handle: z.string().trim().max(32).optional() }).strict(),
   'forum:toTask': z.object({ messageId: id, agentId: id.nullish() }).strict(),
+  'forum:collab': z.object({ companyId: id }).strict(),
+  'forum:runConversation': z.object({ runId: id }).strict(),
+  'orchestrator:forRun': z.object({ runId: id }).strict(),
+  'orchestrator:suggestions': optObj({ companyId: id.nullish() }),
+  'orchestrator:decideSuggestion': z.object({ id, decision: z.enum(['accept', 'dismiss', 'never']), level: z.number().int().min(1).max(3).optional() }).strict(),
+  'orchestrator:decisions': z.object({ companyId: id, limit: z.number().int().min(1).max(100).optional() }).strict(),
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
   'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional(), companyId }),
@@ -576,6 +710,14 @@ export const REQUEST_SCHEMAS = {
   'dashboards:refresh': z.object({ id }).strict(),
   'dashboards:remove': z.object({ id }).strict(),
   'dashboards:sample': z.object({ kind: dashboardKind }).strict(),
+  // LINEAR.md §6
+  'linear:status': z.object({ companyId: id }).strict(),
+  'linear:checkKey': z.object({ companyId: id, key: z.string().max(500).optional() }).strict(),
+  'linear:preview': z.object({ companyId: id, teamId: z.string().min(1).max(200), key: z.string().max(500).optional() }).strict(),
+  'linear:connect': z.object({ companyId: id, key: z.string().max(500).optional(), teamId: z.string().min(1).max(100), autosync: z.boolean(), sendOpen: z.boolean() }).strict(),
+  'linear:sync': z.object({ companyId: id }).strict(),
+  'linear:setAutosync': z.object({ companyId: id, on: z.boolean() }).strict(),
+  'linear:disconnect': z.object({ companyId: id }).strict(),
   'runs:start': z.object({ target: runTarget, companyId }),
   'runs:list': optObj({
     companyId,
@@ -762,6 +904,9 @@ export const REQUEST_SCHEMAS = {
   }),
   'author:grants': none,
   'author:revokeRun': z.object({ workflowId: id, ownerKey: z.string().min(1).max(200) }),
+  'chatCompany:list': none,
+  'chatCompany:decide': z.object({ id, accept: z.boolean(), name: z.string().max(200).optional(), brief: z.string().max(20_000).optional() }).strict(),
+  'chatCompany:open': z.object({ sessionId: id.nullish(), name: z.string().max(200).optional(), brief: z.string().max(20_000).optional() }).strict(),
   'worktrees:list': optObj({ status: z.array(z.enum(['creating', 'active', 'kept', 'removed', 'error'])).max(5).optional() }),
   'worktrees:remove': z.object({ id, discardWork: z.boolean().optional() }),
   'worktrees:branches': z.object({ runId: id }),
@@ -864,8 +1009,24 @@ export const REQUEST_SCHEMAS = {
   'onboarding:skipStep': z.object({ journalId: obHandle, step: z.enum(SOFT_LAUNCH_STEPS) }).strict(),
   'onboarding:discard': z.object({ journalId: obHandle }).strict(),
   'onboarding:start': z.object({ journalId: obHandle, autopilot: z.boolean(), scheduleRefs: z.array(obRef).max(8) }).strict(),
+  'onboarding:startPreview': z.object({ journalId: obHandle, scheduleRefs: z.array(obRef).max(8) }).strict(),
+  // USAGE.md
+  'usage:summary': z.object({ range: z.enum(USAGE_RANGES), companyId }),
+  'usage:disk': optObj({ fresh: z.boolean().optional() }),
+  'usage:cleanupList': none,
+  'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|tw|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
+  'activity:open': none,
+  'activity:close': none,
   // CLOUD.md §13.1: the cloud:* channels
-  ...CLOUD_REQUEST_SCHEMAS
+  ...CLOUD_REQUEST_SCHEMAS,
+  // PLANS.md §3: tasks:brief, tasks:proofPreview, plans:*
+  ...PLANS_REQUEST_SCHEMAS,
+  // CHAT-UI.md §3.2: chat:*
+  ...CHAT_REQUEST_SCHEMAS,
+  // REMOTE.md: remote:*
+  ...REMOTE_REQUEST_SCHEMAS,
+  // BROWSER.md: browser:*
+  ...BROWSER_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {

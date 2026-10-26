@@ -61,6 +61,7 @@ let events: { data: string[]; exits: number; updated: number }
 let trusted: string[] = []
 let lastSpawnOpts: { resumeAgentSessionId?: string | null; freshAgentSessionId?: string | null; artifactsDir: string } | null
 let convExists = true
+let deps: SessionDeps
 
 beforeEach(() => {
   if (!nativeOk) return
@@ -78,7 +79,7 @@ beforeEach(() => {
   lastSpawnOpts = null
   convExists = true
   trusted = []
-  const deps: SessionDeps = {
+  deps = {
     store,
     paths,
     spawnPty: (file, args, opts) => new FakePty(file, args, opts),
@@ -115,6 +116,29 @@ afterEach(() => {
 })
 
 d('SessionManager', () => {
+  it('WORKTREE.md A2: a session in a task worktree gets the guard env (hooksPath, shims first on its own PATH) and trust', () => {
+    const wt = path.join(tmp, 'worktrees', 'task-PRN-1')
+    fs.mkdirSync(wt, { recursive: true })
+    fs.mkdirSync(path.join(tmp, 'elsewhere'))
+    const seen: { cwd: string; path: string | undefined }[] = []
+    const m = new SessionManager({
+      ...deps,
+      worktreeGuard: (cwd, p) => {
+        seen.push({ cwd, path: p })
+        return cwd === wt ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/hooks/task_1', PATH: `/hooks/task_1/bin:${p}` } : null
+      }
+    })
+    m.create({ adapter: 'claude', cwd: wt, cols: 80, rows: 24 })
+    const env = FakePty.last.opts.env
+    expect(env.GIT_CONFIG_VALUE_0).toBe('/hooks/task_1')
+    expect(env.PATH).toBe('/hooks/task_1/bin:/usr/bin')
+    expect(seen[0]).toEqual({ cwd: wt, path: '/usr/bin' })
+    expect(trusted).toContain(wt)
+    m.create({ adapter: 'claude', cwd: path.join(tmp, 'elsewhere'), cols: 80, rows: 24 })
+    expect(FakePty.last.opts.env.GIT_CONFIG_VALUE_0).toBeUndefined()
+    expect(FakePty.last.opts.env.PATH).toBe('/usr/bin')
+  })
+
   it('pre-accepts Claude folder trust only for scratch and user-added repos', () => {
     fs.mkdirSync(path.join(tmp, 'picked'))
     fs.mkdirSync(path.join(tmp, 'adhoc'))

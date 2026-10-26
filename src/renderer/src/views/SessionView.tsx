@@ -13,6 +13,9 @@ import { activityLine, agentLabel, agentVisual, attributionNote, descendants, is
 import { useAgentIndex, useOpenAsks, useSeenSet } from '../state/live'
 import { Popover } from '../components/ui'
 import { TerminalPane, type TerminalHandle } from '../components/TerminalPane'
+// CHAT-UI.md §4: Claude sessions as a chat (the terminal stays one click away)
+import { ChatModeToggle, ChatPane, ChatTerminalBar } from '../components/chat/ChatPane'
+import { useChatMode } from '../state/chat'
 import { Button, EmptyState, IconButton, Toolbar } from '../components/ui'
 import { hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { injectedNames } from '../lib/secrets'
@@ -22,6 +25,10 @@ import { CompanyChip } from '../components/CompanyChip'
 import { clock } from '../lib/time'
 import { sessionEndLabel, sessionPlace, tildify } from '../lib/format'
 import { ProviderSwitcher } from '../shell/ProviderSwitcher'
+import { BrowserToggle } from '../components/browser/BrowserToggle'
+import { TaskStrip } from '../components/board/TaskStrip'
+import { SessionDiagrams } from '../components/diagrams/SessionDiagrams'
+import { openVisualize } from '../state/diagrams'
 import {
   attempt,
   closeSession,
@@ -153,7 +160,9 @@ export function SessionView(): React.JSX.Element {
     if (id === 'single' && focused) setState({ grid: [focused] })
   }
 
-  const title = cur ? (repo?.name ?? (cur.repoId ? 'Repository' : 'Chat')) : 'Session'
+  // CHAT-UI.md: a chat titled by its first message reads as that title
+  const custom = cur && cur.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(cur.title) ? cur.title : null
+  const title = cur ? (repo?.name ?? (cur.repoId ? 'Repository' : (custom ?? 'Chat'))) : 'Session'
   const layoutClass = panes.length <= 1 ? 'grid-1' : panes.length === 2 ? `grid-2 grid-2--${gridDir}` : 'grid-4'
   return (
     <div className="view">
@@ -168,12 +177,15 @@ export function SessionView(): React.JSX.Element {
           Split
         </Button>
         {cur?.status === 'running' && (
-          <Button icon="stop" onClick={() => void closeSession(cur.id)} title="Kill session (⌘W)">
-            Kill
+          <Button icon="stop" onClick={() => void closeSession(cur.id)} title="Stop this chat (⌘W)">
+            Stop
           </Button>
         )}
+        <BrowserToggle companyId={cur ? companyOf(cur) : null} />
         <ProviderSwitcher />
       </Toolbar>
+      {/* WORKTREE.md: which task this session is doing */}
+      <TaskStrip taskId={(cur as (Session & { taskId?: string | null }) | undefined)?.taskId} ownerId={cur?.id} />
       {panes.length === 0 ? (
         <EmptyState icon="terminal" text="No session open. Click a repository, or press ⌘N.">
           <Button variant="primary" onClick={() => void startSession({ repoId: null })} kbd="⌥⌘N">
@@ -271,10 +283,14 @@ function SessionPane({
   const asks = useOpenAsks()
   const seen = useSeenSet()
   const root = idx.roots.find((r) => r.kind === 'session' && r.sessionId === s.id) ?? null
+  // the open chat's agent is working: a light runs along the edge under the pane header (tokens.css)
+  const paneWorking = !exited && (root?.status === 'working' || root?.status === 'starting')
   const tree = root ? new Set([root.id, ...descendants(idx, root.id).map((d) => d.agent.id)]) : null
   // agent-authored drafts are pinned from the drafts slice; their approval asks would only duplicate the card
   const paneDrafts = useSessionDrafts(s.id)
-  const paneAsks = tree ? asks.filter((a) => tree.has(a.agentId) && !(a.kind === 'approval' && paneDrafts.some((d) => d.id === a.draftId))) : []
+  const chatMode = useChatMode(s)
+  // a chat draws its own permission / question cards in the conversation
+  const paneAsks = tree ? asks.filter((a) => tree.has(a.agentId) && !(a.kind === 'approval' && paneDrafts.some((d) => d.id === a.draftId)) && !(chatMode === 'chat' && a.channel === 'stdio')) : []
 
   // An exit right after start usually has a known cause printed in the terminal; explain it instead of a bare "exited 1".
   useEffect(() => {
@@ -300,12 +316,14 @@ function SessionPane({
 
   const menu = async (): Promise<void> => {
     const id = await nativeMenu([
-      exited ? { id: 'restart', label: 'Restart (resume conversation)' } : { id: 'kill', label: 'Kill' },
+      exited ? { id: 'restart', label: 'Restart (resume conversation)' } : { id: 'kill', label: 'Stop' },
       { id: 'copy', label: 'Copy Output' },
       { id: 'reveal', label: 'Reveal cwd in Finder' },
       { id: 'dir', label: 'Open ARTIFACTS_DIR' },
       { type: 'separator' },
       { id: 'find', label: 'Find…', accelerator: 'Cmd+F' },
+      ...(s.adapter === 'claude' && !exited ? [{ id: 'visualize', label: 'Visualize…' }] : []),
+      ...(s.adapter !== 'shell' ? [{ id: 'newco', label: 'New Company from This Chat…' }] : []),
       ...(multi ? [{ id: 'hide', label: 'Remove from Grid' }] : [])
     ])
     if (id === 'kill') void closeSession(s.id)
@@ -318,11 +336,17 @@ function SessionPane({
     if (id === 'reveal') void attempt(() => hive.app.showItemInFolder({ path: s.cwd }))
     if (id === 'dir') void attempt(() => hive.artifacts.openDir({ sessionId: s.id }))
     if (id === 'find') termRef.current?.openSearch()
+    if (id === 'visualize') openVisualize(s.id)
+    if (id === 'newco') void newCompanyFromChat()
     if (id === 'hide') removeFromGrid(s.id)
   }
 
+  // shared/chatCompany.ts: the confirmation card, by hand (codex panes have no hive tools; their brief points here)
+  const newCompanyFromChat = (): Promise<unknown> => attempt(() => hive.chatCompany.open({ sessionId: s.id }), 'New company')
+
   return (
-    <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
+    <section className={`pane ${focused ? 'is-focused' : ''} ${exited ? 'is-exited' : ''} ${paneWorking ? 'is-working' : ''}`} onMouseDown={() => !focused && setState({ focusedSession: s.id })}>
+      {paneWorking && <div className="working-edge pane__working" aria-hidden />}
       <div className="pane__header mono">
         {/* §8.6: a pane may belong to any company, whatever the focus */}
         <CompanyChip companyId={s.companyId} always className="pane__company" />
@@ -333,11 +357,18 @@ function SessionPane({
           {departmentName && <span className="text-tertiary" aria-hidden>· </span>}
           {sessionPlace(s, departmentName)}
         </span>
+        {s.title && !/ · (Claude|Codex|Cursor|Gemini|Shell)$/.test(s.title) && <span className="pane__title-text" title={s.title}>· {s.title}</span>}
         {s.adapter !== 'shell' && <span className="text-tertiary">· {providerLabel(s.adapter)}</span>}
         {profile && profile.adapter !== 'shell' && interactiveBypass && <span className="text-tertiary" title="The agent edits files and runs commands without asking first. Change it in Settings.">· runs without asking</span>}
         {!exited && <StalledBadge agent={root} />}
         <span className="flex1" />
+        <ChatModeToggle session={s} focused={focused} />
         {handoffButton}
+        {s.adapter !== 'shell' && s.adapter !== 'claude' && !exited && (
+          <Button size="sm" onClick={() => void newCompanyFromChat()} title="Set up what you are talking about as a new Principia company (you review the plan first)">
+            New company from chat
+          </Button>
+        )}
         <IconButton icon="more" label="Session actions" onClick={() => void menu()} />
         {multi && <IconButton icon="close" label="Remove from grid" onClick={() => removeFromGrid(s.id)} />}
       </div>
@@ -376,8 +407,11 @@ function SessionPane({
           {paneAsks.length > 1 && <div className="pane__needs-more text-tertiary">+{paneAsks.length - 1} more waiting — answer this one first</div>}
         </div>
       )}
+      {/* a chat draws its diagrams inline in the conversation */}
+      {root && s.adapter !== 'shell' && chatMode !== 'chat' && <SessionDiagrams sessionId={s.id} answer={root.report} />}
+      <ChatTerminalBar session={s} />
       <div className="pane__body">
-        <TerminalPane
+        {chatMode === 'chat' ? <ChatPane session={s} focused={focused} /> : chatMode === null ? null : <TerminalPane
           ref={(h) => {
             termRef.current = h
             registerHandle(h)
@@ -387,7 +421,7 @@ function SessionPane({
           fontSize={fontSize}
           focused={focused}
           onFocus={() => setState({ focusedSession: s.id })}
-        />
+        />}
       </div>
       {exited && diagnosis && (
         <div className="pane__banner pane__banner--warn">

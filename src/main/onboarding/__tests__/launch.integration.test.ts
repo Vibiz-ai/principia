@@ -318,10 +318,11 @@ d('launch: happy path', () => {
     expect(JSON.stringify(w.warnings)).not.toContain(KEY)
     expect(journalText()).not.toContain('SeCrEt')
 
-    // schedules disabled, agents manual, autopilot off
+    // schedules disabled, agents manual; AUTOPILOT.md §7: a new business starts with Autopilot on, and with every agent
+    // manual nothing starts until Start now raises them
     expect(inv.schedules.every((s) => !s.enabled)).toBe(true)
     expect(inv.agents.every((a) => a.data.autonomy === 'manual')).toBe(true)
-    expect(w.company.boardSettings(companyId).autopilot).toBe(false)
+    expect(w.company.boardSettings(companyId).autopilot).toBe(false)  // AUTOPILOT.md §7: off until Start now / Start the first week
     const dev = inv.agents.find((a) => a.data.defaultRepoId)
     expect(dev?.data.defaultRepoId).toBe(added.id)
 
@@ -769,6 +770,14 @@ d('launch: start', () => {
     // a schedule of another company named by ref is never touched
     const other = w.store.insertSchedule({ name: 'Other', target: { kind: 'prompt', profileId: w.store.listProfiles()[0].id, repoId: null, prompt: 'x' }, when: { kind: 'cron', cron: '0 9 * * 1', tz: TZ }, enabled: false }, P)
 
+    // AUTOPILOT.md §7: before it is pressed, Start the first week says what it turns on, and turns nothing on itself
+    const preview = w.svc.startPreview({ journalId: r.journalId, scheduleRefs: [pick.ref, 'not-a-ref'] })
+    const autoCount = input.plan.agents.filter((a) => a.include && a.auto).length
+    expect(preview).toMatchObject({ autopilot: true, noAgentCli: false, maxInFlight: 2 })
+    expect(preview.agents).toHaveLength(autoCount)
+    expect(preview.schedules).toEqual([{ name: w.store.getSchedule(pick.id)!.name, when: w.store.getSchedule(pick.id)!.sentence }])
+    expect(w.store.listSchedules(companyId).some((s) => s.enabled)).toBe(false)
+
     const board = await w.svc.start({ journalId: r.journalId, autopilot: true, scheduleRefs: [pick.ref, 'not-a-ref'] })
     expect(board).toEqual({ companyId, autopilot: true, maxInFlight: 2 })
     for (const s of w.store.listSchedules(companyId)) expect(s.enabled).toBe(s.id === pick.id)
@@ -876,7 +885,7 @@ d('launch: audit paths', () => {
     const ops = w.passport.calls[0].ops
     const rels = ops.filter((o) => o.op === 'relate').map((o) => `${(o as { from: string }).from}->${(o as { to: string }).to}`)
     expect(rels).toEqual(expect.arrayContaining(['Business->Products', 'Business->Audience', 'Business->Brand voice', 'Business->Goals (first 30 days)', 'Sunday Bakery->Business']))
-    expect(w.company.boardSettings(r.companyId!).autopilot).toBe(false)
+    expect(w.company.boardSettings(r.companyId!).autopilot).toBe(false)  // AUTOPILOT.md §7: off until Start now / Start the first week
   })
 
   it('GitHub: the clone is attached to the new company at launch and repo work runs in it', async () => {
@@ -927,7 +936,7 @@ d('launch: audit paths', () => {
 
   it('Start now: Autopilot on, auto agents raised, chosen schedules on', async () => {
     const r = await w.svc.launch({ draftId: 'draft_go', input: launchInput() })
-    expect(w.company.boardSettings(r.companyId!).autopilot).toBe(false)
+    expect(w.company.boardSettings(r.companyId!).autopilot).toBe(false)  // AUTOPILOT.md §7: off until Start now / Start the first week
     const free = r.scheduleRefs!.filter((x) => !x.costly).map((x) => x.ref)
     const board = await w.svc.start({ journalId: r.journalId, autopilot: true, scheduleRefs: free })
     expect(board?.autopilot).toBe(true)

@@ -3,8 +3,7 @@ import type { AdapterId } from '@shared/types'
 import { SWITCHER_ADAPTERS } from '@shared/types'
 import { attempt, enterCompanySlot, getState, hive, multiCompany, navigate, openPalette, runCommand, setProvider } from '../state/store'
 
-/** ⌘7 'memory' opens the Passport (goView maps it, so the app menu's ⌘7 dedupes with this one). */
-const VIEW_KEYS = ['home', 'canvas', 'workflows', 'schedules', 'artifacts', 'keys', 'memory'] as const
+import { doorForDigit } from '../lib/nav'
 
 function inTerminal(t: EventTarget | null): boolean {
   return !!(t as HTMLElement | null)?.closest?.('.xterm')
@@ -29,10 +28,12 @@ export function installKeyboard(): () => void {
     if (!e.metaKey || e.ctrlKey) return
     const code = e.code
     const handled = (): void => e.preventDefault()
-    if (/^Digit[1-7]$/.test(code) && !e.shiftKey && !e.altKey) {
+    if (/^Digit[1-5]$/.test(code) && !e.shiftKey && !e.altKey) {
+      // five doors: ⌘1-⌘5 = Home, Team, Board, Chats, Knowledge in every mode (the app menu sends the same commands)
       handled()
-      runCommand({ kind: 'navigate', view: VIEW_KEYS[Number(code.slice(5)) - 1]! })
+      runCommand({ kind: 'navigate', view: doorForDigit(Number(code.slice(5)))! })
     } else if (code === 'KeyA' && e.shiftKey && !e.altKey) {
+      // the old Agents hub: Chats on Live
       handled()
       runCommand({ kind: 'navigate', view: 'agents' })
     } else if (code === 'KeyL' && e.shiftKey && !e.altKey) {

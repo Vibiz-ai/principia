@@ -66,6 +66,9 @@ function capWords(line: string, max: number): string {
 export function runTitle(r: Pick<Run, 'kind' | 'title' | 'target'>, max = 40): string {
   if (r.kind === 'prompt') {
     const src = r.target.kind === 'prompt' ? r.target.prompt : r.title
+    // a task turn's run is titled "PRN-n · Title" by main: a follow-up's frame has no title in it, the run row does (QA)
+    const framed = /^\s*<principia-[a-z]/i
+    if (framed.test(src) && r.title && !framed.test(r.title)) return capWords(r.title.replace(/\s+/g, ' ').trim(), max)
     return promptTitle(src, max) || 'Prompt'
   }
   return r.title

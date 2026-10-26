@@ -1,21 +1,26 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
+import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
 import type { Store } from '../db/store'
 import { log } from '../log'
 import { DepartmentStore } from './departments'
+import { normalizePrefix, PERSONAL_PREFIX, pickPrefix, TASK_IDENT_RE } from './prefix'
 import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpdateSchema, passportExportSchema, passportInputSchema, taskInputSchema, taskPatchSchema } from './schemas'
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
-import { assertEditable, assertReassignable, assertTransition, runEndState } from './taskState'
+import { briefPromptBlock, contextFromDescription, planStartRefusal } from './brief'
+import { planBlockerMet } from '../../shared/plans'
+import { assertEditable, assertReassignable, assertTransition, runEndState, type StopReason } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
 export { buildPassportContext, CompanyScope } from './scope'
 export type { CompanyRef, Located, PassportContextOptions, PassportRenderer, ResolveQuery, Resolved, SameCompanyRefs } from './scope'
 export { assertTransition, transitionError, TRANSITIONS, type Actor, type TaskState, type TransitionCtx } from './taskState'
 /** What startTask hands the engine besides the target (§4.3): the run's task and seat, its cwd and a Claude resume id. */
+/** LINEAR.md: the tracker issue behind a task, as agents and the Board see it. */
+export interface ExternalTaskLink { provider: 'linear'; key: string; url: string }
 export interface TaskRunLink {
   taskId: string
   agentId: string | null
@@ -23,6 +28,8 @@ export interface TaskRunLink {
   cwd: string | null
   /** set on a resumed Claude turn: the prompt then holds only the wake and the rules footer */
   resumeSessionId: string | null
+  /** the run's title: the task's key and title, never the prompt's frame (QA: canvas cards showed <principia-role>) */
+  title?: string
 }
 /** patchInFlight: the fields main writes while a run holds the task. */
 const inFlightPatchSchema = taskPatchSchema.pick({ report: true, ask: true, agentSessionId: true, pendingWake: true, autoWakes: true, handoffs: true })
@@ -46,9 +53,13 @@ export class CompanyStore {
   /** experimental.departments (§0.8); off, plain tasks keep today's statuses (no dependency lock, no auto heal) */
   private boardOn: () => boolean = ()=>true
   /** why main canceled a task's run (time or wake cap); consumed at its run end */
-  private readonly stopReasons = new Map<string, 'limit'|'interrupted'|'handoff_cap'>()
+  private readonly stopReasons = new Map<string, StopReason>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
   private readonly runLinks: boolean
+  /** LINEAR.md: told after every task write (sync schedules a push); never fails the write */
+  private readonly writeListeners = new Set<(task: BoardTask) => void>()
+  /** LINEAR.md: the tracker issue a task is linked to (plugged in by the sync service) */
+  private externalLink: (taskId: string) => ExternalTaskLink | null = ()=>null
   constructor(readonly store: Store, opts: { companiesRoot?: string | null } = {}) {
     this.scope = new CompanyScope(store, opts.companiesRoot !== undefined ? opts.companiesRoot : defaultCompaniesRoot(store))
     store.db.exec(`CREATE TABLE IF NOT EXISTS company_passports (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -67,6 +78,7 @@ export class CompanyStore {
     this.departments=new DepartmentStore(store,this)
     // openDatabase already did this; kept so a store over a db without the Personal row still lists it
     if (!this.store.db.prepare('SELECT 1 FROM company_passports WHERE id=?').get(PERSONAL_COMPANY_ID)) ensureCompanyRows(store.db)
+    this.ensureTaskPrefixes()
   }
   /** Rail / sidebar order, Personal last. Archived companies only with includeArchived (Settings → Companies). */
   listPassports(opts: { includeArchived?: boolean } = {}): CompanyPassport[] { return this.scope.list(opts) }
@@ -103,7 +115,7 @@ export class CompanyStore {
       const {color, vaultPath, ...profile} = input
       // data keeps the shape older builds' listPassports parses; the §2.1 fields live in their own columns
       // the board switch (§1.1) lives in the same JSON and survives a profile save
-      const board = existing ? (({autopilot, maxInFlight})=>({...(autopilot!==undefined?{autopilot}:{}),...(maxInFlight!==undefined?{maxInFlight}:{})}))(this.companyJson(pid)) : {}
+      const board = existing ? keepRowState(this.companyJson(pid)) : {}
       const data = {...board,...profile,repoIds:personal?[]:[...new Set(input.repoIds)],id:pid,createdAt:existing?.createdAt??now,updatedAt:now}
       if (existing) {
         this.store.db.prepare('UPDATE company_passports SET data=?, color=COALESCE(?,color), vault_path=? WHERE id=?')
@@ -120,7 +132,7 @@ export class CompanyStore {
       }
       return {id: pid, isNew: !existing}
     })()
-    if (created.isNew) this.tryWorkspace(created.id)
+    if (created.isNew) { this.tryWorkspace(created.id); this.taskPrefix(created.id) }
     return this.passport(created.id)
   }
   /** §3: repo-less chats of a new company get `<userData>/companies/<slug>/workspace`. Best effort; sessions re-ensure it. */
@@ -169,6 +181,26 @@ export class CompanyStore {
       if (p.sortOrder !== undefined) this.store.db.prepare('UPDATE company_passports SET sort_order=? WHERE id=?').run(p.sortOrder, id)
       if (p.vaultPath && p.vaultPath !== c.vaultPath) this.scope.checkVaultPath(id, p.vaultPath)
       if (p.vaultPath !== undefined) this.store.db.prepare('UPDATE company_passports SET vault_path=? WHERE id=?').run(p.vaultPath, id)
+      if (p.taskPrefix !== undefined) this.setTaskPrefix(id, p.taskPrefix)
+      if (p.account !== undefined || p.monthlyCap !== undefined) {
+        if (c.system === 'personal' && p.account) fail('Personal has no connections of its own. Connect it inside a company.')
+        const data = this.companyJson(id)
+        const accounts = { ...((data.accounts as Record<string, unknown> | undefined) ?? {}) }
+        if (p.account) {
+          if (p.account.handle) accounts[p.account.kind] = { handle: p.account.handle, connectedAt: new Date().toISOString() }
+          else delete accounts[p.account.kind]
+        }
+        const next: Record<string, unknown> = { ...data, accounts }
+        if (p.monthlyCap !== undefined) next.monthlyCap = p.monthlyCap
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(next), id)
+      }
+      // five doors E14: the rail label and the client tag (UI only: nothing in main decides on them)
+      if (p.railLabel !== undefined || p.client !== undefined) {
+        const next: Record<string, unknown> = { ...this.companyJson(id) }
+        if (p.railLabel !== undefined) { if (p.railLabel) next.railLabel = p.railLabel.toUpperCase(); else delete next.railLabel }
+        if (p.client !== undefined) { if (p.client) next.client = true; else delete next.client }
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(next), id)
+      }
     })()
     return this.passport(id)
   }
@@ -333,7 +365,8 @@ export class CompanyStore {
     }
     if (input.status==='done' && !this.depsDone(input)) fail('Complete dependencies before completing this task')
   }
-  private depsDone(t: Pick<CompanyTaskInput,'dependencyIds'>): boolean { return t.dependencyIds.every(d=>this.task(d).status==='done') }
+  /** PLANS.md §2: inside one plan a blocker in review counts as met (the milestone gate reviews them together). */
+  private depsDone(t: Pick<CompanyTaskInput,'dependencyIds'|'plan'>): boolean { return t.dependencyIds.every(d=>{const dep=this.task(d);return dep.status==='done'||planBlockerMet(t,dep)}) }
   /** A canceled dependency never becomes done: a task waiting on it would sit in blocked(deps) forever. */
   private canceledDep(t: Pick<CompanyTaskInput,'dependencyIds'>): BoardTask|null {
     for(const d of t.dependencyIds) { const dep=this.task(d);if(dep.status==='canceled') return dep }
@@ -358,21 +391,24 @@ export class CompanyStore {
     t.status='blocked';t.blockReason='deps'
     return this.parkOnCanceledDep(t) ?? 'Waiting for its dependencies'
   }
-  createTask(input: CompanyTaskInput): BoardTask {
+  /** `opts.external`: an issue a tracker brought over (LINEAR.md), which may already be in progress there. */
+  createTask(input: CompanyTaskInput, opts: { external?: boolean } = {}): BoardTask {
     input=taskInputSchema.parse(input)
-    if(input.status==='in_progress') fail('Use Run agent to start work, or create the task in To do')
+    if(input.status==='in_progress'&&!opts.external) fail('Use Run agent to start work, or create the task in To do')
     // §0.7: an agent never marks a task done, not even one it creates
     if(input.source==='agent'&&input.status==='done') fail('An agent cannot create a task as done')
     return this.store.db.transaction(()=> {
       this.validate(input);const key=this.sourceKey(input)
       if(key) { const found=this.store.db.prepare('SELECT data FROM company_tasks WHERE company_id=? AND source_key=?').get(input.companyId,key) as {data:string}|undefined;if(found) return readTask(found.data) }
       const now=new Date().toISOString();const id=uid('task')
-      const row=this.store.db.prepare('INSERT INTO company_tasks(id,company_id,source_key,data) VALUES(?,?,?,?)').run(id,input.companyId,key,'{}')
-      const task=withTaskDefaults({...input,id,identifier:`PRN-${row.lastInsertRowid}`,runId:null,createdAt:now,updatedAt:now,dependencyIds:[...new Set(input.dependencyIds)]}) as BoardTask
+      // the company's own counter (five doors step 2), taken before the row exists so the prefix backfill never sees it
+      const identifier=this.nextIdentifier(input.companyId)
+      this.store.db.prepare('INSERT INTO company_tasks(id,company_id,source_key,data) VALUES(?,?,?,?)').run(id,input.companyId,key,'{}')
+      const task=withTaskDefaults({...input,id,identifier,runId:null,createdAt:now,updatedAt:now,dependencyIds:[...new Set(input.dependencyIds)]}) as BoardTask
       if(task.status!=='blocked') task.blockReason=null
       else if(!task.blockReason) task.blockReason=this.boardOn()&&task.dependencyIds.length&&!this.depsDone(task)?'deps':'manual'
       const locked=this.lockDeps(task) ?? this.parkOnCanceledDep(task)
-      this.writeTask(task);this.activity(id,'created',`Created from ${input.source}`,input.source==='agent'?'agent':input.source==='manual'?'human':'system')
+      this.writeTask(task);this.activity(id,'created',`Created from ${input.source==='linear'?'Linear':input.source}`,input.source==='agent'?'agent':input.source==='manual'?'human':'system')
       if(locked) this.activity(id,'parked',locked)
       return task
     })()
@@ -381,6 +417,7 @@ export class CompanyStore {
   private writeTask(task: CompanyTask): void {
     this.store.db.prepare('UPDATE company_tasks SET company_id=?,source_key=?,run_id=?,status=?,department_id=?,agent_id=?,data=? WHERE id=?')
       .run(task.companyId,this.sourceKey(task),task.runId,task.status,task.departmentId??null,task.agentId??null,JSON.stringify(task),task.id)
+    for(const fn of this.writeListeners) { try { fn(task as BoardTask) } catch { /* a listener never fails a write */ } }
   }
   updateTask(id:string, patch:Partial<CompanyTaskInput>): BoardTask {
     return this.store.db.transaction(()=> {
@@ -393,8 +430,11 @@ export class CompanyStore {
    * free status edits. Either way: no edits in flight, the company never changes, and blocked always has a reason.
    */
   private applyUpdate(old:BoardTask,input:CompanyTaskInput): BoardTask {
-    assertEditable(old,input)
-    if(input.status==='in_progress') fail('Use Run agent to start this task')
+    // LINEAR.md §3: in progress in a tracker, with no run of ours, stays editable and leaves by any status move
+    const elsewhere=this.startedElsewhere(old)
+    if(!elsewhere) assertEditable(old,input)
+    else if(input.companyId!==old.companyId) fail('Company cannot change after task creation; create a new task in the correct company')
+    if(input.status==='in_progress'&&!(elsewhere&&old.status==='in_progress')) fail('Use Run agent to start this task')
     this.validate(input,old.id,old)
     const next=withTaskDefaults({...old,...input,dependencyIds:[...new Set(input.dependencyIds)],updatedAt:new Date().toISOString()}) as BoardTask
     const statusChanged=old.status!==next.status
@@ -403,8 +443,9 @@ export class CompanyStore {
     else if(!next.blockReason) next.blockReason=old.blockReason??'manual'
     const board=!!(old.departmentId||old.agentId||next.departmentId||next.agentId)
     const depsDone=this.depsDone(next)
-    if(board&&(statusChanged||old.blockReason!==next.blockReason)) assertTransition(old,next,'human',{routed:!!(next.departmentId||next.agentId),depsDone,doneNote:next.doneNote})
+    if(board&&!elsewhere&&(statusChanged||old.blockReason!==next.blockReason)) assertTransition(old,next,'human',{routed:!!(next.departmentId||next.agentId),depsDone,doneNote:next.doneNote})
     if(statusChanged&&next.status!=='done'&&old.status==='done') next.doneNote=null
+    if(next.brief&&next.description!==old.description) next.brief=contextFromDescription(next.brief,next.description,new Date().toISOString())
     // a new seat or profile never resumes the previous one's provider conversation
     if((next.agentId??null)!==(old.agentId??null)||(next.assigneeProfileId??null)!==(old.assigneeProfileId??null)) next.agentSessionId=null
     let healed=false
@@ -417,6 +458,45 @@ export class CompanyStore {
     if(next.status==='done'&&statusChanged&&this.boardOn()) this.heal(next.companyId)
     if(next.status==='canceled'&&statusChanged) this.parkDependents(next)
     return next
+  }
+
+  // ---------- LINEAR.md: hooks for tracker sync (src/main/company/sync) ----------
+
+  onTaskWrite(fn: (task: BoardTask) => void): () => void { this.writeListeners.add(fn); return ()=>{ this.writeListeners.delete(fn) } }
+  setExternalLinks(fn: ((taskId: string) => ExternalTaskLink | null) | null): void { this.externalLink = fn ?? (()=>null) }
+  externalOf(taskId: string): ExternalTaskLink | null { try { return this.externalLink(taskId) } catch { return null } }
+  /** In progress in a linked tracker, with no run or session of ours holding it. */
+  startedElsewhere(t: BoardTask): boolean { return t.status==='in_progress'&&!t.runId&&!!this.externalOf(t.id) }
+  /** A task made from a tracker issue. A source link seen before returns that task (existed). */
+  createFromRemote(input: CompanyTaskInput): { task: BoardTask; existed: boolean } {
+    const key=this.sourceKey(input)
+    const found=key ? this.store.db.prepare('SELECT data FROM company_tasks WHERE company_id=? AND source_key=?').get(input.companyId,key) as {data:string}|undefined : undefined
+    if(found) return {task:readTask(found.data),existed:true}
+    return {task:this.createTask(input,{external:true}),existed:false}
+  }
+  /**
+   * Writes a tracker's values on a task (LINEAR.md §3). The tracker is neither a human nor an agent, so the §1.4 moves
+   * do not apply; the values are still validated (schema, parent cycles, dependencies before done).
+   */
+  applyRemote(id: string, patch: Partial<Pick<BoardTask,'title'|'description'|'status'|'priority'|'labels'|'estimate'|'dueDate'|'parentId'|'doneNote'>>, message: string): BoardTask {
+    return this.store.db.transaction(()=> {
+      const old=this.task(id)
+      const merged={...old,...patch}
+      const {id:_id,identifier:_identifier,runId:_runId,createdAt:_createdAt,updatedAt:_updatedAt,...fields}=merged
+      const input=taskInputSchema.parse(fields)
+      this.validate(input,old.id,old)
+      const next=withTaskDefaults({...old,...input,updatedAt:new Date().toISOString()}) as BoardTask
+      const statusChanged=old.status!==next.status
+      if(next.status!=='blocked') next.blockReason=null
+      if(statusChanged&&old.status==='done'&&next.status!=='done') next.doneNote=null
+      // started in the tracker: an earlier, finished run of ours no longer holds the task
+      if(statusChanged&&next.status==='in_progress') next.runId=null
+      this.writeTask(next)
+      this.activity(id,'updated',message,'system')
+      if(statusChanged&&next.status==='done'&&this.boardOn()) this.heal(next.companyId)
+      if(statusChanged&&next.status==='canceled') this.parkDependents(next)
+      return next
+    })()
   }
 
   // ---------- DEPARTMENTS.md §1.4, §4, §5: the board ----------
@@ -515,6 +595,23 @@ export class CompanyStore {
       return next
     })()
   }
+  /**
+   * ORCHESTRATOR.md §2: a teammate answered the blocking question this task waits on. A task its agent parked
+   * (blocked(agent)) goes back to To do, so the founder sees it is ready for its next turn; any other state only gets the
+   * Activity line. Never a founder's ask: that one waits for the founder. Returns the task, or null (not moved).
+   */
+  resumeOnAnswer(id: string, message: string): BoardTask | null {
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      if(t.status!=='blocked'||t.blockReason!=='agent'||(t.ask&&!t.ask.answer)) { this.activity(id,'woke',message,'system');return null }
+      assertTransition(t,{status:'todo'},'system',{teammateAnswered:true})
+      const next:BoardTask={...t,status:'todo',blockReason:null,updatedAt:new Date().toISOString()}
+      const locked=this.lockDeps(next)
+      this.writeTask(next);this.activity(id,'woke',message,'system')
+      if(locked) this.activity(id,'parked',locked)
+      return next
+    })()
+  }
   /** tasks:approve: in_review → done, human only, with a non-empty done note (§0.7). Heals the tasks waiting on it. */
   approve(id: string, doneNote: string, by: ActivityBy = 'human'): BoardTask {
     const out=this.store.db.transaction(()=> {
@@ -595,7 +692,7 @@ export class CompanyStore {
     })()
   }
   /** The next run end of this task parks with `reason` instead of no_report (a time or wake cap canceled it). */
-  expectStop(taskId: string, reason: 'limit'|'interrupted'|'handoff_cap'): void { this.stopReasons.set(taskId,reason) }
+  expectStop(taskId: string, reason: StopReason): void { this.stopReasons.set(taskId,reason) }
   /** Parks an in-flight task whose run or session is gone (no live run to cancel). */
   park(id: string, reason: 'no_report'|'interrupted'|'limit'|'run_failed', message: string): BoardTask {
     return this.store.db.transaction(()=> {
@@ -605,10 +702,215 @@ export class CompanyStore {
       this.writeTask(next);this.activity(id,reason==='interrupted'?'interrupted':'parked',message);return next
     })()
   }
+  /**
+   * PROACTIVE.md §3: the chat that tracks a task moves it through its own work. in_progress holds the chat's session id
+   * in runId (like an "Open as session" lease, without sessions.task_id: the chat stays a chat). in_review keeps the
+   * chat's summary as the task's report; blocked(agent) its reason. Never done: a human approves every task.
+   */
+  moveTracked(id: string, holderId: string, to: 'in_progress'|'in_review'|'blocked', note: string|null, ownerAgentId: string|null = null): BoardTask {
+    return this.store.db.transaction(()=> {
+      let t=this.task(id)
+      // AGENT CHAT: the agent's own chat moves a task assigned to that agent, as a run of it would
+      const owned=!!ownerAgentId&&t.agentId===ownerAgentId
+      if(!owned) {
+        if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+        if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      } else if(t.status==='in_progress'&&t.runId!==holderId) fail(`${t.identifier} is being worked on by a run right now; comment on it instead, or wait for that run to finish`)
+      // done in the chat already: in review (or blocked) goes through in progress, one move each
+      if(owned&&to!=='in_progress'&&t.status!=='in_progress') t=this.moveTracked(id,holderId,'in_progress',null,ownerAgentId)
+      const next:BoardTask={...t,updatedAt:new Date().toISOString()}
+      if(to==='in_progress') {
+        if(t.status==='blocked'&&t.blockReason==='deps') fail(`${t.identifier} waits for its dependencies`)
+        assertTransition(t,{status:'in_progress'},'agent',{tracked:true,depsDone:this.depsDone(t)})
+        Object.assign(next,{status:'in_progress',blockReason:null,runId:holderId,report:null,ask:null})
+      } else if(to==='in_review') {
+        assertTransition(t,{status:'in_review'},'agent',{tracked:true})
+        Object.assign(next,{status:'in_review',blockReason:null,runId:null,report:note ? {outcome:'review',summary:note.slice(0,10_000),evidence:[],at:next.updatedAt} : null})
+      } else {
+        assertTransition(t,{status:'blocked',blockReason:'agent'},'agent',{tracked:true})
+        Object.assign(next,{status:'blocked',blockReason:'agent',runId:null,report:note ? {outcome:'blocked',summary:note.slice(0,10_000),evidence:[],at:next.updatedAt} : null})
+      }
+      if(next.status===t.status&&next.blockReason===t.blockReason) return t
+      this.writeTask(next)
+      const label={in_progress:'Started',in_review:'Ready for review',blocked:'Blocked'}[to]
+      this.activity(id,to==='in_progress'?'started':to==='in_review'?'report':'parked',`${label} (chat)${note ? `: ${note.replace(/\s+/g,' ').trim().slice(0,1000)}` : ''}`,'agent')
+      return next
+    })()
+  }
+  /** PROACTIVE.md §3: the tracking chat rewrites its task's title or brief (decisions, criteria, handoff notes). */
+  editTracked(id: string, holderId: string, patch: { title?: string; description?: string }, ownerAgentId: string|null = null): BoardTask {
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      const owned=!!ownerAgentId&&t.agentId===ownerAgentId
+      if(!owned&&trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+      if(!owned&&t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      if(owned&&t.status==='in_progress'&&t.runId!==holderId) fail(`${t.identifier} is being worked on by a run right now`)
+      if(t.status==='done'||t.status==='canceled') fail(`${t.identifier} is closed`)
+      const next:BoardTask={...t,...(patch.title!==undefined ? {title:patch.title.slice(0,240)} : {}),...(patch.description!==undefined ? {description:patch.description.slice(0,50_000)} : {}),updatedAt:new Date().toISOString()}
+      this.writeTask(next);this.activity(id,'updated','Task details updated (chat)','agent')
+      return next
+    })()
+  }
+  // ---------- five doors step 2: per-company task prefixes ----------
+  /**
+   * Every company without a prefix gets one (Personal keeps PRN), and its tasks still numbered PRN-<global seq> are
+   * numbered again inside the company, oldest first: NC-1, NC-2… Idempotent; a task's PRN-<seq> keeps resolving
+   * through findTask. One transaction, so a crash never leaves half a company renumbered.
+   */
+  private ensureTaskPrefixes(): void {
+    const rows=this.store.db.prepare('SELECT id,data FROM company_passports').all() as {id:string;data:string}[]
+    const json=(d:string):Record<string,unknown>=>{ try { const v=JSON.parse(d);return v&&typeof v==='object'?v:{} } catch { return {} } }
+    const missing=rows.filter(r=>typeof json(r.data).taskPrefix!=='string')
+    if(!missing.length) return
+    this.store.db.transaction(()=> {
+      const taken=new Set(rows.map(r=>json(r.data).taskPrefix).filter((p):p is string=>typeof p==='string'))
+      // the rail order decides who gets a contested prefix first
+      const order=new Map(this.listPassports({includeArchived:true}).map((c,i)=>[c.id,i]))
+      missing.sort((a,b)=>(order.get(a.id)??1e9)-(order.get(b.id)??1e9))
+      for(const r of missing) {
+        const data=json(r.data)
+        const prefix=pickPrefix(r.id,typeof data.name==='string'?data.name:r.id,taken)
+        taken.add(prefix)
+        const tasks=this.store.db.prepare('SELECT seq,id,data FROM company_tasks WHERE company_id=? ORDER BY seq').all(r.id) as {seq:number;id:string;data:string}[]
+        let n=0
+        for(const t of tasks) {
+          const td=json(t.data)
+          const m=typeof td.identifier==='string'?TASK_IDENT_RE.exec(td.identifier):null
+          // a hand-made or imported identifier of another shape keeps its name; only the old global numbers move
+          if(!m) continue
+          if(m[1]!.toUpperCase()!==PERSONAL_PREFIX) { n=Math.max(n,m[1]!.toUpperCase()===prefix?Number(m[2]):n);continue }
+          td.identifier=`${prefix}-${++n}`
+          this.store.db.prepare('UPDATE company_tasks SET data=? WHERE id=?').run(JSON.stringify(td),t.id)
+        }
+        this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...data,taskPrefix:prefix,taskSeq:n}),r.id)
+      }
+    })()
+  }
+  /** This company's task prefix ("NC"). */
+  taskPrefix(companyId: string): string {
+    const p=this.companyJson(companyId).taskPrefix
+    if(typeof p==='string'&&p) return p
+    this.ensureTaskPrefixes()
+    const again=this.companyJson(companyId).taskPrefix
+    return typeof again==='string'&&again ? again : PERSONAL_PREFIX
+  }
+  /** The next identifier of this company (NC-13), counted inside the company. Call inside the create transaction. */
+  private nextIdentifier(companyId: string): string {
+    const prefix=this.taskPrefix(companyId)
+    const data=this.companyJson(companyId)
+    const n=(typeof data.taskSeq==='number'&&Number.isInteger(data.taskSeq)?data.taskSeq:0)+1
+    this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...data,taskSeq:n}),companyId)
+    return `${prefix}-${n}`
+  }
+  /**
+   * A task of this company by id, identifier (NC-12, any case) or its pre-prefix PRN-<seq>; another company's task
+   * reads as not found.
+   */
+  findTask(companyId: string, ref: string): BoardTask|null {
+    const r=ref.trim()
+    const byId=this.store.db.prepare('SELECT data FROM company_tasks WHERE id=? AND company_id=?').get(r,companyId) as {data:string}|undefined
+    if(byId) return readTask(byId.data)
+    const m=TASK_IDENT_RE.exec(r)
+    if(!m) return null
+    const ident=`${m[1]!.toUpperCase()}-${Number(m[2])}`
+    const byIdent=this.store.db.prepare("SELECT data FROM company_tasks WHERE company_id=? AND json_extract(data,'$.identifier')=?").get(companyId,ident) as {data:string}|undefined
+    if(byIdent) return readTask(byIdent.data)
+    if(m[1]!.toUpperCase()!==PERSONAL_PREFIX) return null
+    const bySeq=this.store.db.prepare('SELECT data FROM company_tasks WHERE seq=? AND company_id=?').get(Number(m[2]),companyId) as {data:string}|undefined
+    return bySeq ? readTask(bySeq.data) : null
+  }
+  /**
+   * Company settings › General: a new task prefix. 2-5 letters or digits, starting with a letter, held by no other
+   * company (PRN stays Personal's). The company's tasks keep their numbers under the new prefix (NC-12 → NW-12).
+   */
+  setTaskPrefix(companyId: string, raw: string): CompanyPassport {
+    const prefix=normalizePrefix(raw) ?? fail('A task prefix is 2 to 5 letters or digits and starts with a letter')
+    const c=this.passport(companyId)
+    if(prefix===PERSONAL_PREFIX&&c.system!=='personal') fail('PRN is Personal\'s prefix. Choose another one.')
+    const old=this.taskPrefix(companyId)
+    if(old===prefix) return c
+    const owner=this.listPassports({includeArchived:true}).find(o=>o.id!==companyId&&o.taskPrefix===prefix)
+    if(owner) fail(`${owner.name} already uses ${prefix}. Choose another prefix.`)
+    this.store.db.transaction(()=> {
+      for(const t of this.listTasks(companyId)) {
+        const m=TASK_IDENT_RE.exec(t.identifier)
+        if(!m||m[1]!.toUpperCase()!==old) continue
+        this.writeTask({...t,identifier:`${prefix}-${m[2]}`} as BoardTask)
+      }
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...this.companyJson(companyId),taskPrefix:prefix}),companyId)
+    })()
+    return this.passport(companyId)
+  }
+
+  // ---------- five doors A4: pause one company ----------
+  /** The company's pause record, or null while it runs. */
+  pauseState(companyId: string): { at: string; seats: string[]; checkpoints: CompanyPauseCheckpoint[] }|null {
+    const p=this.companyJson(companyId).pause as {at?:unknown;seats?:unknown;checkpoints?:unknown}|undefined
+    if(!p||typeof p.at!=='string') return null
+    return { at:p.at, seats:Array.isArray(p.seats)?p.seats.filter((x):x is string=>typeof x==='string'):[], checkpoints:Array.isArray(p.checkpoints)?(p.checkpoints as CompanyPauseCheckpoint[]):[] }
+  }
+  isPaused(companyId: string): boolean {
+    try { return !!this.pauseState(companyId) } catch { return false }
+  }
+  /**
+   * Pauses this one company: its active seats are paused (and remembered, so Resume brings back exactly those), and the
+   * row holds `pause`, which every start path checks (tasks, the dispatcher, schedules, the engine). Returns the work in
+   * flight, which the caller saves (cancels with a 'paused' checkpoint: the task returns to To do and continues on
+   * resume). Pausing a paused company changes nothing.
+   */
+  pauseCompany(companyId: string): { seats: string[]; inFlight: CompanyPauseCheckpoint[]; already: boolean } {
+    const c=this.passport(companyId)
+    if(c.archivedAt) fail(`${c.name} is archived`)
+    return this.store.db.transaction(()=> {
+      const cur=this.pauseState(companyId)
+      if(cur) return {seats:[],inFlight:[],already:true}
+      const now=new Date().toISOString()
+      const seats=this.departments.listAgents({companyId}).filter(a=>!a.archivedAt&&!a.pausedAt).map(a=>a.id)
+      for(const id of seats) this.store.db.prepare('UPDATE company_agents SET paused_at=?, updated_at=? WHERE id=?').run(now,now,id)
+      const inFlight=this.listTasks(companyId)
+        .filter(t=>t.status==='in_progress'&&!!t.runId&&!trackedBy(t)&&!this.startedElsewhere(t)&&['queued','running'].includes(this.store.getRun(t.runId)?.status??''))
+        .map(t=>this.checkpointOf(t))
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...this.companyJson(companyId),pause:{at:now,seats,checkpoints:inFlight}}),companyId)
+      return {seats,inFlight,already:false}
+    })()
+  }
+  /** Resume: the seats this pause paused run again, and the pause record goes. Returns them and the saved work. */
+  resumeCompany(companyId: string): { seats: string[]; checkpoints: CompanyPauseCheckpoint[] } {
+    this.passport(companyId)
+    return this.store.db.transaction(()=> {
+      const cur=this.pauseState(companyId)
+      if(!cur) return {seats:[],checkpoints:[]}
+      const now=new Date().toISOString()
+      const seats:string[]=[]
+      for(const id of cur.seats) {
+        const a=this.departments.getAgent(id)
+        if(!a||a.companyId!==companyId||!a.pausedAt) continue
+        this.store.db.prepare('UPDATE company_agents SET paused_at=NULL, updated_at=? WHERE id=?').run(now,id)
+        seats.push(id)
+      }
+      const {pause:_p,...rest}=this.companyJson(companyId);void _p
+      this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify(rest),companyId)
+      return {seats,checkpoints:cur.checkpoints}
+    })()
+  }
+  private checkpointOf(t: BoardTask): CompanyPauseCheckpoint {
+    const a=t.agentId ? this.departments.getAgent(t.agentId) : null
+    return {taskId:t.id,identifier:t.identifier,title:t.title.slice(0,200),agentId:a?.id ?? null,agentName:a ? (a.data.persona?.name || a.name) : null}
+  }
+  /** The refusal every start path gives while the company is paused (A4: a paused company starts nothing). */
+  assertRunning(companyId: string): void {
+    if(!this.isPaused(companyId)) return
+    let name='This company'
+    try { name=this.passport(companyId).name } catch { /* gone */ }
+    throw new HiveError('conflict', `${name} is paused. Resume it to start work.`)
+  }
+
   /** board:autopilot. Stored in the company row's JSON (§1.1); both default off / DEFAULT_MAX_IN_FLIGHT. */
   setAutopilot(companyId: string, on: boolean, maxInFlight?: number): BoardSettings {
     const c=this.passport(companyId)
     if(on&&c.archivedAt) fail(`Unarchive ${c.name} before turning Autopilot on`)
+    // A4: a paused company starts nothing; Autopilot stays off until it resumes
+    if(on&&this.isPaused(companyId)) throw new HiveError('conflict', `Autopilot is off while ${c.name} is paused. Resume it first.`)
     if(maxInFlight!==undefined&&(!Number.isInteger(maxInFlight)||maxInFlight<1||maxInFlight>20)) fail('Tasks in flight must be between 1 and 20')
     this.store.db.transaction(()=> {
       const data=this.companyJson(companyId)
@@ -633,18 +935,24 @@ export class CompanyStore {
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
    * autopilot gate. One in-flight task per agent.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system'}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
+      // A4: a paused company starts nothing, whoever asks (resume clears the pause before it restarts saved work)
+      this.assertRunning(task.companyId)
+      if(this.startedElsewhere(task)) fail(`${this.externalLink(task.id)?.key ?? 'This task'} is in progress in Linear. Move it to Todo to run an agent here.`)
+      // PLANS.md §2.4: a plan task runs only through the plan pilot (its milestone worktree), never in the checkout
+      if(task.plan&&!opts.plan) fail(planStartRefusal(task))
       if(task.status==='in_progress'||(task.runId&&['queued','running'].includes(this.store.getRun(task.runId)?.status??''))) fail('An agent already owns this task')
       if(['done','canceled'].includes(task.status)) fail('Reopen this task before starting an agent')
       if(!this.depsDone(task)) fail('Complete dependencies before starting this task')
       if(task.status==='blocked'&&task.blockReason==='deps') task=this.healOne(task)
-      assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true})
+      // WORKTREE.md: a review asking for changes on the task's own PR restarts it (the founder's Start authorized the loop)
+      assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true,...(opts.work ? {work:opts.work} : {})})
       this.validate(task,task.id,task)
       const agent=task.agentId ? this.departments.agent(task.agentId) : null
-      if(actor==='system') this.assertAutoStart(task,agent)
+      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent,opts.consented===true&&startsWithoutAutopilot(task))
       if(agent) {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
@@ -665,14 +973,14 @@ export class CompanyStore {
       } else {
         selected=profileId ?? (agent?.kind==='profile' ? agent.refId : null) ?? task.assigneeProfileId
         const profile=selected ? this.store.getProfile(selected) : null
-        if(!profile) fail('Choose an agent profile')
+        if(!profile) fail(agent ? `${agent.name} has no AI tool to work with. Choose one on the agent's page.` : 'Assign an agent first')
         if(profile!.adapter==='shell') fail('Choose Claude, Codex, Cursor, or Gemini to work on this task')
         // only the profile that held the conversation resumes it (assigneeProfileId is the last turn's profile)
         resumeSessionId=profile!.adapter==='claude'&&task.agentSessionId&&selected===task.assigneeProfileId ? task.agentSessionId : null
         const prompt=resumeSessionId ? buildResumePrompt(wake) : this.taskPrompt(task,agent,wake)
         target={kind:'prompt',profileId:selected!,repoId,prompt:this.redact(prompt),memory:'read-write'}
       }
-      const run=start(target,task.companyId,{taskId:task.id,agentId:agent?.id ?? null,cwd,resumeSessionId})
+      const run=start(target,task.companyId,{taskId:task.id,agentId:agent?.id ?? null,cwd,resumeSessionId,title:`${task.identifier} · ${task.title}`})
       // §6: a task's run belongs to the task's company, whatever the engine inferred; §1.2 runs.task_id / agent_id
       this.store.db.prepare('UPDATE runs SET company_id=? WHERE id=?').run(task.companyId,run.id)
       if(this.runLinks) this.store.db.prepare('UPDATE runs SET task_id=?,agent_id=? WHERE id=?').run(task.id,agent?.id ?? null,run.id)
@@ -688,15 +996,18 @@ export class CompanyStore {
    * on for the company, an `auto` seat, and the company under maxInFlight. Checked inside startTask's transaction, so
    * the gate and the claim cannot interleave with another start. A human click skips it.
    */
-  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null): void {
+  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null, consented=false): void {
     if(!this.boardOn()) fail('Departments are off; only a human can start a task')
     if(!agent) fail('Only a human can start a task without an agent')
-    if(agent!.data.autonomy!=='auto') fail(`${agent!.name} is manual; only a human can start its tasks`)
+    // work the founder already said go to (a schedule's fire, their answer: startsWithoutAutopilot) is not gated by
+    // autonomy or autopilot; the in-flight cap below still is
+    if(!consented&&agent!.data.autonomy!=='auto') fail(`${agent!.name} is manual; only a human can start its tasks`)
     const company=this.passport(task.companyId)
     if(company.archivedAt) fail(`${company.name} is archived`)
     const settings=this.boardSettings(task.companyId)
-    if(!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
-    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND id<>?").get(task.companyId,task.id) as {n:number}).n
+    if(!consented&&!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
+    // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot; LINEAR.md: nor does a task started in a tracker (no run of ours)
+    const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
     if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
@@ -707,7 +1018,11 @@ export class CompanyStore {
   private taskPrompt(task: BoardTask, agent: CompanyAgent|null, wake: string[]): string {
     const department=task.departmentId ? this.departments.get(task.departmentId) : null
     const deps=task.dependencyIds.map(d=>this.task(d)).map(d=>({identifier:d.identifier,title:d.title,status:d.status,doneNote:d.doneNote}))
-    return buildTaskPrompt({task,companyId:task.companyId,department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake})
+    const running=this.listTasks(task.companyId).filter(t=>t.status==='in_progress'&&t.id!==task.id).map(t=>{
+      const a=t.agentId ? this.departments.getAgent(t.agentId) : null;const d=t.departmentId ? this.departments.get(t.departmentId) : null
+      return {identifier:t.identifier,title:t.title,agent:a ? a.name : trackedBy(t) ? 'a chat' : null,department:d?.name ?? null}
+    })
+    return buildTaskPrompt({task,companyId:task.companyId,external:this.externalLink(task.id),department,agent:agent ? {name:agent.name,instructions:agent.data.instructions} : null,deps,activity:this.detail(task.id).activity,wake,running,brief:briefPromptBlock(task)})
   }
   /**
    * Run end (§1.4, §4.5): ask → blocked(needs_input); report blocked → blocked(agent); report review, or passed with no
@@ -722,6 +1037,8 @@ export class CompanyStore {
       assertTransition(t,end.to,'system')
       this.stopReasons.delete(t.id)
       const next:BoardTask={...t,status:end.to.status,blockReason:end.to.blockReason ?? null,updatedAt:new Date().toISOString()}
+      // five doors A4: the next turn picks up where the paused one stopped (the provider session resumes when it can)
+      if(end.kind==='paused') next.pendingWake=addWake(t.pendingWake,'Paused by the founder mid-turn. Your work so far is saved: continue where you left off.')
       // waiting on a dependency that was canceled during the run: it would never heal
       const parked=this.parkOnCanceledDep(next)
       this.writeTask(next);this.activity(t.id,end.kind,end.message,end.by);changed=true
@@ -732,12 +1049,21 @@ export class CompanyStore {
   /** Called once at startup, after engine recovery and before accepting requests. Interrupted tasks are never rerun. */
   reconcile(): void {
     for(const t of this.listTasks()) {
-      if(t.status!=='in_progress') continue
+      if(t.status!=='in_progress'||this.startedElsewhere(t)) continue
       const r=t.runId ? this.store.getRun(t.runId) : null
       if(r && ['passed','failed','canceled'].includes(r.status)) this.syncRun(r)
       else this.park(t.id,'interrupted',`Previous execution${t.runId ? ` ${t.runId}`:''} was interrupted. Review and retry explicitly.`)
     }
   }
+}
+/**
+ * The row JSON a profile save keeps: the board switch (§1.1), the company pause (five doors A4), the task prefix and
+ * counter (five doors step 2), and the connected accounts and monthly cap (five doors step 4). Everything else in the JSON is the profile, rewritten by the save.
+ */
+function keepRowState(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of ['autopilot', 'maxInFlight', 'pause', 'taskPrefix', 'taskSeq', 'accounts', 'monthlyCap', 'railLabel', 'client']) if (data[k] !== undefined) out[k] = data[k]
+  return out
 }
 /** Older rows lack the §1.3 fields; a bad JSON field never hides the task. */
 function readTask(data: string): BoardTask { return withTaskDefaults(JSON.parse(data)) as BoardTask }

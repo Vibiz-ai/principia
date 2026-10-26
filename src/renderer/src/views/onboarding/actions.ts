@@ -18,7 +18,9 @@ import {
   onboardingDispatch,
   onboardingPlanContext,
   requestOnboardingPlan,
+  refreshOnboardingStatus,
   setState,
+  updateSettings,
   toast
 } from '../../state/store'
 import { useSyncExternalStore } from 'react'
@@ -237,10 +239,26 @@ function applyResult(res: LaunchResult): void {
     }
   }))
   onboardingDispatch({ type: 'launchStarted', journalId: res.journalId })
+  if (res.status === 'done') applyChatLogo(getState().onboardingDraft, res.companyId)
   if (res.status === 'done') onboardingDispatch({ type: 'launchDone', journalId: res.journalId })
   else if (res.status === 'failed') onboardingDispatch({ type: 'launchFailed', journalId: res.journalId })
   else if (res.status === 'discarded') discardOnboarding()
   flushOnboardingDraft()
+}
+
+/**
+ * A company started from a chat (shared/chatCompany.ts): the emblem picked on the card, once it exists. With a repo
+ * (`keepDetected`) the repo's own logo wins when one was found. Once per draft; failures keep the initial.
+ */
+const logoApplied = new Set<string>()
+function applyChatLogo(d: OnboardingDraft | null, companyId: string | null): void {
+  const logo = d?.fromChat?.logo
+  if (!d || !logo || !companyId || logoApplied.has(d.id)) return
+  logoApplied.add(d.id)
+  void hive.company
+    .setLogo({ id: companyId, pick: { kind: 'emblem', variant: logo.variant, keepDetected: logo.keepDetected } })
+    .then((res) => res && setState((s) => ({ companyLogos: { ...s.companyLogos, [companyId]: res } })))
+    .catch(() => undefined)
 }
 
 async function runLaunch(call: () => Promise<LaunchResult>, d: OnboardingDraft): Promise<void> {
@@ -350,6 +368,10 @@ export async function start(opts: { autopilot: boolean; scheduleRefs: string[]; 
       toast(errorMessage(e), 'error')
       return false
     }
+  } else {
+    // AUTOPILOT.md §7: a new business is created with Autopilot on; I'll review first holds it off (best effort: the
+    // business is made either way, and its agents only act on their own once raised)
+    await hive.onboarding.start({ journalId, autopilot: false, scheduleRefs: [] }).catch(() => undefined)
   }
   if (opts.autopilot && opts.ceremony) {
     // the draft and the result stay until the ceremony ends: it shows the team from them
@@ -358,6 +380,37 @@ export async function start(opts: { autopilot: boolean; scheduleRefs: string[]; 
   }
   setLocal({ result: null, ceremony: null })
   await finishOnboarding(companyId, opts.autopilot ? 'home' : 'board')
+  return true
+}
+
+/** The company of this launch's journal, or null when the journal on hand belongs to another setup. */
+function journalCompany(journalId: string | undefined, j = getState().onboardingStatus?.journal): string | null {
+  return journalId && j && j.id === journalId ? (j.companyId ?? null) : null
+}
+
+/**
+ * Five doors step 5 (design §6.7): the Ready step's one action. Nothing starts here: the new company opens on Home,
+ * whose first card asks "Your team is ready. Start the first week?" (components/home/FirstRunCards). The journal and
+ * the schedules ticked on Ready wait in settings.firstWeek until that question is answered.
+ */
+export async function landOnHome(opts: { scheduleRefs: string[] }): Promise<boolean> {
+  const d = getState().onboardingDraft
+  const res = local.result
+  const journalId = d?.journalId ?? res?.journalId
+  // the launch result, else the journal of THIS launch only (a stale journal from another setup never names the company)
+  let companyId = res && res.journalId === journalId ? res.companyId : journalCompany(journalId)
+  if (!companyId && journalId) companyId = journalCompany(journalId, (await refreshOnboardingStatus().catch(() => null))?.journal)
+  if (!journalId || !companyId) {
+    toast('Couldn’t find the new company. Open it from the rail.', 'error')
+    return false
+  }
+  try {
+    await updateSettings({ firstWeek: { ...(getState().settings?.firstWeek ?? {}), [companyId]: { journalId, scheduleRefs: opts.scheduleRefs.slice(0, 8) } } })
+  } catch {
+    /* Home then shows no first-week card; each task still waits in To do with Start */
+  }
+  setLocal({ result: null, ceremony: null })
+  await finishOnboarding(companyId, 'home')
   return true
 }
 

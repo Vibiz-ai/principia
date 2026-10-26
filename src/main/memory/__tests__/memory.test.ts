@@ -16,7 +16,7 @@ import { openMemoryDb, MemorySchemaMismatch, type MemDB } from '../db'
 import { MEMORY_SCHEMA_VERSION } from '../schema'
 import { ftsQuery, inferEntityType, MemoryStore, queryKeywords, type GrantRow } from '../store'
 import { buildFingerprints, credentialHit, imperativeHit, redactCredentials, normalizeName, normalizeText, secretHit, textHash } from '../screen'
-import { BRIEF, buildBrief, entityDetail, factsQuery, globalGraph, graphQuery, outgoingLinks, rankedSearch, recencyWeight, searchPage, vaultSearch } from '../search'
+import { BRIEF, buildBrief, entityDetail, factsQuery, globalGraph, graphQuery, outgoingLinks, overviewCore, rankedSearch, recencyWeight, searchPage, vaultSearch } from '../search'
 import { MemoryTools } from '../server/tools'
 import { handleLine, type McpHandlers } from '../server/jsonrpc'
 import { MemoryService, repoForCwd, type PassportRuntime } from '../service'
@@ -806,6 +806,41 @@ d('page queries', () => {
     expect(all.items.map((f) => f.text)).toEqual(['second fact here mentions ••••T', 'first fact here'])
     expect(factsQuery(store, { scope: { repoId: REPO }, runId: 'r_second0001' }).total).toBe(1)
     expect(factsQuery(store, { scope: { repoId: REPO }, text: 'first' }).items[0].text).toBe('first fact here')
+  })
+
+  it('a company sees only its own repositories plus global (QA: Beta showed Alpha memories)', () => {
+    const ea = store.userCreateEntity({ name: 'alpha-cli', repoId: REPO })
+    store.userCreateFact({ entityId: ea.id, text: 'src/cli.js exports run(argv)', scope: 'project' })
+    const eb = store.userCreateEntity({ name: 'beta-api', repoId: OTHER })
+    store.userCreateFact({ entityId: eb.id, text: 'beta api uses fastify', scope: 'project' })
+    const eg = store.userCreateEntity({ name: 'house-style', repoId: null })
+    store.userCreateFact({ entityId: eg.id, text: 'prefer small commits', scope: 'global' })
+    const texts = (r: { items: { text: string }[] }) => r.items.map((f) => f.text).sort()
+    // Beta (owns OTHER) asking for "all": its repo and global, never Alpha's
+    expect(texts(factsQuery(store, { scope: 'all' }, undefined, [OTHER]))).toEqual(['beta api uses fastify', 'prefer small commits'])
+    // Beta asking for Alpha's repo by id: global only
+    expect(texts(factsQuery(store, { scope: { repoId: REPO } }, undefined, [OTHER]))).toEqual(['prefer small commits'])
+    const g = graphQuery(store, { scope: 'all' }, undefined, [OTHER])
+    expect(g.entities.map((e) => e.name).sort()).toEqual(['beta-api', 'house-style'])
+    expect(searchPage(store, { scope: 'all', query: 'cli run argv' }, undefined, [OTHER])).toEqual([])
+    // no company asked (All mode): everything, as before
+    expect(factsQuery(store, { scope: 'all' }).total).toBe(3)
+  })
+
+  it('the overview counts are company-scoped too (QA: Alpha\'s memory took Beta out of the first-run state)', () => {
+    const ea = store.userCreateEntity({ name: 'alpha-cli', repoId: REPO })
+    store.userCreateFact({ entityId: ea.id, text: 'src/cli.js exports run(argv)', scope: 'project' })
+    // Beta owns OTHER, which has nothing yet: no counts, no repos
+    expect(overviewCore(store, [OTHER])).toMatchObject({ counts: { entities: 0, facts: 0, relations: 0, pending: 0, unreviewed: 0 }, repos: [] })
+    expect(overviewCore(store, [])).toMatchObject({ counts: { entities: 0, facts: 0 } })
+    // Alpha sees its own; All mode sees everything
+    expect(overviewCore(store, [REPO]).counts).toMatchObject({ entities: 1, facts: 1 })
+    expect(overviewCore(store, [REPO]).repos.map((r) => r.repoId)).toEqual([REPO])
+    expect(overviewCore(store).counts).toMatchObject({ entities: 1, facts: 1 })
+    // global memory counts for every company
+    const eg = store.userCreateEntity({ name: 'house-style', repoId: null })
+    store.userCreateFact({ entityId: eg.id, text: 'prefer small commits', scope: 'global' })
+    expect(overviewCore(store, [OTHER]).counts).toMatchObject({ entities: 1, facts: 1 })
   })
 })
 

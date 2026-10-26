@@ -1,5 +1,5 @@
 /**
- * FORUM.md §8: one message row. Plain text (grouped by author), asks (an amber status tessera: the Needs-you meaning),
+ * FORUM.md §8: one message row. Plain text (grouped by author), asks (an accent status tessera: the Needs-you meaning),
  * proposals (the double-rule frame with corner lozenges, VOICE.md §5.2) and system lines. Inline tokens open what they
  * name; hover actions: react, reply in thread, make task, copy ref, edit/delete own.
  */
@@ -10,9 +10,17 @@ import { MemberAvatar } from './Avatar'
 import { useForumCtx } from './context'
 import { QUICK_REACTIONS, timeLabel, tokenize } from '../../lib/forum'
 import { hive } from '../../lib/hive'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { DeepLinkButton } from '../DeepLinkButton'
 import { useStore } from '../../state/store'
+import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 
+/** DIAGRAMS.md: a principia-graph block in a post is drawn in place; the prose around it renders as before. */
 export function RichText({ text, from }: { text: string; from?: ForumMessage }): React.JSX.Element {
+  return <TextWithDiagrams text={text} renderText={(t) => <RichTextPlain text={t} from={from} />} />
+}
+
+function RichTextPlain({ text, from }: { text: string; from?: ForumMessage }): React.JSX.Element {
   const ctx = useForumCtx()
   const meHandle = ctx.me?.handle
   return (
@@ -28,6 +36,7 @@ export function RichText({ text, from }: { text: string; from?: ForumMessage }):
           case 'bold':
             return <strong key={i}>{t.v}</strong>
           case 'url':
+            if (isDeepLinkUrl(t.v)) return <DeepLinkButton key={i} href={t.v} />
             return (
               <a key={i} className="fm-link" href={t.v} onClick={(e) => (e.preventDefault(), void hive.app.openExternal({ url: t.v }))}>
                 {t.v.replace(/^https?:\/\//, '')}
@@ -55,6 +64,7 @@ export function RichText({ text, from }: { text: string; from?: ForumMessage }):
             )
           }
           case 'task':
+            if (ctx.knowsTask && !ctx.knowsTask(t.v)) return <Fragment key={i}>{t.v}</Fragment>
             return (
               <span key={i} className="fm-inline-ref" onClick={() => from && ctx.openRef({ kind: 'task', id: t.v, label: t.v }, from)}>
                 {t.v}
@@ -179,16 +189,27 @@ export function AskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
   if (!ask) return null
   const canAnswer = ask.status === 'open' && !!ctx.me && (ctx.me.role === 'owner' || ctx.me.role === 'admin' || ask.to.includes(ctx.me.id))
   const author = ctx.display(m.authorId)
+  // AGENT-COLLAB.md §5: an agent asking agents is their conversation, not a Needs-you card
+  const agentToAgent = author?.kind === 'agent' && ask.to.length > 0 && ask.to.every((id) => ctx.display(id)?.kind === 'agent')
+  const targets = ask.to.map((id) => ctx.display(id)).filter((d): d is NonNullable<typeof d> => !!d)
   const go = async (a: string) => {
     setBusy(true)
     await ctx.answer(m, a)
     setBusy(false)
   }
   return (
-    <div className={`fm-ask ${ask.status === 'open' ? 'is-open' : 'is-answered'}`}>
+    <div className={`fm-ask ${ask.status === 'open' ? 'is-open' : 'is-answered'} ${agentToAgent ? 'fm-ask--agents' : ''}`}>
       <div className="fm-ask__kicker">
-        <span className={`fm-tessera ${ask.status === 'open' ? 'fm-tessera--needs' : 'fm-tessera--ok'}`} aria-hidden />
-        <span>{ask.status === 'open' ? 'Needs you · ask' : 'Answered'}</span>
+        <span className={`fm-tessera ${ask.status === 'open' ? (agentToAgent ? 'fm-tessera--working' : 'fm-tessera--needs') : 'fm-tessera--ok'}`} aria-hidden />
+        {agentToAgent ? (
+          <span className="fm-ask__route" title="One agent asked another; the asked agent was woken to answer in this thread">
+            Agent ask · {author?.name}
+            {author?.role ? ` (${author.role})` : ''} → {targets.map((t) => `${t.name}${t.role ? ` (${t.role})` : ''}`).join(', ')}
+            {ask.status === 'open' ? ' · answering' : ' · answered'}
+          </span>
+        ) : (
+          <span>{ask.status === 'open' ? 'Needs you · ask' : 'Answered'}</span>
+        )}
         {ask.taskId && <span className="fm-ask__park">{ask.status === 'open' ? 'parks its task until answered' : 'its task resumed'}</span>}
       </div>
       <div className="fm-ask__q">
@@ -217,7 +238,7 @@ export function AskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
       )}
       <div className="fm-ask__foot">
         Asked {ask.to.map((id) => `@${ctx.display(id)?.handle ?? '?'}`).join(', ')}
-        {ask.status === 'open' && author?.kind === 'agent' ? ` · ${author.name} resumes with your answer` : ''}
+        {ask.status === 'open' && author?.kind === 'agent' ? (agentToAgent ? ` · ${targets.map((t) => t.name).join(', ')} was woken to answer; you can answer too` : ` · ${author.name} resumes with your answer`) : ''}
       </div>
     </div>
   )
@@ -302,8 +323,10 @@ export function MessageRow({ m, head, inThread = false, highlight = false }: { m
   const d = ctx.display(m.authorId)
   if (m.kind === 'system') {
     return (
-      <div className="fm-system" id={`fm-${m.id}`}>
+      <div className={`fm-system ${m.via === 'principia' ? 'fm-system--principia' : ''}`} id={`fm-${m.id}`}>
         <span className="fm-tessera fm-tessera--line" aria-hidden />
+        {/* ORCHESTRATOR.md §3: the chief of staff's digest is Principia's own line */}
+        {m.via === 'principia' && <b className="fm-system__who">Principia (chief of staff)</b>}
         <RichText text={m.text} from={m} />
         <span className="fm-system__time">{timeLabel(m.createdAt)}</span>
       </div>
@@ -324,7 +347,18 @@ export function MessageRow({ m, head, inThread = false, highlight = false }: { m
               {timeLabel(m.createdAt)}
             </span>
             <span className="fm-msg__ref">{m.ref}</span>
+            {m.via === 'principia' && (
+              <span className="fm-msg__via" title="Principia posted this for the agent, from the report at the end of its run">
+                via Principia
+              </span>
+            )}
           </div>
+        )}
+        {/* a Principia post grouped under the agent's own message still says so */}
+        {!head && m.via === 'principia' && (
+          <span className="fm-msg__via fm-msg__via--cont" title="Principia posted this for the agent, from the report at the end of its run">
+            via Principia
+          </span>
         )}
         {m.deletedAt ? (
           <div className="fm-msg__text fm-msg__text--deleted">This message was deleted.</div>

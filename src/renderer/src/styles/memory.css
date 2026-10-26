@@ -238,7 +238,7 @@
 .mfact { position: relative; padding: 7px 8px 6px 10px; margin: 0 -6px 4px; border-radius: var(--radius-sm); border-left: 2px solid transparent; outline: none; }
 .mfact:hover, .mfact:focus-within { background: var(--row-hover); }
 .mfact:focus-visible { box-shadow: var(--focus); }
-.mfact--pending { border-left-color: var(--status-warning); background: rgba(240, 181, 74, 0.05); }
+.mfact--pending { border-left-color: var(--status-warning); background: rgba(214, 224, 240, 0.05); }
 .mfact--gotcha { border-left-color: rgba(242, 92, 92, 0.5); }
 .mfact--invalid .mfact__text { color: var(--text-tertiary); text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, 0.2); }
 .mfact__text { font-size: var(--text-md); line-height: var(--leading-normal); color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }

@@ -4,6 +4,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { McpServerSpec, ProcessReaper } from '../../shared/engine'
 import { AUTHOR_SERVER_NAME, AUTHOR_TOOLS, approveLabel, type AuthoringContext } from '../../shared/authoring'
@@ -24,7 +25,11 @@ import { checkTarget } from '../handlers/runs'
 import { guardSameCompany, guardWorkflowTargets, workflowRepoRefs } from '../handlers/companyScope'
 import { repoForCwd } from '../memory/service'
 import { AuthorBroker } from './broker'
+import { ChatProposals } from '../company/chatProposals'
+import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
+import { CONNECTIONS_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
+import { connectionsReport } from '../company/connectionsReport'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
 import { NotifyNode } from '../notifyNode'
@@ -98,7 +103,17 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     }
     if (TERMINAL_RUN.has(run.status) && snapped.has(run.id) && !swept.has(run.id)) {
       swept.add(run.id)
-      void wm.sweepRun(run.id).catch((e) => log.warn('run branch sweep failed', { runId: run.id, e: String(e) }))
+      // WORKTREE.md A3: a task's turn ran every git command under its worktree's guard, which recorded the branches it
+      // made; only those are the run's (never one the founder made meanwhile in their own checkout)
+      let guardOwners: Id[] | undefined
+      try {
+        const taskId = (h.db.prepare('SELECT task_id FROM runs WHERE id = ?').get(run.id) as { task_id: string | null } | undefined)?.task_id ?? null
+        const owner = taskId ? (h.taskWork?.guardOwner(taskId) ?? null) : null
+        if (owner) guardOwners = [owner]
+      } catch {
+        /* older db: the refs diff */
+      }
+      void wm.sweepRun(run.id, { atRunEnd: true, guardOwners }).catch((e) => log.warn('run branch sweep failed', { runId: run.id, e: String(e) }))
     }
   })
 
@@ -170,6 +185,14 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       emit('data:changed', { domain: 'tasks' })
       h.statusChanged()
     },
+    // task_create {agent}: a teammate of the same company by @handle, name or role (the Forum's roster)
+    teammate: (companyId, raw) => {
+      const store = h.forum?.store
+      if (!store) return { teammates: [] }
+      const m = store.agentByName(companyId, raw)
+      if (m?.agentId && m.companyId === companyId) return { agentId: m.agentId }
+      return { teammates: store.roster(companyId).map((t) => `@${t.handle}`) }
+    },
     // a handed-off task wakes its auto target now (null until startDispatcher; the tick covers it then)
     pump: (companyId) => void h.dispatcher?.pump(companyId),
     // §9 company_create_department: the UI's departments:save path (department note), then the sidebar refreshes
@@ -196,6 +219,21 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   }
 
   const drafts = new AuthorDrafts(h.db, redact)
+  const proposals = new ChatProposals({
+    emit: (p) => emit('chatCompany:updated', p),
+    sessionTitle: (id) => h.store.getSession(id)?.title ?? null,
+    home: os.homedir(),
+    // the founder said yes in the chat, so they are usually looking at it; a notification only when Principia is behind
+    attention: (p) => {
+      try {
+        if (h.windows.isFocused()) return
+        notify({ title: p.name ? `Create ${p.name}?` : 'Create a new company?', body: 'A chat suggests setting this up as a new Principia company.', sound: h.settings().notificationSound, onClick: () => h.windows.show() })
+      } catch {
+        /* best effort */
+      }
+    }
+  })
+  h.chatProposals = proposals
   h.author = new AuthorBroker({
     drafts,
     owner: (sessionId): DraftOwner | null => {
@@ -358,6 +396,16 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       alertUserId: () => h.settings().slackAlertUserId ?? null,
       channelName: (id) => h.slack?.connector.names.channel(id) ?? id
     },
+    // shared/chatCompany.ts: the confirmation card behind principia_propose_company
+    proposals: { propose: (sessionId, args, signal) => proposals.propose(sessionId, args, signal) },
+    // connections_list: the caller's own company (session, else its run), never the line's
+    connections: {
+      list: (owner, args, hints) => {
+        const companyId = 'sessionId' in owner ? sessionCompany(owner.sessionId) : h.store.getRun(owner.runId)?.companyId || PERSONAL_COMPANY_ID
+        if (hints.companyId && hints.companyId !== companyId) throw new Error('This tool server belongs to another company. Restart the session.')
+        return companyConnections(h, companyId, typeof args.tool === 'string' ? args.tool.slice(0, 60) : undefined) as unknown as Record<string, unknown>
+      }
+    },
     tasks: {
       resolve: (owner) => tasks.resolveCaller(owner),
       call: (caller, tool, args, hints) => tasks.call(caller as TaskCaller, tool, args, hints)
@@ -415,7 +463,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       let taskId: Id | null = null
       if (board) {
         try {
-          taskId = (h.db.prepare("SELECT id FROM company_tasks WHERE run_id = ? AND status = 'in_progress' LIMIT 1").get(sessionId) as { id: Id } | undefined)?.id ?? null
+          // PROACTIVE.md §3: a task the chat tracks for itself never makes it a task session
+          taskId = (h.db.prepare("SELECT id FROM company_tasks WHERE run_id = ? AND status = 'in_progress' AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%' LIMIT 1").get(sessionId) as { id: Id } | undefined)?.id ?? null
         } catch {
           /* older db */
         }
@@ -429,8 +478,11 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           HIVE_LIVE_DIR: liveDir,
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
           // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}`,
+          // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
+          // PROACTIVE.md §2: the passive wording of the company tools when "Agents use Principia on their own" is off
+          ...(proactiveOn(h) ? {} : { HIVE_PROACTIVE: '0' }),
           // COMPANY.md §6: the session's company (main still scopes every call by the session itself)
           ...(companyId ? { HIVE_COMPANY_ID: companyId } : {}),
           ...(opts.reaper?.tag(sessionId) ?? { HIVE_SPAWN_ID: sessionId, HIVE_USER_DATA: h.paths.userData })
@@ -439,10 +491,46 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // pre-allowed mcp__hive__* names for the pane: the slack group joins once Slack is connected
     get tools() {
-      // company_departments reads; company_file_task is left to the pane's own permission prompt (a second yes)
-      return [...AUTHOR_TOOLS, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...(boardOn() ? [...TASK_TOOLS, 'company_departments'] : [])]
+      // company_departments reads; principia_propose_company only opens a card in Principia (the founder confirms there)
+      // PROACTIVE.md §2: with "Agents use Principia on their own" on (the default) filing and tracking tasks needs no
+      // permission prompt (capped and deduplicated by the board); off, company_file_task waits for the pane's prompt.
+      // company_create_department always does (a second yes).
+      const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
+      // connections_list is read-only (what is connected, and where the founder connects the rest)
+      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
+  }
+}
+
+/** What one company has connected, and the principia://connect link for the rest (connections_list, the gateway's errors). */
+export function companyConnections(h: Pick<Hive, 'company' | 'gateway' | 'slack' | 'linear'>, companyId: Id, tool?: string): ReturnType<typeof connectionsReport> {
+  const c = h.company.scope.get(companyId)
+  let slack: 'connected' | 'set-up' | 'none' | 'unavailable' = 'unavailable'
+  try {
+    const st = h.slack?.status().state
+    slack = !h.slack ? 'unavailable' : st === 'connected' ? 'connected' : st && st !== 'disabled' ? 'set-up' : 'none'
+  } catch {
+    /* Slack unknown: left out */
+  }
+  let linear = false
+  try {
+    linear = !!h.linear?.status(companyId).connected
+  } catch {
+    /* not connected */
+  }
+  return connectionsReport(
+    { companyId, companyName: c?.name ?? 'This company', personal: c?.system === 'personal', accounts: c?.accounts, gateway: h.gateway?.list() ?? [], slack, linear, code: (c?.repoIds?.length ?? 0) > 0 },
+    tool ? { tool } : {}
+  )
+}
+
+/** PROACTIVE.md §2: Settings → "Agents use Principia on their own". Absent = on. */
+export function proactiveOn(h: Pick<Hive, 'settings'>): boolean {
+  try {
+    return h.settings().proactiveAgents !== false
+  } catch {
+    return true
   }
 }
 

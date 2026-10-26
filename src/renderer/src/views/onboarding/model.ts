@@ -2,6 +2,7 @@
  * Pure helpers for the onboarding screens (docs/ONBOARDING.md §2, §9): copy built from the plan, keyboard decisions,
  * plan edits. No React, no store, no IPC, so they are unit-tested (model.test.ts).
  */
+import { CLAUDE_PLAN_PRICES, claudePlanLabel, onPlan, type ClaudeAuthStatus } from '@shared/providerAuth'
 import { DEPARTMENT_PRESETS, type DepartmentPresetKey } from '@shared/company'
 import {
   GOAL_INFO,
@@ -462,7 +463,7 @@ export function nextSteps(opts: { plan: OnboardingPlan; name: string; repoNames:
   out.push('Everything agents make lands in review. Nothing is posted, sent or paid without you.')
   const notes = opts.notes ?? 5 + opts.repoNames.length
   if (opts.passport && notes > 0) {
-    out.push(`Your passport has ${notes} ${notes === 1 ? 'note' : 'notes'} about ${name || 'your business'}. Agents read them before every task. Edit them under Passport.`)
+    out.push(`Knowledge has ${notes} ${notes === 1 ? 'note' : 'notes'} about ${name || 'your business'}. Agents read them before every task. Edit them under Knowledge.`)
   } else {
     out.push(`Your answers are saved in ${name || 'the company'}'s settings. Edit them any time under Company Settings.`)
   }
@@ -662,9 +663,13 @@ export function gridMove(index: number, key: string, count: number, cols: number
   }
 }
 
-/** Whether the step shows the progress row and counts toward "Step n of 6". */
+/**
+ * Whether the step shows the progress row and counts toward "Step n of 6". The opening question ("Where does your
+ * business live today?") shows none: Step 1 is the page it leads to (name, connect or brief), so Continue never lands
+ * on a page that still says "Step 1 of 6".
+ */
 export function showsProgress(step: StepKey): boolean {
-  return step !== 'launching' && step !== 'failed' && step !== 'ready'
+  return step !== 'start' && step !== 'launching' && step !== 'failed' && step !== 'ready'
 }
 
 const AGENT_LOGIN: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini' }
@@ -672,4 +677,17 @@ const AGENT_LOGIN: Record<string, string> = { claude: 'Claude Code', codex: 'Cod
 export function agentLogin(adapters: readonly string[]): string {
   const id = adapters.includes('claude') ? 'claude' : adapters.find((a) => a in AGENT_LOGIN)
   return id ? AGENT_LOGIN[id] : 'Claude Code'
+}
+
+/** Five doors step 5 (E12): the Claude check's line on the last setup steps (ClaudeCheck.tsx). */
+export function claudeCheckLine(auth: Pick<ClaudeAuthStatus, 'state' | 'method' | 'plan'> | null): { ok: boolean | null; text: string } {
+  if (!auth) return { ok: null, text: 'Checking Claude on this Mac…' }
+  if (auth.state === 'ok') {
+    const plan = claudePlanLabel(auth.plan)
+    if (onPlan(auth) === false) return { ok: true, text: 'Claude is signed in on this Mac with an API key: Anthropic bills each use. Principia adds nothing.' }
+    return { ok: true, text: `Runs on your Claude ${plan ?? 'plan'}. No extra charge from Principia. Claude is signed in on this Mac.` }
+  }
+  if (auth.state === 'signedOut') return { ok: false, text: `Sign in to Claude, or get a plan: Claude isn’t signed in on this Mac, so your team can’t start yet. Run claude in Terminal to sign in. ${CLAUDE_PLAN_PRICES}` }
+  if (auth.state === 'missing') return { ok: false, text: `Claude Code isn’t installed on this Mac, so your team can’t start yet. Install it and sign in with a Claude plan. ${CLAUDE_PLAN_PRICES}` }
+  return { ok: null, text: 'Runs on your Claude plan. No extra charge from Principia. This Claude Code can’t tell us whether you’re signed in.' }
 }

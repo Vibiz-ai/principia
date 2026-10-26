@@ -41,7 +41,8 @@ export function parseText(text: string): ParsedText {
   }
   // tokens inside URLs are not refs
   const bare = urls.reduce((t, u) => t.split(u).join(' '), text)
-  for (const m of bare.matchAll(/\b(PRN-\d{1,7})\b/g)) add({ kind: 'task', id: m[1].toUpperCase(), label: m[1].toUpperCase() })
+  // five doors step 2: every company has its own prefix (NC-12, LA-3); uppercase only, so prose never reads as a task
+  for (const m of bare.matchAll(/\b([A-Z][A-Z0-9]{1,4}-\d{1,7})\b/g)) add({ kind: 'task', id: m[1].toUpperCase(), label: m[1].toUpperCase() })
   for (const m of bare.matchAll(/\[\[([^\[\]\n|#^]{1,200})(?:[#^|][^\]\n]*)?\]\]/g)) {
     const title = m[1].trim()
     if (title) add({ kind: 'note', id: title, label: `[[${title}]]` })
@@ -61,7 +62,7 @@ export function parseRefArg(raw: string): ForumRef | { message: string } | null 
   const s = raw.trim()
   if (!s) return null
   if (/^https?:\/\//.test(s)) return { kind: 'url', id: clip(s, 500), label: clip(s.replace(/^https?:\/\//, ''), 60) }
-  const task = /^PRN-\d{1,7}$/i.exec(s)
+  const task = /^[A-Z][A-Z0-9]{1,4}-\d{1,7}$/i.exec(s)
   if (task) return { kind: 'task', id: s.toUpperCase(), label: s.toUpperCase() }
   const note = /^\[\[(.{1,200})\]\]$/.exec(s)
   if (note) return { kind: 'note', id: note[1].trim(), label: `[[${note[1].trim()}]]` }

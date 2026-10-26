@@ -4,6 +4,7 @@
  * One Forum per company: All mode asks which one. Lives behind the board switch (companies + departments).
  */
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { AgentTalkPanel } from '../components/forum/AgentTalk'
 import type { ForumChannel, ForumMember, ForumMessage, ForumRef } from '@shared/forum'
 import { channelLabel } from '@shared/forum'
 import { EmptyState, Loading } from '../components/ui'
@@ -15,10 +16,14 @@ import { Composer, type ComposerHandle } from '../components/forum/Composer'
 import { DecideSheet, EditSheet, InviteSheet, NewChannelSheet, ProposeSheet } from '../components/forum/Sheets'
 import { ForumMosaic } from '../components/forum/ForumMosaic'
 import { groupMessages, parseSlash, presenceLine, sortChannels } from '../lib/forum'
+import { forumVisualizeAsk } from '@shared/diagram'
 import { confirmNative, hive, nativeMenu } from '../lib/hive'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { followLink } from '../lib/inAppLink'
 import { initForumEvents, loadChannel, loadForum, loadThread, markRead, post, setViewing, useForum } from '../state/forum'
 import { activeCompany, attempt, departmentsOn, enterCompany, navigate, openBoard, toast, useStore } from '../state/store'
 import '../styles/forum.css'
+import '../styles/agentTalk.css'
 
 const EMPTY: ForumMessage[] = []
 
@@ -65,6 +70,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
   const [threadId, setThreadId] = useState<string | null>(wantedThread ?? null)
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<ForumMessage[] | null>(null)
+  const [agentTalk, setAgentTalk] = useState(false)
   const [sheet, setSheet] = useState<null | { kind: 'channel' } | { kind: 'invite' } | { kind: 'decide'; m: ForumMessage } | { kind: 'edit'; m: ForumMessage } | { kind: 'propose'; k: 'department' | 'agent' | null }>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -131,7 +137,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
         case 'run':
           return void navigate({ name: 'run', runId: ref.id })
         case 'url':
-          return void hive.app.openExternal({ url: ref.id })
+          return isDeepLinkUrl(ref.id) ? followLink(ref.id) : void hive.app.openExternal({ url: ref.id })
         case 'message': {
           const pool = [...Object.values(cf?.pages ?? {}).flatMap((p) => p.list), ...Object.values(cf?.threads ?? {}).flatMap((t) => [t.root, ...t.replies])]
           const m = pool.find((x) => x.ref === ref.id)
@@ -169,6 +175,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
       },
       openChannel,
       openRef,
+      knowsTask: (ident: string) => tasks.some((x) => x.companyId === companyId && x.identifier.toUpperCase() === ident.toUpperCase()),
       react: (m, emoji) => void attempt(() => hive.forum.react({ messageId: m.id, emoji }), 'React'),
       edit: (m) => setSheet({ kind: 'edit', m }),
       remove: (m) =>
@@ -256,6 +263,12 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
           ctx.toTask(m)
           return true
         }
+        case 'visualize': {
+          // DIAGRAMS.md §6: the ask goes out as a normal message, so the agent answers in the thread with a diagram
+          const text = forumVisualizeAsk(cmd.handles, cmd.what)
+          if (!text) return (toast('Usage: /visualize @agent what to draw'), false)
+          return !!(await attempt(() => post({ companyId, channelId: channel.id, text }), 'Visualize'))
+        }
         case 'unknown':
           toast(`Unknown command /${cmd.name}`)
           return false
@@ -279,7 +292,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
 
   return (
     <ForumContext.Provider value={ctx}>
-      <div className={`view fm-view ${threadId || results ? 'has-side' : ''}`}>
+      <div className={`view fm-view ${threadId || results || agentTalk ? 'has-side' : ''}`}>
         <ForumNav
           companyName={companyName}
           channels={channels}
@@ -294,6 +307,8 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
           onOpen={openChannel}
           onNewChannel={() => setSheet({ kind: 'channel' })}
           onInvite={() => setSheet({ kind: 'invite' })}
+          agentTalk={agentTalk}
+          onAgentTalk={() => (setAgentTalk((x) => !x), setThreadId(null), setSearch(''), setResults(null))}
           onNewDm={async () => {
             const others = members.filter((m) => m.status === 'active' && m.id !== state.me && m.kind !== 'guest')
             const id = await nativeMenu(others.map((m) => ({ id: m.id, label: `${display(m.id)?.name ?? m.name}${m.kind === 'agent' ? ` · ${display(m.id)?.role}` : ''}` })))
@@ -397,6 +412,8 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
               <Loading />
             )}
           </aside>
+        ) : agentTalk ? (
+          <AgentTalkPanel companyId={companyId} onClose={() => setAgentTalk(false)} />
         ) : null}
         {sheet?.kind === 'channel' && (
           <NewChannelSheet
@@ -491,7 +508,9 @@ function ForumNav({
   onOpen,
   onNewChannel,
   onInvite,
-  onNewDm
+  onNewDm,
+  agentTalk,
+  onAgentTalk
 }: {
   companyName: string
   channels: ForumChannel[]
@@ -507,6 +526,8 @@ function ForumNav({
   onNewChannel: () => void
   onInvite: () => void
   onNewDm: () => void
+  agentTalk: boolean
+  onAgentTalk: () => void
 }): React.JSX.Element {
   const ctx = useContextSafe()
   const departments = useStore((s) => s.departments)
@@ -530,7 +551,8 @@ function ForumNav({
   return (
     <nav className="fm-nav" aria-label="Forum channels">
       <div className="fm-nav__brand">
-        <span className="fm-nav__forum">FORUM</span>
+        {/* the view's title (every door has one h1); the wordmark is the same word in capitals */}
+        <h1 className="fm-nav__forum">Forum</h1>
         <span className="fm-nav__co">{companyName}</span>
       </div>
       <div className="fm-nav__search">
@@ -568,6 +590,19 @@ function ForumNav({
             c.kind === 'private' ? <Icon name="lock" size={12} /> : c.departmentId ? <span className="fm-nav__dept" style={{ background: deptColor(c) ?? 'var(--text-tertiary)' }} aria-hidden /> : '#'
           )
         )}
+        <div
+          className={`fm-nav__row ${agentTalk ? 'is-selected' : ''}`}
+          role="button"
+          tabIndex={0}
+          title="Conversations between agents: who asked whom, why, cost, and the limits"
+          onClick={onAgentTalk}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onAgentTalk())}
+        >
+          <span className="fm-nav__lead">
+            <Icon name="chat" size={12} />
+          </span>
+          <span className="fm-nav__label">Agent talk</span>
+        </div>
         {proposals.length > 0 && (
           <>
             <div className="fm-nav__section">

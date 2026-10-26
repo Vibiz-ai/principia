@@ -10,7 +10,12 @@ import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
 import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
-import { focusSession, followCompany, getState, navigate, setState, toast, toastError, useStore } from './store'
+import { departmentsOn, focusSession, followCompany, getState, loadJson, navigate, openBoard, scopeCompanyId, setState, toast, toastError, useStore, type State } from './store'
+import { lastChatKey } from '../lib/agentChatView'
+import { needsYouTasks } from '../lib/board'
+import { liveTruth, needsIn, workingIn, type LiveScope, type LiveTruth, type NeedsSlice, type WorkingSlice } from '../lib/liveTruth'
+import { reposOf, taskCounts, taskNeedsIn } from '../lib/companyModel'
+import { laneContext } from '../lib/departments'
 
 const DAY = 24 * 60 * 60_000
 
@@ -18,13 +23,22 @@ const DAY = 24 * 60 * 60_000
 let pendingAgents: AgentNode[] = []
 let pendingAsks: Ask[] = []
 let frame: number | null = null
+let timer: ReturnType<typeof setTimeout> | null = null
+/**
+ * One flush per animation frame, and never later than a short timer: a window that is hidden or behind another one
+ * gets no animation frames, and its live state must not stall (a run that started or ended would show seconds late).
+ */
 function schedule(): void {
-  if (frame !== null) return
-  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 16) as unknown as number
-  frame = raf(() => {
+  if (frame !== null || timer !== null) return
+  const run = (): void => {
+    if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+    if (timer !== null) clearTimeout(timer)
     frame = null
+    timer = null
     flush()
-  })
+  }
+  if (typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(run)
+  timer = setTimeout(run, 100)
 }
 function flush(): void {
   const ag = pendingAgents
@@ -112,11 +126,72 @@ export function wireLiveEvents(): void {
     pendingAsks.push(a)
     schedule()
   })
+  // A2: a run or session that ended takes its live agents with it in the same render, even when the agents' own
+  // final update is still on its way (or never comes: a killed CLI)
+  hive.on('run:updated', (run) => {
+    if (run.status === 'queued' || run.status === 'running') return
+    endOwned((a) => a.runId === run.id && a.kind !== 'session', run.status === 'passed' ? 'done' : run.status === 'failed' ? 'failed' : 'canceled')
+  })
+  hive.on('pty:exit', ({ sessionId }) => endOwned((a) => a.sessionId === sessionId, 'done'))
   hive.on('agent:events', ({ agentId, events }) => {
     const subs = eventSubs.get(agentId)
     if (subs) for (const f of subs) f(events)
   })
   if (typeof window !== 'undefined') window.addEventListener('focus', () => markVisibleSeen())
+}
+
+/** Ends every live agent `owned` matches (run end, pane exit): the same batch as agent updates, so one render. */
+function endOwned(owned: (a: AgentNode) => boolean, status: 'done' | 'failed' | 'canceled'): void {
+  const now = new Date().toISOString()
+  for (const a of Object.values(getState().agents)) {
+    if (!owned(a) || !isLive(a)) continue
+    pendingAgents.push({ ...a, status, needs: null, endedAt: a.endedAt ?? now, updatedAt: now })
+  }
+  schedule()
+}
+
+// ---------- A2: the one live source ----------
+let truthMemo: { deps: unknown[]; truth: LiveTruth } | null = null
+/**
+ * Every working and needs-you number and list reads this (lib/liveTruth.ts). Memoised on the store slices it reads,
+ * so every surface in a render shares one result.
+ */
+export function truthOf(s: State): LiveTruth {
+  const on = departmentsOn(s)
+  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, s.companiesLoaded, s.companyError, on, s.repos, s.suggestionCounts]
+  if (truthMemo && truthMemo.deps.every((d, i) => d === deps[i])) return truthMemo.truth
+  const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
+  const counts = on ? taskCounts(s.tasks, laneContext(s.asks, s.companyAgents, paused)) : {}
+  const taskNeeds: Record<Id, number> = {}
+  for (const id of Object.keys(counts)) taskNeeds[id] = taskNeedsIn(counts, id)
+  // ORCHESTRATOR.md §3: Principia's open suggestions wait on the founder too
+  if (on) for (const [id, n] of Object.entries(s.suggestionCounts ?? {})) taskNeeds[id] = (taskNeeds[id] ?? 0) + n
+  // an archived company's asks and agents leave every count with it (the rail lists only the others)
+  const listed = s.companiesLoaded && !s.companyError ? new Set(s.companies.map((c) => c.id)) : undefined
+  const code = new Set(s.companies.filter((c) => reposOf(s.repos, c.id).length > 0).map((c) => c.id))
+  const truth = liveTruth({ agents: Object.values(s.agents), asks: Object.values(s.asks), seen: new Set(Object.keys(s.seenIdle)), sessions: s.sessions, tasks: s.tasks, taskNeeds, listed, code })
+  truthMemo = { deps, truth }
+  return truth
+}
+export function useLiveTruth(): LiveTruth {
+  return useStore(truthOf)
+}
+/** Agents working now in a scope (a company id, or 'all' / undefined for every company). */
+export function useWorking(scope?: LiveScope): WorkingSlice {
+  const t = useLiveTruth()
+  return useMemo(() => workingIn(t, scope), [t, scope])
+}
+/** Everything that needs you in a scope: live asks, finished turns and board tasks waiting on you. */
+export function useNeeds(scope?: LiveScope): NeedsSlice {
+  const t = useLiveTruth()
+  return useMemo(() => needsIn(t, scope), [t, scope])
+}
+/** The same slices outside React (palette commands, ⌘J). */
+export function workingNow(scope?: LiveScope): WorkingSlice {
+  return workingIn(truthOf(getState()), scope)
+}
+export function needsNow(scope?: LiveScope): NeedsSlice {
+  return needsIn(truthOf(getState()), scope)
 }
 
 // ---------- visible owner + A3 seen ----------
@@ -136,18 +211,37 @@ export function reportVisibleOwner(): void {
   }
   if (s.window.focused) markVisibleSeen()
 }
+/**
+ * AGENT CHAT: the chat on screen outside a session pane: an agent's chat on its page or in Chats, or a chat open in
+ * Chats. Reading an agent's answer there is seeing it (never "your turn" in Needs you while it is on screen).
+ */
+function shownChatSession(s: ReturnType<typeof getState>): Id | null {
+  const agentChat = (agentId: Id): Id | null => s.sessions.find((x) => x.companyAgentId === agentId && x.status === 'running')?.id ?? null
+  if (s.view.name === 'agentSeat') return agentChat(s.view.id)
+  // Chats with nothing picked shows the last conversation open in this company (ChatsView)
+  const open = s.view.name === 'chats' ? (s.view.chat ?? loadJson<string | null>(lastChatKey(scopeCompanyId()), null)) : null
+  if (open) {
+    const [kind, id] = open.split(':')
+    if (kind === 'agent' && id) return agentChat(id)
+    if (kind === 'session' && id) return id
+  }
+  return null
+}
 function visibleOwner(): { sessionId: Id | null; runId: Id | null } {
   const s = getState()
   if (!s.window.focused) return { sessionId: null, runId: null }
   if (s.view.name === 'session') return { sessionId: s.focusedSession, runId: null }
+  const shown = shownChatSession(s)
+  if (shown) return { sessionId: shown, runId: null }
   if (s.view.name === 'run') return { sessionId: null, runId: s.view.runId }
   return { sessionId: null, runId: null }
 }
 /** The session the user is looking at (the same owner main is told about, so the badge and the tray agree). */
 function visibleSessions(): Set<Id> {
   const s = getState()
-  if (!s.window.focused || s.view.name !== 'session' || !s.focusedSession) return new Set()
-  return new Set([s.focusedSession])
+  if (!s.window.focused) return new Set()
+  const shown = s.view.name === 'session' ? s.focusedSession : shownChatSession(s)
+  return shown ? new Set([shown]) : new Set()
 }
 function withVisibleSeen(seen: Record<Id, true>, agents: Record<Id, AgentNode>): Record<Id, true> {
   const vis = visibleSessions()
@@ -168,9 +262,21 @@ function markVisibleSeen(): void {
 }
 
 // ---------- hooks ----------
+/**
+ * Finished turns that do not wait on you: the ones you saw, and (AGENT CHAT) every answer of an agent in its own chat
+ * (its Chats row carries the unread dot instead; what it asks you to allow still waits). Needs you reads this set.
+ */
+export function needsSeen(seenIdle: Record<Id, true>, agents: Record<Id, AgentNode>, sessions: readonly { id: Id; companyAgentId?: Id | null }[]): Set<Id> {
+  const out = new Set(Object.keys(seenIdle))
+  const agentChats = new Set(sessions.filter((x) => x.companyAgentId).map((x) => x.id))
+  if (agentChats.size) for (const a of Object.values(agents)) if (a.kind === 'session' && a.sessionId && agentChats.has(a.sessionId)) out.add(a.id)
+  return out
+}
 export function useSeenSet(): ReadonlySet<Id> {
   const seen = useStore((s) => s.seenIdle)
-  return useMemo(() => new Set(Object.keys(seen)), [seen])
+  const agents = useStore((s) => s.agents)
+  const sessions = useStore((s) => s.sessions)
+  return useMemo(() => needsSeen(seen, agents, sessions), [seen, agents, sessions])
 }
 export function useAgentIndex(): AgentIndex {
   const agents = useStore((s) => s.agents)
@@ -311,11 +417,23 @@ export async function focusAgent(agentId: Id, askId: Id | null = null): Promise<
   void navigate({ name: 'agents' })
 }
 
-/** ⌘J: the oldest open ask anywhere; else the session that waited longest. */
+/**
+ * ⌘J: the next thing that needs you, in the company you are in (every company in All mode), the same list Home
+ * counts: the oldest open ask or finished turn first, then the board tasks waiting on you (a review opens with Approve
+ * on top). "Nothing needs you." only when that list is empty.
+ */
 export function goNextNeedsYou(): void {
   const s = getState()
-  const seen = new Set(Object.keys(s.seenIdle))
-  const next = nextNeedsYou(Object.values(s.agents), Object.values(s.asks), seen)
+  const scope = scopeCompanyId(s)
+  const live = needsIn(truthOf(s), scope ?? 'all').items[0]
+  if (live) return void focusAgent(live.agentId, live.askId)
+  if (departmentsOn(s)) {
+    const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
+    const task = needsYouTasks(s.tasks, laneContext(s.asks, s.companyAgents, paused), scope, { skipLiveAsks: true })[0]
+    if (task) return void openBoard(task.task.companyId, { taskId: task.task.id })
+  }
+  // outside any company scope (Personal sessions): the hub's own order
+  const next = scope ? null : nextNeedsYou(Object.values(s.agents), Object.values(s.asks), needsSeen(s.seenIdle, s.agents, s.sessions))
   if (!next) return void toast('Nothing needs you.')
   void focusAgent(next.agentId, next.askId)
 }

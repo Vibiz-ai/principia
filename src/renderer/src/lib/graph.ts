@@ -67,15 +67,15 @@ export interface CardData extends Record<string, unknown> {
   /** Live subagents of this node's agent (LIVE.md §11): up to 4 pills + "+n more". */
   pills?: Pill[]
   morePills?: number
-  /** Open asks anywhere in this node's agent tree (amber ring + ⚑ badge). */
+  /** Open asks anywhere in this node's agent tree (accent ring + ◆ badge). */
   needs?: number
   /** Root agent of this card (step or session), for the drawer's agent tree. */
   agentId?: string | null
-  /** The root agent is waiting on the user (open ask, or an unseen "your turn"): amber flag, same as the hub. */
+  /** The root agent is waiting on the user (open ask, or an unseen "your turn"): accent flag, same as the hub. */
   waiting?: boolean
-  /** The root agent is working but silent for Settings.stallMinutes: amber "Stalled?" badge (never auto-killed). */
+  /** The root agent is working but silent for Settings.stallMinutes: cyan "Stalled?" badge (never auto-killed). */
   stalled?: boolean
-  /** Approval card diff (AUTHORING.md §2.2): added green, removed red ghost, changed amber. */
+  /** Approval card diff (AUTHORING.md §2.2): added green, removed red ghost, changed in caution white. */
   diff?: 'added' | 'removed' | 'changed'
   /** Runs in the run's git worktree (branch glyph). */
   isolated?: boolean

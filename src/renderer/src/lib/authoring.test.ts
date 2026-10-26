@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AuthorFlags, ClaudeHistorySession } from '@shared/authoring'
 import type { AgentProfile, Repo, RunWorktree, WorkflowDraft, WorkflowOrigin } from '@shared/types'
 import {
+  historyInScope,
   canRemoveWorktree,
   computeDiff,
   draftTitle,
@@ -206,5 +207,25 @@ describe('approval card fixes (items 2, 4, 7)', () => {
     expect(repoLabel('{{ inputs.repo }}', repos, roundup, { repo: 'repo_1' })).toBe('example-project')
     const lines = nodeLines({ ...roundup, nodes: [{ id: 'scan', type: 'shell', label: 'Scan', after: [], cwd: '{{inputs.repo}}', timeoutMin: 1, command: 'ls' }] }, profiles, repos)
     expect(lines[0]!.folder).toBe('example-project')
+  })
+})
+
+describe('historyInScope: Claude sessions on a company Home are that company’s only (A1)', () => {
+  const repos = [{ id: 'r_la', path: '/code/ledgerly', companyId: 'co_la' }, { id: 'r_nw', path: '/code/northwind', companyId: 'co_nw' }]
+  const owner = (r: { companyId: string }): string => r.companyId
+  const items = [
+    { id: 'a', cwd: '/code/ledgerly/src', repoId: null },
+    { id: 'b', cwd: '/code/northwind', repoId: null },
+    { id: 'c', cwd: null, repoId: 'r_la' },
+    { id: 'd', cwd: '/tmp/userdata/companies/ledgerly-app/workspace', repoId: null },
+    { id: 'e', cwd: '/code/ledgerly-old', repoId: null }
+  ]
+  it('a company sees its own repositories’ sessions, never another company’s or an unowned folder', () => {
+    expect(historyInScope(items, 'co_nw', repos, owner, false).map((x) => x.id)).toEqual(['b'])
+    expect(historyInScope(items, 'co_la', repos, owner, false).map((x) => x.id)).toEqual(['a', 'c'])
+  })
+  it('unowned folders belong to Personal and to All companies', () => {
+    expect(historyInScope(items, 'co_personal', repos, owner, true).map((x) => x.id)).toEqual(['d', 'e'])
+    expect(historyInScope(items, undefined, repos, owner, false)).toHaveLength(5)
   })
 })

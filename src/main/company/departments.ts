@@ -14,7 +14,7 @@ import {
   type CompanyAgent, type CompanyAgentData, type CompanyTask, type CompanyTaskInput, type CompanyAgentSaveInput, type Department, type DepartmentData, type DepartmentPresetKey, type DepartmentSaveInput
 } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
-import { DEPT_POOLS, pickPersona, usedPersonaNames, type AgentPersona } from '../../shared/personas'
+import { DEPT_POOLS, personaNamesElsewhere, pickPersona, usedPersonaNames, type AgentPersona } from '../../shared/personas'
 import type { ExperimentalFlags } from '../../shared/types'
 import { companySlug, defaultCompanyColor } from '../db/companyMigration'
 import type { Store } from '../db/store'
@@ -280,7 +280,8 @@ export class DepartmentStore {
     const used = usedPersonaNames(companyId, this.listAgents({ companyId }), departments)
     if (given && !used.has(given.name.trim().toLowerCase())) return given
     const dept = departmentId ? departments.find(d => d.id === departmentId) : undefined
-    return pickPersona({ departmentKey: dept ? presetKeyOf(dept) : null, used, seed: `${companyId}:${agentId}` })
+    const avoid = personaNamesElsewhere(companyId, this.listAgents(), this.list(undefined, { includeArchived: true }))
+    return pickPersona({ departmentKey: dept ? presetKeyOf(dept) : null, used, avoid, seed: `${companyId}:${agentId}` })
   }
   /**
    * A rename (update with a persona) must not take a name another active agent of the company is shown with, stored

@@ -16,6 +16,7 @@ import { TerminalPane } from '../components/TerminalPane'
 import { Button, EmptyState, ErrorState, IconButton, Loading, Pill, RelativeTime, StatusGlyph, Toolbar, useTick } from '../components/ui'
 import type { ClaudeHistorySession } from '@shared/authoring'
 import { TranscriptSheet } from '../components/history/TranscriptSheet'
+import { ActivityCanvas } from '../components/activity/ActivityCanvas'
 import { historyGroups, historyMeta, splitRecent } from '../lib/authoring'
 import { useClaudeHistory } from '../state/history'
 import {
@@ -71,6 +72,16 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
       return !v
     })
     setFitKey(`hist:${Date.now()}`)
+  }
+  // USAGE.md §4: the portfolio Activity layer (All companies only); its watcher runs only while it is shown
+  const [activityOn, setActivityOn] = useState<boolean>(() => loadJson('principia.canvasActivity', false))
+  const showActivity = activityOn && !scope
+  const toggleActivity = (): void => {
+    setActivityOn((v) => {
+      saveJson('principia.canvasActivity', !v)
+      return !v
+    })
+    setSel(null)
   }
   const select = (ref: NodeRef, id: string): void => {
     if (ref.kind === 'history') {
@@ -233,16 +244,26 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
   const empty = !!graph && graph.nodes.length === 0
   return (
     <div className="view">
-      <Toolbar title="Canvas">
+      <Toolbar title="Activity">
         <div className="canvas-modes" role="group" aria-label="Canvas view">
-          <Button variant={canvasMode === 'agents' ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'agents'} onClick={() => changeMode('agents')}>Agents</Button>
-          <Button variant={canvasMode === 'workflows' ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'workflows'} onClick={() => changeMode('workflows')}>Workflows</Button>
+          <Button variant={canvasMode === 'agents' && !showActivity ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'agents' && !showActivity} onClick={() => { if (showActivity) toggleActivity(); changeMode('agents') }}>Agents</Button>
+          <Button variant={canvasMode === 'workflows' && !showActivity ? 'secondary' : 'ghost'} aria-pressed={canvasMode === 'workflows' && !showActivity} onClick={() => { if (showActivity) toggleActivity(); changeMode('workflows') }}>Workflows</Button>
         </div>
-        {canvasMode === 'agents' && <span className="canvas-agent-summary" aria-live="polite">{agentCounts.total} agents{agentCounts.working > 0 ? ` · ${agentCounts.working} running` : ''}{agentCounts.failed > 0 ? ` · ${agentCounts.failed} failed` : ''}</span>}
+        {canvasMode === 'agents' && !showActivity && <span className="canvas-agent-summary" aria-live="polite">{agentCounts.total} agents{agentCounts.working > 0 ? ` · ${agentCounts.working} running` : ''}{agentCounts.failed > 0 ? ` · ${agentCounts.failed} failed` : ''}</span>}
         <Button onClick={() => void navigate({ name: 'marketplace' })} title="Find workflows, Claude Code agents and skills to install">
           Marketplace
         </Button>
-        {historyOn && canvasMode === 'workflows' && (
+        {!scope && (
+          <Button
+            variant={showActivity ? 'secondary' : 'ghost'}
+            aria-pressed={showActivity}
+            onClick={toggleActivity}
+            title="Every Claude session on this Mac, by company: Principia's agents and your own terminals (read-only)"
+          >
+            Activity
+          </Button>
+        )}
+        {historyOn && canvasMode === 'workflows' && !showActivity && (
           <Button
             variant={showHistory ? 'secondary' : 'ghost'}
             aria-pressed={showHistory}
@@ -257,7 +278,9 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
         </Button>
       </Toolbar>
       <div className="canvas">
-        {error && !snap ? (
+        {showActivity ? (
+          <ActivityCanvas idx={idx} />
+        ) : error && !snap ? (
           <ErrorState error={error} onRetry={load} />
         ) : !snap || !graph ? (
           <Loading />
@@ -284,7 +307,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
           />
           </PillContext.Provider>
         )}
-        {hint && !sel && snap && graph && !empty && (
+        {hint && !showActivity && !sel && snap && graph && !empty && (
           <div className="canvas__hint" role="note">
             {canvasMode === 'agents' ? 'Follow the team from parent to subagent · click a card to inspect · collapse branches with the agent count' : 'Click any node to inspect its live terminal or log · double-click to open'}
             <IconButton
@@ -298,7 +321,7 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
           </div>
         )}
         {preview && <TranscriptSheet session={preview} onClose={() => setPreview(null)} />}
-        {sel && snap && <Drawer sel={sel.ref} snap={snap} idx={idx} agentId={sel.agentId ?? null} onAgent={(agentId) => setSel((s) => (s ? { ...s, agentId } : s))} onClose={() => setSel(null)} />}
+        {sel && snap && !showActivity && <Drawer sel={sel.ref} snap={snap} idx={idx} agentId={sel.agentId ?? null} onAgent={(agentId) => setSel((s) => (s ? { ...s, agentId } : s))} onClose={() => setSel(null)} />}
       </div>
     </div>
   )

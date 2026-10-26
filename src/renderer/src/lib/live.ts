@@ -19,7 +19,7 @@ export function isTerminal(s: AgentStatus): boolean {
 }
 
 export type AgentVisual = VisualStatus | 'needs'
-/** Canvas/list glyph status. Needs you is amber everywhere (LIVE.md §11). */
+/** Canvas/list glyph status. Needs you is the accent everywhere (five doors A2). */
 export function agentVisual(a: Pick<AgentNode, 'status' | 'needs'>, seen = false): AgentVisual {
   switch (a.status) {
     case 'starting':
@@ -43,6 +43,8 @@ export function agentVisual(a: Pick<AgentNode, 'status' | 'needs'>, seen = false
 export function mergeAgent(prev: AgentNode | undefined, next: AgentNode): AgentNode {
   if (!prev) return next
   if (isTerminal(prev.status) && !isTerminal(next.status)) return prev
+  // the renderer ends a run's agents itself at the run's end (A2); main's own final row (cost, report) still wins
+  if (isTerminal(prev.status) && isTerminal(next.status)) return next
   if (next.updatedAt < prev.updatedAt && !(isTerminal(next.status) && !isTerminal(prev.status))) return prev
   return next
 }
@@ -325,6 +327,40 @@ export function lastSaid(a: Pick<AgentNode, 'report'>, max = 400): string | null
   if (!t) return null
   return t.length > max ? `…${t.slice(t.length - max + 1).trimStart()}` : t
 }
+/**
+ * Markdown as plain words for a one-line preview (a chat's row in Chats, Needs you on the phone): no code fences,
+ * headings, list marks, **bold**, `code` or link syntax; a principia:// link keeps only its label.
+ */
+export function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?(```|$)/g, ' ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\s*\(\s*<?principia:\/\/[^\s)]+>?\s*\)/g, '')
+    .replace(/<?principia:\/\/\S+>?/g, '')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=[^\w*]|$)/g, '$1$2')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^\s*([-*_]\s*){3,}$/gm, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
+/**
+ * The gist of what an agent said last, for a list row: its first real line in plain words (a list of 300 numbers
+ * previews as "1", never as its last number).
+ */
+export function saidPreview(a: Pick<AgentNode, 'report'>, max = 160): string | null {
+  const t = a.report?.trim()
+  if (!t) return null
+  const lines = plainText(t)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const first = lines.find((l) => l.length > 3 && /[A-Za-z\u00C0-\u024F]/.test(l)) ?? lines[0]
+  if (!first) return null
+  return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first
+}
 export const ANSWER_TRACE_MS = 3 * 60_000
 /**
  * The row's "↩ You allowed it" trace: only once nothing is pending for that root (no open ask in its tree, root not
@@ -379,7 +415,7 @@ export function pillsFor(idx: AgentIndex, rootId: Id, askAgents: ReadonlySet<Id>
 
 // ---------- events ----------
 export function eventGlyph(e: AgentEvent): string {
-  if (e.kind === 'ask') return '⚑'
+  if (e.kind === 'ask') return '◆'
   if (e.kind === 'answer') return '↩'
   if (e.kind === 'error' || e.state === 'error') return '✕'
   if (e.state === 'denied') return '⊘'

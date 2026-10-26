@@ -21,8 +21,17 @@ import { registerSlackHandlers } from './slack'
 import { registerMarketplaceHandlers } from './marketplace'
 import { registerOnboardingHandlers } from './onboarding'
 import { registerForumHandlers } from './forum'
+import { registerOrchestratorHandlers } from './orchestrator'
+import { registerPlaybookHandlers } from './playbooks'
 import { registerCloudHandlers } from './cloud'
 import { registerDashboardHandlers } from './dashboards'
+import { registerTaskWorkHandlers } from './taskWork'
+import { registerUsageHandlers } from './usage'
+import { registerLinearHandlers } from './linear'
+import { registerPlansHandlers } from './plans'
+import { registerChatHandlers } from '../chat/wire'
+import { registerRemoteHandlers } from '../remote/wire'
+import { registerBrowserHandlers } from '../browser/wire'
 
 export function registerAllHandlers(h: Hive): void {
   registerCompanyHandlers(h)
@@ -36,6 +45,7 @@ export function registerAllHandlers(h: Hive): void {
   registerWorkflowHandlers(h)
   registerRunHandlers(h)
   registerScheduleHandlers(h)
+  registerPlaybookHandlers(h)
   registerSecretHandlers(h)
   registerArtifactHandlers(h)
   registerMemoryHandlers(h)
@@ -45,8 +55,16 @@ export function registerAllHandlers(h: Hive): void {
   registerMarketplaceHandlers(h)
   registerOnboardingHandlers(h)
   registerForumHandlers(h)
+  registerOrchestratorHandlers(h)
   registerCloudHandlers(h)
   registerDashboardHandlers(h)
+  registerTaskWorkHandlers(h)
+  registerUsageHandlers(h)
+  registerLinearHandlers(h)
+  registerPlansHandlers(h)
+  registerChatHandlers(h)
+  registerRemoteHandlers(h)
+  registerBrowserHandlers(h)
   const missing = registerMissingAsNotImplemented()
   if (missing.length) log.warn('IPC channels without a handler', { missing })
 }

@@ -17,6 +17,8 @@ import { log } from './log'
 
 type Handler<C extends InvokeChannel> = (req: InvokeReq<C>, sender: WebContents) => InvokeRes<C> | Promise<InvokeRes<C>>
 const registered = new Set<InvokeChannel>()
+/** REMOTE.md RA3: the same handlers, callable in main (the Phone API composes a fixed list of them). */
+const local = new Map<InvokeChannel, Handler<InvokeChannel>>()
 let isTrustedSender: (wc: WebContents) => boolean = () => true
 
 /** Only the main window's webContents may call in (defense in depth; there is no other renderer). */
@@ -38,6 +40,7 @@ export function parseRequest<C extends InvokeChannel>(channel: C, raw: unknown):
 /** Register a typed invoke handler. Requests are zod-validated; errors return { ok:false, error } (preload rethrows). */
 export function handle<C extends InvokeChannel>(channel: C, fn: Handler<C>): void {
   registered.add(channel)
+  local.set(channel, fn as unknown as Handler<InvokeChannel>)
   ipcMain.removeHandler(channel)
   ipcMain.handle(channel, async (event, raw): Promise<IpcResult<InvokeRes<C>>> => {
     try {
@@ -78,10 +81,35 @@ export function registerMissingAsNotImplemented(): InvokeChannel[] {
   return missing
 }
 
+/**
+ * Calls a registered handler in main, validated exactly like an IPC request (REMOTE.md RA3). There is no sender: a
+ * handler that needs a window (menus, dialogs) must never be on the Phone's list.
+ */
+export async function invokeLocal<C extends InvokeChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> {
+  const fn = local.get(channel) as Handler<C> | undefined
+  if (!fn) throw new HiveError('internal', `${channel} not implemented yet`)
+  return await fn(parseRequest(channel, req), null as unknown as WebContents)
+}
+
+type Tap = <E extends EventName>(event: E, payload: EventMap[E]) => void
+const taps = new Set<Tap>()
+/** Every emitted event, in main (the Phone's live socket). Returns unsubscribe. A tap must not throw or block. */
+export function onEmit(fn: Tap): () => void {
+  taps.add(fn)
+  return () => void taps.delete(fn)
+}
+
 let targets: () => WebContents[] = () => []
 export function setEventTargets(fn: () => WebContents[]): void {
   targets = fn
 }
 export function emit<E extends EventName>(event: E, payload: EventMap[E]): void {
   for (const wc of targets()) if (!wc.isDestroyed()) wc.send(eventChannel(event), payload)
+  for (const t of taps) {
+    try {
+      t(event, payload)
+    } catch (e) {
+      log.warn(`[ipc] tap ${event}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 }

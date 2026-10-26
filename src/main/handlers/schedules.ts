@@ -78,6 +78,18 @@ export function createSchedule(h: Hive, { companyId, ...input }: ScheduleInput &
   return afterScheduleWrite(h, id)
 }
 
+/** schedules:update. */
+export function updateSchedule(h: Hive, id: Id, input: ScheduleInput): Schedule {
+  const existing = h.store.getSchedule(id)
+  if (!existing) throw new HiveError('not_found', 'Schedule not found')
+  validateInput(h, input)
+  // a repo-less prompt schedule keeps its company; a workflow or repo target re-stamps from it
+  const co = scheduleCompany(h, input, existing.companyId)
+  validateBoard(h, input, co)
+  h.store.updateScheduleConfig(id, input, co)
+  return afterScheduleWrite(h, id)
+}
+
 /** schedules:setEnabled. */
 export function setScheduleEnabled(h: Hive, id: Id, enabled: boolean): Schedule {
   h.store.setScheduleEnabled(id, enabled)
@@ -94,19 +106,9 @@ export function removeSchedule(h: Hive, id: Id): void {
 }
 
 export function registerScheduleHandlers(h: Hive): void {
-  const afterWrite = (id: string) => afterScheduleWrite(h, id)
   handle('schedules:list', (q) => h.store.listSchedules(q?.companyId))
   handle('schedules:create', (req) => createSchedule(h, req as ScheduleInput & { companyId?: Id | null }))
-  handle('schedules:update', ({ id, input }) => {
-    const existing = h.store.getSchedule(id)
-    if (!existing) throw new HiveError('not_found', 'Schedule not found')
-    validateInput(h, input as ScheduleInput)
-    // a repo-less prompt schedule keeps its company; a workflow or repo target re-stamps from it
-    const co = scheduleCompany(h, input as ScheduleInput, existing.companyId)
-    validateBoard(h, input as ScheduleInput, co)
-    h.store.updateScheduleConfig(id, input as ScheduleInput, co)
-    return afterWrite(id)
-  })
+  handle('schedules:update', ({ id, input }) => updateSchedule(h, id, input as ScheduleInput))
   handle('schedules:remove', ({ id }) => removeSchedule(h, id))
   handle('schedules:setEnabled', ({ id, enabled }) => setScheduleEnabled(h, id, enabled))
   handle('schedules:runNow', async ({ id }) => {

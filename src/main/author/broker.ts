@@ -44,9 +44,10 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
-import { isBoardTool, isCompanyTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
+import { isBoardTool, isCompanyTool, isConnectionsTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
+import { isChatCompanyTool } from '../../shared/chatCompany'
 
 export const RATE_PER_MIN = 60
 export const MAX_PENDING_PER_OWNER = 5
@@ -109,6 +110,12 @@ export interface BrokerDeps {
     resolve(owner: LiveOwner): TaskCallerRef
     call(caller: TaskCallerRef, tool: BoardTool, args: Record<string, unknown>, hints: { companyId: string | null; taskId: string | null; callId: string | null }): Record<string, unknown> | Promise<Record<string, unknown>>
   }
+  /**
+   * `connections_list` (read-only): what the caller's company has connected and the principia://connect link for each
+   * tool it has not. The company comes from the owner (session or run), never from the line; a line naming another
+   * company is refused. Absent = the tool is unknown.
+   */
+  connections?: { list(owner: LiveOwner, args: Record<string, unknown>, hints: { companyId: string | null }): Record<string, unknown> }
   /** SLACK.md §9.5: `slack_trigger` on create/update/validate. Absent = the argument is refused. */
   slackTriggers?: {
     /** Resolves #name / @handle from the local mirror and validates (PO-S3c included). */
@@ -119,6 +126,11 @@ export interface BrokerDeps {
     alertUserId(): string | null
     channelName(id: string): string
   }
+  /**
+   * shared/chatCompany.ts: `principia_propose_company` (interactive chat sessions only). Opens the confirmation card
+   * and waits for the founder's decision. Absent = the tool is unknown.
+   */
+  proposals?: { propose(sessionId: Id, args: Record<string, unknown>, signal: AbortSignal): Promise<object> }
   now?: () => number
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>
 }
@@ -185,6 +197,16 @@ export class AuthorBroker {
       }
     }
     const tool = typeof line.tool === 'string' ? line.tool : ''
+    // where to connect a tool: any owner (steps and sessions), always its own company
+    if (isConnectionsTool(tool)) {
+      if (!this.d.connections) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      try {
+        return answer({ ok: true, result: this.d.connections.list(owner, isObj(line.args) ? line.args : {}, { companyId: str(line.company_id, 64) }) })
+      } catch (e) {
+        return answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+      }
+    }
     // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike), §9 company tools (chat sessions); identity is
     // the owner, checked in taskCall
     if (isBoardTool(tool)) {
@@ -195,6 +217,22 @@ export class AuthorBroker {
         .then(() => this.taskCall(owner, tool, args, line))
         .then((result) => answer({ ok: true, result }))
         .catch((e: unknown) => answer({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      return
+    }
+    // "Start a company from this chat": a session owner only; the card waits for the founder (nothing is created here)
+    if (isChatCompanyTool(tool)) {
+      if (!('sessionId' in owner) || !this.d.proposals) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const ac = new AbortController()
+      this.calls.set(key, ac)
+      this.d.proposals
+        .propose(owner.sessionId, isObj(line.args) ? line.args : {}, ac.signal)
+        .then((result) => {
+          if (!ac.signal.aborted) answer({ ok: true, result })
+        })
+        .catch((e: unknown) => {
+          if (!ac.signal.aborted) answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+        })
       return
     }
     // SLACK.md §11.4: the work toolset rides on the same handler (it decides from the owner: Slack-triggered steps only)
@@ -246,7 +284,8 @@ export class AuthorBroker {
     if (isCompanyTool(tool)) {
       if (caller.kind !== 'session') throw new Error(`Unknown tool: ${tool}`)
       if (tool === 'company_file_task' && caller.taskId) throw new Error('You are working on a task: use task_create or task_handoff instead')
-    } else if (TASK_MUTATIONS.has(tool as TaskTool) && !(tool === 'task_create' && caller.kind === 'session' && !caller.taskId)) {
+    } else if (TASK_MUTATIONS.has(tool as TaskTool) && !((tool === 'task_create' || tool === 'task_comment') && caller.kind === 'session' && !caller.taskId)) {
+      // PROACTIVE.md §3: a chat tracks its own tasks (task_create) and notes on the ones it tracks or filed (task_comment {id})
       if (!caller.taskId) throw new Error('You are not working on a task')
       if (!caller.holdsTask) throw new Error('This task is no longer yours to change (its run or session ended)')
     }

@@ -7,9 +7,10 @@ import { CompanyChip, useScope } from '../components/CompanyChip'
 import { confirmNative, errorCode, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { SECRET_NAME_RE, isLiveKey, looksLikeEnvBlob, profilesReferencing, subscriptionNote } from '../lib/secrets'
 import { companyLabel } from '../lib/companyModel'
+import { isWriteOnlyKey } from '@shared/linear'
 import { keyId, keySections, overriddenShared, type KeySection } from '../lib/scope'
 import { CompanyAvatar } from '../shell/CompanyRail'
-import { attempt, companyName, enterCompany, toast, useStore } from '../state/store'
+import { attempt, companyName, enterCompany, navigate, toast, useStore } from '../state/store'
 
 /** COMPANY.md §4: where a key lives. null = Shared (every company's agents); an id = that company only. */
 type Space = Id | null
@@ -94,8 +95,8 @@ export function KeysView(): React.JSX.Element {
   const menu = async (s: SecretMeta): Promise<void> => {
     const from = space(s)
     const id = await nativeMenu([
-      { id: 'reveal', label: revealed?.id === keyId(s) ? 'Hide' : 'Reveal for 10 s' },
-      { id: 'copy', label: 'Copy Value' },
+      // the Linear sync key is write-only (LINEAR.md §6)
+      ...(isWriteOnlyKey(s.name, s.companyId) ? [] : [{ id: 'reveal', label: revealed?.id === keyId(s) ? 'Hide' : 'Reveal for 10 s' }, { id: 'copy', label: 'Copy Value' }]),
       { id: 'copyName', label: 'Copy Name' },
       { id: 'edit', label: 'Replace Value…' },
       ...(multi
@@ -139,7 +140,7 @@ export function KeysView(): React.JSX.Element {
   if (vaultDown || (info && !info.safeStorageAvailable)) {
     return (
       <div className="view">
-        <Toolbar title="Keys" />
+        <Toolbar title="Keys & secrets" />
         <EmptyState icon="lock" text="macOS Keychain encryption is unavailable, so Principia won’t store keys.">
           <Button onClick={() => void attempt(() => hive.app.showItemInFolder({ path: '/System/Applications/Utilities/Keychain Access.app' }))}>Show Keychain Access</Button>
         </EmptyState>
@@ -180,8 +181,10 @@ export function KeysView(): React.JSX.Element {
         </span>
         <span className="td text-tertiary">{s.lastUsedAt ? <RelativeTime iso={s.lastUsedAt} /> : 'never'}</span>
         <span className="td td--actions td--always">
-          <IconButton icon="eye" label={shown ? 'Hide' : 'Reveal for 10 s'} onClick={(e) => (e.stopPropagation(), void reveal(s))} />
-          <IconButton icon="copy" label="Copy (clears in 60 s)" onClick={(e) => (e.stopPropagation(), void copy(s))} />
+          {!isWriteOnlyKey(s.name, s.companyId) && <>
+            <IconButton icon="eye" label={shown ? 'Hide' : 'Reveal for 10 s'} onClick={(e) => (e.stopPropagation(), void reveal(s))} />
+            <IconButton icon="copy" label="Copy (clears in 60 s)" onClick={(e) => (e.stopPropagation(), void copy(s))} />
+          </>}
           <IconButton icon="more" label="More" onClick={(e) => (e.stopPropagation(), void menu(s))} />
         </span>
       </div>
@@ -229,16 +232,28 @@ export function KeysView(): React.JSX.Element {
       onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDrop(false)}
       onDrop={(e) => void onDrop(e)}
     >
-      <Toolbar title="Keys" sub={multi && scope ? <CompanyChip companyId={scope} always className="toolbar-company" /> : undefined}>
-        <Button icon="download" onClick={() => void pickEnv()} title={home ? `Import into ${company?.name ?? 'this company'}` : multi ? 'Import as Shared keys' : undefined}>
-          Import .env…
+      <Toolbar
+        title="Keys & secrets"
+        sub={multi && scope ? <CompanyChip companyId={scope} always className="toolbar-company" /> : multi ? <span className="company-toolbar-meta">All companies · new keys here are Shared</span> : undefined}
+      >
+        {/* All companies: say where a key goes (Shared = every company); a client's own key is added from its section */}
+        <Button icon="download" onClick={() => void pickEnv()} title={home ? `Import into ${company?.name ?? 'this company'}` : multi ? 'Import as Shared keys (every company gets them)' : undefined}>
+          {multi && !home ? 'Import Shared .env…' : 'Import .env…'}
         </Button>
-        <Button variant="primary" icon="plus" onClick={() => setAdding({ space: home })}>
-          Add Key
+        <Button variant="primary" icon="plus" onClick={() => setAdding({ space: home })} title={multi && !home ? 'A Shared key: every company’s agents get it. To add one for a single company, use + in its section.' : undefined}>
+          {multi && !home ? 'Add Shared Key' : 'Add Key'}
         </Button>
       </Toolbar>
       <div className="keys-note">
         <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys never leave this Mac. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s, never another company’s.' : '.'}
+      </div>
+      {/* design §4.10: each page says what goes where (Diego picks Keys or AI providers on the first try) */}
+      <div className="keys-note keys-note--where">
+        Secrets {company && home ? `${company.name}’s` : 'your'} agents use while they work, like STRIPE_SECRET_KEY or DATABASE_URL. Your Claude or OpenAI keys don’t go here: they’re in{' '}
+        <button type="button" className="link-btn" onClick={() => void navigate({ name: 'settings', section: 'providers', nonce: Date.now() })}>
+          AI providers
+        </button>
+        .
       </div>
       {error && !list ? (
         <ErrorState error={error} onRetry={load} />
@@ -264,7 +279,8 @@ export function KeysView(): React.JSX.Element {
           {sections.map((section) => (
             <section key={section.key} className="keys-group" aria-label={section.title ?? 'Keys'}>
               {sectionHead(section)}
-              {section.keys.map((s) => row(s, section))}
+              {/* five doors step 5: All companies never lists one client's key names beside another's; enter it to see them */}
+              {section.companyId === null || section.companyId === scope ? section.keys.map((s) => row(s, section)) : section.keys.length > 0 && <div className="keys-section__empty text-tertiary">{section.keys.length} key{section.keys.length === 1 ? '' : 's'} only {section.company?.name ?? 'this company'}’s agents get. Enter the company to see {section.keys.length === 1 ? 'it' : 'them'}.</div>}
               {section.title !== null && section.keys.length === 0 && (
                 <div className="keys-section__empty text-tertiary">{section.companyId ? 'No keys only this company gets yet.' : 'No shared keys.'}</div>
               )}

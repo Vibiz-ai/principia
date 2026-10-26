@@ -30,6 +30,9 @@ export function AboutStep(): React.JSX.Element | null {
   const siteTitle = site?.title || site?.ogTitle || site?.siteName
   // code branch with nothing to prefill the name from: the one required field gets focus first
   const nameMissing = !!d.hasCode && !a.name.trim()
+  // five doors step 5 (design §6.2): never ask twice. Without code, Name already asked the one line and the link;
+  // this step is prefilled from them and asks only what is new
+  const askedOnName = !d.hasCode
   return (
     <>
       <StepTitle>{copy('ob.about.title')}</StepTitle>
@@ -53,15 +56,15 @@ export function AboutStep(): React.JSX.Element | null {
             />
           </label>
         )}
-        <label className="ob-field">
+        {!askedOnName && <label className="ob-field">
           <span className="ob-field__label">Website {pill('siteUrl')}</span>
           <input className="input" value={a.siteUrl} placeholder="acme.com" maxLength={2048} spellCheck={false} onChange={(e) => set({ siteUrl: e.target.value })} />
-        </label>
+        </label>}
       </div>
-      <label className="ob-field">
+      {!askedOnName && <label className="ob-field">
         <span className="ob-field__label">What it is {pill('oneLiner')}</span>
         <input className="input" value={a.oneLiner} placeholder="In one line" maxLength={200} onChange={(e) => set({ oneLiner: e.target.value })} />
-      </label>
+      </label>}
       <label className="ob-field">
         <span className="ob-field__label">What you sell {pill('products')}</span>
         <input

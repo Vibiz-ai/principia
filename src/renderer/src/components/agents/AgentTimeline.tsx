@@ -10,8 +10,11 @@ import { durationMs } from '../../lib/time'
 import { eventDurations, eventGlyph } from '../../lib/live'
 import { useAgentEvents } from '../../state/live'
 import { Button, EmptyState, Loading } from '../ui'
+import { hasDiagram } from '@shared/diagram'
+import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 
-export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }: { agentId: Id; emptyText?: string; note?: string | null }): React.JSX.Element {
+/** `emptyText` null: nothing at all when there are no events (the pane above already shows the message). */
+export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }: { agentId: Id; emptyText?: string | null; note?: string | null }): React.JSX.Element {
   const { events, loading, error, loadOlder, hasOlder } = useAgentEvents(agentId)
   const durs = useMemo(() => eventDurations(events), [events])
   const box = useRef<HTMLDivElement>(null)
@@ -41,7 +44,7 @@ export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }:
         </div>
       )}
       {events.length === 0 ? (
-        loading ? <Loading /> : error ? <EmptyState compact text={<span className="text-failed">{error}</span>} /> : <EmptyState compact text={emptyText} />
+        loading ? <Loading /> : error ? <EmptyState compact text={<span className="text-failed">{error}</span>} /> : emptyText === null ? null : <EmptyState compact text={emptyText} />
       ) : (
         events.map((e) => <EventRow key={e.seq} e={e} dur={durs.get(e.seq)} />)
       )}
@@ -53,6 +56,17 @@ function EventRow({ e, dur }: { e: AgentEvent; dur: number | undefined }): React
   const [open, setOpen] = useState(false)
   const expandable = !!e.detail && e.detail !== e.summary
   const state = e.state ?? (e.kind === 'error' ? 'error' : null)
+  if (e.kind === 'text' && hasDiagram(e.detail)) {
+    // DIAGRAMS.md: an answer with a diagram shows whole, the block drawn in place
+    return (
+      <div className="tl tl--text">
+        <span className="tl__glyph">{eventGlyph(e)}</span>
+        <div className="tl__text">
+          <TextWithDiagrams text={e.detail!} renderText={(t) => <div>{t}</div>} />
+        </div>
+      </div>
+    )
+  }
   if (e.kind === 'text' || e.kind === 'thinking') {
     const lines = (e.detail ?? e.summary).split('\n')
     const long = lines.length > 3

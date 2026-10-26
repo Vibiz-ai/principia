@@ -1,0 +1,52 @@
+/* AGENT-COLLAB.md §5: agent-to-agent asks, the Forum's Agent talk panel and the Run view's Forum conversation.
+   White line art on dark (VOICE.md §5): strokes and text colours only, no fills. */
+.fm-tessera--working { background: var(--status-running); }
+.fm-ask--agents.is-open { border-color: var(--border-strong); }
+.fm-ask--agents .fm-ask__kicker { color: var(--text-secondary); }
+.fm-ask__route { text-transform: none; letter-spacing: 0; font-weight: var(--weight-semibold); }
+
+.fm-agents__limits { margin: 6px 14px 10px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 8px); }
+.fm-agents__limits-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+.fm-agents__limits-line .btn { margin-left: auto; }
+.fm-agents__editor { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.fm-agents__field { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--text-secondary); }
+.fm-agents__field em { font-style: normal; color: var(--text-tertiary); }
+.fm-agents__field input[type='number'] { width: 70px; background: transparent; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-primary); padding: 3px 6px; font: inherit; }
+.fm-agents__field--toggle { justify-content: flex-start; }
+.fm-agents__editor-foot { display: flex; justify-content: flex-end; gap: 8px; }
+
+.fm-agents__thread { margin: 0 14px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md, 8px); cursor: pointer; }
+.fm-agents__thread:hover { border-color: var(--border-strong); }
+.fm-agents__thread.is-loose { cursor: default; }
+.fm-agents__meta { font-size: 11px; color: var(--text-tertiary); }
+.fm-agents__text { margin: 4px 0 6px; color: var(--text-primary); font-size: 13px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.fm-agents__wake { padding: 6px 0 2px; border-top: 1px dashed var(--border); }
+.fm-agents__route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-primary); }
+.fm-agents__hop { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid var(--text-tertiary); border-radius: 50%; font-size: 10px; color: var(--text-secondary); }
+.fm-agents__arrow { color: var(--text-tertiary); }
+.fm-agents__status { font-size: 11px; color: var(--text-tertiary); border: 1px solid var(--border-strong); border-radius: 999px; padding: 0 6px; }
+.fm-agents__status.is-answered { color: var(--status-success); border-color: currentColor; }
+.fm-agents__status.is-started, .fm-agents__status.is-queued { color: var(--status-running); border-color: currentColor; }
+.fm-agents__status.is-refused { color: var(--status-needs); border-color: currentColor; }
+.fm-agents__via { font-size: 11px; color: var(--text-tertiary); }
+.fm-agents__cost { margin-left: auto; font-size: 11.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.fm-agents__why { font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; }
+.fm-agents__runs { display: flex; gap: 8px; margin-top: 3px; }
+.fm-agents__run { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--text-secondary); text-decoration: underline; text-decoration-color: var(--border-strong); cursor: pointer; }
+.fm-agents__run:hover { color: var(--text-primary); }
+
+/* Run view: the conversation this run had in the Forum */
+.run-forum { margin: 10px 0 4px; }
+.run-forum__wake { margin: 0 12px 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md, 8px); font-size: 12px; color: var(--text-secondary); }
+.run-forum__wake strong { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.run-forum__msgs { margin: 4px 12px 0; border-left: 1px solid var(--border-strong); padding-left: 10px; }
+.run-forum__msg { padding: 4px 0; font-size: 12px; line-height: 1.4; color: var(--text-secondary); }
+.run-forum__msg b { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.run-forum__msg span { color: var(--text-tertiary); }
+.run-forum__msg p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text-primary); }
+.run-forum__open { margin: 6px 12px 0; }
+
+/* ORCHESTRATOR.md §5: "Principia after this run" (reuses the run-forum rows) */
+.run-principia__action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.run-principia__action .pill { flex: none; }
+.run-principia__link { display: block; width: 100%; margin-top: 2px; font-size: 11px; color: var(--text-tertiary); }

@@ -1,0 +1,39 @@
+/* Five doors step 5: Automations › Autopilot (design §2.3) */
+.auto-tab { max-width: 860px; padding: 20px 28px 32px; display: flex; flex-direction: column; gap: 18px; }
+.auto-tab__switch { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 14px 16px; }
+.auto-tab__title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.auto-tab__lede { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); }
+.auto-tab__foot { margin: 0; font-size: 12px; color: var(--text-tertiary); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.auto-tab__pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.auto-tab__co { display: flex; align-items: center; gap: 10px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 10px 12px; color: var(--text-primary); font-size: 12.5px; }
+.auto-tab__co:hover { border-color: var(--border-strong); }
+.auto-tab__co-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-tab__co-state { font-size: 11px; color: var(--text-tertiary); }
+
+/* Automations › Routines: one card per ready-made routine, white line art on dark */
+.routine-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.routine { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 14px 16px; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.routine:hover { border-color: var(--border-strong); }
+.routine.is-on { border-color: var(--border-strong); }
+.routine.is-suggested { border-color: var(--text-primary); box-shadow: 0 0 0 1px var(--text-primary); }
+.routine__head { display: flex; align-items: baseline; gap: 8px; }
+.routine__name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.routine__state { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+.routine__state.is-on { color: var(--status-success); }
+.routine__summary { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); }
+.routine__facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; }
+.routine__facts > div { display: contents; }
+.routine__facts dt { color: var(--text-tertiary); }
+.routine__facts dd { margin: 0; color: var(--text-secondary); min-width: 0; }
+.routine__who { display: inline-flex; align-items: center; gap: 6px; }
+.routine__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.routine__blocker { font-size: 11.5px; color: var(--text-tertiary); }
+.routine__edit { margin-left: auto; font-size: 12px; }
+
+.routine__time { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.routine__time-note { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.routine__days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.routine__day { height: 24px; min-width: 36px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-secondary); font-size: 11.5px; cursor: pointer; }
+.routine__day.is-on { border-color: var(--text-primary); color: var(--text-primary); background: var(--row-hover); }
+.routine__day:focus-visible { outline: 1px solid var(--text-primary); outline-offset: 1px; }
+.routine__clock { width: 120px; margin-left: 6px; }

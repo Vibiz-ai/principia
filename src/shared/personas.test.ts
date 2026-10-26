@@ -14,6 +14,7 @@ import {
   ROLE_POOLS,
   lookFor,
   personaDef,
+  personaNamesElsewhere,
   pickPersona,
   resolvePersonas,
   storedPersona,
@@ -61,6 +62,14 @@ describe('pickPersona', () => {
     expect(a.name).toBe('Marcus')
     used.add(a.name)
     expect(pickPersona({ departmentKey: 'marketing', used, seed: 'co:2' }).name).toBe('Ovid')
+  })
+  it('avoids names other companies use while any are free; within a company names stay unique', () => {
+    const p = pickPersona({ departmentKey: 'marketing', used: none, avoid: new Set(['Marcus']), seed: 'co:1' })
+    expect(p.name).toBe('Ovid')
+    // every name used elsewhere: a repeat across companies beats a numeral
+    const all = new Set(PERSONAS.map((d) => d.name))
+    expect(pickPersona({ departmentKey: 'marketing', used: none, avoid: all, seed: 'co:1' }).name).toBe('Marcus')
+    expect(pickPersona({ departmentKey: 'marketing', used: new Set(['marcus']), avoid: all, seed: 'co:1' }).name).toBe('Ovid')
   })
   it('first developer is Livia; builder is Vitruvius', () => {
     expect(pickPersona({ departmentKey: 'development', role: 'developer', used: none, seed: 's' }).name).toBe('Livia')
@@ -194,5 +203,15 @@ describe('resolvePersonas and usedPersonaNames (shared with main)', () => {
   it('treats prototype-ish department keys as custom', () => {
     const a = ag('a1', { departmentId: 'd_x' })
     expect(resolvePersonas([a], [{ id: 'd_x', key: 'constructor' }]).get('a1')?.name).toBe('Junia')
+  })
+})
+
+describe('personaNamesElsewhere', () => {
+  it('the names other companies’ active agents are shown with, never this company’s or an archived one’s', () => {
+    const ag = (id: string, companyId: string, archivedAt: string | null = null): PersonaAgentLike => ({ id, companyId, departmentId: null, name: 'Writer', archivedAt, createdAt: id })
+    const names = personaNamesElsewhere('co_a', [ag('1', 'co_a'), ag('2', 'co_b'), ag('3', 'co_c', 'x')])
+    expect(names.size).toBe(1)
+    const own = resolvePersonas([ag('1', 'co_a')]).get('1')!.name.toLowerCase()
+    expect(personaNamesElsewhere(null, [ag('1', 'co_a')])).toEqual(new Set([own]))
   })
 })

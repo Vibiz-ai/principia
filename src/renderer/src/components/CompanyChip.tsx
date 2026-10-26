@@ -11,9 +11,9 @@ import type { Id } from '@shared/types'
 import { agentCompanyResolver, companyLabel, useActiveCompany, type ActiveCompany } from '../lib/company'
 import { nativeMenu } from '../lib/hive'
 import { indexAgents, type AgentIndex } from '../lib/live'
-import { scopeAgents, scopeAsks, showChips } from '../lib/scope'
+import { showChips } from '../lib/scope'
 import { CompanyAvatar } from '../shell/CompanyRail'
-import { useAgentIndex, useOpenAsks } from '../state/live'
+import { useAgentIndex, useLiveTruth, useOpenAsks } from '../state/live'
 import { useStore } from '../state/store'
 
 export interface Scope {
@@ -47,7 +47,7 @@ export function CompanyChip({ companyId, always = false, avatarOnly = false, siz
   const name = c ? companyLabel(c) : 'Archived company'
   return (
     <span className={`co-chip ${avatarOnly ? 'co-chip--avatar' : ''} ${className}`} title={c ? companyLabel(c, true) : 'This company is archived'}>
-      <CompanyAvatar company={{ name, color: c?.color ?? 'var(--series-other)' }} size={size} />
+      <CompanyAvatar company={{ id: c?.id, name, color: c?.color ?? 'var(--series-other)', railLabel: c?.railLabel }} size={size} />
       {!avatarOnly && <span className="co-chip__name">{name}</span>}
     </span>
   )
@@ -110,10 +110,13 @@ export function CompanyChooser({ title, text, onPick, companies: given }: { titl
 export function useScopedLive(scope: Id | undefined): { idx: AgentIndex; asks: Ask[] } {
   const all = useAgentIndex()
   const allAsks = useOpenAsks()
-  const sessions = useStore((s) => s.sessions)
+  // five doors A2: the same company resolution as LIVE, the rail and the counts (lib/liveTruth), so Chats › Live never
+  // lists an agent another surface files under another company
+  const truth = useLiveTruth()
   return useMemo(() => {
     if (!scope) return { idx: all, asks: allAsks }
-    const agents = [...all.byId.values()]
-    return { idx: indexAgents(scopeAgents(agents, sessions, scope)), asks: scopeAsks(allAsks, agents, sessions, scope) }
-  }, [all, allAsks, sessions, scope])
+    const agents = [...all.byId.values()].filter((a) => truth.companyOf(a.id) === scope)
+    const askCo = new Map(truth.needs.filter((n) => n.askId).map((n) => [n.askId!, n.companyId]))
+    return { idx: indexAgents(agents), asks: allAsks.filter((q) => (askCo.get(q.id) ?? truth.companyOf(q.agentId)) === scope) }
+  }, [all, allAsks, truth, scope])
 }

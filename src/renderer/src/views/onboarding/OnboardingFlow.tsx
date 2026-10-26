@@ -21,7 +21,7 @@ import BeamBorder from '../../components/ui/border-beam'
 import { canContinue, canGoBack, draftGoals, hasProgress, isLaunchStep, stepIndex } from '../../state/onboarding'
 import { closeOnboarding, continueOnboarding, getState, onboardingDispatch, useStore } from '../../state/store'
 import { AboutStep } from './AboutStep'
-import { back, finishCeremony, getLocal, next, setLocal, skipBrief, start, useFlowLocal } from './actions'
+import { back, finishCeremony, getLocal, landOnHome, next, setLocal, skipBrief, useFlowLocal } from './actions'
 import { BriefStep } from './BriefStep'
 import { Ceremony } from './Ceremony'
 import { ConnectStep, connectKeys } from './ConnectStep'
@@ -32,7 +32,7 @@ import { blocksAppChord, flowKey, passportMeta, showsProgress } from './model'
 import { NameStep } from './NameStep'
 import { PlanStep } from './PlanStep'
 import { ReadyStep, readyKeys } from './ReadyStep'
-import { AgentsFound, StartStep } from './StartStep'
+import { StartStep } from './StartStep'
 import { VoiceStep } from './VoiceStep'
 
 export function OnboardingFlow(): React.JSX.Element | null {
@@ -54,7 +54,8 @@ export function footerFor(step: StepKey, d: OnboardingDraft, banner: boolean, re
   const cont = { label: 'Continue', kbd: '↵', disabled: !canContinue(d), run: next }
   switch (step) {
     case 'start':
-      return { left: <AgentsFound />, back: false, primary: banner ? undefined : cont }
+      // five doors step 5: no "Agents found" here; the Claude check is plain words on the last step
+      return { back: false, primary: banner ? undefined : cont }
     // ⌘↵ only: ↵ is a new line in the brief
     case 'brief':
       return {
@@ -174,7 +175,8 @@ function Flow({ mode, resumable }: { mode: 'first' | 'new'; resumable: boolean }
    */
   const closeFlow = (s: StepKey): void => {
     if (s === 'ready') {
-      if (mode === 'new') void start({ autopilot: false, scheduleRefs: [] })
+      // the company exists: closing opens it on Home, where "Start the first week?" waits (nothing turned on)
+      if (mode === 'new') void landOnHome({ scheduleRefs: [] })
       return
     }
     closeOnboarding()

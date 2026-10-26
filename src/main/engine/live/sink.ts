@@ -24,6 +24,11 @@ export interface LiveSinkOptions {
   repoId: Id | null
   /** Id to use for the root (main may pre-create it). Default: a new `ag_` id. */
   rootId?: Id
+  /**
+   * COMPANY.md §3: the owner's company (a run's or a session's). Every node and ask this sink emits carries it, so the
+   * renderer files a live agent under its company from the first event, never under Personal by default.
+   */
+  companyId?: Id | null
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
   /** Coalescing off (tests): emit synchronously. */
   sync?: boolean
@@ -154,7 +159,8 @@ export function createLiveSink(o: LiveSinkOptions): LiveSink {
           if (!id || !agents.has(id)) {
             id ??= newId('agent')
             ids.set(op.key, id)
-            const node: AgentNode = {
+            const node: AgentNode & { companyId?: Id } = {
+              ...(o.companyId ? { companyId: o.companyId } : {}),
               id,
               parentId: op.key === ROOT_KEY ? null : parentId,
               rootId,
@@ -210,7 +216,8 @@ export function createLiveSink(o: LiveSinkOptions): LiveSink {
         case 'ask.open': {
           const agentId = ids.get(op.key) ?? rootId
           const a = op.ask
-          const ask: Ask = {
+          const ask: Ask & { companyId?: Id } = {
+            ...(o.companyId ? { companyId: o.companyId } : {}),
             id: newId('ask'),
             agentId,
             rootId,

@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import * as pty from 'node-pty'
 import { Reaper, StallMonitor, createEngine, stallThresholdMs } from './engine'
 import { applyUserDataOverride, resolvePaths } from './paths'
+import { installVisualizeSkill } from './diagrams/visualizeSkill'
 import { baseChildEnv, resolveLoginEnv } from './loginEnv'
 import { openDatabase } from './db'
 import { Store } from './db/store'
@@ -33,12 +34,23 @@ import { pickCli, strippedChildEnv } from './oneshot'
 import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
+import { chatLink, createChatHub } from './chat/wire'
+import { AgentChats } from './chat/agentChat'
+import { createRemote } from './remote/wire'
+import { createBrowser } from './browser/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
+import { wireTaskWork } from './company/taskWorkWire'
+import { wireLinearSync } from './company/sync/wire'
+import { startOrchestrator } from './orchestrator/wire'
 import { SlackService } from './connectors/slack/service'
+import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
 
 applyUserDataOverride()
+// BROWSER.md §2: agents drive the company browser while Principia sits behind other windows. An occluded window must
+// keep rendering: clicks are hit-tested against rendered frames and screenshots need one.
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.setName('Hive')
 // Local minidumps only (<userData>/Crashpad), never uploaded: lets us see why a renderer or GPU process died.
 crashReporter.start({ uploadToServer: false })
@@ -48,10 +60,19 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   let hive: Hive | null = null
   let pendingShow = false
+  // principia:// links (deepLinks.ts): checked here, navigated by the renderer
+  const links = new DeepLinkInbox()
 
-  app.on('second-instance', () => {
+  app.on('second-instance', (_e, argv) => {
+    const url = deepLinkFromArgv(argv)
+    if (url) links.receive(url)
     if (hive) hive.windows.show()
     else pendingShow = true
+  })
+  // macOS: also on a cold launch from a link, before ready
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    if (links.receive(url) && !hive) pendingShow = true
   })
   app.on('activate', () => hive?.windows.show())
 
@@ -148,6 +169,7 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.themeSource = 'dark'
     const paths = resolvePaths()
     initLog(paths.mainLog)
+    installVisualizeSkill(paths.userData) // DIAGRAMS.md §6: /visualize in the Claude chats Principia starts
     log.info('Hive starting', { version: app.getVersion(), userData: paths.userData, packaged: app.isPackaged })
     const envState = await resolveLoginEnv()
     if (!envState.ok) log.warn('login shell env resolution failed; using fallback PATH', { shell: envState.shell })
@@ -168,7 +190,9 @@ if (!app.requestSingleInstanceLock()) {
     hive = h
     // COMPANY.md §6: a connection limited to some companies reaches only their spawns
     h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(), seedDefaults: true,
-      companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) } })
+      companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) },
+      // AUTOPILOT.md §6: an autopilot's run is checked call by call against its level, before each call is made
+      guard: (c) => h.playbooks?.gatewayCall(c) ?? null })
     app.on('will-quit', () => h.gateway?.close())
 
     // shared memory (MEMORY.md): separate memory.db, opened + migrated by main only. Failure = memory off, Hive runs.
@@ -202,6 +226,7 @@ if (!app.requestSingleInstanceLock()) {
           env: (companyId: string, cli: LlmCli) => strippedChildEnv(vault.resolveCompanyOnly(LLM_CLI_KEYS[cli], companyId))
         }
       })
+      h.memorySuggest = suggest
       app.on('will-quit', () => suggest.stop())
       // §6.3: window focus rescans every watched vault (edits made in Obsidian while Principia was in the background)
       app.on('browser-window-focus', () => {
@@ -254,11 +279,31 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('forum unavailable', { e: String(e) })
     }
+    // BROWSER.md: the company browser (views, sessions, the agents' 127.0.0.1 endpoint); failure = no browser
+    try {
+      h.browser = createBrowser(h, { mainDir: __dirname })
+    } catch (e) {
+      log.error('company browser unavailable', { e: String(e) })
+    }
+    // REMOTE.md: Phone (built idle: no listener until the user turns it on)
+    try {
+      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart })
+      // RA8: paired phones find this Mac again after a restart (when the founder wants it, by default once one is paired)
+      void h.remote.autoStartIfWanted().catch((e) => log.warn('phone did not start at launch', { e: String(e) }))
+    } catch (e) {
+      log.error('phone unavailable', { e: String(e) })
+    }
     // DASHBOARDS.md: department dashboards (fetch and refresh in main); failure = no dashboards, Principia runs
     try {
       h.dashboards = wireDashboards(h, cipher)
     } catch (e) {
       log.error('dashboards unavailable', { e: String(e) })
+    }
+    // LINEAR.md: optional Linear sync (no connected company = no request); failure = no sync, Principia runs
+    try {
+      h.linear = wireLinearSync(h, cipher)
+    } catch (e) {
+      log.error('linear sync unavailable', { e: String(e) })
     }
     // SLACK.md §2.3: the Slack connector (no tokens = zero outbound requests). The dev-only fake transport exists only
     // in a build made with HIVE_BUILD_FAKE_SLACK=1 (the define removes this branch from every normal build).
@@ -310,10 +355,14 @@ if (!app.requestSingleInstanceLock()) {
       passportContext: (cwd, companyId, departmentId) => h.passportContext(cwd, companyId, departmentId),
       company: h.companyBridge(),
       onStepOutput: (e) => h.onStepOutput(e),
+      // ORCHESTRATOR.md §1.1: Principia's context and report contract for every company step (wired after the dispatcher)
+      orchestrator: { stepContext: (req) => h.orchestrator?.stepContext(req) ?? null },
       getWorkflow: (id) => store.getWorkflow(id),
       emit: (e) => h.onEngineEvent(e),
       log,
       gateway: h.gateway ?? undefined,
+      browser: h.browser?.service ?? undefined,
+      autopilot: { strictMcp: (runId) => h.playbooks?.strictMcpFor(runId) ?? false },
       memory: h.memory ?? undefined,
       live: liveBridge,
       reaper,
@@ -324,15 +373,34 @@ if (!app.requestSingleInstanceLock()) {
     })
     store.setDescribe((w) => h.engine.scheduler.describe(w))
 
+    // CHAT-UI.md §3: Claude panes go through the chat hub (chat or terminal inside); every other pane is a plain pty
+    h.chats = createChatHub(h, {
+      userData: paths.userData,
+      emit: (sessionId, seq, ops) => emit('chat:ops', { sessionId, seq, ops }),
+      redact: (t) => vault.redact(t),
+      killGroup: (pid, sig) => {
+        try {
+          process.kill(-pid, sig)
+          return true
+        } catch {
+          return false
+        }
+      },
+      log,
+      baseEnv: () => baseChildEnv()
+    })
+    const plainPty = (file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }) => pty.spawn(file, args, opts)
     h.sessions = new SessionManager({
       store,
       paths,
-      spawnPty: (file, args, opts) => pty.spawn(file, args, opts),
+      spawnPty: (file, args, opts, host) => (h.chats ? h.chats.spawn(file, args, opts, host, plainPty) : plainPty(file, args, opts)),
       interactiveSpawn: (profile, opts) => h.engine.providers.interactiveSpawn(profile, opts),
       baseEnv: () => baseChildEnv(),
       secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
       company: h.companyBridge(),
       chat: (req) => h.safe(() => h.chatContext(req), null),
+      agentChat: (agentId) => h.safe(() => h.agentChats?.spawnOptions(agentId) ?? null, null),
+      worktreeGuard: (cwd, p) => h.worktrees?.guardEnvForPath(cwd, p) ?? null,
       trustFolder: (cwd, env) => {
         if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
       },
@@ -351,7 +419,9 @@ if (!app.requestSingleInstanceLock()) {
       live: {
         open: (sid, adapter) => (adapter === 'shell' ? null : liveBridge.open({ sessionId: sid })),
         start: (s, channel) => {
-          h.sessionLive.open(s, channel)
+          const sl = h.sessionLive.open(s, channel)
+          // CHAT-UI.md §3.2: a chat owns its asks from the first moment (before any hook line arrives)
+          if (sl && h.chats?.get(s.id)) sl.chat = chatLink(h, h.chats, s.id)
         },
         data: (sid, data) => h.sessionLive.get(sid)?.onPtyData(data),
         input: (sid, data, typed) => h.sessionLive.get(sid)?.onUserInput(data, typed),
@@ -370,6 +440,25 @@ if (!app.requestSingleInstanceLock()) {
         h.statusChanged()
       },
       reaper
+    })
+    // AGENT CHAT: each company agent's standing chat (its brief, its folder, resumed across restarts)
+    h.agentChats = new AgentChats({
+      getAgent: (id) => h.company.departments.getAgent(id),
+      agentsOf: (companyId) => h.company.departments.listAgents({ companyId }),
+      departmentsOf: (companyId) => h.company.departments.list(companyId, { includeArchived: true }),
+      companyName: (companyId) => h.safe(() => h.company.passport(companyId).name, 'the company'),
+      profileAdapter: (profileId) => store.getProfile(profileId)?.adapter ?? null,
+      repoPath: (repoId) => {
+        const r = store.getRepo(repoId)
+        return r?.exists ? r.path : null
+      },
+      workspaceDir: (companyId) => h.safe(() => h.company.workspaceDir(companyId), null),
+      isCode: (companyId) => h.safe(() => h.company.passport(companyId).repoIds.length > 0, false),
+      personasOn: () => store.getSettings().personas !== false,
+      teamContext: (companyId, agentId) => h.orchestrator?.chatContext(companyId, agentId) ?? null,
+      sessionsOf: (agentId, companyId) => store.listSessions('all', undefined, companyId).filter((s) => s.companyAgentId === agentId),
+      sessions: () => h.sessions,
+      redact: (t) => vault.redact(t)
     })
     // Hive's scratch dir (New chat, no repo) is Hive's own: pre-accept Claude's folder-trust prompt for it.
     try {
@@ -417,6 +506,8 @@ if (!app.requestSingleInstanceLock()) {
         h.clearUnseen()
         // PO9: Claude history refreshes on window focus (stat pass + lazy queue), never on a timer
         h.safe(() => h.history?.refresh(), undefined)
+        // WORKTREE.md: worktrees and open PRs are checked on focus too (at most every 10 s)
+        h.safe(() => void h.taskWork?.focus().catch(() => undefined), undefined)
       },
       sendCommand: (cmd) => emit('ui:command', cmd),
       onReadyToShow: process.env.HIVE_SMOKE === '1' ? runSmoke : undefined
@@ -429,6 +520,8 @@ if (!app.requestSingleInstanceLock()) {
       const w = h.windows.get()
       return !!w && wc.id === w.webContents.id
     })
+    // WORKTREE.md: a code task's own worktree, branch and PR (failure = no Start, Principia runs)
+    h.taskWork = h.safe(() => wireTaskWork(h), null)
     registerAllHandlers(h)
     // DEPARTMENTS.md §3: the board dispatcher starts after registerCompanyHandlers ran CompanyStore.reconcile()
     try {
@@ -436,6 +529,13 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('dispatcher start failed', { e: String(e) })
     }
+    // ORCHESTRATOR.md: after the Forum, authoring and the dispatcher (its run hook is the last one); failure = off
+    try {
+      h.orchestrator = startOrchestrator(h)
+    } catch (e) {
+      log.error('orchestrator unavailable', { e: String(e) })
+    }
+    h.safe(() => h.taskWork?.start(), undefined)
 
     // artifacts indexer
     h.indexer = new ArtifactIndexer(
@@ -490,8 +590,19 @@ if (!app.requestSingleInstanceLock()) {
 
     // window: hidden when launched at login (SPEC A13)
     const hidden = h.launchedAtLogin() && process.env.HIVE_SMOKE !== '1'
+    // a cold launch from a link (Windows / Linux argv, or HIVE_DEEP_LINK in dev) shows the window like a click would
+    const launchLink = deepLinkFromArgv(process.argv) ?? process.env.HIVE_DEEP_LINK ?? null
+    if (launchLink && links.receive(launchLink)) pendingShow = true
     h.windows.create(!hidden || pendingShow)
     if (hidden) log.info('launched at login: starting hidden in the menu bar')
+    links.attach({ deliver: (url) => h.windows.command({ kind: 'openLink', url }), log })
+    if (shouldRegisterProtocol({ packaged: app.isPackaged, env: process.env })) {
+      try {
+        if (!app.isDefaultProtocolClient(PROTOCOL)) app.setAsDefaultProtocolClient(PROTOCOL)
+      } catch (e) {
+        log.warn('could not register principia:// links', { e: String(e) })
+      }
+    }
 
     if (process.env.HIVE_NO_SCHEDULER !== '1') {
       h.safe(() => h.engine.scheduler.start(), undefined)

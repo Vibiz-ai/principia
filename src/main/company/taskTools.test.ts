@@ -72,8 +72,9 @@ function board(o: { name?: string; adapter?: 'claude' | 'codex' } = {}) {
   const task = (over: Partial<CompanyTaskInput> = {}) => c.createTask({ title: 'Launch post', description: 'Write the launch post', companyId: co.id, repoId: null, status: 'todo', priority: 3, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: marketing.id, agentId: writer.id, ...over })
   /** Run now on a task: its run and the live owner of its headless step. */
   const run = (taskId: string) => {
-    d.runNow(taskId)
-    const r = started[started.length - 1].run
+    // a handoff carries the work on by itself (startsWithoutAutopilot): then its run is already there
+    if (c.task(taskId).status !== 'in_progress') d.runNow(taskId)
+    const r = [...started].reverse().find(s => s.opts.taskId === taskId)!.run
     return { run: r, owner: { runId: r.id, stepId: `st_${r.id.replace(/_/g, '')}` } as LiveOwner }
   }
   return { co, marketing, dev, profile, writer, fixer, task, run }
@@ -118,8 +119,8 @@ describe('DEPARTMENTS.md §4.5 report harvest: the fenced principia-task-report 
     const b = board({ adapter: 'codex' })
     const t = b.task(), u = b.task({ title: 'Second' })
     const { run } = b.run(t.id)
-    // Codex gets no tools: the step's toolset is null, the footer asks for the fence
-    expect(tools.toolset({ runId: run.id, taskId: t.id, agentId: b.writer.id, stepId: 'st_1', adapter: 'codex', companyId: b.co.id })).toBeNull()
+    // Codex gets the task tools now; the fence stays the fallback (a turn that never called task_report)
+    expect(tools.toolset({ runId: run.id, taskId: t.id, agentId: b.writer.id, stepId: 'st_1', adapter: 'codex', companyId: b.co.id })?.toolNames).toContain('task_report')
     expect((started[0].target as { prompt: string }).prompt).toContain('principia-task-report')
     expect(tools.harvest({ runId: run.id, stepId: 'st_1', adapter: 'codex', status: 'passed', output: fence('{"outcome":"blocked","summary":"Need the brand guide sk-abcdefghij1234","evidence":[]}') })).toMatchObject({ outcome: 'blocked' })
     end(run.id, 'passed')
@@ -183,7 +184,8 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     const s = sessions.create({ companyId: z.co.id, profileId: a.profile.id, repoId: null, cols: 80, rows: 24, title: 'Zeta chat', initialPrompt: '', resumeAgentSessionId: null })
     const so: LiveOwner = { sessionId: s.id }
     expect((await viaBroker(b, so, 'task_get', { id: mine.id })).error).toBe('Task not found in this company')
-    expect((await viaBroker(b, so, 'task_comment', { text: 'hi' })).error).toBe('You are not working on a task')
+    expect((await viaBroker(b, so, 'task_comment', { text: 'hi' })).error).toContain('You are not working on a task')
+    expect((await viaBroker(b, so, 'task_comment', { id: theirs.id, text: 'hi' })).error).toContain('was not opened by this chat')
     expect((await viaBroker(b, so, 'task_list', { scope: 'open' })).result?.tasks).toEqual([expect.objectContaining({ id: theirs.id })])
     // a run with no task gets no task tools at all
     expect((await viaBroker(b, { runId: 'r_none', stepId: 'st_none' }, 'task_get', {})).error).toContain('only available to runs started for a board task')
@@ -223,12 +225,16 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     expect(withTaskTools(base, { HIVE_TASK_ID: 'task_x' }).listTools().map(t => t.name)).not.toContain('task_get')
     expect(buildHandlers({ HIVE_TASK_ID: 'task_x', HIVE_LIVE_DIR: dir }).handlers.listTools().map(t => t.name)).toEqual(expect.arrayContaining(['ask_user', 'task_report']))
   })
-  it('the toolset is offered to claude steps of a task run only, and not with departments off', () => {
+  it('the toolset is offered to claude and codex steps of a task run (gemini once verified), never cursor, and not with departments off', () => {
     const b = board()
     const t = b.task()
     const req = { runId: 'r_1', taskId: t.id, agentId: b.writer.id, stepId: 's', adapter: 'claude' as const, companyId: b.co.id }
-    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS] })
-    expect(tools.toolset({ ...req, adapter: 'gemini' })).toBeNull()
+    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, 'connections_list'] })
+    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, 'connections_list'])
+    // gemini: offered here; the executor attaches it only once MCP_VERIFIED.gemini (untested: not installed)
+    expect(tools.toolset({ ...req, adapter: 'gemini' })).not.toBeNull()
+    expect(tools.toolset({ ...req, adapter: 'cursor' })).toBeNull()
+    expect(tools.toolset({ ...req, adapter: 'shell' })).toBeNull()
     expect(tools.toolset({ ...req, companyId: 'co_other' })).toBeNull()
     enabled = false
     expect(tools.toolset(req)).toBeNull()
@@ -364,8 +370,11 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
     expect(c.task(t.id).status).toBe('in_progress')
     end(run.id, 'passed')
     await settle()
-    expect(c.task(t.id)).toMatchObject({ status: 'todo', agentId: b.fixer.id, departmentId: b.dev.id, handoffs: 1, agentSessionId: null, report: null })
-    expect(c.task(t.id).pendingWake?.reasons.at(-1)).toContain('This is a code bug')
+    // the next seat carries the work on (a manual seat, autopilot off): the handoff is the same work, already under way
+    expect(c.task(t.id)).toMatchObject({ status: 'in_progress', agentId: b.fixer.id, departmentId: b.dev.id, handoffs: 1, agentSessionId: null, report: null })
+    expect(started.at(-1)!.opts).toMatchObject({ taskId: t.id, agentId: b.fixer.id, resumeSessionId: null })
+    const prompt = started.at(-1)!.target.kind === 'prompt' ? (started.at(-1)!.target as { prompt: string }).prompt : ''
+    expect(prompt).toContain('This is a code bug')
     expect(c.detail(t.id).activity.find(a => a.kind === 'handoff')).toMatchObject({ by: 'agent' })
     // to an agent of another company: refused
     const z = board({ name: 'Zeta' })
@@ -387,7 +396,7 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
       call(r.owner, 'task_handoff', { departmentKey: i % 2 ? 'marketing' : 'development', reason: `round ${i}` })
       end(r.run.id, 'passed')
       await settle()
-      expect(c.task(t.id)).toMatchObject({ status: 'todo', handoffs: i + 1 })
+      expect(c.task(t.id)).toMatchObject({ status: 'in_progress', handoffs: i + 1 })
     }
     r = b.run(t.id)
     const fifth = call(r.owner, 'task_handoff', { departmentKey: 'development', reason: 'again' })
@@ -509,5 +518,68 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
     const { owner } = b.run(t.id)
     enabled = false
     expect(() => tools.resolveCaller(owner)).toThrow('board is off')
+  })
+})
+
+describe('PROACTIVE.md §3: tasks a chat tracks for its own work', () => {
+  const chat = (b: ReturnType<typeof board>, departmentId: string | null = null) => {
+    const s = sessions.create({ companyId: b.co.id, profileId: b.profile.id, repoId: null, cols: 80, rows: 24, title: 'Chat', initialPrompt: '', resumeAgentSessionId: null })
+    if (departmentId) db.prepare('UPDATE sessions SET department_id=? WHERE id=?').run(departmentId, s.id)
+    return { sessionId: s.id } as LiveOwner
+  }
+  const callAs = (owner: LiveOwner, tool: string, args: Record<string, unknown>, callId?: string) => tools.call(tools.resolveCaller(owner), tool as TaskTool, args, callId ? { callId } : {})
+
+  it('task_create from a chat tracks the task: never routed to an agent, even an auto one; the chat moves it, never to done', async () => {
+    const b = board()
+    c.departments.saveAgent({ id: b.writer.id, companyId: b.co.id, departmentId: b.marketing.id, kind: 'profile', refId: b.profile.id, name: 'Copywriter', data: { autonomy: 'auto' } })
+    c.setAutopilot(b.co.id, true)
+    const owner = chat(b, b.marketing.id)
+    const parent = callAs(owner, 'task_create', { title: 'Launch week', description: '- [ ] post\n- [ ] email' }, 'toolu_p') as { task: { id: string; identifier: string }; tracked: boolean }
+    expect(parent.tracked).toBe(true)
+    const child = callAs(owner, 'task_create', { title: 'Write the launch post', parent: parent.task.identifier, start: true }, 'toolu_c') as { task: { id: string } }
+    await settle()
+    const t = c.task(child.task.id)
+    // the department chat's department, no agent, in progress held by the chat, under its parent; nothing started a run
+    expect(t).toMatchObject({ departmentId: b.marketing.id, agentId: null, status: 'in_progress', runId: (owner as { sessionId: string }).sessionId, parentId: parent.task.id })
+    expect(c.task(parent.task.id)).toMatchObject({ agentId: null, status: 'todo' })
+    expect(started).toHaveLength(0)
+    // the chat is still a chat: it holds no task, so company_file_task stays open to it
+    expect(tools.resolveCaller(owner).taskId).toBeNull()
+    callAs(owner, 'task_comment', { id: child.task.id, text: 'Decision: short post, because the list is small' })
+    callAs(owner, 'task_update', { id: child.task.id, description: '- [x] post' })
+    const done = callAs(owner, 'task_update', { id: child.task.id, status: 'in_review', note: 'Wrote it; checked the links' }) as { task: { status: string } }
+    expect(done.task.status).toBe('in_review')
+    expect(c.task(child.task.id)).toMatchObject({ runId: null, description: '- [x] post', report: expect.objectContaining({ outcome: 'review', summary: 'Wrote it; checked the links' }) })
+    expect(() => callAs(owner, 'task_update', { id: child.task.id, status: 'done' })).toThrow()
+    // a replayed call returns the first task
+    expect((callAs(owner, 'task_create', { title: 'Launch week' }, 'toolu_p') as { replayed?: boolean }).replayed).toBe(true)
+    // blocked needs a reason
+    callAs(owner, 'task_update', { id: parent.task.id, status: 'in_progress' })
+    expect(() => callAs(owner, 'task_update', { id: parent.task.id, status: 'blocked' })).toThrow('needs a note')
+    expect((callAs(owner, 'task_update', { id: parent.task.id, status: 'blocked', note: 'Waiting for the logo' }) as { task: { status: string } }).task.status).toBe('blocked')
+  })
+
+  it("another chat, a task run and the founder's own tasks are out of reach", () => {
+    const b = board()
+    const mine = chat(b), other = chat(b)
+    const r = callAs(mine, 'task_create', { title: 'Mine' }) as { task: { id: string } }
+    expect(() => callAs(other, 'task_update', { id: r.task.id, status: 'in_progress' })).toThrow('not tracked by this chat')
+    expect(() => callAs(other, 'task_comment', { id: r.task.id, text: 'hi' })).toThrow('not opened by this chat')
+    const manual = b.task({ agentId: null })
+    expect(() => callAs(mine, 'task_update', { id: manual.id, status: 'in_progress' })).toThrow('not tracked by this chat')
+    // a task run never gets task_update, and comments only on its own task
+    const { owner } = b.run(b.task().id)
+    expect(() => callAs(owner, 'task_update', { id: r.task.id, status: 'in_progress' })).toThrow('for chats')
+    expect(() => callAs(owner, 'task_comment', { id: r.task.id, text: 'x' })).toThrow('only comment on your current task')
+  })
+
+  it('a chat that closes with work in progress parks it for the founder', () => {
+    const b = board()
+    const owner = chat(b)
+    const r = callAs(owner, 'task_create', { title: 'Mine', start: true }) as { task: { id: string } }
+    const live = sessions.isLive
+    sessions.isLive = () => false
+    try { d.checkSessions() } finally { sessions.isLive = live }
+    expect(c.task(r.task.id)).toMatchObject({ status: 'blocked', blockReason: 'no_report', runId: null })
   })
 })

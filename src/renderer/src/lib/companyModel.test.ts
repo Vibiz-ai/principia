@@ -10,6 +10,7 @@ import {
   companyOf,
   effectiveCompany,
   isMultiCompany,
+  listedRows,
   liveItems,
   nextGroupPeek,
   reorderIds,
@@ -18,7 +19,12 @@ import {
   switchTarget,
   windowTitle,
   withPersonal,
-  workflowsTargetingRepo
+  workflowsTargetingRepo,
+  railLookAlikes,
+  colorsNear,
+  parseRgb,
+  railName,
+  railText
 } from './companyModel'
 
 const co = (id: string, name: string, sortOrder: number, extra: Partial<CompanyPassport> = {}): CompanyPassport =>
@@ -58,7 +64,7 @@ describe('company ordering', () => {
     expect(reorderIds(ids, 'z', 'a', 'after')).toBe(ids)
   })
   it('labels, initials and NULL stamps', () => {
-    expect(companyLabel(personal, true)).toBe('Personal / Unassigned')
+    expect(companyLabel(personal, true)).toBe('Personal')
     expect(companyLabel(acme, true)).toBe('Acme')
     expect(companyInitials('Beta Labs')).toBe('BL')
     expect(companyInitials('acme')).toBe('AC')
@@ -125,12 +131,13 @@ describe('companyBadges with three companies', () => {
     expect(total.needsYou).toBe(4)
   })
   it('counts working roots and failed runs per company', () => {
-    expect(byCompany.co_a!.working).toBe(1)
+    // five doors A2: ag_a waits on its open ask k1, so it is Needs you, not working (the hub's rule, one source)
+    expect(byCompany.co_a!.working).toBe(0)
     expect(byCompany.co_b!.working).toBe(0)
-    expect(byCompany.co_c!.working).toBe(1)
+    expect(byCompany.co_c!.working).toBe(0)
     expect(byCompany.co_c!.failed).toBe(true)
     expect(byCompany.co_a!.failed).toBe(false)
-    expect(total.working).toBe(2)
+    expect(total.working).toBe(0)
     expect(total.failed).toBe(true)
   })
   it('subagents inherit the root’s company', () => {
@@ -198,5 +205,47 @@ describe('All-mode group auto-expand', () => {
     expect(nextGroupPeek(peek, 2, 1)).toBe(false)
     // something new needs you while one is still open: it opens again
     expect(nextGroupPeek(peek, 1, 2)).toBe(true)
+  })
+})
+
+describe('listedRows (archiving a company takes its tasks off every surface)', () => {
+  it('keeps only rows of listed companies; unstamped rows are Personal; nothing drops before the list loads', () => {
+    const rows = [{ id: 1, companyId: 'co_nw' }, { id: 2, companyId: 'co_hd' }, { id: 3, companyId: null }]
+    expect(listedRows(rows, [{ id: 'co_nw' }, { id: 'co_personal' }]).map((r) => r.id)).toEqual([1, 3])
+    expect(listedRows(rows, [])).toBe(rows)
+    expect(listedRows(rows, [{ id: 'co_nw' }, { id: 'co_hd' }, { id: 'co_personal' }])).toBe(rows)
+  })
+})
+
+describe('five doors E14: telling look-alike clients apart on the rail', () => {
+  const co = (id: string, name: string, p: Record<string, unknown> = {}) => ({ id, name, color: 'var(--series-1)', system: null, archivedAt: null, ...p }) as unknown as import('@shared/company').CompanyPassport
+  it('uses the company’s own short label, else its initials; the hover label says client', () => {
+    expect(railText(co('co_a', 'Harbor Dental Group'))).toBe('HD')
+    expect(railText(co('co_a', 'Harbor Dental Group', { railLabel: 'hd2' }))).toBe('HD2')
+    expect(railName(co('co_a', 'Harbor Dental Group', { client: true }))).toBe('Harbor Dental Group · client')
+    expect(railName(co('co_a', 'Northwind Coffee'))).toBe('Northwind Coffee')
+  })
+  it('finds the companies that would look the same (same letters, same colour); a label or a colour tells them apart', () => {
+    const a = co('co_a', 'Harbor Dental')
+    const b = co('co_b', 'Harbor Dentistry')
+    const c = co('co_c', 'Hill Design', { color: 'var(--series-3)' })
+    const d = co('co_d', 'Hayes Dairy', { railLabel: 'HY' })
+    const gone = co('co_e', 'Hollow Drums', { archivedAt: '2026-10-01T00:00:00Z' })
+    expect(railLookAlikes(a, [a, b, c, d, gone]).map((x) => x.id)).toEqual(['co_b'])
+    expect(railLookAlikes({ ...a, railLabel: 'HA' }, [a, b, c, d]).map((x) => x.id)).toEqual([])
+  })
+  it('two colours that read the same at a glance count as the same tile (NC in accent beside NC in Blue)', () => {
+    const tokens: Record<string, string> = { 'var(--accent)': '#6e8cff', 'var(--series-1)': '#3987e5', 'var(--series-2)': '#2fb5c9', 'var(--series-3)': '#199e70' }
+    const rgbOf = (col: string) => parseRgb(tokens[col] ?? col)
+    const nw = co('co_n', 'Northwind Coffee', { color: 'var(--accent)' })
+    const hd = co('co_h', 'Harbor Dental Group', { railLabel: 'NC', color: 'var(--series-1)' })
+    expect(railLookAlikes(hd, [nw, hd]).map((x) => x.id)).toEqual([])
+    expect(railLookAlikes(hd, [nw, hd], rgbOf).map((x) => x.id)).toEqual(['co_n'])
+    expect(railLookAlikes({ ...hd, color: 'var(--series-3)' }, [nw, hd], rgbOf)).toEqual([])
+    expect(railLookAlikes({ ...hd, color: 'var(--series-2)' }, [nw, hd], rgbOf)).toEqual([])
+    expect(parseRgb('rgb(127, 196, 255)')).toEqual([127, 196, 255])
+    expect(parseRgb('#fff')).toEqual([255, 255, 255])
+    expect(parseRgb('var(--x)')).toBeNull()
+    expect(colorsNear([57, 135, 229], [47, 181, 201])).toBe(false)
   })
 })

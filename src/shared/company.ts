@@ -1,9 +1,13 @@
 /** Portable company context and durable work. Credentials never belong in a Passport. */
 import type { AgentPersona } from './personas'
+import type { TaskWork } from './taskWork'
+import type { TaskBrief, TaskPlanLink, TaskProof } from './plans'
 export const TASK_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled'] as const
 export type TaskStatus = typeof TASK_STATUSES[number]
 /** DEPARTMENTS.md §1.3: `agent` (task_create from a run) and `schedule` (a task-mode schedule's standing card). */
-export const TASK_SOURCES = ['manual', 'github', 'slack', 'sentry', 'posthog', 'agent', 'schedule'] as const
+export const TASK_SOURCES = ['manual', 'github', 'slack', 'sentry', 'posthog', 'agent', 'schedule',
+  /** LINEAR.md: an issue Linear sync brought over (sourceUrl is the issue) */
+  'linear'] as const
 export type TaskSource = typeof TASK_SOURCES[number]
 /** COMPANY.md §2.2: the reserved Personal / Unassigned company. Unowned repos, repo-less chats and NULL stamps land here. */
 export const PERSONAL_COMPANY_ID = 'co_personal'
@@ -32,12 +36,103 @@ export interface CompanyPassport extends CompanyPassportInput {
   autopilot?: boolean
   /** DEPARTMENTS.md §3: tasks in flight at once across the company's agents. Absent = DEFAULT_MAX_IN_FLIGHT. */
   maxInFlight?: number
+  /**
+   * Five doors A4: when this company was paused (company:pause). While set nothing of this company starts: no agent
+   * turn, no schedule, no autopilot. Absent / null = running.
+   */
+  pausedAt?: string | null
+  /** Five doors step 2: this company's task prefix ("NC" in NC-12). Personal keeps PRN. */
+  taskPrefix?: string
+  /**
+   * Five doors step 4: accounts connected to this company only, by the Connections page (never shared with another
+   * company). Instagram is drafts only: Principia keeps the handle, agents get each post ready, the founder posts it.
+   * GitHub records the founder's OK to use the gh login on this Mac for this company, with the login it saw.
+   */
+  accounts?: CompanyAccounts
+  /** Five doors §4.8: pay-as-you-go value cap per calendar month, in dollars. Reaching it pauses the company. */
+  monthlyCap?: number | null
+  /** Five doors step 5: the last task number handed out in this company (NC-12 → 12); the Board previews the next branch. */
+  taskSeq?: number
+  /** Five doors E14: a short rail label (1-3 letters or digits) replacing the initials, so look-alike clients differ. */
+  railLabel?: string
+  /** Five doors E14: this company is a client (any company can be tagged; agencies tell clients apart on the rail). */
+  client?: boolean
 }
+export interface CompanyAccount { handle: string; connectedAt: string }
+export interface CompanyAccounts { instagram?: CompanyAccount | null; github?: CompanyAccount | null }
+export const MONTHLY_CAP_MAX = 100_000
+/** Work that was in flight when its company was paused: saved, and started again on resume. */
+export interface CompanyPauseCheckpoint {
+  taskId: string
+  identifier: string
+  title: string
+  agentId: string | null
+  /** the agent's persona name ("Pliny"), else its role name; null for a task without an agent */
+  agentName: string | null
+}
+/** company:pause's answer: what this one company's pause or resume touched (nothing of any other company). */
+export interface CompanyPauseResult {
+  company: CompanyPassport
+  paused: boolean
+  /** agent seats this click paused (pause) or resumed (resume) */
+  agents: number
+  /** this company's enabled schedules, which hold while it is paused */
+  schedules: number
+  /** pause: the in-flight work saved; resume: the saved work started again */
+  checkpoints: CompanyPauseCheckpoint[]
+}
+/**
+ * The company's logo on the rail coin and the sidebar chips. Detected from the company's repositories (public/,
+ * app/icon.*, logo*.svg, manifest icons…) or picked by hand; the image is copied into
+ * `<userData>/companies/<slug>/logo/`, never read from the repo afterwards. `manual` and `none` (Use initials) are
+ * never overridden by a later detection; `auto` re-detects when the company's repositories change.
+ */
+export type CompanyLogoSource = 'auto' | 'manual' | 'none'
+export interface CompanyLogo {
+  companyId: string
+  source: CompanyLogoSource
+  /** data: URL of the stored copy; null = the initial letter */
+  dataUrl: string | null
+  /** where the image came from, repo-relative ("vibiz/public/logo.svg") or the picked file's name */
+  origin: string | null
+  updatedAt: string | null
+}
+/** One image found in a repository, for the picker grid. `path` is what company:setLogo takes back. */
+export interface LogoCandidate {
+  path: string
+  /** "<repo name>/<path inside the repo>" */
+  label: string
+  dataUrl: string
+  width: number | null
+  height: number | null
+  score: number
+  /** confident enough to be used without asking */
+  confident: boolean
+}
+/** company:setLogo: a detected candidate, a file from the open dialog, the initials, or back to automatic detection. */
+export type LogoPick =
+  | { kind: 'candidate'; path: string }
+  | { kind: 'file' }
+  | { kind: 'none' }
+  | { kind: 'auto' }
+  /** the generated line-art monogram (shared/chatCompany.ts emblemSvg); keepDetected: only when no logo was found */
+  | { kind: 'emblem'; variant: 'arch' | 'ring' | 'tablet'; keepDetected?: boolean }
 export interface PassportExport { format: 'principia-passport'; version: 1; passport: Omit<CompanyPassportInput, 'repoIds' | 'vaultPath'> }
 /** company:create. Profile fields default to empty. */
 export type CompanyCreateInput = { name: string; color?: string; vaultPath?: string | null; repoIds?: string[] } & Partial<Record<typeof PROFILE_FIELDS[number], string>>
 /** company:update (name, colour, sort, vault path). */
-export interface CompanyUpdateInput { name?: string; color?: string; sortOrder?: number; vaultPath?: string | null }
+export interface CompanyUpdateInput {
+  name?: string; color?: string; sortOrder?: number; vaultPath?: string | null
+  /** five doors step 2: NC → NW (tasks keep their numbers) */ taskPrefix?: string
+  /** five doors step 4: connect (an account) or disconnect (null) one of this company's own accounts */
+  account?: { kind: keyof CompanyAccounts; handle: string | null }
+  /** five doors step 4: dollars per month; null removes the cap */
+  monthlyCap?: number | null
+  /** five doors E14: the rail's short label (1-3 letters or digits); null goes back to the initials */
+  railLabel?: string | null
+  /** five doors E14: tag (or untag) this company as a client */
+  client?: boolean
+}
 /** company:overview, one per listed company. Memory counts come from the passport index (0 until it exists). */
 export interface CompanyOverview {
   companyId: string
@@ -55,6 +150,12 @@ export interface CompanyOverview {
 export interface CompanyTaskInput extends Partial<TaskBoardFields> {
   title: string; description: string; companyId: string; repoId: string | null; status: TaskStatus; priority: 0 | 1 | 2 | 3 | 4;
   source: TaskSource; sourceUrl: string | null; externalId: string | null; assigneeProfileId: string | null; parentId: string | null; dependencyIds: string[]
+  /** PLANS.md §1: the living brief (absent on old rows: briefOf reads the description as its Context) */
+  brief?: TaskBrief | null
+  /** PLANS.md §1: screenshots, test results, links attached as proof */
+  proof?: TaskProof[]
+  /** PLANS.md §2: the plan this task belongs to */
+  plan?: TaskPlanLink | null
 }
 /** Stored tasks. Rows written before departments lack the TaskBoardFields; read them through withTaskDefaults. */
 export interface CompanyTask extends CompanyTaskInput { id: string; identifier: string; runId: string | null; createdAt: string; updatedAt: string }
@@ -62,7 +163,11 @@ export interface CompanyTask extends CompanyTaskInput { id: string; identifier: 
 export type BoardTask = CompanyTask & TaskBoardFields
 export const TASK_ACTIVITY_KINDS = ['created', 'routed', 'assigned', 'woke', 'coalesced', 'started', 'report', 'asked', 'answered', 'parked', 'healed', 'handoff', 'approved', 'sent_back', 'comment', 'run_finished', 'interrupted',
   /** pre-departments edits ("Status: todo → blocked"); still written for plain field edits */
-  'updated'] as const
+  'updated',
+  /** WORKTREE.md: the task's worktree, branch and PR (created, PR opened, review, merged, removed) */
+  'work',
+  /** Five doors A4: its company was paused mid-turn (work saved) or resumed */
+  'paused'] as const
 export type TaskActivityKind = typeof TASK_ACTIVITY_KINDS[number]
 export const ACTIVITY_BY = ['human', 'agent', 'system'] as const
 export type ActivityBy = typeof ACTIVITY_BY[number]
@@ -118,13 +223,35 @@ export interface TaskBoardFields {
   autoWakes: AutoWakes
   /** capped at MAX_HANDOFFS */
   handoffs: number
+  /** LINEAR.md §3: tracker parity. Label names as typed (matched in any case). */
+  labels: string[]
+  /** points (Linear's estimate); null = not estimated */
+  estimate: number | null
+  /** YYYY-MM-DD; null = no due date */
+  dueDate: string | null
+  /** WORKTREE.md: the task's own worktree, branch and PR once Started. Absent on older rows (read as null). */
+  work?: TaskWork | null
 }
-export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0 }
+export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0, labels: [], estimate: null, dueDate: null, work: null }
 /** Fills the §1.3 fields an older row lacks (no validation; taskInputSchema validates). */
 export function withTaskDefaults<T extends CompanyTaskInput>(t: T): T & TaskBoardFields {
   const d = TASK_BOARD_DEFAULTS
   return { ...t, departmentId: t.departmentId ?? null, agentId: t.agentId ?? null, blockReason: t.blockReason ?? null, ask: t.ask ?? null, report: t.report ?? null, doneNote: t.doneNote ?? null,
-    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0 }
+    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0, work: t.work ?? null,
+    labels: Array.isArray(t.labels) ? t.labels : [], estimate: t.estimate ?? null, dueDate: t.dueDate ?? null }
+}
+
+/**
+ * PROACTIVE.md §3: a task a chat tracks for its own work (task_create from a session that holds no task). Its source key
+ * names the session: `externalId = track:<sessionId>:<call>`. Never routed to an agent; only that chat moves it
+ * (todo → in_progress → in_review, or blocked), and only a human marks it done.
+ */
+export const TRACK_PREFIX = 'track:'
+export function trackedBy(t: Pick<CompanyTaskInput, 'source' | 'externalId'>): string | null {
+  if (t.source !== 'agent' || !t.externalId?.startsWith(TRACK_PREFIX)) return null
+  const rest = t.externalId.slice(TRACK_PREFIX.length)
+  const i = rest.indexOf(':')
+  return (i < 0 ? rest : rest.slice(0, i)) || null
 }
 
 /** §1.5 derived lanes. Every surface (board, overview, rail badge, Needs you) uses laneOf. */
@@ -234,6 +361,18 @@ export interface CompanyAgentSaveInput {
   data?: Partial<Omit<CompanyAgentData, 'limits'>> & { limits?: Partial<AgentLimits> }
 }
 /** An agent can take a task: active (not archived, not paused). Autonomy is a separate gate (§3.2). */
+/**
+ * Work the founder already said go to, which the dispatcher starts with autopilot off and on a manual seat: a schedule's
+ * standing card with a fire queued on it (they turned the schedule on), a task whose question they just answered, and
+ * a task an agent just handed to a teammate (the same work, carried on).
+ */
+export function startsWithoutAutopilot(t: Pick<BoardTask, 'source' | 'status' | 'pendingWake' | 'plan' | 'ask' | 'handoffs'>): boolean {
+  if (t.status !== 'todo' || !t.pendingWake?.count || t.plan) return false
+  // a handoff carries on work already under way (capped by MAX_HANDOFFS and the wake guard)
+  const handedOn = t.handoffs > 0 && /^Handed off to you:/.test(t.pendingWake.reasons.at(-1) ?? '')
+  return t.source === 'schedule' || !!t.ask?.answer || handedOn
+}
+
 export const agentActive = (a: Pick<CompanyAgent, 'archivedAt' | 'pausedAt'>): boolean => !a.archivedAt && !a.pausedAt
 
 /**
@@ -270,3 +409,5 @@ export const DEPARTMENT_PRESETS: readonly DepartmentPreset[] = [
 
 /** board:autopilot */
 export interface BoardSettings { companyId: string; autopilot: boolean; maxInFlight: number }
+/** board:autopilotPreview (AUTOPILOT.md §7): the To do work Autopilot would start, shown before it goes on */
+export interface AutopilotPreview { companyId: string; count: number; tasks: { id: string; identifier: string; title: string }[]; maxInFlight: number; inFlight: number }

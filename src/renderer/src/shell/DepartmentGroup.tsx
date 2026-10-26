@@ -1,12 +1,13 @@
 /**
  * DEPARTMENTS.md §9 sidebar. Focused mode: a Departments section (above Repositories) with one row per department
- * (icon, name, amber needs-you count, blue working dot), expanding to its agent seats and, muted, its recurring
+ * (icon, name, accent needs-you count, blue working dot), expanding to its agent seats and, muted, its recurring
  * workflows, schedules and triggers. All mode: per company a Board row, then department rows folded until something
  * needs you. Every count is `laneOf` through lib/departments. Nothing here renders unless experimental.departments.
  * §9 department chats: a "+" on the row's hover ("New Chat in Marketing", ⌥-click picks the agent CLI) and the
  * department's chats under it (running ones always, the newest ended one while open), drawn by the sidebar's own
  * session row (DepartmentChatRows).
  */
+import { useLaneContext as useSharedLaneContext } from '../lib/company'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { DEPARTMENT_PRESETS, type CompanyAgent, type Department, type DepartmentPresetKey } from '@shared/company'
 import type { Id, Schedule, Session, Workflow } from '@shared/types'
@@ -87,7 +88,7 @@ export function NeedsYouTasksSlot({ heading = false, ...props }: { companyId?: I
       {heading && (
         <div className="sidebar__section sidebar__section--needs">
           <span>Needs you</span>
-          <span className="side-row__badge side-row__badge--needs">⚑ {count}</span>
+          <span className="side-row__badge side-row__badge--needs">◆ {count}</span>
         </div>
       )}
       <NeedsYouTasks {...props} playfulTop={false} />
@@ -108,9 +109,8 @@ export function useNeedsYouTaskCount(companyId?: Id): number {
 
 /** Lane context from the store's asks and seats; recomputed only when they change. */
 export function useLaneContext(): LaneContext {
-  const asks = useStore((s) => s.asks)
-  const agents = useStore((s) => s.companyAgents)
-  return useMemo(() => laneContext(asks, agents), [asks, agents])
+  // five doors A4: the one lane context (with the paused rule) lives in lib/company
+  return useSharedLaneContext()
 }
 
 /** Per-company Board counts (All-mode Board rows, CompanyGroup auto-expand). Empty while departments are off. */
@@ -282,13 +282,13 @@ function AddDepartment({ companyId, existing, onDone }: { companyId: Id; existin
   )
 }
 
-/** Needs-you count in amber, else a blue dot while something works. */
+/** Needs-you count in the accent, else a blue dot while something works. */
 function LaneBadge({ counts }: { counts: LaneCounts | undefined }): React.JSX.Element | null {
   if (!counts) return null
   if (counts.needsYou > 0)
     return (
       <span className="side-row__badge side-row__badge--needs" title={`${counts.needsYou} task${counts.needsYou === 1 ? '' : 's'} need${counts.needsYou === 1 ? 's' : ''} you`}>
-        ⚑ {counts.needsYou}
+        ◆ {counts.needsYou}
       </span>
     )
   if (counts.working > 0)

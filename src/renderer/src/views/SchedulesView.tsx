@@ -9,22 +9,48 @@ import { absolute, absoluteWithDay, duration } from '../lib/time'
 import { useCoalesced } from '../lib/useThrottled'
 import { firstLine } from '../lib/format'
 import { SlackTriggersTab } from '../components/slack/TriggerEditor'
-import { attempt, companyName, enterCompany, lastInputs, navigate, pauseAll, providerLabel, toast, updateSettings, useStore, type ScheduleSeed } from '../state/store'
+import { attempt, companyName, enterCompany, lastInputs, multiCompany, navigate, pauseAllSchedulesAsked, providerLabel, setCompanyPaused, toast, updateSettings, useStore, type ScheduleSeed } from '../state/store'
 import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
 import { companyOf, reposOf } from '../lib/companyModel'
 import { inScope } from '../lib/scope'
+import { AutomationTabs } from '../components/AutomationTabs'
+import { AutopilotsTab } from '../components/AutopilotsTab'
+import { RoutinesTab } from '../components/RoutinesTab'
 import { CloudPlacedMark } from '../components/cloud/bits'
 import { useCloudPlacement } from '../state/cloud'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
 import type { Id } from '@shared/types'
 
-export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: 'schedules' | 'slack' }): React.JSX.Element {
-  const [cur, setCur] = useState<'schedules' | 'slack'>(tab ?? 'schedules')
+const ADAPTER_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', shell: 'A script' }
+
+type SchedTab = 'routines' | 'autopilots' | 'schedules' | 'slack'
+
+export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, addPlaybook, routineTime }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab; addRoutine?: string; addPlaybook?: string; routineTime?: { at?: string; days?: string } }): React.JSX.Element {
+  // a deep link to a schedule (or a seed) opens Schedules; Automations itself opens on Autopilots
+  const [cur, setCur] = useState<SchedTab>(tab ?? 'schedules')
   useEffect(() => setCur(tab ?? 'schedules'), [tab, nonce])
+  if (cur === 'routines')
+    return (
+      <div className="view">
+        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <div className="scroll view__body">
+          <RoutinesTab suggest={tab === 'routines' ? addRoutine : undefined} suggestTime={tab === 'routines' ? routineTime : undefined} nonce={nonce} />
+        </div>
+      </div>
+    )
+  if (cur === 'autopilots')
+    return (
+      <div className="view">
+        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <div className="scroll view__body">
+          <AutopilotsTab focus={tab === 'autopilots' ? addPlaybook : undefined} nonce={nonce} />
+        </div>
+      </div>
+    )
   if (cur === 'slack')
     return (
       <div className="view">
-        <Toolbar title="Schedules" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
         <ScopedSlackTriggers seedWorkflowId={tab === 'slack' ? seed?.workflowId : undefined} nonce={nonce} />
       </div>
     )
@@ -54,20 +80,9 @@ function ScopedSlackTriggers({ seedWorkflowId, nonce }: { seedWorkflowId?: strin
   return <SlackTriggersTab seedWorkflowId={seedWorkflowId} nonce={nonce} />
 }
 
-/** SLACK.md §12.5: Schedules | Slack triggers. */
-function ScheduleTabs({ value, onChange }: { value: 'schedules' | 'slack'; onChange: (v: 'schedules' | 'slack') => void }): React.JSX.Element {
-  return (
-    <Segmented
-      size="sm"
-      className="no-drag"
-      items={[
-        { value: 'schedules', label: 'Schedules' },
-        { value: 'slack', label: 'Slack triggers' }
-      ]}
-      value={value}
-      onChange={onChange}
-    />
-  )
+/** SLACK.md §12.5 + five doors: Automations → Schedules | Workflows | Slack triggers. */
+function ScheduleTabs({ value, onChange }: { value: SchedTab; onChange: (v: SchedTab) => void }): React.JSX.Element {
+  return <AutomationTabs value={value} onChange={(v) => v !== 'workflows' && onChange(v)} />
 }
 
 /** COMPANY.md §3, §8.3-8.4: the focused company's schedules, or every company's with a chip in All mode. */
@@ -76,6 +91,12 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
   const status = useStore((s) => s.status)
   const repos = useStore((s) => s.repos)
   const profiles = useStore((s) => s.profiles)
+  const companies = useStore((s) => s.companies)
+  // A4: a paused company starts nothing, so its Run Now is greyed out (the banner says why) instead of inviting an error
+  const heldBy = (s: Schedule): string | null => {
+    const c = companies.find((x) => x.id === s.companyId)
+    return c?.pausedAt ? c.name : null
+  }
   const [list, setList] = useState<Schedule[] | null>(null)
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -107,7 +128,9 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
     if (t.kind === 'workflow') return `⇶ ${workflows.find((w) => w.id === t.workflowId)?.name ?? 'workflow'}`
     const p = profiles.find((x) => x.id === t.profileId)
     const r = repos.find((x) => x.id === t.repoId)
-    return `◆ ${p?.adapter ?? 'agent'} · ${r?.name ?? 'Chat'}`
+    // plain words: who runs it, and in which repository when it has one ("◆ Claude", "◆ Claude · ledgerly-app")
+    const who = p?.adapter ? (ADAPTER_NAME[p.adapter] ?? p.adapter) : 'An agent'
+    return r ? `◆ ${who} · ${r.name}` : `◆ ${who}`
   }
 
   // CLOUD.md §8: a schedule placed in the cloud starts there (main answers null: no local run)
@@ -132,8 +155,9 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
     load()
   }
   const menu = async (s: Schedule): Promise<void> => {
+    const held = heldBy(s)
     const id = await nativeMenu([
-      { id: 'run', label: 'Run Now' },
+      { id: 'run', label: held ? `Run Now (${held} is paused)` : 'Run Now', enabled: !held },
       { id: 'edit', label: 'Edit…' },
       { id: 'toggle', label: s.enabled ? 'Disable' : 'Enable' },
       ...(s.target.kind === 'workflow' ? [{ id: 'wf', label: 'Open Workflow' }] : []),
@@ -148,17 +172,27 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
   }
 
   const selected = list?.find((s) => s.id === sel) ?? null
+  const multi = multiCompany()
+  const focusedCo = useStore((st) => (scope ? (st.companies.find((c) => c.id === scope) ?? null) : null))
   return (
     <div className="view">
-      <Toolbar title="Schedules" sub={tabs}>
-        <Button icon="pause" variant={paused ? 'secondary' : 'ghost'} className={paused ? 'btn--amber' : ''} onClick={() => void pauseAll(!paused)}>
-          {paused ? 'Resume All' : 'Pause All'}
-        </Button>
+      <Toolbar title="Automations" sub={tabs}>
+        {/* PM review: inside a company the pause is that company's (agents, schedules, autopilot); every company only from All */}
+        {multi && focusedCo && !paused ? (
+          <Button icon={focusedCo.pausedAt ? 'play' : 'pause'} variant={focusedCo.pausedAt ? 'secondary' : 'ghost'} onClick={() => void setCompanyPaused(focusedCo.id, !focusedCo.pausedAt)} title={focusedCo.pausedAt ? undefined : 'This company only. Other companies keep running.'}>
+            {focusedCo.pausedAt ? `Resume ${focusedCo.name}` : `Pause ${focusedCo.name}`}
+          </Button>
+        ) : (
+          <Button icon="pause" variant={paused ? 'secondary' : 'ghost'} className={paused ? 'btn--caution' : ''} onClick={() => void pauseAllSchedulesAsked(!paused)} title={multi ? 'Every company’s schedules (asks first)' : undefined}>
+            {paused ? (multi ? 'Resume All Companies…' : 'Resume All') : multi ? 'Pause All Companies…' : 'Pause All'}
+          </Button>
+        )}
         <Button variant="primary" icon="plus" onClick={() => setSheet({})}>
           New Schedule
         </Button>
       </Toolbar>
-      {paused && <div className="banner banner--warning banner--bar">Schedules are paused — nothing will fire.</div>}
+      {paused && <div className="banner banner--warning banner--bar">Schedules are paused in every company. Nothing fires until you resume.</div>}
+      {!paused && focusedCo?.pausedAt && <div className="banner banner--warning banner--bar">‖ {focusedCo.name} is paused. Its schedules hold until you resume it; other companies keep running.</div>}
       {error && !list ? (
         <ErrorState error={error} onRetry={load} />
       ) : !list ? (
@@ -175,7 +209,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
             <div className="tr tr--head sch-cols">
               <span className="th">On</span>
               <span className="th">Name</span>
-              <span className="th">Target</span>
+              <span className="th">Who runs it</span>
               <span className="th">When</span>
               <span className="th">Next</span>
               <span className="th">Last</span>
@@ -208,14 +242,14 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
                 <span className="td">{s.enabled && !paused && s.nextFireAt ? <RelativeTime iso={s.nextFireAt} /> : <span className="text-tertiary">—</span>}</span>
                 <span className="td">{s.lastRunStatus ? <StatusGlyph status={runVisual(s.lastRunStatus)} /> : <span className="text-tertiary">—</span>}</span>
                 <span className="td td--actions">
-                  <Button size="sm" title={cloudSchedules.includes(s.id) ? 'Runs in the cloud' : undefined} onClick={(e) => (e.stopPropagation(), void runNow(s))}>
+                  <Button size="sm" disabled={!!heldBy(s)} title={heldBy(s) ? `${heldBy(s)} is paused. Resume it to run this.` : cloudSchedules.includes(s.id) ? 'Runs in the cloud' : undefined} onClick={(e) => (e.stopPropagation(), void runNow(s))}>
                     Run Now
                   </Button>
                 </span>
               </div>
             ))}
           </div>
-          {selected && <History schedule={selected} onRunNow={() => void runNow(selected)} />}
+          {selected && <History schedule={selected} held={heldBy(selected)} onRunNow={() => void runNow(selected)} />}
         </div>
       )}
       {sheet && (
@@ -235,7 +269,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
   )
 }
 
-function History({ schedule, onRunNow }: { schedule: Schedule; onRunNow: () => void }): React.JSX.Element {
+function History({ schedule, held, onRunNow }: { schedule: Schedule; held: string | null; onRunNow: () => void }): React.JSX.Element {
   const [events, setEvents] = useState<ScheduleEvent[] | null>(null)
   const [runs, setRuns] = useState<Run[]>([])
   const load = (): void => {
@@ -298,7 +332,7 @@ function History({ schedule, onRunNow }: { schedule: Schedule; onRunNow: () => v
         <Loading />
       ) : rows.length === 0 ? (
         <EmptyState compact text={<>Hasn’t fired yet.{schedule.nextFireAt ? ` Next: ${absoluteWithDay(schedule.nextFireAt)}.` : ''}</>}>
-          <Button size="sm" onClick={onRunNow}>
+          <Button size="sm" disabled={!!held} title={held ? `${held} is paused. Resume it to run this.` : undefined} onClick={onRunNow}>
             Run Now
           </Button>
         </EmptyState>

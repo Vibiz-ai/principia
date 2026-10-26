@@ -50,11 +50,11 @@ beforeEach(() => {
 })
 afterEach(() => { d.dispose(); db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 
-function board(o: { autopilot?: boolean } = {}) {
+function board(o: { autopilot?: boolean; autonomy?: 'auto' | 'manual'; mode?: 'headless' | 'session' } = {}) {
   const co = c.create({ name: 'Acme' })
   const dep = c.departments.save({ companyId: co.id, name: 'Support' })
   const profile = store.createProfile({ name: 'Claude', adapter: 'claude', permissionMode: 'default', secretNames: [], useApiKeyAuth: false })
-  const agent = c.departments.saveAgent({ companyId: co.id, departmentId: dep.id, kind: 'profile', refId: profile.id, name: 'Digest writer', data: { autonomy: 'auto' } })
+  const agent = c.departments.saveAgent({ companyId: co.id, departmentId: dep.id, kind: 'profile', refId: profile.id, name: 'Digest writer', data: { autonomy: o.autonomy ?? 'auto', ...(o.mode ? { mode: o.mode } : {}) } })
   if (o.autopilot ?? true) c.setAutopilot(co.id, true)
   return { co, dep, profile, agent }
 }
@@ -116,8 +116,8 @@ describe('DEPARTMENTS.md §8: task-mode schedules keep one standing card', () =>
     expect(kinds(card.id).filter(k => k === 'coalesced')).toHaveLength(2)
     expect(started).toHaveLength(1)
     expect(mem.events.map(e => e.kind)).toEqual(['fired', 'fired', 'fired'])
-    expect(mem.events[0].message).toMatch(/^Created PRN-\d+$/)
-    expect(mem.events[1].message).toMatch(/^Coalesced into PRN-\d+ \(agent busy\)$/)
+    expect(mem.events[0].message).toMatch(/^Created [A-Z][A-Z0-9]{1,4}-\d+$/)
+    expect(mem.events[1].message).toMatch(/^Coalesced into [A-Z][A-Z0-9]{1,4}-\d+ \(agent busy\)$/)
     expect(mem.schedules.get('sch_digest')!).toMatchObject({ lastFireAt: '2026-10-20T10:10:00.000Z', nextFireAt: '2026-10-20T10:15:00.000Z', lastRunId: null })
 
     // the run ends in review: the coalesced fires become exactly one follow-up turn
@@ -130,22 +130,65 @@ describe('DEPARTMENTS.md §8: task-mode schedules keep one standing card', () =>
     expect(tasksFrom('schedule')).toHaveLength(1)
   })
 
-  it('autopilot off: fires queue on the card (one comment each), nothing starts, the event says why', async () => {
+  it('autopilot off and a manual seat: the founder turned the schedule on, so its fire still starts the card', async () => {
+    const b = board({ autopilot: false, autonomy: 'manual' })
+    const { mem, s } = scheduler()
+    mem.schedules.set('sch_digest', taskSchedule(b))
+    s.tick(); await flush()
+    const card = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
+    expect(c.task(card.id).status).toBe('in_progress')
+    expect(started).toHaveLength(1)
+    expect(started[0].opts).toMatchObject({ trigger: 'task', taskId: card.id })
+    expect(mem.events.map(e => e.message)).toEqual([expect.stringMatching(/^Created [A-Z][A-Z0-9]{1,4}-\d+$/)])
+    // autopilot stays off for everything else: a plain todo task of the same seat does not start
+    const other = c.createTask({ title: 'Plain work', description: '', companyId: b.co.id, repoId: null, status: 'todo', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: b.dep.id, agentId: b.agent.id })
+    end(started[0].run.id, 'passed'); await flush()
+    expect(c.task(other.id).status).toBe('todo')
+  })
+
+  it('a fire while the agent is busy or paused says so in plain words, and the busy one starts right after', async () => {
+    const b = board({ autopilot: false })
+    const busy = c.createTask({ title: 'Other', description: '', companyId: b.co.id, repoId: null, status: 'todo', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: b.dep.id, agentId: b.agent.id })
+    d.runNow(busy.id)
+    const { mem, s } = scheduler()
+    mem.schedules.set('sch_digest', taskSchedule(b))
+    s.tick(); await flush()
+    expect(mem.events.at(-1)!.message).toMatch(/Digest writer is busy on [A-Z]+-\d+; it starts right after/)
+    const card = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
+    expect(c.task(card.id).status).toBe('todo')
+    end(started[0].run.id, 'passed'); await flush()
+    expect(c.task(card.id).status).toBe('in_progress')
+    expect(started.at(-1)!.opts.taskId).toBe(card.id)
+  })
+
+  it('a card in review or done takes the next fire as its next turn (one card, history kept)', async () => {
     const b = board({ autopilot: false })
     const { mem, s } = scheduler()
     mem.schedules.set('sch_digest', taskSchedule(b))
     s.tick(); await flush()
+    const first = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
+    c.patchInFlight(first.id, { report: { outcome: 'review', summary: 'Brief ready', evidence: [], at: new Date().toISOString() } })
+    end(started[0].run.id, 'passed'); await flush()
+    expect(c.task(first.id).status).toBe('in_review')
+    // next fire: back to todo and started, no second card
     at('2026-10-20T10:05:20.000Z'); s.tick(); await flush()
-    const card = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
-    expect(card.status).toBe('todo')
-    expect(card.pendingWake?.count).toBe(2)
-    expect(comments(card.id)).toHaveLength(2)
-    expect(started).toHaveLength(0)
-    expect(mem.events.map(e => e.message)).toEqual([expect.stringMatching(/^Created PRN-\d+; Autopilot is off/), expect.stringMatching(/^Commented on PRN-\d+; Autopilot is off/)])
+    expect(tasksFrom('schedule')).toHaveLength(1)
+    expect(c.task(first.id).status).toBe('in_progress')
+    expect(started).toHaveLength(2)
+    c.patchInFlight(first.id, { report: { outcome: 'review', summary: 'Brief 2', evidence: [], at: new Date().toISOString() } })
+    end(started[1].run.id, 'passed'); await flush()
+    c.approve(first.id, 'Read it, thanks')
+    expect(c.task(first.id).status).toBe('done')
+    at('2026-10-20T10:10:20.000Z'); s.tick(); await flush()
+    expect(tasksFrom('schedule')).toHaveLength(1)
+    expect(c.task(first.id).status).toBe('in_progress')
+    expect(started).toHaveLength(3)
+    expect(c.detail(first.id).activity.some(a => /fired again/.test(a.message))).toBe(true)
   })
 
-  it('a closed card is never replaced or reopened by a fire: the fire is a comment and the event says so', async () => {
-    const b = board({ autopilot: false })
+  it('a canceled card is never replaced or reopened by a fire: the fire is a comment and the event says so', async () => {
+    // a session seat: the fire waits for the founder to open the card, so it can be canceled while still in To do
+    const b = board({ autopilot: false, mode: 'session' })
     const { mem, s } = scheduler()
     mem.schedules.set('sch_digest', taskSchedule(b))
     s.tick(); await flush()
@@ -344,7 +387,7 @@ describe('DEPARTMENTS.md §8: task-mode Slack triggers map a thread to one task'
     expect(c.task(t.id).pendingWake?.reasons[0]).toMatch(/^Slack follow-up in #support: 1 new message[\s\S]*it also fails on Safari/)
     expect(started).toHaveLength(1)
     expect(h.kinds()).toEqual(['fired', 'fired', 'fired'])
-    expect(h.st.trigEvents.map(e => e.message)).toEqual([expect.stringMatching(/^Created PRN-/), expect.stringMatching(/^Coalesced into PRN-/), expect.stringMatching(/^Coalesced into PRN-/)])
+    expect(h.st.trigEvents.map(e => e.message)).toEqual([expect.stringMatching(/^Created [A-Z][A-Z0-9]{1,4}-/), expect.stringMatching(/^Coalesced into [A-Z][A-Z0-9]{1,4}-/), expect.stringMatching(/^Coalesced into [A-Z][A-Z0-9]{1,4}-/)])
     expect(h.st.trigEvents.every(e => e.runId === null)).toBe(true)
     h.stop()
   })

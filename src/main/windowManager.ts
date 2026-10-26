@@ -3,6 +3,7 @@ import path from 'node:path'
 import { app, BrowserWindow, screen, shell, type Rectangle } from 'electron'
 import type { UiCommand } from '../shared/ipc'
 import { isWebLink } from '../shared/externalLinks'
+import { formatDeepLink, isDeepLinkUrl, parseDeepLink } from '../shared/deepLink'
 import { log } from './log'
 
 /** Renderer crash recovery: reload after a crash, but stop after this many within the window (a crash loop). */
@@ -79,10 +80,14 @@ export class WindowManager {
     })
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (isWebLink(url)) void shell.openExternal(url)
+      // a principia:// anchor the UI did not handle itself: navigate in place (never a new window, never the OS)
+      else if (isDeepLinkUrl(url)) this.openLink(url)
       return { action: 'deny' }
     })
     win.webContents.on('will-navigate', (e, url) => {
-      if (url !== win.webContents.getURL()) e.preventDefault()
+      if (url === win.webContents.getURL()) return
+      e.preventDefault()
+      if (isDeepLinkUrl(url)) this.openLink(url)
     })
     win.webContents.on('will-attach-webview', (e) => e.preventDefault())
     win.webContents.on('did-start-loading', () => {
@@ -178,6 +183,12 @@ export class WindowManager {
     const q = this.queue
     this.queue = []
     for (const c of q) this.hooks.sendCommand(c)
+  }
+
+  /** A principia:// link clicked inside the window: checked, then navigated by the renderer. Unknown links do nothing. */
+  private openLink(raw: string): void {
+    const link = parseDeepLink(raw)
+    if (link) this.command({ kind: 'openLink', url: formatDeepLink(link) })
   }
 
   /** Show the window and deliver a command (queued until the renderer says ui:ready). */

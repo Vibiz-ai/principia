@@ -22,8 +22,11 @@ export const GOAL_INFO: Record<GoalKey, { label: string; codeOnly: boolean; cont
   support: { label: 'Customer support', codeOnly: false, content: false },
   other: { label: 'Something else', codeOnly: false, content: false }
 }
-/** Soft cap: a 4th pick shows a note, it is not refused. */
-export const GOAL_SOFT_MAX = 3
+
+/** Five doors step 5 (design §6.3): a hard maximum. The 4th pick is refused and the step says "Pick up to 3". */
+export const GOAL_MAX = 3
+/** @deprecated the cap is hard now: GOAL_MAX */
+export const GOAL_SOFT_MAX = GOAL_MAX
 
 /** §2 S3 vibe cards. `sample` is a template: `{name}` is replaced with the business name (see vibeSample). */
 export const VIBES = ['friendly', 'expert', 'bold', 'playful', 'premium', 'straight'] as const
@@ -142,6 +145,12 @@ export const BRIEF_MAX = 20_000
 export const PLAN_BRIEF_MAX = 8_000
 /** §2 S0 for a new company: the three ways to start. `guided` is today's question flow. */
 export const START_MODES = ['guided', 'prompt', 'repo'] as const
+/**
+ * Five doors step 5 (design §6.1): step 1 asks "Where does your business live today?". `running`: a store, a site or
+ * socials (no code); `code`: a folder or a GitHub repo; `idea`: nothing yet. It decides steps 2, 4 and 5.
+ */
+export const LIVES = ['running', 'code', 'idea'] as const
+export type Lives = (typeof LIVES)[number]
 export type StartMode = (typeof START_MODES)[number]
 
 // ---------- the plan (§6.1, .strict() throughout) ----------
@@ -271,6 +280,8 @@ export interface OnboardingAvailable {
   profileAdapters: PlanAdapter[]
   hasCode: boolean
   departmentsOn: boolean
+  /** persona names other companies' agents already have (lowercase): new agents pick others while any are free */
+  personasElsewhere?: string[]
 }
 
 // ---------- steps ----------
@@ -463,10 +474,20 @@ export const DraftSchema = z
     enableFlags: z.boolean(),
     journalId: handle.optional(),
     updatedAt: short(40),
+    /** Five doors step 5: the step-1 answer (Where does your business live today?); absent on older drafts. */
+    lives: z.enum(LIVES).optional(),
     /** §2 S0 (new company): how the founder chose to start; absent = guided (drafts from before the choice). */
     start: z.enum(START_MODES).optional(),
     /** "From a prompt": the pasted brief, kept until launch (it seeds the Passport). */
-    brief: z.string().max(BRIEF_MAX).optional()
+    brief: z.string().max(BRIEF_MAX).optional(),
+    /**
+     * shared/chatCompany.ts: started from a chat. `logo`: the generated emblem set once the launch is done
+     * (`keepDetected`: only when the repo has no logo of its own); null = keep the initial / the detected logo.
+     */
+    fromChat: z
+      .object({ proposalId: short(64), logo: z.object({ variant: z.enum(['arch', 'ring', 'tablet']), keepDetected: z.boolean() }).strict().nullable() })
+      .strict()
+      .optional()
   })
   .strict()
 export type OnboardingDraft = z.infer<typeof DraftSchema>

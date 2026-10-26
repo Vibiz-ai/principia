@@ -132,6 +132,27 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         return dep ? `${a.name}, ${dep.name}` : a.name
       }
     },
+    // AGENT-COLLAB.md: the board for team_board, the guards' settings and seat facts
+    board: (companyId) =>
+      c()
+        .listTasks(companyId)
+        .map((t) => ({ identifier: t.identifier, title: t.title, status: t.status, blockReason: t.blockReason ?? null, agentId: t.agentId ?? null, departmentId: t.departmentId ?? null, priority: t.priority, updatedAt: t.updatedAt })),
+    collabSettings: () => h.settings().agentCollab,
+    seats: {
+      departmentOf: (agentId) => c().departments.getAgent(agentId)?.departmentId ?? null,
+      canAnswer: (agentId) => {
+        const a = c().departments.getAgent(agentId)
+        if (!a || a.archivedAt || a.pausedAt || a.kind !== 'profile') return false
+        const p = h.store.getProfile(a.refId)
+        return !!p && p.adapter !== 'shell'
+      },
+      leadOf: (companyId, departmentId) => {
+        const lead = c()
+          .departments.listAgents({ companyId, departmentId })
+          .find((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile' && h.store.getProfile(a.refId)?.adapter !== 'shell')
+        return lead?.id ?? null
+      }
+    },
     cliScript: path.join(opts.mainDir, 'forum-cli.js'),
     execPath: process.execPath,
     spawnRoot,
@@ -182,9 +203,24 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
       service.noteReplyRun(run.id, reply)
       return run.id
     },
+    onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
+    onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
     log
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)
+  // AGENT-COLLAB.md §2: an agent's ask or mention wakes another agent, after collab.ts checked the guards
+  service.collabWake = (req) =>
+    responder.wakeForAgent(req.target, req.message.companyId, req.message.id, {
+      handle: req.asker.handle,
+      label: req.asker.agentId ? (() => {
+        const a = c().departments.getAgent(req.asker.agentId!)
+        const dep = a?.departmentId ? c().departments.get(a.departmentId) : null
+        return a ? (dep ? `${a.name}, ${dep.name}` : a.name) : null
+      })() : null,
+      depth: req.depth,
+      maxHops: req.maxHops,
+      why: req.why
+    }, req.wakeId)
   h.runHooks.push((run) => {
     if (!TERMINAL.has(run.status)) return
     responder.onRunEnded(run.id)

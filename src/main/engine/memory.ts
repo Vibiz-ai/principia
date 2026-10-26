@@ -14,13 +14,15 @@ import type { AdapterId, WorkflowNode } from '../../shared/types'
  * MCP attach verified on an installed CLI. Unverified adapters fall back to the brief-only 'inject' transport
  * (read-only). Flip only after the adapter's spike passes (MEMORY.md 7, 13.2).
  *  - claude: verified (claude 2.1.x: --mcp-config + --allowedTools, real smoke in __tests__/memory.smoke.test.ts).
- *  - codex: renderer exists; needs `codex exec` + MCP approval behaviour verified (openai/codex#24135).
- *  - gemini: renderer exists; needs GEMINI_CLI_SYSTEM_SETTINGS_PATH merge semantics verified.
+ *  - codex: verified (codex-cli 0.163.0, 2026-10-26): `codex exec --json -s read-only` with `-c mcp_servers.<name>.*`
+ *    overrides, `enabled_tools` and `default_tools_approval_mode="approve"` lists and calls the server's tools without a
+ *    prompt (an exec run cannot answer one); the interactive TUI reads the same overrides. No ~/.codex edit.
+ *  - gemini: renderer exists; needs GEMINI_CLI_SYSTEM_SETTINGS_PATH merge semantics verified (not installed here).
  *  - cursor: no per-invocation MCP flag; never mcp without touching ~/.cursor.
  */
 export const MCP_VERIFIED: Record<AdapterId, boolean> = {
   claude: true,
-  codex: false,
+  codex: true,
   gemini: false,
   cursor: false,
   shell: false
@@ -117,7 +119,7 @@ export function claudeSessionMcpAttach(
 const toml = (v: string): string => JSON.stringify(v)
 const tomlArr = (vs: string[]): string => `[${vs.map(toml).join(',')}]`
 
-/** codex: `-c mcp_servers.hivemem.*` overrides for this invocation only (no ~/.codex/config.toml edits). Unverified. */
+/** codex: `-c mcp_servers.hivemem.*` overrides for this invocation only (no ~/.codex/config.toml edits). Verified on 0.163. */
 export function codexMcpAttach(grant: MemoryGrant): McpAttachment {
   const k = `mcp_servers.${MEMORY_SERVER_NAME}`
   const s = grant.server
@@ -125,6 +127,24 @@ export function codexMcpAttach(grant: MemoryGrant): McpAttachment {
   for (const [name, value] of Object.entries(s.env)) args.push('-c', `${k}.env.${name}=${toml(value)}`)
   args.push('-c', `${k}.enabled_tools=${tomlArr(grant.toolNames)}`)
   args.push('-c', `${k}.default_tools_approval_mode="approve"`)
+  return { args, env: {}, files: [] }
+}
+
+/**
+ * codex interactive pane: every Hive server of the spawn as `-c mcp_servers.<name>.*` overrides (hivemem and `hive`),
+ * each limited to its `enabled_tools` and pre-approved: Principia's own broker, caps and approval cards are the gate
+ * (the same tools claude pre-allows with --allowedTools). `toolTimeoutSec`: a `hive` write waits for the founder's click.
+ */
+export function codexSessionMcpAttach(servers: { server: McpServerSpec; toolNames: readonly string[]; toolTimeoutSec?: number }[]): McpAttachment {
+  const args: string[] = []
+  for (const { server: s, toolNames, toolTimeoutSec } of servers) {
+    if (!toolNames.length) continue
+    const k = `mcp_servers.${s.name}`
+    args.push('-c', `${k}.command=${toml(s.command)}`, '-c', `${k}.args=${tomlArr(s.args)}`)
+    for (const [name, value] of Object.entries(s.env)) args.push('-c', `${k}.env.${name}=${toml(value)}`)
+    args.push('-c', `${k}.enabled_tools=${tomlArr([...toolNames])}`, '-c', `${k}.default_tools_approval_mode="approve"`)
+    if (toolTimeoutSec) args.push('-c', `${k}.tool_timeout_sec=${Math.floor(toolTimeoutSec)}`)
+  }
   return { args, env: {}, files: [] }
 }
 

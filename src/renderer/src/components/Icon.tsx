@@ -1,6 +1,8 @@
 /** Line icons (16px, 1.5 stroke), inline SVG so the app works offline. */
 const P: Record<string, string> = {
   tasks: 'M3 3h10v11H3zM6 1.5v3h4v-3zM5.5 8l1.2 1.2L9 7M5.5 11.5h5',
+  /** PLANS.md: milestones on a line, the last one flagged */
+  plans: 'M2 12.5h2.5M6.5 12.5H9M11 12.5h3M3.2 12.5V9M7.7 12.5V9M12.5 12.5V3.5l2 1.2-2 1.2',
   passport: 'M4 2h8a1 1 0 0 1 1 1v11H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM3 12h10M8 9.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM5.5 7h5M8 4.5c1.5 1.5 1.5 3.5 0 5-1.5-1.5-1.5-3.5 0-5',
   marketplace: 'M2 6l1-3h10l1 3M2 6v1a1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0 1.5 1.5 0 0 0 3 0V6zM3 8.5V14h10V8.5M6 14v-4h4v4',
   book: 'M8 4C6 2.5 3.5 2.5 1.5 3v10c2-.5 4.5-.5 6.5 1 2-1.5 4.5-1.5 6.5-1V3C12.5 2.5 10 2.5 8 4v10',
@@ -53,7 +55,18 @@ const P: Record<string, string> = {
   edit: 'M10.5 3 13 5.5 6 12.5H3.5V10z',
   /** two figures: the Agents hub */
   agents: 'M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.5 3.5-3.5S9 11 9 13M11 7.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM10.2 9.7c.3-.1.5-.1.8-.1 1.7 0 3 1.3 3 3.2',
+  /** five doors §2.5: Personal on the rail, a person rather than a letter */
+  user: 'M8 7.5a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5zM3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5',
   reply: 'M6.5 4 3 7.5 6.5 11M3 7.5h6.5a3.5 3.5 0 0 1 3.5 3.5v1',
+  /** five doors: the Ask box's send (an arrow to the right) */
+  send: 'M3 8h10M9 4l4 4-4 4',
+  /** Five doors: Board (three columns), Knowledge (open book), Activity (a pulse), Add-ons (grid + plus), a repo branch */
+  board: 'M2.5 3h11v10h-11zM6.2 3v10M9.8 3v10',
+  knowledge: 'M8 4.5C6.5 3.3 4.3 3 2.5 3.3v9.4c1.8-.3 4 0 5.5 1.3 1.5-1.3 3.7-1.6 5.5-1.3V3.3C11.7 3 9.5 3.3 8 4.5v9.5',
+  activity: 'M1.5 8.5h3l1.8-4 3.2 8 1.8-4h3.2',
+  addons: 'M3 3h4v4H3zM9 9h4v4H9zM3 9h4v4H3zM11 3v4M9 5h4',
+  branch: 'M5 2.5v8M5 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 6.5c0 3-6 2-6 4',
+  department: 'M2.5 6 8 3l5.5 3zM3.5 6.5v5M6.5 6.5v5M9.5 6.5v5M12.5 6.5v5M2.5 13h11',
   /** hash in a speech bubble: the Slack page (generic glyph, not the Slack logo) */
   // FORUM.md §8: a pediment over a speech bubble
   forum: 'M2.5 5.5 8 2l5.5 3.5zM3 7.5h10a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5H7.5L5 14.5v-2H3a.5.5 0 0 1-.5-.5V8a.5.5 0 0 1 .5-.5z',

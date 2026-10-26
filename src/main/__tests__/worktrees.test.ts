@@ -163,6 +163,10 @@ d('worktree per run', () => {
     expect(wm.get(wt.id)).toMatchObject({ status: 'kept', keptReason: 'failed' })
     expect(branchSlug('Ünïcode PR / roundup!!')).toBe('unicode-pr-roundup')
     expect(prePushScript(['main'], null)).toContain("protect='main'")
+    // a board task's refusal is in task words, never the workflow's pushBranches (QA)
+    expect(prePushScript(['main'], null, ['hive/*'], null, true)).toContain("this task may push only to: $allow (not $b). Push the task branch itself")
+    expect(prePushScript(['main'], null, ['hive/*'], null, true)).not.toContain('pushBranches')
+    expect(prePushScript(['main'], null)).toContain('worktree.pushBranches')
     await expect(wm.ensure({ runId: 'r_0000000007', workflowName: 'x', repo: path.join(root, 'nope'), base: null })).rejects.toThrow(/not found/)
   })
 
@@ -255,6 +259,55 @@ d('worktree per run', () => {
     expect(await wm.deleteBranches(runId, [{ repoPath: repo, name: 'superlog-pr-1' }])).toEqual([])
     expect(git(repo, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'])).toBe('main')
     expect(listHeadsSync(path.join(repo, '.git'))).toEqual(['main'])
+  })
+
+  it('WORKTREE.md A3: a branch the founder makes after the run ended is never the run\'s (Remove long after, a later sweep)', async () => {
+    const runId = 'r_0000000030'
+    wm.snapshotRun(runId, [repo])
+    // during the run: a fetched PR head (the run's, no new work) and the run's worktree with a commit
+    git(repo, ['fetch', '-q', 'origin', 'pr-1:pr1'])
+    const wt = await wm.ensure({ runId, workflowName: 'late', repo, base: null })
+    fs.writeFileSync(path.join(wt.path, 'w.txt'), 'run work\n')
+    git(wt.path, ['add', '.'])
+    git(wt.path, ['commit', '-qm', 'run work'])
+    // the run ends: finish keeps the failed worktree, the run-end hook sweeps (and freezes the run's own branches)
+    expect(await wm.finish(runId, { status: 'failed', nothingToDo: false })).toMatchObject({ status: 'kept', keptReason: 'failed' })
+    await wm.sweepRun(runId, { atRunEnd: true })
+    expect(refExists('refs/heads/pr1')).toBe(false)
+    // long after: the founder makes branches in their own checkout, one with no new commit (a sweep would take it), one
+    // with work
+    git(repo, ['branch', 'founder-idea'])
+    git(repo, ['branch', 'founder-work', 'main'])
+    expect((await wm.branches(runId)).map((b) => b.name)).toEqual([wt.branch])
+    // then Remove on the kept worktree (with discardWork, the strongest form): only the run's own branch goes
+    await wm.remove(wt.id, { discardWork: true })
+    expect(refExists(`refs/heads/${wt.branch}`)).toBe(false)
+    expect(refExists('refs/heads/founder-idea')).toBe(true)
+    expect(refExists('refs/heads/founder-work')).toBe(true)
+    // a later sweep (and the explicit delete list) never offers them either
+    expect(await wm.sweepRun(runId)).toEqual([])
+    expect(refExists('refs/heads/founder-idea')).toBe(true)
+    await expect(wm.deleteBranches(runId, [{ repoPath: repo, name: 'founder-idea' }])).resolves.toEqual([])
+    expect(refExists('refs/heads/founder-idea')).toBe(true)
+  })
+
+  it('WORKTREE.md A3: a non-isolated run frozen at its end; an older row never frozen is listed but not swept', async () => {
+    const runId = 'r_0000000031'
+    wm.snapshotRun(runId, [repo])
+    git(repo, ['fetch', '-q', 'origin', 'pr-1:pr2'])
+    await wm.sweepRun(runId, { atRunEnd: true })
+    expect(refExists('refs/heads/pr2')).toBe(false)
+    git(repo, ['branch', 'founder-later'])
+    expect(await wm.sweepRun(runId)).toEqual([])
+    expect(refExists('refs/heads/founder-later')).toBe(true)
+    // a row from before the freeze existed (created_json null): the later branch is listed (the user may delete it),
+    // a sweep leaves it alone
+    const old = 'r_0000000032'
+    wm.snapshotRun(old, [repo])
+    git(repo, ['branch', 'made-later'])
+    const left = await wm.sweepRun(old)
+    expect(left.map((b) => b.name)).toContain('made-later')
+    expect(refExists('refs/heads/made-later')).toBe(true)
   })
 
   it('PO6: Remove of a failed run keeps a hive/ branch with unpushed work unless the user discards it', async () => {

@@ -48,17 +48,17 @@
 .task-status--triage { border-style: dotted; }
 .task-status--backlog { border-style: dashed; }
 .task-status--todo { border-color: var(--text-secondary); }
-.task-status--in_progress { border-color: #e2b45c; background: linear-gradient(90deg, #e2b45c 50%, transparent 50%); }
+.task-status--in_progress { border-color: var(--status-running); background: linear-gradient(90deg, var(--status-running) 50%, transparent 50%); }
 .task-status--in_review { border-color: #ad91e9; background: linear-gradient(90deg, #ad91e9 75%, transparent 75%); }
 .task-status--done { background: var(--status-success); border-color: var(--status-success); color: var(--bg); }
 .task-status--blocked { color: var(--status-failed); border-color: var(--status-failed); }
 .task-priority { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 14px; height: 13px; color: var(--text-secondary); flex: 0 0 auto; }
 .task-priority i { width: 2px; background: currentColor; border-radius: 1px; }
-.task-priority--1 { background: #df9361; color: #1b1c1f; height: 14px; border-radius: 3px; font-size: 11px; font-weight: 750; align-items: center; }
+.task-priority--1 { background: var(--text-primary); color: var(--surface-0, #1b1c1f); height: 14px; border-radius: 3px; font-size: 11px; font-weight: 750; align-items: center; }
 .task-source { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
 .task-source img { width: 12px; height: 12px; object-fit: contain; }
 .task-slack { font-size: 16px; line-height: 12px; font-weight: 700; color: #c799d7; }
-.task-posthog { font-size: 14px; line-height: 12px; color: #e7a75f; }
+.task-posthog { font-size: 14px; line-height: 12px; color: var(--text-secondary); }
 .task-source-note { display: flex; align-items: center; gap: 7px; font-size: 10px; color: var(--text-tertiary); padding: 16px 24px; margin-top: auto; }
 .task-board { display: flex; gap: 18px; padding: 20px; overflow-x: auto; flex: 1; align-items: flex-start; }
 .task-board .task-group { min-width: 270px; width: 280px; }
@@ -196,9 +196,13 @@
 
 /* Company settings */
 .cs-avatar { border-radius: var(--radius-lg) !important; }
+.cs-logo-btn { font-size: var(--text-xs); margin-top: 2px; }
 .cs-colors { display: flex; gap: 8px; }
 .cs-color { width: 24px; height: 24px; border-radius: var(--radius-sm); border: 2px solid transparent; padding: 0; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.cs-color { position: relative; }
 .cs-color.is-on { border-color: var(--text-primary); }
+/* the chosen swatch carries a white check, not only a border */
+.cs-color.is-on::after { content: ''; position: absolute; left: 50%; top: 45%; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: translate(-50%, -50%) rotate(45deg); }
 .cs-color:focus-visible { outline: none; box-shadow: var(--focus); }
 .cs-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .cs-actions--start { justify-content: flex-start; }
@@ -220,9 +224,51 @@
 .op-connect-tabs button:focus-visible, .op-connect-apps button:focus-visible { outline: 2px solid var(--focus, var(--text-primary)); outline-offset: 1px; }
 .op-connect-snippet { display: grid; gap: 8px; margin-bottom: 10px; }
 .op-connect-snippet pre { margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; border: 1px solid var(--border); border-radius: 7px; color: var(--text-secondary); }
+.op-connect-raw summary { cursor: pointer; font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: 6px; }
+.op-connect-raw[open] summary { margin-bottom: 8px; }
 .op-import-kind { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; font-size: 12px; }
 .op-import-kind input { margin-top: 3px; }
 .op-import-kind small { display: block; color: var(--text-tertiary); margin-top: 2px; }
 .op-import-preview { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .op-import-preview strong { color: var(--text-primary); font-weight: 600; }
 .op-import-preview small { display: block; color: var(--text-tertiary); font-size: 10px; }
+
+/* "Change Logo…" picker: line-art tiles on dark (white hairlines, no colour fields) */
+.logo-pick { display: flex; flex-direction: column; gap: 14px; }
+.logo-pick__now { display: flex; align-items: center; gap: 12px; }
+.logo-pick__now-text { min-width: 0; }
+.logo-pick__now-title { font-weight: var(--weight-semibold); }
+.logo-pick__now-sub { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 440px; }
+.logo-pick__empty { padding: 28px 8px; text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); }
+.logo-pick__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; max-height: 340px; overflow-y: auto; padding: 2px; }
+.logo-pick__item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px 8px; border-radius: var(--radius-md); border: 1px solid var(--border); background: transparent; color: var(--text-primary); cursor: default; min-width: 0; }
+.logo-pick__item:hover { border-color: rgba(255, 255, 255, 0.28); }
+.logo-pick__item.is-sel { border-color: rgba(255, 255, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85); }
+.logo-pick__img { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 0 4px var(--surface-2), 0 0 0 5px rgba(255, 255, 255, 0.12); overflow: hidden; background: rgba(255, 255, 255, 0.04); }
+.logo-pick__img img { width: 74%; height: 74%; object-fit: contain; pointer-events: none; }
+.logo-pick__img--fill img { width: 100%; height: 100%; object-fit: cover; }
+.logo-pick__img--backed { background: rgba(255, 255, 255, 0.94); }
+.logo-pick__name { font-size: var(--text-xs); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logo-pick__meta { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -4px; }
+.logo-pick__actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* "Create <Name> from this chat?" (ChatCompanyCard.tsx): white line art, no warm colours */
+.chat-co { display: flex; flex-direction: column; gap: 12px; }
+.chat-co__lead { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
+.chat-co__strong { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.chat-co__field { display: flex; flex-direction: column; gap: 5px; }
+.chat-co__label { font-size: var(--text-xs); color: var(--text-secondary); min-width: 44px; }
+textarea.input.chat-co__brief { height: 160px; min-height: 96px; max-height: 300px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; }
+.chat-co__row { display: flex; align-items: center; gap: 12px; }
+.chat-co__row--top { align-items: flex-start; }
+.chat-co__row--top .chat-co__label { padding-top: 6px; }
+.chat-co__repo { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text-primary); }
+.chat-co__logos { display: flex; gap: 8px; flex-wrap: wrap; }
+.chat-co__logo { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 8px 6px; border-radius: var(--radius-md); border: 1px solid var(--border); background: transparent; color: var(--text-primary); cursor: default; }
+.chat-co__logo:hover { border-color: rgba(255, 255, 255, 0.28); }
+.chat-co__logo.is-sel { border-color: rgba(255, 255, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85); }
+.chat-co__logo .logo-pick__img { width: 52px; height: 52px; }
+.chat-co__logo-name { font-size: 10px; color: var(--text-secondary); }
+.chat-co__initial { font-family: Cinzel, 'Trajan Pro', Georgia, serif; font-weight: 600; font-size: 22px; color: rgba(255, 255, 255, 0.92); }
+.chat-co__note { font-size: var(--text-xs); margin-top: -4px; }
+.chat-co__foot { font-size: var(--text-xs); }

@@ -105,8 +105,20 @@ export interface EngineLogger {
 }
 
 export interface EngineContext {
+  /**
+   * ORCHESTRATOR.md §1.1: Principia's context block and report contract for one non-shell step of a company run (a task
+   * run or a seat run), on every harness. null = nothing to add (the layer is off, or the run is no agent's).
+   */
+  orchestrator?: { stepContext(req: OrchestratorStepRequest): string | null }
   /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
-  gateway?: { attachment(cwd: string, companyId?: Id | null): McpServerSpec | null }
+  gateway?: { attachment(cwd: string, companyId?: Id | null, runId?: Id | null): McpServerSpec | null }
+  /** AUTOPILOT.md §6: a money autopilot's run loads only Principia's own MCP servers (outside calls go through the gateway). */
+  autopilot?: { strictMcp(runId: Id): boolean }
+  /**
+   * BROWSER.md §3: the principia-browser MCP server for one claude / codex spawn of a company (its own token, bound to
+   * that company's browser). null = no company, or the browser is off.
+   */
+  browser?: { attachment(req: { companyId: Id; agent: string; sessionKey: string }): McpServerSpec | null; toolNames(): string[] }
   /**
    * Company context for one spawn; never global chat context. COMPANY.md §5: with `companyId` it is that company's
    * Passport (passportContextFor); without it, the company of the working directory (older callers).
@@ -208,6 +220,11 @@ export interface CompanyBridge {
   workspaceDir(companyId: Id): string | null
   /** Ids of the repos this company owns (Personal: every unowned repo). */
   repoIds(companyId: Id): Id[]
+  /**
+   * Five doors A4: the company's name while it is paused (a paused company starts nothing: no run, no schedule, no
+   * retry), else null. Absent = no company pause (older main). Must not throw.
+   */
+  pausedName?(companyId: Id): string | null
   /** DEPARTMENTS.md §4.3: the board's view of task runs. Absent = no board (tests, older main). */
   tasks?: TaskRunBridge
   /** DEPARTMENTS.md §8: the board side of task-mode schedules and Slack triggers (company/recurring.ts). Absent = no board. */
@@ -244,11 +261,31 @@ export interface TaskRunBridge {
    * EngineContext.passportContext for task runs; null = nothing to say.
    */
   passportContext?(e: { taskId: Id; companyId: Id }): string | null
+  /**
+   * WORKTREE.md: a task Started into its own worktree runs every prompt turn there, with the push guard env. null = the
+   * task has no worktree (the repo, as before). Rejects when the worktree cannot be made: the turn fails, it never
+   * falls back to the founder's checkout.
+   */
+  workdir?(e: { taskId: Id; runId: Id }): Promise<{ cwd: string; env: Record<string, string> } | null>
 }
 /** §3.6: the in-band warning, about 2 minutes before a task run's time cap. */
 export const TASK_WRAP_UP_MS = 2 * 60_000
 export const TASK_WRAP_UP_TEXT =
   'Principia: about 2 minutes are left before this task run is stopped. Wrap up now: save your work and call task_report (or task_ask if you need the human).'
+
+/** ORCHESTRATOR.md §1.1: one step asking for its Principia context. */
+export interface OrchestratorStepRequest {
+  runId: Id
+  stepId: Id
+  companyId: Id
+  taskId: Id | null
+  agentId: Id | null
+  adapter: AdapterId
+  /** a resumed conversation (it already holds the full block): only the inbox delta and the footer */
+  resumed: boolean
+  /** the step's $PRINCIPIA_RUN_REPORT file */
+  reportPath: string
+}
 
 /** EngineContext.onStepOutput (PASSPORT.md §7.6). `output` is the step's final answer, already redacted. */
 export interface StepOutputEvent {
@@ -393,7 +430,7 @@ export interface LiveBridge {
 /** The hivemem stdio MCP server, as each agent CLI must spawn it. */
 export interface McpServerSpec {
   /** 'hive' = the authoring server (AUTHORING.md §1.1), interactive claude sessions only (PO1, PO7). */
-  name: 'hivemem' | 'hive' | 'principia' | 'principia-forum'
+  name: 'hivemem' | 'hive' | 'principia' | 'principia-forum' | 'principia-browser'
   command: string // process.execPath
   args: string[] // [<abs>/out/main/mcp-memory.js]
   /** ELECTRON_RUN_AS_NODE=1, HIVE_MEM_DB, HIVE_MEM_GRANT, HIVE_MEM_FP. Goes into the MCP config, never the agent env. */
@@ -512,6 +549,8 @@ export interface StartRunOptions {
   agentId?: Id | null
   /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
   resumeSessionId?: string | null
+  /** Prompt runs: the title to show instead of one cut from the prompt (a board task turn: its key and title). */
+  title?: string | null
   /** §3.6 task runs: the time cap in minutes (warned ~2 min before, then canceled). Absent = the seat's limits.runMinutes. */
   runMinutes?: number | null
 }

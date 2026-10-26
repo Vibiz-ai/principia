@@ -22,6 +22,8 @@ import {
 import { createEngineWith } from '../index'
 import { baseBranch, installPushGuard, pushGuardEnv } from '../pushGuard'
 import { validateWorkflow } from '../validate'
+import { CLAUDE_CONTEXT_FILE } from '../live/attach'
+import { OPS_TITLE } from '../../company/principiaOps'
 import { addWorkflow, fakeAdapter, fakeCtx, fakeProviders, profile, waitRun, type FakeCall, type FakeCtx } from './fakes'
 
 // ---------- builders ----------
@@ -615,7 +617,8 @@ describe('hive server attach: interactive claude only (PO1, PO7)', () => {
     expect(append).toContain('mcp__hive__* tools')
     expect(append).toContain('<hive-memory>')
 
-    // resume: same attach, no re-sent hint
+    // resume (PROACTIVE.md §4): same attach, and the hint is passed again (claude keeps its snapshot; after a compaction
+    // the system prompt is rendered from this launch's text)
     const resumed = engine.providers.interactiveSpawn(profile('p_claude', 'claude'), {
       artifactsDir: '/a/',
       author,
@@ -623,14 +626,84 @@ describe('hive server attach: interactive claude only (PO1, PO7)', () => {
       live: { dir: liveDir, hookCommand: 'hook', mcpEnv: {} }
     })
     expect(resumed.args).toContain('--mcp-config')
-    expect(resumed.args).not.toContain('--append-system-prompt')
+    expect(resumed.args[resumed.args.indexOf('--append-system-prompt') + 1]).toContain('mcp__hive__* tools')
   })
 
-  it('other adapters never get it, and neither do panes without a spawn dir', async () => {
+  it('PROACTIVE.md: a company chat pane gets the Use Principia section and the resume/compact context hook; the nudge only under Always', async () => {
     const ctx = setup()
     const engine = await engineFor(ctx)
-    const codex = engine.providers.interactiveSpawn(profile('p_codex', 'codex'), { artifactsDir: '/a/', author, live: { dir: ctx.root, hookCommand: 'h', mcpEnv: {} } })
-    expect(codex.args.join(' ')).not.toContain('hive')
+    const liveDir = join(ctx.root, 'live', 's_2')
+    mkdirSync(liveDir, { recursive: true })
+    const chatAuthor: McpServerSpec = { ...author, env: { ...author.env, HIVE_LIVE_DIR: liveDir, HIVE_TOOLSETS: 'author,task,company,newco', HIVE_COMPANY_ID: 'co_1' } }
+    const spawn = (o: { resumeAgentSessionId?: string } = {}) =>
+      engine.providers.interactiveSpawn(profile('p_claude', 'claude'), {
+        artifactsDir: '/a/', author: chatAuthor, authorTools: [...AUTHOR_TOOLS], live: { dir: liveDir, hookCommand: 'hook', mcpEnv: {} }, companyId: 'co_1', chatBrief: '## This chat: Acme', ...o
+      })
+    const spec = spawn()
+    const append = spec.args[spec.args.indexOf('--append-system-prompt') + 1]!
+    expect(append).toContain(OPS_TITLE)
+    for (const t of ['task_create', 'task_update', 'company_file_task', 'hive_workflow_create']) expect(append).toContain(t)
+    const settings = JSON.parse(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')) as { hooks: Record<string, { matcher?: string; hooks: { command: string; async?: boolean }[] }[]> }
+    const ctxHook = settings.hooks.SessionStart!.find((e) => e.matcher === 'resume|compact')!
+    expect(ctxHook.hooks[0]!.command).toContain(`--context '${join(liveDir, CLAUDE_CONTEXT_FILE)}'`)
+    expect(ctxHook.hooks[0]!.async).toBeUndefined()
+    // the default ("When it helps") never blocks the end of a turn
+    expect(JSON.stringify(settings.hooks.Stop)).not.toContain('--nudge')
+    expect(readFileSync(join(liveDir, CLAUDE_CONTEXT_FILE), 'utf8')).toContain(OPS_TITLE)
+    // "Always": every multi-step turn, with the one-time gentle reminder
+    ctx.settings.trackTasks = 'always'
+    expect(spawn().args.join(' ')).toContain('Track every multi-step turn')
+    const always = JSON.parse(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')) as typeof settings
+    expect(always.hooks.Stop!.some((e) => e.hooks.some((h) => h.command.endsWith('--nudge') && !h.async))).toBe(true)
+    // "Off": no tracking rules
+    ctx.settings.trackTasks = 'off'
+    expect(spawn().args.join(' ')).not.toContain('task_update')
+    ctx.settings.trackTasks = 'always'
+    // a resumed pane passes it again
+    expect(spawn({ resumeAgentSessionId: 'uuid-9' }).args.join(' ')).toContain(OPS_TITLE)
+    // off in Settings: no section, no nudge
+    ctx.settings.proactiveAgents = false
+    expect(spawn().args.join(' ')).not.toContain(OPS_TITLE)
+    expect(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')).not.toContain('--nudge')
+  })
+
+  it('codex panes get the same hive tools through -c overrides (pre-allowed ones only, with the Use Principia rules)', async () => {
+    const ctx = setup()
+    const engine = await engineFor(ctx)
+    const liveDir = join(ctx.root, 'live', 's_3')
+    mkdirSync(liveDir, { recursive: true })
+    const chatAuthor: McpServerSpec = { ...author, env: { ...author.env, HIVE_LIVE_DIR: liveDir, HIVE_TOOLSETS: 'author,task,company,newco', HIVE_COMPANY_ID: 'co_1' } }
+    const grant: MemoryGrant = { grantId: 'mgr_9', server: { name: 'hivemem', command: '/x/electron', args: ['/x/mcp-memory.js'], env: { HIVE_MEM_GRANT: 'mgr_9' } }, toolNames: ['memory_search', 'memory_write'], spawnDir: join(ctx.root, 'spawn'), brief: '' }
+    // the pre-allowed list a proactive chat gets (author/wire.ts tools): company_create_department is not in it
+    const allowed = [...AUTHOR_TOOLS, 'principia_propose_company', 'connections_list', 'task_get', 'task_list', 'task_create', 'task_update', 'task_comment', 'company_departments', 'company_file_task']
+    const spec = engine.providers.interactiveSpawn(profile('p_codex', 'codex'), { artifactsDir: '/a/', memory: grant, author: chatAuthor, authorTools: allowed, live: { dir: liveDir, hookCommand: 'h', mcpEnv: {} }, companyId: 'co_1', chatBrief: '## This chat: Acme' })
+    const args = spec.args.join(' ')
+    expect(args).toContain('mcp_servers.hive.command="/x/electron"')
+    expect(args).toContain(`mcp_servers.hive.env.HIVE_LIVE_DIR="${liveDir}"`)
+    expect(args).toContain('mcp_servers.hive.default_tools_approval_mode="approve"')
+    expect(args).toContain('mcp_servers.hive.tool_timeout_sec=3700')
+    expect(args).toContain('mcp_servers.hivemem.enabled_tools=["memory_search","memory_write"]')
+    const enabled = JSON.parse(/mcp_servers\.hive\.enabled_tools=(\[[^\]]*\])/.exec(args)![1]!) as string[]
+    for (const t of ['hive_workflow_create', 'task_create', 'task_update', 'company_file_task', 'connections_list']) expect(enabled).toContain(t)
+    // needs a yes (claude prompts in the pane): codex does not list it; the new-company card stays the codex button
+    expect(enabled).not.toContain('company_create_department')
+    expect(enabled).not.toContain('principia_propose_company')
+    const dev = spec.args[spec.args.indexOf('-c') + 1]!
+    expect(dev.startsWith('developer_instructions=')).toBe(true)
+    expect(dev).toContain(OPS_TITLE)
+    expect(dev).toContain('company_file_task')
+    expect(dev).toContain("hive server's tools")
+    expect(dev).toContain('principia://connect/stripe')
+    expect(spec.env?.MCP_TOOL_TIMEOUT).toBeUndefined()
+  })
+
+  it('gemini and cursor never get it, and neither do panes without a spawn dir', async () => {
+    const ctx = setup()
+    const engine = await engineFor(ctx)
+    for (const a of ['gemini', 'cursor'] as const) {
+      const spec = engine.providers.interactiveSpawn(profile(`p_${a}`, a), { artifactsDir: '/a/', author, live: { dir: ctx.root, hookCommand: 'h', mcpEnv: {} } })
+      expect(spec.args.join(' ')).not.toContain('mcp-hive')
+    }
     const noDir = engine.providers.interactiveSpawn(profile('p_claude', 'claude'), { artifactsDir: '/a/', author })
     expect(noDir.args).not.toContain('--mcp-config')
   })
