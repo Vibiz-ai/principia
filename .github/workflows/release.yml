@@ -1,0 +1,98 @@
+# Publishes the signed, notarized macOS release for a version tag (docs/RELEASING.md §5.2): push `vX.Y.Z`, approve the
+# run in the `release` environment, and scripts/release-mac.mjs builds, signs, notarizes, staples, verifies and creates
+# the GitHub release. The Developer ID certificate lives only in a temporary keychain for this job and the App Store
+# Connect key only in the runner's temp folder; both are deleted at the end, whatever happened.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  mac:
+    name: macOS (Apple Silicon)
+    runs-on: macos-14
+    environment: release
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      # before any secret is in the environment; npm ci checks every package against package-lock.json's integrity
+      - run: npm ci
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/principia-signing.keychain-db"
+          if [ -z "$MAC_CERT_P12_BASE64" ] || [ -z "$MAC_CERT_PASSWORD" ]; then
+            echo "::error::MAC_CERT_P12_BASE64 and MAC_CERT_PASSWORD must be set in the release environment"
+            exit 1
+          fi
+          umask 077
+          kc_pass="$(openssl rand -base64 32)"
+          echo "::add-mask::$kc_pass"
+          p12="$RUNNER_TEMP/principia-signing.p12"
+          printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$p12"
+          security create-keychain -p "$kc_pass" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$kc_pass" "$KEYCHAIN"
+          security import "$p12" -k "$KEYCHAIN" -f pkcs12 -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign > /dev/null
+          rm -f "$p12"
+          # Apple's Developer ID intermediate (G2), checked against its SHA-256, so the identity is valid on any runner
+          ca="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          curl -fsSL --proto '=https' https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$ca"
+          echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $ca" | shasum -a 256 -c - > /dev/null \
+            || { echo "::error::Apple's Developer ID G2 certificate does not match its pinned SHA-256"; exit 1; }
+          security import "$ca" -k "$KEYCHAIN" > /dev/null
+          rm -f "$ca"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pass" "$KEYCHAIN" > /dev/null
+          # put it first in the search list, keeping the runner's own keychains after it
+          security list-keychains -d user | xargs security list-keychains -d user -s "$KEYCHAIN"
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          count="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -c '"Developer ID Application:' || true)"
+          echo "Developer ID Application identities in the temporary keychain: $count"
+
+      - name: Write the App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_API_KEY_P8" ]; then
+            echo "::error::APPLE_API_KEY_P8 must be set in the release environment"
+            exit 1
+          fi
+          NOTARY_DIR="$RUNNER_TEMP/principia-notary"
+          umask 077
+          mkdir -p "$NOTARY_DIR"
+          chmod 700 "$NOTARY_DIR"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$NOTARY_DIR/AuthKey.p8"
+          chmod 600 "$NOTARY_DIR/AuthKey.p8"
+          echo "APPLE_API_KEY=$NOTARY_DIR/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: node scripts/release-mac.mjs "${GITHUB_REF_NAME#v}" --ci
+
+      - name: Delete the temporary keychain and the API key
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/principia-signing.keychain-db"
+          if [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          rm -rf "$RUNNER_TEMP/principia-notary" "$RUNNER_TEMP/principia-signing.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
