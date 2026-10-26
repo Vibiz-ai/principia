@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tagTargetProblem } from './release-target.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -99,8 +100,22 @@ if (live.length) fail(`A Principia is running from this checkout (${live.length}
 console.log('\nPreflight')
 const dirty = run('git', ['status', '--porcelain']).out
 check(!dirty, 'working tree is clean', 'working tree has uncommitted changes (commit or stash them)', { blocking: !dryRun })
-const head = run('git', ['rev-parse', '--short', 'HEAD']).out
+// the release tag must name the commit these binaries come from (release-target.mjs)
+const sha = run('git', ['rev-parse', 'HEAD']).out
+const head = sha.slice(0, 12)
 console.log(`  · building commit ${head}`)
+if (ci) {
+  const p = tagTargetProblem({ tag, sha, tagCommit: sha, ci, githubSha: process.env.GITHUB_SHA ?? null })
+  check(!p, `the checkout is the tagged commit ${head}`, p)
+}
+/** Publishing `tag` would describe the built commit (asks the release repository where the tag points). */
+function checkTagTarget() {
+  const t = run('gh', ['api', `repos/${repo}/commits/${tag}`, '--jq', '.sha'])
+  const tagCommit = t.ok && /^[0-9a-f]{40}$/.test(t.out) ? t.out : null
+  const shaOnRemote = !tagCommit && run('gh', ['api', `repos/${repo}/commits/${sha}`, '--jq', '.sha']).ok
+  const p = tagTargetProblem({ tag, sha, tagCommit, shaOnRemote, ci, githubSha: process.env.GITHUB_SHA ?? null })
+  return check(!p, `${tag} ${tagCommit ? 'points' : 'will point'} at the built commit ${head}`, p)
+}
 
 const gh = run('gh', ['auth', 'status'])
 check(gh.ok, 'gh is signed in', 'gh is not signed in (run: gh auth login)', { blocking: !dryRun })
@@ -112,6 +127,7 @@ if (gh.ok) {
   if (!dryRun) {
     const exists = run('gh', ['release', 'view', tag, '--repo', repo]).ok
     check(!exists, `${tag} is not published yet`, `${tag} already exists on ${repo}`)
+    checkTagTarget()
   }
 }
 if (!dryRun) {
@@ -235,7 +251,8 @@ if (problems.length) fail(`Verification failed (${problems.length}). Nothing was
 // ---------- 5. publish ----------
 const assets = [dmg, dmgVersioned, zip, `${zip}.blockmap`, latestYml].filter((f) => fs.existsSync(f))
 const notes = notesFile ? ['--notes-file', path.resolve(notesFile)] : ['--generate-notes']
-const ghArgs = ['release', 'create', tag, '--repo', repo, '--title', `Principia ${version}`, ...notes, ...assets.map((f) => path.relative(root, f))]
+// --target is used only when the tag is new; an existing tag was checked (and is checked again below) to be the build
+const ghArgs = ['release', 'create', tag, '--repo', repo, '--target', sha, ...(ci ? ['--verify-tag'] : []), '--title', `Principia ${version}`, ...notes, ...assets.map((f) => path.relative(root, f))]
 console.log('\nArtifacts')
 for (const f of assets) console.log(`  ${path.relative(root, f)}  ${(fs.statSync(f).size / 1048576).toFixed(1)} MB`)
 if (dryRun) {
@@ -243,6 +260,8 @@ if (dryRun) {
   console.log(`\nTry it: open "${path.relative(root, appPath)}" (use HIVE_USER_DATA=<scratch dir> so it never touches your data).`)
   process.exit(0)
 }
+// the tag may have been pushed or moved while this built and notarized
+if (gh.ok && !checkTagTarget()) fail(`Nothing was published: ${tag} must point at the built commit ${head}.`)
 step('gh', ghArgs)
 
 // the download link on the site resolves to this release

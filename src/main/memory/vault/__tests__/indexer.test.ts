@@ -391,6 +391,9 @@ d('incremental index equals a full rebuild', () => {
   }, 30_000) // ~1.5 s alone, past the 5 s default under the full parallel suite
 })
 
+// 5 s on a laptop; shared CI runners are slower and noisier, so they get headroom (a real regression still fails)
+const BUDGET_MS = process.env.CI ? 15_000 : 5000
+
 d('rebuild performance', () => {
   it('rebuilds 5k notes in under 5 s', () => {
     kit = makeKit()
@@ -405,12 +408,12 @@ d('rebuild performance', () => {
     const stats = kit.index.rebuild(CO)
     const ms = Date.now() - t0
     expect(stats.notes).toBe(5000)
-    expect(ms).toBeLessThan(5000)
+    expect(ms).toBeLessThan(BUDGET_MS)
     expect(kit.db.prepare('SELECT count(*) AS n FROM mem_link WHERE company_id = ? AND to_note IS NOT NULL').get(CO)).toEqual({ n: 15000 })
     // a second rebuild skips rewriting unchanged snapshots
     const t1 = Date.now()
     kit.index.rebuild(CO)
-    expect(Date.now() - t1).toBeLessThan(5000)
+    expect(Date.now() - t1).toBeLessThan(BUDGET_MS)
     // startup scan with nothing changed is cheap and touches nothing
     expect(kit.index.scan(CO)).toEqual([])
   }, 30_000)

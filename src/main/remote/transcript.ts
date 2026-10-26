@@ -164,11 +164,12 @@ export class CodexTranscript {
 }
 
 /** A rollout's first line: which folder it ran in and when it began (finding the rollout of a terminal session). */
-export function codexMeta(firstLine: unknown): { cwd: string; at: number } | null {
+export function codexMeta(firstLine: unknown): { cwd: string; at: number; id: string | null } | null {
   const o = obj(firstLine)
   if (o.type !== 'session_meta') return null
   const p = obj(o.payload)
   const cwd = str(p.cwd)
   const at = Date.parse(str(p.timestamp) ?? str(o.timestamp) ?? '')
-  return cwd && Number.isFinite(at) ? { cwd, at } : null
+  // the conversation (thread) id: a Codex chat's Session.agentSessionId
+  return cwd && Number.isFinite(at) ? { cwd, at, id: str(p.id) ?? null } : null
 }

@@ -70,9 +70,43 @@ describe('UpdateService', () => {
     expect(emitted.at(-1)?.phase).toBe('ready')
     await s.check()
     expect(f.u.checkForUpdates).toHaveBeenCalledTimes(1)
-    // a late error does not take the ready update away
-    f.fire('error', new Error('net::ERR_NETWORK_CHANGED'))
-    expect(s.state().phase).toBe('ready')
+  })
+
+  it('Squirrel failing to stage the downloaded update clears ready, says so plainly and lets the next check retry', async () => {
+    const { s, f, emitted } = service()
+    await s.check()
+    f.fire('update-downloaded', { version: '0.2.0' })
+    f.fire('error', new Error('Error: Could not get code signature for running application'))
+    expect(s.state()).toMatchObject({ phase: 'error', next: null, error: 'The update did not pass the signature check, so it was not installed.' })
+    expect(emitted.at(-1)?.phase).toBe('error')
+    expect(s.restart()).toEqual({ restarting: false, reason: 'No update is ready to install.' })
+    await s.check()
+    expect(f.u.checkForUpdates).toHaveBeenCalledTimes(2)
+    f.fire('update-downloaded', { version: '0.2.0' })
+    f.fire('error', new Error('SQRLShipItRequest failed: The operation could not be completed'))
+    expect(s.state()).toMatchObject({ phase: 'error', error: 'The update could not be prepared to install. Principia tries again later.' })
+  })
+
+  it('Restart goes through the app quit (sessions stopped, windows allowed to close) and installs at its end', async () => {
+    const f = fakeUpdater()
+    const order: string[] = []
+    let finish: (() => void) | null = null
+    const quit = vi.fn(async (install: () => void) => {
+      order.push('quit started')
+      finish = install
+    })
+    f.u.quitAndInstall.mockImplementation(() => order.push('quitAndInstall'))
+    const s = new UpdateService({ current: '0.1.0', offReason: null, work: () => idle, emit: () => undefined, log: quiet, load: async () => f.u, quit })
+    await s.check()
+    f.fire('update-downloaded', { version: '0.2.0' })
+    expect(s.restart()).toEqual({ restarting: true })
+    await new Promise((res) => setImmediate(res))
+    // the native updater is not called before the quit sequence hands over
+    expect(order).toEqual(['quit started'])
+    expect(f.u.quitAndInstall).not.toHaveBeenCalled()
+    finish!()
+    expect(order).toEqual(['quit started', 'quitAndInstall'])
+    expect(f.u.quitAndInstall).toHaveBeenCalledWith(false, true)
   })
 
   it('never restarts while agents or runs work, and says why', async () => {

@@ -299,6 +299,8 @@ if (!app.requestSingleInstanceLock()) {
         claudeFile: (conv) => h.chats?.transcriptFile(conv) ?? null,
         claudeRoots: () => [...historyRoots(baseChildEnv()), path.join(claudeDataDir(baseChildEnv()), 'projects')],
         codexHome: () => baseChildEnv().CODEX_HOME?.trim() || path.join(os.homedir(), '.codex'),
+        // every recent Codex session, so a rollout goes to its own session whichever one a phone opens first
+        codexSessions: () => h.store.listSessions('all', new Date(Date.now() - 2 * 86_400_000).toISOString()).filter((s) => s.adapter === 'codex'),
         redact: (t) => h.vault.redact(t),
         log
       })
@@ -547,6 +549,7 @@ if (!app.requestSingleInstanceLock()) {
       },
       emit: (s) => emit('updates:changed', s),
       log,
+      quit: (install) => h.requestQuit(install),
       load: async () => {
         // the getter-defined `autoUpdater` export is only on the CommonJS default when the bundle keeps import()
         const m = (await import('electron-updater')) as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }
