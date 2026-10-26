@@ -1,6 +1,6 @@
 # Keeps the SHA-pinned workflow actions and the npm lockfiles current. Every update arrives as a pull request and
 # goes through the same required checks as any other change (plus dependency-review.yml).
-# cooldown: a new version is proposed only once it is 5 days old (14 for a new major), the window in which hijacked
+# cooldown: a new version is proposed only once it is 5 days old (14 for a new npm major), the window in which hijacked
 # or broken npm releases are usually caught and yanked. groups: one pull request per ecosystem for all minor and
 # patch updates; majors stay separate pull requests.
 version: 2
@@ -9,9 +9,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # github-actions supports only default-days (Dependabot rejects semver-*-days for this ecosystem)
     cooldown:
       default-days: 5
-      semver-major-days: 14
     groups:
       actions:
         patterns: ['*']
