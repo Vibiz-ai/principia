@@ -34,9 +34,8 @@ jobs:
       group: ios-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     env:
-      # deployment target iOS 26: macos-15's default Xcode is 16.x, so pick 26.2 and its own simulator runtime
+      # deployment target iOS 26: macos-15's default Xcode is 16.x, so pick 26.2 (the simulator is chosen below)
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
-      DESTINATION: platform=iOS Simulator,name=iPhone 17 Pro,OS=26.2
     defaults:
       run:
         working-directory: ios
@@ -47,6 +46,34 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
       - run: xcodegen generate
+      # Runner images differ in which iOS simulator runtimes and devices they ship (a fixed `name=…,OS=…` destination
+      # matched on one macos-15 image and nothing on the next), so pick the newest iOS 26+ runtime this Xcode has and an
+      # iPhone on it, creating one if the image ships the runtime without devices; download the runtime only if none.
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          runtime() {
+            xcrun simctl list runtimes available -j | jq -r '[.runtimes[] | select(.platform == "iOS"
+              and (.version | split(".")[0] | tonumber) >= 26)] | sort_by(.version | split(".") | map(tonumber))
+              | last | .identifier // empty'
+          }
+          rt=$(runtime)
+          if [ -z "$rt" ]; then
+            echo "no iOS 26+ simulator runtime on this image: downloading one"
+            xcodebuild -downloadPlatform iOS
+            rt=$(runtime)
+          fi
+          [ -n "$rt" ] || { echo "::error::no iOS 26+ simulator runtime available"; exit 1; }
+          udid=$(xcrun simctl list devices available -j | jq -r --arg rt "$rt" '(.devices[$rt] // [])
+            | map(select(.name | startswith("iPhone"))) | last | .udid // empty')
+          if [ -z "$udid" ]; then
+            type=$(xcrun simctl list devicetypes -j | jq -r '[.devicetypes[] | select(.name | startswith("iPhone"))]
+              | last | .identifier')
+            udid=$(xcrun simctl create ci-iphone "$type" "$rt")
+          fi
+          echo "runtime $rt, device $udid"
+          echo "destination=platform=iOS Simulator,id=$udid" >> "$GITHUB_OUTPUT"
       - name: Cache DerivedData
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -56,11 +83,15 @@ jobs:
           key: ios-dd-xcode26.2-${{ hashFiles('ios/project.yml') }}-${{ hashFiles('ios/Principia/**', 'ios/PrincipiaTests/**') }}
           restore-keys: ios-dd-xcode26.2-${{ hashFiles('ios/project.yml') }}-
       - name: Build
+        env:
+          DESTINATION: ${{ steps.sim.outputs.destination }}
         run: >-
           xcodebuild -project Principia.xcodeproj -scheme Principia -destination "$DESTINATION"
           -derivedDataPath build CODE_SIGN_IDENTITY=- build
       - name: Unit tests
         timeout-minutes: 15
+        env:
+          DESTINATION: ${{ steps.sim.outputs.destination }}
         run: >-
           xcodebuild -project Principia.xcodeproj -scheme Principia -destination "$DESTINATION"
           -derivedDataPath build -resultBundlePath "$RUNNER_TEMP/PrincipiaTests.xcresult" CODE_SIGN_IDENTITY=- test
