@@ -14,6 +14,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # @types/node follows the Node line the app runs on (24); a major bump would type APIs that runtime lacks
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: npm
     directory: /website
     schedule:
