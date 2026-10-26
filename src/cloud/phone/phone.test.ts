@@ -119,6 +119,12 @@ describe('screens', () => {
     expect(s).toContain('Checking the menu file')
     expect(s).toContain('waiting for your OK')
   })
+  it('Now shows the Autopilot switch read-only, and nothing while paused', () => {
+    const now: PhoneNow = { companyId: 'co_a', name: 'Northwind', paused: false, autopilot: 'on', needs: 0, working: [], done: [] }
+    expect(textOf(renderNow({ ...baseView(), now }, noop, Date.parse(T)))).toContain('Quiet right nowAutopilot on')
+    expect(btns(renderNow({ ...baseView(), now }, noop, Date.parse(T)))).not.toContain('Autopilot on')
+    expect(textOf(renderNow({ ...baseView(), now: { ...now, paused: true, autopilot: 'held' } }, noop, Date.parse(T)))).not.toContain('Autopilot')
+  })
   it('Needs you: the same actions as Home (an ask’s options, Approve and Send back, an answer box)', () => {
     const needs: PhoneNeeds = {
       companyId: 'co_a',

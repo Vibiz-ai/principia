@@ -284,3 +284,70 @@ describe('decisions on the real board', () => {
     expect(w.db.prepare("SELECT COUNT(*) AS n FROM forum_messages WHERE origin='principia:coordinator'").get()).toEqual({ n: 0 })
   })
 })
+
+describe('"Put it on autopilot?" offers (AUTOPILOT.md §6)', () => {
+  it('a run that launched ads with a Meta Ads tool: offer the ads watch at Level 1; one already on: nothing', () => {
+    const r = rep({ summary: 'Launched the spring campaign: 3 ad sets, $20 a day' })
+    const reports = [{ runId: 'r', taskId: null, agentId: 'm', report: r, at: '', tools: ['mcp__meta_ads__create_campaign'], departmentKey: 'marketing' }]
+    const out = coordinatorRules(base({ reports, events: [ev('run_ended', { runId: 'r' })] }))
+    expect(out.decisions).toEqual([expect.objectContaining({ verb: 'suggest', kind: 'autopilot', playbook: 'ads-watch', level: 1, title: 'Put your ads on autopilot?', to: 'm' })])
+    expect(out.decisions[0]!.text).toContain('Meta Ads (create campaign)')
+    expect(coordinatorRules(base({ reports, playbooksOn: ['ads-watch'] })).decisions).toEqual([])
+  })
+  it('the agent’s own "recurring" hint is enough; plain work is not; one offer per batch', () => {
+    const hinted = rep({ summary: 'Deployed the new landing page', recurring: { playbook: 'site-watch', why: 'I’ll keep this on autopilot: the page is live' } })
+    const plain = rep({ summary: 'Fixed the login bug' })
+    const out = coordinatorRules(base({ reports: [{ runId: 'a', taskId: null, agentId: null, report: plain, at: '' }, { runId: 'b', taskId: null, agentId: null, report: hinted, at: '' }, { runId: 'c', taskId: null, agentId: null, report: rep({ summary: 'x' }), at: '', tools: ['mcp__stripe__list_charges'] }] }))
+    expect(out.decisions.filter((d) => d.kind === 'autopilot')).toEqual([expect.objectContaining({ playbook: 'site-watch' })])
+  })
+  it('a playbook already answered is skipped, and the next best one of the same run is offered', () => {
+    const r = rep({ summary: 'Launched ads and deployed the landing page' })
+    const reports = [{ runId: 'r', taskId: 't1', agentId: 'm', report: r, at: '', tools: ['mcp__meta_ads__create_campaign', 'mcp__vercel__deploy'], departmentKey: 'marketing' }]
+    const out = coordinatorRules(base({ reports, playbooksOn: ['ads-watch'], tasks: [{ id: 't1', identifier: 'PC-3', title: 'Spring launch', status: 'review', blockReason: null, agentId: 'm', dependencyIds: [], source: 'manual', externalId: null, asks: false, updatedAt: '' }] }))
+    expect(out.decisions).toEqual([expect.objectContaining({ kind: 'autopilot', playbook: 'site-watch', task: 'PC-3' })])
+  })
+  it('a draft written at $10/day: the reason names who and where, the offer carries the budget', () => {
+    const r = rep({ summary: 'Drafted 2 Meta ads at $10/day, nothing published' })
+    const out = coordinatorRules(base({ agents: [{ id: 'o', name: 'Ovid', handle: null, auto: true, paused: false }], reports: [{ runId: 'r', taskId: null, agentId: 'o', report: r, at: '', tools: ['Write'], departmentKey: 'marketing' }] }))
+    expect(out.decisions).toEqual([expect.objectContaining({ playbook: 'ads-watch', budgetUsd: 10 })])
+    expect(out.decisions[0]!.text).toMatch(/^Ovid worked on ads\./)
+  })
+  it('the daily tick offers what a connected service fits (Stripe → revenue brief)', () => {
+    const out = coordinatorRules(base({ events: [ev('tick')], connections: ['stripe', 'vibiz'] }))
+    expect(out.decisions).toEqual([expect.objectContaining({ kind: 'autopilot', playbook: 'revenue-brief' })])
+    // not on a plain batch, and not when it is on
+    expect(coordinatorRules(base({ events: [ev('task_done')], connections: ['stripe'] })).decisions).toEqual([])
+    expect(coordinatorRules(base({ events: [ev('tick')], connections: ['stripe'], playbooksOn: ['revenue-brief'] })).decisions).toEqual([])
+  })
+
+  it('end to end: a marketing run launches ads, the offer lands in Needs you, Turn on at Level 1 makes the routine', async () => {
+    const turned: { companyId: string; id: string; level: number }[] = []
+    const { w, co } = setup({ playbooksOn: (companyId) => turned.filter((x) => x.companyId === companyId).map((x) => x.id) })
+    const mkt = w.department(co.id, 'Marketing', 'marketing')
+    const growth = w.seat(co.id, mkt, 'Growth', 'claude', 'auto')
+    w.scripts.set(growth.id, (t) => {
+      // the run's tool calls, as the live tracker records them
+      w.db.prepare(`INSERT INTO agents(id,kind,root_id,run_id,provider,cwd,title,status,started_at,updated_at) VALUES(?,'step',?,?,'claude','/','Ads','done','x','x')`).run(`ag_${t.run.id}`, `ag_${t.run.id}`, t.run.id)
+      for (const n of ['mcp__meta_ads__create_campaign', 'mcp__meta_ads__create_ad']) w.db.prepare(`INSERT INTO agent_events(agent_id,ts,kind,name,summary) VALUES(?,'x','tool',?,'')`).run(`ag_${t.run.id}`, n)
+      return { output: report({ outcome: 'review', summary: 'Launched the spring campaign on Meta: 3 ad sets at $20 a day.' }) }
+    })
+    const t = w.task({ companyId: co.id, title: 'Launch the spring ads', departmentId: mkt.id, agentId: growth.id })
+    await w.runNow(t.id)
+    await w.play(w.turns[0])
+    const coord = w.coord!
+    const rec = (await coord.flush(co.id))!
+    expect(rec.results).toEqual(expect.arrayContaining([expect.objectContaining({ verb: 'suggest', status: 'done', detail: 'Offered you in Needs you: Put your ads on autopilot?' })]))
+    const [o] = w.suggestions!.list(co.id).filter((x) => x.kind === 'autopilot')
+    expect(o).toMatchObject({ playbookId: 'ads-watch', level: 1, agentId: growth.id })
+    const res = w.suggestions!.decide(o!.id, 'accept', { createRoutine: () => 'x', startTask: () => 'x', fileTask: () => 'x', turnOnPlaybook: (s, level) => (turned.push({ companyId: s.companyId, id: s.playbookId!, level }), 'on') }, { level: 1 })
+    expect(res.detail).toBe('on')
+    expect(turned).toEqual([{ companyId: co.id, id: 'ads-watch', level: 1 }])
+    // the next run that touches ads offers nothing more
+    w.clock = new Date(w.clock.getTime() + 3 * 86_400_000)
+    const t2 = w.task({ companyId: co.id, title: 'More ads', departmentId: mkt.id, agentId: growth.id })
+    await w.runNow(t2.id)
+    await w.play(w.turns.at(-1)!)
+    await coord.flush(co.id)
+    expect(w.suggestions!.list(co.id).filter((x) => x.kind === 'autopilot')).toEqual([])
+  })
+})

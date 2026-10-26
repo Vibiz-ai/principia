@@ -209,6 +209,9 @@ interface NodeState {
   attempt: number
 }
 
+/** AUTOPILOT.md §6: env names of ads account keys, kept from a money autopilot's step. */
+const ADS_KEY_NAME = /META|FACEBOOK|(^|_)FB_|GOOGLE_ADS|ADWORDS|TIKTOK|LINKEDIN|PIPEBOARD|(^|_)ADS?(_|$)/i
+
 export class Execution {
   /** 'halted' = a step emitted HIVE_STOP: the run ends passed · nothing to do (AUTHORING.md §5). */
   private stopped: 'canceled' | 'failed' | 'halted' | null = null
@@ -291,6 +294,15 @@ export class Execution {
     const v = triggerVars(sl, thread, this.slackImages)
     const red = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, this.redact(x)])) as TriggerVars
     return (this.triggerScope = red)
+  }
+
+  /** AUTOPILOT.md §6: a money autopilot's run (or a follow-up of one) loads only Principia's own MCP servers. */
+  private strictMcp(): boolean {
+    try {
+      return this.ctx.autopilot?.strictMcp(this.run.id) === true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -856,7 +868,7 @@ export class Execution {
       }
       let gatewayOn = false
       if (runnable && (!this.slackAccess() || this.slackAccess()?.fullPermissions) && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
-        const gateway = this.run.companyId ? this.ctx.gateway?.attachment(s.cwd, this.run.companyId) : this.ctx.gateway?.attachment(s.cwd)
+        const gateway = this.ctx.gateway?.attachment(s.cwd, this.run.companyId ?? null, this.run.id)
         if (gateway) { slackMcp = attachGateway(s.adapterId, gateway, slackMcp ?? mem?.attachment ?? null, gateway.env.PRINCIPIA_GATEWAY_DIR); if (slackMcp) { writeMcpFiles(slackMcp.files); gatewayOn = true } }
       }
       if (forum?.server && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
@@ -971,6 +983,16 @@ export class Execution {
           error: `${info.label} can't run in a Slack-driven workflow: Hive restricts agents that read Slack text and only Claude Code supports that mode. Use a Claude profile${this.run.slack ? ", or turn on 'unsafe: full agent permissions' on the Slack trigger" : ''}.`
         })
       }
+      // AUTOPILOT.md §6: a money autopilot's step runs only where Principia can keep it to the gateway's check (claude:
+      // strict MCP, no terminal, no file writing, no web requests). Other agents have no such mode yet: refused.
+      const money = this.strictMcp()
+      if (money && s.adapterId !== 'claude') {
+        return end({
+          ...canceled,
+          status: 'failed',
+          error: `${info.label} can't run a playbook that can move money (the ads watch): only Claude Code can be kept to Principia's checked connections. Give the playbook a Claude agent.`
+        })
+      }
       // per-spawn hooks (gemini: system settings via env; cursor: --plugin-dir). claude headless needs none.
       const gated = usesGate(s.adapterId, s.profile)
       const unrouted = unroutedAsksNotice(s.adapterId, s.profile)
@@ -1006,6 +1028,7 @@ export class Execution {
         ...(gated && liveFiles.length ? { gated: true } : {}),
         ...(slackNote && s.adapterId === 'claude' ? { systemNote: slackNote } : {}),
         ...(restricted ? { restricted: true } : {}),
+        ...(!restricted && s.adapterId === 'claude' && money ? { strictMcp: true } : {}),
         ...(this.run.slack && this.slackImages.length && s.adapterId !== 'shell' ? { images: this.slackImages } : {})
       })
       const env = buildChildEnv(this.ctx, adapter, s.profile, {
@@ -1020,6 +1043,8 @@ export class Execution {
         ...(this.ctx.reaper?.tag(stepId) ?? {})
       }, this.secretOverride(), this.run.companyId)
       if (s.extraEnv) Object.assign(env, s.extraEnv)
+      // AUTOPILOT.md §6: a money autopilot's step never holds the ads account's own keys (only the gateway does)
+      if (money) for (const k of Object.keys(env)) if (ADS_KEY_NAME.test(k)) delete env[k]
       // ORCHESTRATOR.md §1.2: the step's report file, for agents that write files more reliably than they format
       if (principia.reportPath) env[RUN_REPORT_ENV] = principia.reportPath
       if (mem?.attachment) Object.assign(env, mem.attachment.env)

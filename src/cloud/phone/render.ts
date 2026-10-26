@@ -116,7 +116,7 @@ export function renderNow(v: View, a: Actions, now = Date.now()): VNode {
     'section',
     { class: 'page' },
     h('h1', { class: 'title' }, n.name),
-    h('p', { class: 'lede' }, headline({ working: n.working.length, needs: n.needs, paused: n.paused })),
+    h('p', { class: 'lede' }, headline({ working: n.working.length, needs: n.needs, paused: n.paused }), n.autopilot && n.autopilot !== 'held' ? h('span', { class: `ap is-${n.autopilot}` }, n.autopilotLabel ?? (n.autopilot === 'on' ? 'Autopilot on' : 'Autopilot off')) : null),
     n.paused ? h('div', { class: 'banner' }, h('span', { class: 'glyph' }, '‖'), `${n.name} is paused. Agents start nothing new and schedules wait.`) : null,
     n.needs ? h('button', { type: 'button', class: 'callout', on: { click: () => a.tab('needs') } }, tile('needs'), `${n.needs} thing${n.needs === 1 ? '' : 's'} need${n.needs === 1 ? 's' : ''} you`, h('span', { class: 'go' }, '›')) : null,
     h('h2', { class: 'sec' }, 'Working now'),

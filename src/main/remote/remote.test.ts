@@ -546,6 +546,14 @@ describe('Phone views (the desktop’s one live source)', () => {
     expect(now.done.map((x) => x.status)).toEqual(['review'])
     expect(now.needs).toBe(phoneNeeds(data(), 'co_a').count)
   })
+  it('Now carries the company\'s Autopilot switch, read-only, from the same truth as the Mac (AUTOPILOT.md §7)', () => {
+    const d = data()
+    expect(phoneNow(d, 'co_a').autopilot).toBe('off')
+    const on = { ...d, companies: d.companies.map((c) => (c.id === 'co_a' ? { ...c, autopilot: true } : c.id === 'co_b' ? { ...c, autopilot: true, pausedAt: T } : c)) }
+    expect(phoneNow(on, 'co_a').autopilot).toBe('on')
+    expect(phoneNow(on, 'co_b').autopilot).toBe('held')
+    expect(phoneNow(on, 'co_personal').autopilot).toBeUndefined()
+  })
   it('a run with no task reads as words with its agent (a Forum reply), never its prompt', () => {
     expect(runTitle('Forum reply in #general <principia-role department="Marketing" agent="Copywriter">')).toBe('Forum reply in #general')
     expect(runTitle('<principia-role>x')).toBe('A run')

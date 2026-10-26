@@ -1,0 +1,86 @@
+/* AUTOPILOT.md §6-§7: the Autopilot chip, its popover, the rail and portfolio marks, offers and the Autopilots list.
+   Line art: white strokes on dark, no warm colours (VOICE.md §5). */
+
+.ap-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 16px; padding: 0 6px 0 5px; margin-left: 2px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-full); background: none;
+  font-size: 10px; line-height: 1; color: var(--text-tertiary); white-space: nowrap; cursor: default;
+  position: relative; z-index: 1; pointer-events: auto; -webkit-app-region: no-drag;
+}
+.ap-chip:hover { color: var(--text-secondary); border-color: var(--text-tertiary); }
+.ap-chip:focus-visible { outline: none; box-shadow: var(--focus); }
+.ap-chip.is-on { color: var(--text-primary); border-color: rgba(255, 255, 255, 0.42); }
+/* the mark: a ring (off) that gains its centre point (on), drawn in strokes */
+.ap-chip__mark { width: 7px; height: 7px; border-radius: 50%; border: 1px solid currentColor; box-sizing: border-box; position: relative; flex: none; }
+.ap-chip.is-on .ap-chip__mark::after { content: ''; position: absolute; inset: 1.5px; border-radius: 50%; background: currentColor; }
+
+.ap-pop { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; white-space: normal; text-align: left; overflow-y: auto; overscroll-behavior: contain; }
+.ap-pop__list--rows li { flex-direction: column; gap: 1px; }
+.ap-pop__list--rows .ap-pop__meta { flex: initial; }
+.ap-pop__name b { font-weight: var(--weight-semibold); }
+.ap-pop__miss { font-size: var(--text-xs); color: var(--text-primary); }
+.ap-pop__miss::before { content: '× '; color: var(--text-tertiary); }
+.ap-item__misses { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ap-item__miss { font-size: var(--text-xs); color: var(--text-secondary); }
+.ap-item__miss::before { content: '× '; color: var(--text-tertiary); }
+.ap-pop__sec { margin-top: 2px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.ap-pop__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ap-pop__list li { display: flex; justify-content: space-between; gap: 8px; font-size: var(--text-sm); }
+.ap-pop__name { color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ap-pop__meta { color: var(--text-tertiary); font-size: var(--text-xs); flex: none; }
+.ap-pop__label { font-size: var(--text-sm); color: var(--text-primary); }
+.ap-pop__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ap-pop__title { font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-primary); }
+.ap-pop__what { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); line-height: var(--leading-normal); white-space: normal; overflow-wrap: anywhere; }
+.ap-pop__limits { margin: 0; font-size: var(--text-xs); color: var(--text-tertiary); }
+.ap-pop__link { align-self: flex-start; font-size: var(--text-sm); }
+
+/* the company header holds the chip: the whole header stays one click target behind it */
+.co-head { position: relative; }
+.co-head__hit { position: absolute; inset: 0; border: 0; border-radius: inherit; background: none; padding: 0; cursor: default; -webkit-app-region: no-drag; }
+.co-head__hit:focus-visible { outline: none; box-shadow: var(--focus); }
+.co-head > :not(.co-head__hit) { pointer-events: none; }
+
+/* rail tile: a thin white ring under the tile when Autopilot is on */
+.ap-mark { position: absolute; right: 3px; bottom: 2px; z-index: 1; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, 0.85); background: var(--sidebar-bg); box-sizing: border-box; pointer-events: none; }
+.ap-mark::after { content: ''; position: absolute; inset: 1.5px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); }
+.ap-line { display: block; font-size: var(--text-xs); color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-line.is-on { color: var(--text-secondary); }
+
+/* the offer in Needs you */
+.ap-offer__plan { margin-top: 4px; font-size: var(--text-sm); color: var(--text-secondary); }
+.ap-offer__limits { margin-top: 2px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.ap-offer__needs { color: var(--text-secondary); }
+.ap-offer__levels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.ap-level { height: 22px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-full); background: none; color: var(--text-secondary); font-size: var(--text-xs); cursor: default; }
+.ap-level:hover:not(:disabled) { border-color: var(--text-tertiary); color: var(--text-primary); }
+.ap-level.is-on { border-color: rgba(255, 255, 255, 0.6); color: var(--text-primary); }
+.ap-level:disabled { opacity: 0.45; }
+.ap-level:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* Automations › Autopilot: what runs on autopilot */
+.ap-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.ap-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.ap-item.is-focus { border-color: rgba(255, 255, 255, 0.5); }
+.ap-item__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ap-item__name { font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-primary); }
+.ap-item__sum { font-size: var(--text-sm); color: var(--text-secondary); }
+.ap-item__meta { font-size: var(--text-xs); color: var(--text-tertiary); }
+.ap-item__warn { font-size: var(--text-xs); color: var(--text-primary); }
+.ap-item__acts { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.ap-item__limits { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.ap-item__limits li::before { content: '— '; }
+.ap-section-title { margin: 18px 0 6px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+/* the chip has its own row under "Running", so neither is cut short */
+.co-head__ap { display: flex; min-width: 0; margin-top: 2px; container-type: inline-size; }
+.co-head__ap .ap-chip { margin-left: 0; min-width: 0; max-width: 100%; }
+.ap-chip__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* the full words ("Autopilot on · 1 waiting for its connection") where they fit; else "Autopilot on · 1 waiting" */
+.ap-chip__text--short { display: none; }
+@container (max-width: 230px) {
+  .ap-chip__text--full { display: none; }
+  .ap-chip__text--short { display: inline; }
+}
+/* the header grows by the chip's row instead of pushing the company name under the window's top edge */
+.sidebar__drag.sidebar__drag.has-switcher:has(.co-head__ap) { height: auto; min-height: calc(var(--toolbar-h) + 10px); padding-top: 8px; }
+.co-head:has(.co-head__ap) .co-head__text { gap: 0; }

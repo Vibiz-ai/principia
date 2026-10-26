@@ -368,6 +368,10 @@ export async function start(opts: { autopilot: boolean; scheduleRefs: string[]; 
       toast(errorMessage(e), 'error')
       return false
     }
+  } else {
+    // AUTOPILOT.md §7: a new business is created with Autopilot on; I'll review first holds it off (best effort: the
+    // business is made either way, and its agents only act on their own once raised)
+    await hive.onboarding.start({ journalId, autopilot: false, scheduleRefs: [] }).catch(() => undefined)
   }
   if (opts.autopilot && opts.ceremony) {
     // the draft and the result stay until the ceremony ends: it shows the team from them

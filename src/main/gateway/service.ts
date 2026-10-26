@@ -9,9 +9,14 @@ import { Upstream } from './client'
 import { readPrivateJson, writePrivateJson } from './files'
 import { presetForUrl } from '../../shared/connectionCatalog'
 import { connectLink, connectToolId } from '../../shared/deepLink'
+import { adsConnectorOf, type AdsConnector } from '../../shared/autopilotPlaybooks'
 
 /** A call on a connection this spawn was not granted: its message (with the connect link) goes back to the agent. */
 class NotGranted extends Error {}
+/** AUTOPILOT.md §6: a call the run's autopilot level refuses, before it is made; its message goes back to the agent. */
+class Refused extends Error {}
+/** The check main runs on a call before it is made (null = allowed). Never throws past here: a throw refuses. */
+export type GatewayGuard = (c: { runId: string | null; companyId: string | null; connection: string; tool: string; args: unknown; readOnly?: boolean; connector?: AdsConnector | null }) => string | null
 
 type Saved = { config: GatewayConnection; cipher: string; oauthCipher?: string }
 /**
@@ -22,15 +27,17 @@ type Saved = { config: GatewayConnection; cipher: string; oauthCipher?: string }
 export interface GatewayCompanies { forCwd(cwd: string): string; enforced(): boolean; warn?(message: string, meta: Record<string, unknown>): void }
 export class GatewayService {
   private saved: Saved[] = []
-  private grants = new Map<string, { dir: string; cwd: string; companyId: string | null; expires: number; busy: Set<string> }>()
+  private grants = new Map<string, { dir: string; cwd: string; companyId: string | null; runId: string | null; expires: number; busy: Set<string> }>()
   private clients = new Map<string, Upstream>()
+  /** AUTOPILOT.md §6: tools a connection's server marks read-only (MCP `annotations.readOnlyHint`), from its last tools/list */
+  private readOnly = new Map<string, Set<string>>()
   private timer: NodeJS.Timeout
   private file: string
   private oauth = new Map<string, OAuthConnection>()
   private oauthRedacted = new Set<string>()
   private authState = new Map<string, { authStatus: import('../../shared/gateway').GatewayAuthStatus; authError?: string }>()
   /** `fileOwner` (Principia Cloud, CLOUD.md §7.8): grant folders and answers belong to the agent user, whose bridge reads them; the saved connections stay the service's own. */
-  constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string>; companies?: GatewayCompanies; fileOwner?: { uid: number; gid: number } | null; /** Add the default connections (Vibiz) once per install; the desktop app only. */ seedDefaults?: boolean }) {
+  constructor(private opts: { userData: string; mainDir: string; bridgePath?: string; cipher: Cipher; vault: Pick<Vault, 'addRedactions'>; baseEnv(): Record<string, string>; companies?: GatewayCompanies; fileOwner?: { uid: number; gid: number } | null; /** Add the default connections (Vibiz) once per install; the desktop app only. */ seedDefaults?: boolean; /** AUTOPILOT.md §6: checks each call of a run before it is made */ guard?: GatewayGuard }) {
     this.file = path.join(opts.userData, 'mcp-connections.json')
     try { this.saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (!Array.isArray(this.saved)) this.saved = [] } catch {}
     if (opts.seedDefaults) this.seedDefaults()
@@ -94,7 +101,7 @@ export class GatewayService {
   }
   remove(id: string): void { this.oauth.get(id)?.close(); this.oauth.delete(id); this.authState.delete(id); this.saved = this.saved.filter(s => s.config.id !== id); this.persist(); this.reset(id) }
   private persist(): void { fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 }); writePrivateJson(this.file, this.saved) }
-  private reset(id: string): void { this.clients.get(id)?.close(); this.clients.delete(id); /* Keep previous credential redactions for historical logs until app exit. */ }
+  private reset(id: string): void { this.clients.get(id)?.close(); this.clients.delete(id); this.readOnly.delete(id); /* Keep previous credential redactions for historical logs until app exit. */ }
   private allowed(cwd: string, companyId: string | null = null): Saved[] {
     let real: string; try { real = fs.realpathSync(cwd) } catch { return [] }
     // an OAuth connection nobody signed in to has no tools to offer (e.g. the default Vibiz): not granted until sign-in
@@ -113,13 +120,13 @@ export class GatewayService {
     return true
   }
   /** `companyId`: the spawn's company (session or run stamp); absent = the company of `cwd`. */
-  attachment(cwd: string, companyId?: string | null): McpServerSpec | null {
+  attachment(cwd: string, companyId?: string | null, runId?: string | null): McpServerSpec | null {
     if (!this.allowed(cwd, companyId ?? null).length) return null
     const id = crypto.randomBytes(24).toString('hex'); const dir = path.join(this.opts.userData, 'scratch', 'mcp-gateway', id)
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     const owner = this.opts.fileOwner
     if (owner) { for (const p of [this.opts.userData, path.join(this.opts.userData, 'scratch'), path.dirname(dir)]) fs.chmodSync(p, 0o711); fs.chownSync(dir, owner.uid, owner.gid) }
-    this.grants.set(id, { dir, cwd, companyId: companyId ?? null, expires: Date.now() + 24 * 3600_000, busy: new Set() })
+    this.grants.set(id, { dir, cwd, companyId: companyId ?? null, runId: runId ?? null, expires: Date.now() + 24 * 3600_000, busy: new Set() })
     return { name: 'principia', command: process.execPath, args: [this.opts.bridgePath ?? path.join(this.opts.mainDir, 'mcp-gateway.js')], env: { ELECTRON_RUN_AS_NODE: '1', PRINCIPIA_GATEWAY_DIR: dir } }
   }
   async test(id: string): Promise<unknown> { const saved = this.saved.find(s => s.config.id === id); if (!saved) throw new Error('Connection not found'); return this.tools(saved) }
@@ -127,7 +134,7 @@ export class GatewayService {
   exportCredentials(id: string): Record<string, string> { const saved = this.saved.find(s => s.config.id === id); if (!saved) throw new Error('Connection not found'); if (!this.opts.cipher.available()) throw new Error('Credential encryption unavailable'); const value = JSON.parse(this.opts.cipher.decrypt(Buffer.from(saved.cipher, 'base64'))) as Record<string, unknown>; return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, String(v)])) }
   private async tools(s: Saved): Promise<{ tools: unknown[] }> {
     const tools: unknown[] = []; let cursor: string | undefined
-    for (let page = 0; page < 100; page++) { const result = await this.client(s).request('tools/list', cursor ? { cursor } : {}); if (!Array.isArray(result.tools)) throw new Error('Invalid MCP tools list'); tools.push(...result.tools); if (!result.nextCursor) return { tools }; cursor = result.nextCursor }
+    for (let page = 0; page < 100; page++) { const result = await this.client(s).request('tools/list', cursor ? { cursor } : {}); if (!Array.isArray(result.tools)) throw new Error('Invalid MCP tools list'); tools.push(...result.tools); if (!result.nextCursor) { this.readOnly.set(s.config.id, new Set(tools.flatMap(t => { const x = t as { name?: unknown; annotations?: { readOnlyHint?: unknown } }; return typeof x?.name === 'string' && x.annotations?.readOnlyHint === true ? [x.name] : [] }))); return { tools } }; cursor = result.nextCursor }
     throw new Error('MCP tool pagination exceeded')
   }
   private client(s: Saved): Upstream { let c = this.clients.get(s.config.id); if (!c) { const credentials = JSON.parse(this.opts.cipher.decrypt(Buffer.from(s.cipher, 'base64'))); for (const [k,v] of Object.entries(credentials)) this.opts.vault.addRedactions('MCP_' + s.config.id + '_' + k + '_' + crypto.randomBytes(8).toString('hex'), String(v)); const oauth = s.config.authentication === 'oauth' ? this.oauthConnection(s.config.id) : undefined; c = new Upstream(s.config, credentials, this.opts.baseEnv(), oauth ? async force => { if (this.saved.find(current => current.config.id === s.config.id) !== s) throw new Error('Connection changed'); const headers = await oauth.headers(force); if (this.saved.find(current => current.config.id === s.config.id) !== s) throw new Error('Connection changed'); return headers } : undefined); this.clients.set(s.config.id, c) } return c }
@@ -137,9 +144,18 @@ export class GatewayService {
       let files: string[]; try { files = fs.readdirSync(grant.dir) } catch { continue }
       for (const file of files) if (/^[a-f0-9]{32}\.request$/.test(file) && !grant.busy.has(file)) {
         grant.busy.add(file)
-        void (async () => { let result: unknown; try { const p = path.join(grant.dir, file); const req = readPrivateJson(p, 262144) as Record<string, unknown>; const allowed = this.allowed(grant.cwd, grant.companyId); if (req.method === 'list') { result = []; for (const s of allowed) { try { const tools = await this.tools(s); (result as unknown[]).push({ id: s.config.id, name: s.config.name, ...tools }) } catch { this.reset(s.config.id); (result as unknown[]).push({ id: s.config.id, error: `Connection unavailable. The founder can check it in Settings › Connections: ${connectLink(this.toolOf(s.config), grant.companyId)}` }) } } } else if (req.method === 'call') { const s = allowed.find(s => s.config.id === req.connection); if (!s || typeof req.tool !== 'string') throw new NotGranted(this.notGrantedMessage(req.connection, grant.companyId)); result = await this.client(s).request('tools/call', { name: req.tool, arguments: req.arguments ?? {} }) } else throw new Error('Unknown method'); result = { ok: true, result } } catch (e) { result = { ok: false, error: e instanceof NotGranted ? e.message : `MCP request failed; check the connection's sign-in and access in Principia: Settings › Connections (${connectLink('mcp', grant.companyId)})` } } try { const answer = path.join(grant.dir, file.replace('.request', '.answer')); writePrivateJson(answer, result, this.opts.fileOwner); fs.unlinkSync(path.join(grant.dir, file)) } catch {} finally { grant.busy.delete(file) } })()
+        void (async () => { let result: unknown; try { const p = path.join(grant.dir, file); const req = readPrivateJson(p, 262144) as Record<string, unknown>; const allowed = this.allowed(grant.cwd, grant.companyId); if (req.method === 'list') { result = []; for (const s of allowed) { try { const tools = await this.tools(s); (result as unknown[]).push({ id: s.config.id, name: s.config.name, ...tools }) } catch { this.reset(s.config.id); (result as unknown[]).push({ id: s.config.id, error: `Connection unavailable. The founder can check it in Settings › Connections: ${connectLink(this.toolOf(s.config), grant.companyId)}` }) } } } else if (req.method === 'call') { const s = allowed.find(s => s.config.id === req.connection); if (!s || typeof req.tool !== 'string') throw new NotGranted(this.notGrantedMessage(req.connection, grant.companyId)); const refusal = this.check(grant, s.config, req.tool, req.arguments); if (refusal) throw new Refused(refusal); result = await this.client(s).request('tools/call', { name: req.tool, arguments: req.arguments ?? {} }) } else throw new Error('Unknown method'); result = { ok: true, result } } catch (e) { result = { ok: false, error: e instanceof NotGranted ? e.message : e instanceof Refused ? `Refused by Principia: ${e.message}.` : `MCP request failed; check the connection's sign-in and access in Principia: Settings › Connections (${connectLink('mcp', grant.companyId)})` } } try { const answer = path.join(grant.dir, file.replace('.request', '.answer')); writePrivateJson(answer, result, this.opts.fileOwner); fs.unlinkSync(path.join(grant.dir, file)) } catch {} finally { grant.busy.delete(file) } })()
       }
     }
+  }
+  /** The run's check before a call (a throw refuses: a check that cannot answer never lets the call through). */
+  /**
+   * Every grant is checked, a chat session's or a run's (one of no playbook passes unless a money playbook runs now:
+   * see Playbooks.liveMoneyRun). `connector`: the known ads server it is, from its URL or command, never its name.
+   */
+  private check(grant: { runId: string | null; companyId: string | null }, config: GatewayConnection, tool: string, args: unknown): string | null {
+    if (!this.opts.guard) return null
+    try { return this.opts.guard({ runId: grant.runId, companyId: grant.companyId, connection: config.id, tool, args: args ?? {}, readOnly: this.readOnly.get(config.id)?.has(tool) === true, connector: adsConnectorOf({ url: config.url ?? null, command: config.command ?? null, args: config.args ?? null }) }) } catch { return 'Principia could not check this call, so it was not made' }
   }
   /** The Connections card of a saved connection: its catalog tool (stripe, notion, …), else "your own MCP server". */
   private toolOf(c: Pick<GatewayConnection, 'url'>): string { return (c.url && presetForUrl(c.url)?.id) || 'mcp' }

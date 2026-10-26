@@ -143,11 +143,11 @@ export function checklistItems(i: ChecklistInput): ChecklistItem[] {
     { id: 'schedule', title: 'Add a schedule', detail: 'Run a workflow or an agent prompt on a cadence, like a weekly report.', done: (i.scheduleCount ?? 0) > 0, pending: i.scheduleCount === null, action: { kind: 'schedule' }, actionLabel: (i.scheduleCount ?? 0) > 0 ? 'Open' : 'New schedule' },
     {
       id: 'autopilot',
-      title: 'Turn on an autopilot',
+      title: 'Turn on a schedule pack',
       detail: 'Marketing or Company: ready-made schedules and recurring agent tasks, built from what you connected above.',
       done: anyAutopilot,
       action: { kind: 'autopilot', id: i.autopilots?.marketing || !i.autopilots?.company ? 'marketing' : 'company' },
-      actionLabel: anyAutopilot ? 'Open' : 'See autopilots'
+      actionLabel: anyAutopilot ? 'Open' : 'See schedule packs'
     }
   ]
   if (!i.typed) return items

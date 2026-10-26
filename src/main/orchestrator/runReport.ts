@@ -81,7 +81,14 @@ const reportSchema = z.object({
     }),
     L.suggestions
   ),
-  answers: list(z.object({ ref: z.string().trim().regex(/^m[0-9a-z]{1,12}$/i), text: text(L.answer).refine((s) => s.length > 0) }), L.answers)
+  answers: list(z.object({ ref: z.string().trim().regex(/^m[0-9a-z]{1,12}$/i), text: text(L.answer).refine((s) => s.length > 0) }), L.answers),
+  recurring: z
+    .object({
+      playbook: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9-]{0,40}$/).optional().catch(undefined),
+      why: text(L.recurringWhy).refine((s) => s.length > 0)
+    })
+    .optional()
+    .catch(undefined)
 })
 
 /** A parsed object as a RunReport, or null (wrong shape). */
@@ -100,7 +107,8 @@ export function toRunReport(json: unknown): RunReport | null {
     facts: d.facts.map((f) => ({ text: f.text, ...(f.topic ? { topic: f.topic } : {}) })),
     blockers: d.blockers.map((b) => ({ text: b.text, needs: b.needs, ...(b.connectionId ? { connectionId: b.connectionId } : {}) })),
     suggestions: d.suggestions.map((s) => ({ kind: s.kind, text: s.text, ...(s.cron ? { cron: s.cron } : {}), ...(s.connectionId ? { connectionId: s.connectionId } : {}) })),
-    answers: d.answers.map((a) => ({ ref: a.ref.toLowerCase(), text: a.text }))
+    answers: d.answers.map((a) => ({ ref: a.ref.toLowerCase(), text: a.text })),
+    ...(d.recurring ? { recurring: { ...(d.recurring.playbook ? { playbook: d.recurring.playbook } : {}), why: d.recurring.why } } : {})
   }
 }
 
@@ -171,8 +179,10 @@ export function reportFooter(opts: { resumed: boolean; reportPath: string | null
     ' "answers":[{"ref":"m1c","text":"your answer to a teammate\'s question in your inbox"}],',
     ' "facts":[{"text":"a durable fact worth remembering","topic":"optional note name"}],',
     ' "blockers":[{"text":"…","needs":"decision|access|money|connection","connectionId":"optional"}],',
-    ' "suggestions":[{"kind":"routine|connection|task","text":"…"}]}',
+    ' "suggestions":[{"kind":"routine|connection|task","text":"…"}],',
+    ' "recurring":{"playbook":"ads-watch|social-rhythm|site-watch|release-digest|support-triage|revenue-brief|outreach-followups","why":"…"}}',
     '```',
+    'Use "recurring" whenever the work you did should keep running on its own (ads you launched or drafted, posts you published, a site you deployed, a support inbox you answered). Then end your summary with one plain line telling the founder what you would keep doing on autopilot, for example: "Once these ads run, I can keep them on autopilot: check them every day and refresh the creatives based on what performs." Principia offers the founder to turn it on, with levels and limits. Nothing is turned on without their yes.',
     'Leave out what you have nothing for. A blocking question to a teammate brings their answer back to you on your next turn, so it needs no blocker as well. Only whitespace may follow the block. If you were told to end with a principia-task-report block, use this one instead: it carries the same fields and more. If you already did something with a tool (posted, filed a task, asked someone), Principia will not do it twice.',
     '</principia-report-contract>'
   ].join('\n')

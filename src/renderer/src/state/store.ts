@@ -17,7 +17,8 @@ import type {
   StatusSnapshot
 } from '@shared/types'
 import type { MemoryOverview } from '@shared/memory'
-import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, CompanyUpdateInput, Department, DepartmentPresetKey } from '@shared/company'
+import type { BoardSettings, CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, CompanyUpdateInput, Department, DepartmentPresetKey } from '@shared/company'
+import { willStartLine } from '@shared/autopilotState'
 import { DEPARTMENT_PRESETS, PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
 import type { CompanyProposal } from '@shared/chatCompany'
 import { suggestionCounts } from '@shared/orchestrator'
@@ -88,7 +89,7 @@ export type ViewState =
   | { name: 'editor'; workflowId: Id | null; nonce: number; approvalDraftId?: Id; script?: boolean }
   | { name: 'run'; runId: Id; stepId?: Id; agentId?: Id }
   /** `addRoutine`: a principia://automations?add=<template> link suggested this routine (the view only points at it) */
-  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'routines' | 'autopilots' | 'schedules' | 'slack'; addRoutine?: string; routineTime?: { at?: string; days?: string } }
+  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'routines' | 'autopilots' | 'schedules' | 'slack'; addRoutine?: string; addPlaybook?: string; routineTime?: { at?: string; days?: string } }
   | { name: 'artifacts'; runId?: Id; sessionId?: Id }
   /** Alias: Settings → Keys & secrets */
   | { name: 'keys' }
@@ -192,6 +193,8 @@ export interface State {
   tasks: CompanyTask[]
   /** ORCHESTRATOR.md §3: open suggestions per company (they count in every Needs you badge) */
   suggestionCounts: Record<Id, number>
+  /** AUTOPILOT.md §7: the autopilots (playbooks) on per company; the header chip, Home, the rail and All companies read it */
+  playbooksOn: import('@shared/autopilotPlaybooks').PlaybookSummary
   /** DEPARTMENTS.md: every company's departments (archived included), loaded with the companies. Empty while the flag is off. */
   departments: Department[]
   /** DEPARTMENTS.md: every company's agent seats (archived included). Empty while the flag is off. */
@@ -263,6 +266,7 @@ const initial: State = {
   logoPickerFor: null,
   tasks: [],
   suggestionCounts: {},
+  playbooksOn: {},
   departments: [],
   companyAgents: [],
   expandedCompanies: {},
@@ -525,7 +529,10 @@ function wireEvents(): void {
     }
     if (domain === 'tasks') void refreshTasks()
     if (domain === 'departments') void refreshDepartments()
+    // playbooks own schedules: their changes come as 'schedules'
+    if (domain === 'schedules' || domain === 'company') void refreshPlaybooksOn()
   })
+  void refreshPlaybooksOn()
   // failed-24h dots and portfolio counts follow run outcomes; tasks show their run's state
   hive.on('run:updated', () => {
     scheduleCompanyOverview()
@@ -1225,6 +1232,14 @@ export async function refreshTasks(): Promise<void> {
     setState({ companyError: errorMessage(e) })
   }
 }
+/** AUTOPILOT.md §7: the autopilots on per company. A failed read keeps the last answer. */
+export async function refreshPlaybooksOn(): Promise<void> {
+  try {
+    setState({ playbooksOn: await hive.playbooks.summary() })
+  } catch {
+    /* no playbooks here */
+  }
+}
 /** Open Principia suggestions per company (Needs you badges). A failed read keeps the last counts. */
 async function refreshSuggestionCounts(): Promise<void> {
   try {
@@ -1297,6 +1312,8 @@ export async function setDepartmentPaused(departmentId: Id, paused: boolean): Pr
  * was saved and that other companies keep running. Undo resumes it again.
  */
 export async function setCompanyPaused(companyId: Id, paused: boolean, opts: { undo?: boolean } = {}): Promise<void> {
+  // AUTOPILOT.md §7: work that piled up while paused never starts silently on resume (Autopilot stays on through a pause)
+  if (!paused && state.companies.find((c) => c.id === companyId)?.autopilot && !(await confirmResumeStarts(companyId))) return
   const res = await attempt(() => hive.company.pause({ id: companyId, paused }), paused ? 'Pause company' : 'Resume company')
   if (!res) return
   setState((s) => ({ companies: s.companies.map((c) => (c.id === companyId ? { ...c, ...res.company } : c)) }))
@@ -1305,6 +1322,20 @@ export async function setCompanyPaused(companyId: Id, paused: boolean, opts: { u
   toast(pauseToastText(companyName(companyId), res.checkpoints, paused, others), 'info', opts.undo === false ? {} : {
     action: { label: 'Undo', run: () => void setCompanyPaused(companyId, !paused, { undo: false }) }
   })
+}
+/** Resuming a company with Autopilot on and work waiting: "N tasks will start" first. False = the founder said no. */
+async function confirmResumeStarts(companyId: Id): Promise<boolean> {
+  const pre = await hive.board.autopilotPreview({ companyId }).catch(() => null)
+  if (!pre || pre.count <= 0) return true
+  const room = Math.max(1, pre.maxInFlight - pre.inFlight)
+  const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
+  const ok = await confirmNative({
+    message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,
+    detail: [`Autopilot is on in ${companyName(companyId)}, so resuming starts work that waited in To do. ${willStartLine(pre.count, room)}`, ...list, ...(pre.count > list.length ? [`and ${pre.count - list.length} more`] : []), 'Not ready? Keep it paused and turn Autopilot off first.'].join('\n'),
+    confirmLabel: 'Resume and start them'
+  }).catch(() => false)
+  if (!ok) toast(`${companyName(companyId)} stays paused.`)
+  return ok
 }
 /** The status bar's Resume and other one-click resumes: no question, the action is the company's own. */
 export async function resumeCompanyAsked(companyId: Id): Promise<void> {
@@ -1321,9 +1352,29 @@ export async function addDepartmentMenu(companyId: Id): Promise<void> {
   if (id) await createDepartmentPresets(companyId, [id as DepartmentPresetKey])
 }
 /** Company menu "Autopilot": assignment wakes this company's auto agents (DEPARTMENTS.md §1.1). One company only. */
+/**
+ * AUTOPILOT.md §7: every Autopilot switch goes through here. Turning it on with work waiting first says "N tasks will
+ * start" (a native confirm listing them); main refuses an unconfirmed turn-on too. Null = the founder said no.
+ */
+export async function requestAutopilot(q: { companyId: Id; on: boolean; maxInFlight?: number }): Promise<BoardSettings | null> {
+  if (!q.on) return hive.board.autopilot(q)
+  const pre = await hive.board.autopilotPreview({ companyId: q.companyId }).catch(() => null)
+  if (pre && pre.count > 0) {
+    const room = Math.max(1, (q.maxInFlight ?? pre.maxInFlight) - pre.inFlight)
+    const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
+    const ok = await confirmNative({
+      message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,
+      detail: [`Turning Autopilot on in ${companyName(q.companyId)} starts work already waiting in To do. ${willStartLine(pre.count, room)}`, ...list, ...(pre.count > list.length ? [`and ${pre.count - list.length} more`] : []), 'Not ready? Keep it off and start each task yourself.'].join('\n'),
+      confirmLabel: 'Turn on and start them'
+    }).catch(() => false)
+    if (!ok) return null
+  }
+  return hive.board.autopilot({ ...q, confirmed: true })
+}
+
 export async function setCompanyAutopilot(companyId: Id, on: boolean): Promise<void> {
   if (on && state.companies.find((c) => c.id === companyId)?.pausedAt) return toast(`Autopilot is off while ${companyName(companyId)} is paused. Resume it first.`)
-  const res = await attempt(() => hive.board.autopilot({ companyId, on }), 'Autopilot')
+  const res = await attempt(() => requestAutopilot({ companyId, on }), 'Autopilot')
   if (!res) return
   setState((s) => ({ companies: s.companies.map((c) => (c.id === companyId ? { ...c, autopilot: on } : c)) }))
   void refreshCompanies().catch(() => undefined)
@@ -1568,7 +1619,7 @@ export async function createCompany(name: string, color?: string): Promise<Compa
   setState({ newCompanyOpen: false })
   await refreshCompanies().catch(() => undefined)
   void refreshCompanyOverview()
-  toast(`Created ${created.name}`)
+  toast(created.autopilot ? `Created ${created.name}. Auto-start is on; nothing is assigned yet, so nothing starts.` : `Created ${created.name}`)
   void enterCompany(created.id)
   return created
 }

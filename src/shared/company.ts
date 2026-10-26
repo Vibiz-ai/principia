@@ -409,3 +409,5 @@ export const DEPARTMENT_PRESETS: readonly DepartmentPreset[] = [
 
 /** board:autopilot */
 export interface BoardSettings { companyId: string; autopilot: boolean; maxInFlight: number }
+/** board:autopilotPreview (AUTOPILOT.md §7): the To do work Autopilot would start, shown before it goes on */
+export interface AutopilotPreview { companyId: string; count: number; tasks: { id: string; identifier: string; title: string }[]; maxInFlight: number; inFlight: number }

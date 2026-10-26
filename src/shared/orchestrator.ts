@@ -91,7 +91,8 @@ export const RUN_REPORT_LIMITS = {
   suggestions: 5,
   suggestion: 500,
   answers: 5,
-  answer: 2000
+  answer: 2000,
+  recurringWhy: 300
 } as const
 
 export type RunOutcome = 'review' | 'blocked' | 'answered' | 'progress'
@@ -104,6 +105,11 @@ export interface RunBlocker { text: string; needs: 'decision' | 'access' | 'mone
 export interface RunSuggestion { kind: 'routine' | 'connection' | 'task'; text: string; cron?: string; connectionId?: string }
 /** An answer to a question a teammate asked this agent (its ask's ref, e.g. m1c). */
 export interface RunAnswer { ref: string; text: string }
+/**
+ * AUTOPILOT.md §6: this work should keep running on its own (ads launched, a site deployed). `playbook` names one of
+ * shared/autopilotPlaybooks.ts when it fits; Principia offers the founder to put it on autopilot (never turns it on).
+ */
+export interface RunRecurring { playbook?: string; why: string }
 
 export interface RunReport {
   v: 1
@@ -117,6 +123,7 @@ export interface RunReport {
   blockers: RunBlocker[]
   suggestions: RunSuggestion[]
   answers: RunAnswer[]
+  recurring?: RunRecurring
 }
 
 /** Where the report came from: the fenced block, the file, the fallback extractor, or only MCP calls. */
@@ -176,7 +183,7 @@ export interface OrchEvent {
 export const ORCH_VERBS = ['pump', 'wake_task', 'ask_agent', 'file_task', 'suggest', 'digest_post'] as const
 export type OrchVerb = (typeof ORCH_VERBS)[number]
 
-export type SuggestionKind = 'routine' | 'connection' | 'task'
+export type SuggestionKind = 'routine' | 'connection' | 'task' | 'autopilot'
 export interface OrchDecision {
   verb: string
   /** a task identifier (NC-4) or id */
@@ -190,6 +197,11 @@ export interface OrchDecision {
   kind?: SuggestionKind
   cron?: string
   connectionId?: string
+  /** an autopilot offer: the playbook (shared/autopilotPlaybooks.ts) and the level it preselects */
+  playbook?: string
+  level?: number
+  /** an ads autopilot offer: the daily budget the work named */
+  budgetUsd?: number
   why?: string
 }
 export type OrchDecisionStatus = 'done' | 'refused' | 'skipped' | 'shadow' | 'failed'
@@ -228,8 +240,11 @@ export const COORDINATOR_LIMITS = {
 
 // ---------- feature pushes (suggestions in Needs you, ORCHESTRATOR.md §3) ----------
 
-export const SUGGESTION_LIMITS = { perDay: 3, cooldownDays: 14, title: 160, detail: 600 } as const
-export type SuggestionStatus = 'open' | 'accepted' | 'dismissed' | 'expired'
+/** autopilotPerDay: at most one "Put … on autopilot?" offer per company per day (AUTOPILOT.md §6) */
+export const SUGGESTION_LIMITS = { perDay: 3, autopilotPerDay: 1, cooldownDays: 14, title: 160, detail: 600 } as const
+/** never: the founder said "Never for this" (an autopilot offer): it never comes back */
+/** queued: an autopilot offer kept for a later day (the day's offer was already made); it opens by itself */
+export type SuggestionStatus = 'open' | 'accepted' | 'dismissed' | 'expired' | 'never' | 'queued'
 export interface OrchSuggestion {
   id: string
   companyId: string
@@ -242,6 +257,15 @@ export interface OrchSuggestion {
   link?: string
   /** a ready-made routine (shared/routines.ts): its link opens Automations › Routines with it */
   routineId?: string
+  /** an autopilot offer (or a paused autopilot): its playbook and the level it preselects */
+  playbookId?: string
+  level?: number
+  /** a paused autopilot: Principia paused it because a run did something above its level */
+  breach?: boolean
+  /** an ads autopilot offer: the daily budget the work named, its budget cap */
+  budgetUsd?: number
+  /** an autopilot offer whose connection is missing: "Connect … first" (`link` is its principia://connect link) */
+  needs?: { label: string; connectId: string }
   taskId?: string
   taskIdentifier?: string
   agentId?: string

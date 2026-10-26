@@ -18,6 +18,8 @@ import { useMemo, useState } from 'react'
 import type { CompanyTask } from '@shared/company'
 import type { Id } from '@shared/types'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
+import { withAutopilot } from '@shared/autopilotState'
+import { useAutopilotState } from '../components/autopilot/AutopilotChip'
 import { AgentRow } from '../components/agents/AgentTree'
 import { AskCard } from '../components/agents/AskCard'
 import { ReplyBox } from '../components/agents/ReplyBox'
@@ -62,7 +64,11 @@ export function HomeView(): React.JSX.Element {
   const name = company?.name ?? 'Personal'
   const userName = useStore((s) => s.info?.userName ?? null)
   const pausedAt = useStore((s) => s.companies.find((c) => c.id === scope)?.pausedAt ?? null)
+  // AUTOPILOT.md §7: the one-line answer says whether Autopilot is on (the header chip's truth)
+  const row = useStore((s) => s.companies.find((c) => c.id === scope))
+  const autopilot = useAutopilotState(row)
   const code = useIsCode(scope)
+  const deptsOn = useStore((s) => departmentsOn(s))
   const agentCount = useStore((s) => (departmentsOn(s) ? s.companyAgents.filter((a) => a.companyId === scope && !a.archivedAt).length : 0))
   const needs = useNeeds(scope)
   const working = useWorking(scope)
@@ -73,7 +79,8 @@ export function HomeView(): React.JSX.Element {
   const reviews = useMemo(() => needsYouTasks(own, ctx, scope, { skipLiveAsks: true }).filter((i) => i.group === 'review').length, [own, ctx, scope])
   // ORCHESTRATOR.md §3: Principia's suggestions (a routine, a connection, a next step) wait on you too
   const sugs = usePrincipiaSuggestions(scope)
-  const needsTotal = needs.count + drafts.length + sugs.items.length
+  // Principia's open suggestions already count in needs (suggestionCounts) while departments are on: never twice
+  const needsTotal = needs.count + drafts.length + (deptsOn ? 0 : sugs.items.length)
   const short = useCompanyShortName(scope, name)
   const personal = scope === PERSONAL_COMPANY_ID
   const tiles = useMemo(() => weekTiles(own, { now: new Date(), code, waitingReview: reviews, paused: !!pausedAt }), [own, code, reviews, pausedAt])
@@ -103,7 +110,7 @@ export function HomeView(): React.JSX.Element {
           <header className="home5__hero">
             <ArchFrame className="home5__arch" opacity={0.1} />
             <h1 className="home5__greet">{greeting(new Date(), userName)}</h1>
-            <p className="home5__line">{homeHeadline({ company: name, needs: needsTotal, working: working.agents, chats: working.chats, paused: !!pausedAt, agents: personal ? 1 : agentCount })}</p>
+            <p className="home5__line">{withAutopilot(homeHeadline({ company: name, needs: needsTotal, working: working.agents, chats: working.chats, paused: !!pausedAt, agents: personal ? 1 : agentCount }), personal || agentCount === 0 ? null : autopilot)}</p>
           </header>
 
           {firstWeek && <FirstWeekCard companyId={scope} />}

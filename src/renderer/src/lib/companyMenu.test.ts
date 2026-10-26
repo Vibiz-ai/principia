@@ -26,7 +26,7 @@ describe('company menu', () => {
   })
   it('A4: while paused, Autopilot reads "Off while paused" and is greyed out', () => {
     const a = find(companyMenuItems({ ...base, company: { ...nw, autopilot: true }, paused: true }), 'autopilot')
-    expect(a).toMatchObject({ label: 'Autopilot: off while paused', checked: false, enabled: false })
+    expect(a).toMatchObject({ label: 'Auto-start: off while paused', checked: false, enabled: false })
   })
   it('Add Department lists the missing presets, never for Personal', () => {
     expect(find(companyMenuItems({ ...base, company: nw, seats: 0 }), 'dep:finance')?.label).toBe('Finance')

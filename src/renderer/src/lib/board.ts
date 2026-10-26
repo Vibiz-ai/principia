@@ -120,7 +120,7 @@ const routed = (t: CompanyTask): boolean => !!(t.departmentId || t.agentId)
 export function laneDrop(t: CompanyTask, target: TaskLane, ctx: LaneContext): DropResult {
   const from = taskLane(t, ctx)
   if (from === target) return { ok: true, action: null }
-  if (target === 'working') return { ok: false, reason: 'Cards can’t be dragged into Working. Use Run now, or turn on Autopilot for assigned agents.' }
+  if (target === 'working') return { ok: false, reason: 'Cards can’t be dragged into Working. Use Run now, or turn on Auto-start for assigned agents.' }
   if (target === 'needs_you') return { ok: false, reason: 'Tasks land in Needs you by themselves when they wait for you.' }
   if (t.status === 'in_progress') return { ok: false, reason: 'This task is running. Stop it before moving it.' }
   if (target === 'done') return { ok: false, reason: t.status === 'in_review' ? 'Approve it in the task details: a done note is required.' : 'Only a reviewed task can be approved as done.' }

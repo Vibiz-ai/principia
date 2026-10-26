@@ -73,6 +73,13 @@ export interface HeadlessRequest {
    */
   restricted?: boolean
   /**
+   * AUTOPILOT.md §6: a money autopilot's step loads only Principia's own MCP servers (`--strict-mcp-config`), so every
+   * call to an ads account goes through the connections gateway and is checked before it is made. The profile's own
+   * `--mcp-config` flags are dropped, and it has no terminal, no file writing, no web requests and no subagents
+   * (`--disallowedTools`, which beats any allow rule): an ads API cannot be reached around the gateway's check.
+   */
+  strictMcp?: boolean
+  /**
    * SLACK.md §9.6: local image files from the triggering Slack thread (run artifacts). claude: `--add-dir` of their
    * folder so even a restricted step can Read them; codex: one `-i <file>` each. The prompt lists the paths.
    */
@@ -207,8 +214,26 @@ export function stripPermissionArgs(args: string[]): string[] {
   }
   return out
 }
+/** A profile's extraArgs without its own MCP servers (`--mcp-config …`, `--strict-mcp-config`). Pure. */
+export function stripMcpArgs(args: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!
+    if (a === '--strict-mcp-config' || a.startsWith('--mcp-config=')) continue
+    if (a === '--mcp-config') {
+      while (i + 1 < args.length && !args[i + 1]!.startsWith('-')) i++
+      continue
+    }
+    out.push(a)
+  }
+  return out
+}
 /** SA2 flags for a restricted claude step: placed before --session-id/--resume (variadic --disallowedTools). */
 const restrictedClaudeArgs = (): string[] => ['--permission-mode', 'dontAsk', '--strict-mcp-config', '--disallowedTools', RESTRICTED_DENIED_TOOLS.join(',')]
+
+/** AUTOPILOT.md §6: flags for a money autopilot's claude step (variadic --disallowedTools: before --session-id/--resume). */
+export const MONEY_DENIED_TOOLS = RESTRICTED_DENIED_TOOLS.filter((t) => t !== 'WebSearch')
+const moneyClaudeArgs = (): string[] => ['--strict-mcp-config', '--disallowedTools', MONEY_DENIED_TOOLS.join(',')]
 
 /** Headless steps cannot answer prompts, so they follow the profile (default bypass). */
 const bypass = (p: AgentProfile | null): boolean => (p?.permissionMode ?? 'bypass') === 'bypass'
@@ -283,7 +308,7 @@ export const claudeAdapter: Adapter = {
         '--verbose',
         // variadic --mcp-config/--allowedTools: always followed by --resume/--session-id, never the prompt
         ...(req.mcpArgs ?? []),
-        ...(req.restricted ? restrictedClaudeArgs() : []),
+        ...(req.restricted ? restrictedClaudeArgs() : req.strictMcp ? moneyClaudeArgs() : []),
         // variadic --add-dir too: the thread images' folder (§9.6), still before --resume/--session-id
         ...imageDirArgs(req.images),
         ...(req.resumeId ? ['--resume', id] : ['--session-id', id]),
@@ -299,7 +324,7 @@ export const claudeAdapter: Adapter = {
             .filter(Boolean)
             .join('\n\n')
         ),
-        ...(req.restricted ? stripPermissionArgs(extra(req.profile)) : extra(req.profile))
+        ...(req.restricted ? stripPermissionArgs(extra(req.profile)) : req.strictMcp ? stripMcpArgs(extra(req.profile)) : extra(req.profile))
       ],
       stdin: { protocol: 'claude-control', lines: [claudeInitialize(), claudeUserMessage(req.prompt)] }
     }

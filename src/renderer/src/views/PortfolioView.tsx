@@ -5,6 +5,7 @@
  * DEPARTMENTS.md §9: with departments on, each card adds "3 working · 2 need you · 5 done today" (laneOf) and the
  * Needs you list starts with the board's task items (NeedsYouTasks).
  */
+import { AutopilotMark } from '../components/autopilot/AutopilotChip'
 import { useEffect, useMemo, useState } from 'react'
 import type { CompanyOverview, CompanyPassport } from '@shared/company'
 import type { Run } from '@shared/types'
@@ -181,6 +182,8 @@ function CompanyCard({ company: c, badge, laurel = false, tasks, overview: o, ru
           <div className={`pcard__status ${badge.needsYou ? 'text-needs' : badge.working ? 'text-running' : 'text-tertiary'}`}>
             {paused ? `‖ Paused${badge.needsYou ? ` · ${statusLine({ needsYou: badge.needsYou, working: 0 })}` : ''}` : statusLine(badge)}
           </div>
+          {/* AUTOPILOT.md §7: the same truth as the header chip */}
+          {!isPersonal(c) && !paused && <AutopilotMark company={c} label />}
           {laurel && <span className="rm-sr">{t.sr('rail.laurel.sr')}</span>}
           {taskLine && (
             <button type="button" className="pcard__tasks link-btn" onClick={() => openBoard(c.id)} title={`Open ${c.name}’s Board`}>

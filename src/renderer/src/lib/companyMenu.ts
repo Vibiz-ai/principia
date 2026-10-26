@@ -31,8 +31,8 @@ export function companyMenuItems(o: {
                 { type: 'separator' },
                 paused ? { id: 'resume', label: `Resume ${company.name}` } : { id: 'pause', label: `Pause ${company.name}` },
                 paused
-                  ? { id: 'autopilot', type: 'checkbox', label: 'Autopilot: off while paused', checked: false, enabled: false }
-                  : { id: 'autopilot', type: 'checkbox', label: 'Autopilot (agents pick up tasks on their own)', checked: !!company.autopilot }
+                  ? { id: 'autopilot', type: 'checkbox', label: 'Auto-start: off while paused', checked: false, enabled: false }
+                  : { id: 'autopilot', type: 'checkbox', label: 'Auto-start (agents pick up assigned tasks on their own)', checked: !!company.autopilot }
               ] as NativeMenuItem[])
             : []),
           ...(departments && !personal && missingPresets.length

@@ -93,3 +93,90 @@ describe('suggestions', () => {
     expect(s.suggest({ companyId: 'co_b', kind: 'routine', title: 'A morning brief' })).toMatchObject({ status: 'skipped', detail: 'the Morning brief routine is already on' })
   })
 })
+
+describe('autopilot offers (AUTOPILOT.md §6)', () => {
+  const offer = (companyId: string, playbookId: string, level?: number) => s.suggest({ companyId, kind: 'autopilot', title: 'Put your ads on autopilot?', playbookId, ...(level ? { level } : {}) })
+  const turned: string[] = []
+  const acts = (): AcceptDeps => ({ ...act([]), turnOnPlaybook: (x, level) => (turned.push(`${x.companyId}:${x.playbookId}:${level}`), 'on'), resumePlaybook: (x) => (turned.push(`resume:${x.playbookId}`), 'resumed') })
+  beforeEach(() => {
+    turned.length = 0
+  })
+
+  it('accepting turns the playbook on at the level the founder picked; a money playbook only up to Level 2 here', () => {
+    expect(offer('co', 'ads-watch').status).toBe('created')
+    const [o] = s.list('co')
+    expect(o).toMatchObject({ kind: 'autopilot', playbookId: 'ads-watch', level: 1 })
+    expect(() => s.decide(o.id, 'accept', acts(), { level: 3 })).toThrow(/Level 1 or 2 here/)
+    expect(s.get(o.id)!.status).toBe('open')
+    s.decide(o.id, 'accept', acts(), { level: 2 })
+    expect(turned).toEqual(['co:ads-watch:2'])
+    expect(s.get(o.id)!.status).toBe('accepted')
+  })
+  it('an offer never preselects above what the playbook allows without a raise', () => {
+    offer('co', 'ads-watch', 3)
+    expect(s.list('co')[0].level).toBe(2)
+  })
+  it('at most one autopilot offer per company per day, never one already on, unknown ones refused', () => {
+    const on = new Set(['co_b:site-watch'])
+    s = new Suggestions({ db, now: () => now, playbookOn: (co, id) => on.has(`${co}:${id}`) })
+    expect(offer('co_a', 'ads-watch').status).toBe('created')
+    expect(offer('co_a', 'site-watch').detail).toMatch(/already offered an autopilot today/)
+    // another company keeps its own day
+    expect(offer('co_b', 'ads-watch').status).toBe('created')
+    expect(offer('co_b', 'social-rhythm').detail).toMatch(/already offered an autopilot today/)
+    now = new Date('2026-10-21T10:00:00.000Z')
+    expect(offer('co_b', 'site-watch').detail).toMatch(/already on/)
+    expect(offer('co_a', 'make-money').detail).toMatch(/not an autopilot Principia knows/)
+  })
+  it('Not now waits 14 days; Never for this never comes back', () => {
+    offer('co', 'ads-watch')
+    s.decide(s.list('co')[0].id, 'dismiss', acts())
+    now = new Date('2026-10-25T09:00:00.000Z')
+    expect(offer('co', 'ads-watch').detail).toMatch(/less than 14 days ago/)
+    now = new Date('2026-11-05T09:00:00.000Z')
+    expect(offer('co', 'ads-watch').status).toBe('created')
+    const again = s.list('co')[0]
+    expect(s.decide(again.id, 'never', acts()).detail).toMatch(/will not offer this autopilot again/)
+    now = new Date('2027-06-01T09:00:00.000Z')
+    expect(offer('co', 'ads-watch').detail).toBe('you said never for this')
+    // "never" is only for autopilot offers
+    s.suggest({ companyId: 'co', kind: 'task', title: 'Write the FAQ' })
+    expect(() => s.decide(s.list('co').find((x) => x.kind === 'task')!.id, 'never', acts())).toThrow(/Only an autopilot offer/)
+  })
+  it('an offer over the day’s limit is kept for the next day, not lost, and opens by itself', () => {
+    expect(offer('co', 'ads-watch').status).toBe('created')
+    const kept = offer('co', 'site-watch')
+    expect(kept.detail).toMatch(/kept for tomorrow/)
+    expect(s.list('co').map((x) => x.playbookId)).toEqual(['ads-watch'])
+    expect(offer('co', 'site-watch').detail).toMatch(/kept for a later day/)
+    expect(s.offerable('co', 'site-watch')).toBe(false)
+    now = new Date('2026-10-21T09:30:00.000Z')
+    expect(s.list('co').map((x) => x.playbookId)).toEqual(['ads-watch', 'site-watch'])
+    expect(s.get(kept.id!)!.status).toBe('open')
+  })
+  it('offerable: the chief of staff skips answered playbooks, so the next best one is offered', () => {
+    expect(s.offerable('co', 'ads-watch')).toBe(true)
+    offer('co', 'ads-watch')
+    expect(s.offerable('co', 'ads-watch')).toBe(false)
+    s.decide(s.list('co')[0].id, 'dismiss', acts())
+    expect(s.offerable('co', 'ads-watch')).toBe(false)
+    expect(s.offerable('co', 'site-watch')).toBe(true)
+    now = new Date('2026-11-05T09:00:00.000Z')
+    expect(s.offerable('co', 'ads-watch')).toBe(true)
+  })
+  it('the offer carries the founder’s own daily budget and the missing connection, and never preselects Level 3', () => {
+    s.suggest({ companyId: 'co', kind: 'autopilot', title: 'Put your ads on autopilot?', playbookId: 'ads-watch', budgetUsd: 10, needs: { label: 'your ads account', connectId: 'meta-ads' } })
+    expect(s.list('co')[0]).toMatchObject({ budgetUsd: 10, needs: { connectId: 'meta-ads' }, link: expect.stringContaining('connect/meta-ads') })
+    s.suggest({ companyId: 'co2', kind: 'autopilot', title: 'Keep your site watched?', playbookId: 'site-watch', level: 3 })
+    expect(s.list('co2')[0].level).toBe(2)
+    const o = s.list('co2')[0]
+    expect(() => s.decide(o.id, 'accept', acts(), { level: 3 })).toThrow(/Level 1 or 2 here/)
+  })
+  it('a paused autopilot card skips the daily caps and Resume resumes it', () => {
+    offer('co', 'ads-watch')
+    expect(s.suggest({ companyId: 'co', kind: 'autopilot', breach: true, playbookId: 'ads-watch', title: 'Ads watch is paused' }).status).toBe('created')
+    const card = s.list('co').find((x) => x.breach)!
+    expect(s.decide(card.id, 'accept', acts()).detail).toBe('resumed')
+    expect(turned).toEqual(['resume:ads-watch'])
+  })
+})

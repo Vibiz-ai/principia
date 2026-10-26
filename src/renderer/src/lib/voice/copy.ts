@@ -98,7 +98,7 @@ export const COPY = {
   'ob.ready.title': { plain: '{name} is ready.', playful: '{name} is ready. Signed and sealed.' },
   'ob.ready.q': { plain: 'Start now?' },
   // five doors step 5: Ready opens the company; Home asks "Start the first week?"
-  'ob.ready.next': { plain: 'Next, Home asks whether to start the first week.' },
+  'ob.ready.next': { plain: 'Nothing starts yet. Next, Home asks whether to start the first week and says exactly what that turns on.' },
   'ob.ready.open': { plain: 'Open {name}' },
   'ob.ready.start': { plain: 'Start now' },
   'ob.ready.review': { plain: "I'll review first" },

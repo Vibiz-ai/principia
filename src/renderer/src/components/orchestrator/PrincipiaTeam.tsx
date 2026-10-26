@@ -15,6 +15,7 @@ import { batchLine, CHIEF, resultLine, suggestionAction, suggestionKind, teamPat
 import { attempt, navigate, refreshTasks, toast, updateSettings, useStore } from '../../state/store'
 import { DeepLinkButton } from '../DeepLinkButton'
 import { followLink } from '../../lib/inAppLink'
+import { AutopilotOffer } from '../autopilot/AutopilotOffer'
 
 /** Open suggestions of a company, refreshed when tasks change. */
 export function usePrincipiaSuggestions(companyId: Id): { items: OrchSuggestion[]; reload: () => void } {
@@ -33,9 +34,7 @@ export function PrincipiaSuggestions({ items, onChanged }: { items: OrchSuggesti
   if (!items.length) return null
   return (
     <div className="group-list home5__list orch-sugs" aria-label="Suggestions from Principia">
-      {items.map((s) => (
-        <SuggestionRow key={s.id} s={s} onChanged={onChanged} />
-      ))}
+      {items.map((s) => (s.kind === 'autopilot' ? <AutopilotOffer key={s.id} s={s} onChanged={onChanged} /> : <SuggestionRow key={s.id} s={s} onChanged={onChanged} />))}
     </div>
   )
 }

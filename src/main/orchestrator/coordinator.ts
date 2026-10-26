@@ -35,6 +35,7 @@ import { queueCountsFrom, route } from '../company/router'
 import type { ForumService } from '../forum/service'
 import type { CoordinatorCallInput, CoordinatorCallResult } from './coordinatorCall'
 import { coordinatorRules, type RulesInput, type RulesReport } from './coordinatorRules'
+import { isPlaybookId, missingConnection, playbookDef, PLAYBOOK_IDS } from '../../shared/autopilotPlaybooks'
 import type { Mailbox } from './mailbox'
 import type { Suggestions } from './suggestions'
 
@@ -85,6 +86,10 @@ export interface CoordinatorDeps {
   mailbox: Pick<Mailbox, 'send'>
   forum: () => ForumService | null
   suggestions: Suggestions
+  /** AUTOPILOT.md §6: connections that reach the company (ids, key names, accounts), read on the daily tick */
+  connections?: (companyId: string) => string[]
+  /** playbooks already on (or paused) for the company */
+  playbooksOn?: (companyId: string) => string[]
   redact?: (s: string) => string
   /** the model call's tokens (usage source 'orchestrator') */
   usage?: (companyId: string, r: CoordinatorCallResult) => void
@@ -346,7 +351,7 @@ export class Coordinator {
       if (!r?.report_json) continue
       try {
         const ev = events.find((e) => e.runId === id)
-        reports.push({ runId: id, taskId: ev?.taskId ?? null, agentId: ev?.agentId ?? null, report: JSON.parse(r.report_json) as RunReport, at: r.applied_at ?? r.created_at })
+        reports.push({ runId: id, taskId: ev?.taskId ?? null, agentId: ev?.agentId ?? null, report: JSON.parse(r.report_json) as RunReport, at: r.applied_at ?? r.created_at, tools: this.toolsOf(id), departmentKey: this.departmentKeyOf(companyId, ev?.taskId ?? null, ev?.agentId ?? null) })
       } catch {
         /* a broken row reads as no report */
       }
@@ -370,7 +375,47 @@ export class Coordinator {
       autopilot: c.boardSettings(companyId).autopilot,
       reports,
       routineHistory,
-      lastDigestAt: lastDigest?.created_at ?? null
+      lastDigestAt: lastDigest?.created_at ?? null,
+      ...(events.some((e) => e.kind === 'tick') && this.d.connections ? { connections: this.safeList(() => this.d.connections!(companyId)) } : {}),
+      // a playbook already on, or one the founder answered (open, kept for later, Never, its quiet period): never offered,
+      // so the next best playbook of the same run gets the offer instead
+      playbooksOn: [...new Set([...(this.d.playbooksOn ? this.safeList(() => this.d.playbooksOn!(companyId)) : []), ...PLAYBOOK_IDS.filter((id) => !this.d.suggestions.offerable(companyId, id))])]
+    }
+  }
+  private safeList(fn: () => string[]): string[] {
+    try {
+      return fn().slice(0, 200)
+    } catch {
+      return []
+    }
+  }
+  /** The tool names one run called (every agent of the run), and its calls through the connections gateway. */
+  private toolsOf(runId: string): string[] {
+    const out = new Set<string>()
+    try {
+      for (const r of this.d.db.prepare("SELECT DISTINCT e.name AS name FROM agent_events e JOIN agents a ON a.id=e.agent_id WHERE a.run_id=? AND e.kind='tool' AND e.name IS NOT NULL LIMIT 200").all(runId) as { name: string }[]) out.add(r.name)
+    } catch {
+      /* no live events */
+    }
+    try {
+      // AUTOPILOT.md §6: a company connection reached through principia_call_tool, recorded by the gateway's check
+      for (const r of this.d.db.prepare('SELECT DISTINCT name FROM autopilot_tool_calls WHERE run_id=? AND refused=0 LIMIT 200').all(runId) as { name: string }[]) out.add(r.name)
+    } catch {
+      /* no playbooks table */
+    }
+    return [...out]
+  }
+  /** The department key of a run's task (its department), else its agent's. */
+  private departmentKeyOf(companyId: string, taskId: string | null, agentId: string | null): string | null {
+    try {
+      const c = this.d.company()
+      const t = taskId ? c.task(taskId) : null
+      const a = agentId ? c.departments.getAgent(agentId) : t?.agentId ? c.departments.getAgent(t.agentId) : null
+      const depId = t?.departmentId ?? a?.departmentId ?? null
+      const dep = depId ? c.departments.get(depId) : null
+      return dep && dep.companyId === companyId ? dep.key : null
+    } catch {
+      return null
     }
   }
 
@@ -453,7 +498,17 @@ export class Coordinator {
           const title = this.text(x.title ?? x.text, 160)
           if (!title) return { verb, status: 'skipped', detail: 'Nothing to suggest' }
           if (kind === 'connection' && !x.connectionId) return { verb, status: 'skipped', detail: 'A connection suggestion needs the connection' }
+          if (kind === 'autopilot' && !x.playbook) return { verb, status: 'skipped', detail: 'An autopilot offer needs its playbook' }
           if (o.shadow) return { verb, status: 'shadow', detail: `Would suggest to you: ${title}` }
+          if (kind === 'autopilot') {
+            const agent = this.agentOf(companyId, x.to)
+            // the connection it cannot work without: the card says "Connect … first", turning on waits for it
+            const conns = this.d.connections && isPlaybookId(x.playbook) && playbookDef(x.playbook).needs ? this.safeList(() => this.d.connections!(companyId)) : null
+            const miss = conns && isPlaybookId(x.playbook) ? missingConnection(playbookDef(x.playbook), conns) : null
+            const detail = this.text(`${x.text ?? ''}${miss ? ` Needs ${miss.label} connected first: it waits, paused, until then.` : ''}`, 600)
+            const res = this.d.suggestions.suggest({ companyId, kind, title, detail, playbookId: x.playbook, ...(x.level ? { level: x.level } : {}), ...(agent ? { agentId: agent.id } : {}), ...(x.budgetUsd ? { budgetUsd: x.budgetUsd } : {}), ...(miss ? { needs: { label: miss.label, connectId: miss.connectId } } : {}), ...(x.task ? { taskIdentifier: x.task } : {}) })
+            return { verb, status: res.status === 'created' ? 'done' : 'skipped', detail: res.status === 'created' ? `Offered you in Needs you: ${title}` : `Not offered (${res.detail}): ${title}` }
+          }
           const agent = kind === 'routine' ? this.agentOf(companyId, x.to) : null
           const res = this.d.suggestions.suggest({ companyId, kind, title, detail: this.text(x.text ?? '', 600), ...(x.cron ? { cron: x.cron } : {}), ...(x.connectionId ? { connectionId: x.connectionId } : {}), ...(agent ? { agentId: agent.id } : {}) })
           return { verb, status: res.status === 'created' ? 'done' : 'skipped', detail: res.status === 'created' ? `Suggested to you in Needs you: ${title}` : `Not suggested (${res.detail}): ${title}` }

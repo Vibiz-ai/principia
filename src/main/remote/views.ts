@@ -19,6 +19,8 @@ import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { deskTasks, deskThread } from '../../renderer/src/lib/deskThread'
 import { finishedLine, taskOrigin } from '../../renderer/src/lib/desk'
 import { BUST_NAMES } from './bustNames'
+import { autopilotState } from '../../shared/autopilotState'
+import { playbooksOnOf } from '../../shared/autopilotPlaybooks'
 
 type Stamped = { companyId?: Id | null }
 
@@ -38,6 +40,8 @@ export interface PhoneData {
   seen: ReadonlySet<Id>
   /** ORCHESTRATOR.md §3: Principia's open suggestions (they count in Needs you; decided on the Mac) */
   suggestions?: OrchSuggestion[]
+  /** AUTOPILOT.md §7: the autopilots on per company (the Now header names them) */
+  playbooks?: import('../../shared/autopilotPlaybooks').PlaybookSummary
 }
 
 const PROVIDER: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', shell: 'Terminal' }
@@ -147,7 +151,8 @@ export function phoneNow(d: PhoneData, companyId: Id, done: RunCard[] = [], runA
     out.push({ key: `run:${r.id}`, title: runTitle(r.title), who: who(seat(r.agentId)), at: r.endedAt, status: r.status === 'failed' ? 'failed' : 'done', summary: r.status === 'failed' ? (c.failedStep?.error ? oneLine(c.failedStep.error, 160) : 'It stopped with an error.') : null })
   }
   out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
-  return { companyId, name: co?.name ?? 'Personal', paused: !!co?.pausedAt, needs: needsIn(t, companyId).count, working, done: out.slice(0, 12) }
+  const personal = !co || co.id === PERSONAL_COMPANY_ID || co.system === 'personal'
+  return { companyId, name: co?.name ?? 'Personal', paused: !!co?.pausedAt, ...(personal ? {} : { autopilot: autopilotState(co, playbooksOnOf(d.playbooks, companyId)).mode, autopilotLabel: autopilotState(co, playbooksOnOf(d.playbooks, companyId)).label }), needs: needsIn(t, companyId).count, working, done: out.slice(0, 12) }
 }
 
 /** The command, file or address a tool asks to use, for the ask card ("git push origin main"). */

@@ -306,6 +306,10 @@ export interface PhoneNow {
   companyId: Id
   name: string
   paused: boolean
+  /** AUTOPILOT.md §7: the company's Autopilot switch, read-only on the phone ('held' while paused). Absent on older Macs. */
+  autopilot?: 'on' | 'off' | 'held'
+  /** "Autopilot on · Ads watch": the switch and the autopilots on, in words. Absent on older Macs. */
+  autopilotLabel?: string
   needs: number
   working: PhoneWorking[]
   done: PhoneDone[]

@@ -30,6 +30,8 @@ import { extractRunReport } from './extract'
 import { Mailbox } from './mailbox'
 import { Suggestions } from './suggestions'
 import { recordUsage } from './usage'
+import { companyConnections } from '../handlers/playbooks'
+import { levelLabel, playbookDef, type PlaybookLevel } from '../../shared/autopilotPlaybooks'
 
 export interface Orchestrator {
   readonly applier: RunApplier
@@ -39,7 +41,7 @@ export interface Orchestrator {
   /** orchestrator:suggestions (Needs you) */
   openSuggestions(companyId?: string | null): OrchSuggestion[]
   /** orchestrator:decideSuggestion (the founder's yes or no) */
-  decideSuggestion(id: string, decision: 'accept' | 'dismiss'): { suggestion: OrchSuggestion; detail: string }
+  decideSuggestion(id: string, decision: 'accept' | 'dismiss' | 'never', level?: number): { suggestion: OrchSuggestion; detail: string }
   /** orchestrator:decisions (Activity: "Principia (chief of staff)") */
   decisions(companyId: string, limit?: number): OrchDecisionRecord[]
   dispose(): void
@@ -102,7 +104,14 @@ export function startOrchestrator(h: Hive): Orchestrator {
     emit('data:changed', { domain: 'tasks' })
     h.statusChanged()
   }
-  const suggestions = new Suggestions({ db: h.db, redact: (t) => h.vault.redact(t), onChange: changed, routineOn: (companyId, id) => !!h.settings().routines?.[companyId]?.[id] })
+  const suggestions = new Suggestions({
+    db: h.db,
+    redact: (t) => h.vault.redact(t),
+    onChange: changed,
+    routineOn: (companyId, id) => !!h.settings().routines?.[companyId]?.[id],
+    playbookOn: (companyId, id) => !!h.playbooks?.isOn(companyId, id)
+  })
+  const connectionsOf = (companyId: string): string[] => companyConnections(h, companyId)
   const coordinator = new Coordinator({
     db: h.db,
     company: () => h.company,
@@ -126,6 +135,8 @@ export function startOrchestrator(h: Hive): Orchestrator {
     mailbox,
     forum: () => h.forum,
     suggestions,
+    connections: connectionsOf,
+    playbooksOn: (companyId) => (h.playbooks ? h.playbooks.list(companyId).filter((v) => v.on).map((v) => v.id) : []),
     redact: (t) => h.vault.redact(t),
     onChange: changed,
     log
@@ -134,6 +145,15 @@ export function startOrchestrator(h: Hive): Orchestrator {
   h.runHooks.push((run) => {
     const p = applier.afterRun(run)
     if (!['passed', 'failed', 'canceled'].includes(run.status)) return
+    // AUTOPILOT.md §6: a playbook run that called a tool above its level pauses the playbook, and the founder is told
+    const breach = h.safe(() => h.playbooks?.guardRun(run.id) ?? null, null)
+    if (breach) {
+      const def = playbookDef(breach.id)
+      // AUTOPILOT.md §6: every refused call leaves its line ("Ads watch tried to change a budget to $900; refused.")
+      const lines = [...new Set(breach.refused.map((r) => r.line))]
+      suggestions.suggest({ companyId: breach.companyId, kind: 'autopilot', breach: true, playbookId: breach.id, title: `${def.short} was stopped and paused`, detail: `${lines.slice(0, 4).join(' ')}${lines.length > 4 ? ` And ${lines.length - 4} more.` : ''} Why: ${breach.refused[0]!.reason}. Principia paused it; nothing else runs until you resume it.` })
+      log.warn('autopilot: paused a playbook after a refused tool call', { companyId: breach.companyId, playbook: breach.id, tools: breach.refused.map((r) => r.tool) })
+    }
     void Promise.resolve(p).then(() => coordinator.runEnded(run.id))
   })
   if (h.forum) {
@@ -182,7 +202,11 @@ export function startOrchestrator(h: Hive): Orchestrator {
   }
   // the daily tick (the digest): checked every hour, one tick per company per day
   const companiesOn = (): string[] => h.safe(() => h.company.listPassports().filter((c) => !c.archivedAt && c.system !== 'personal').map((c) => c.id), [])
-  const ticker = setInterval(() => coordinator.tick(companiesOn()), 3_600_000)
+  const ticker = setInterval(() => {
+    // AUTOPILOT.md §6: a playbook waiting for its connection starts within the hour once it is connected
+    for (const id of companiesOn()) h.safe(() => h.playbooks?.wakeWaiting(id), null)
+    coordinator.tick(companiesOn())
+  }, 3_600_000)
   ticker.unref?.()
 
   // ---------- suggestions: what accepting one does (the founder's own yes) ----------
@@ -210,6 +234,21 @@ export function startOrchestrator(h: Hive): Orchestrator {
       changed()
       return `Started ${t.identifier}.`
     },
+    turnOnPlaybook: (sg: OrchSuggestion, level: PlaybookLevel): string => {
+      if (!h.playbooks || !sg.playbookId) throw new Error('Playbooks are not available')
+      // the ads offer's budget cap is the daily budget the work named ($10/day), never a bigger default
+      const v = h.playbooks.turnOn(sg.companyId, sg.playbookId, { level, agentId: sg.agentId ?? null, ...(sg.budgetUsd ? { limits: { budgetCapUsd: sg.budgetUsd } } : {}) })
+      changed()
+      const def = playbookDef(v.id)
+      if (v.waiting) return `${def.name} is on at ${levelLabel(v.level)}${v.agentName ? `, run by ${v.agentName}` : ''}. It waits for ${v.waiting.label}: connect it and it starts by itself.`
+      return `${def.name} is on at ${levelLabel(v.level)}${v.agentName ? `, run by ${v.agentName}` : ''}. ${def.cadence}. Pause it any time in Automations › Autopilot.`
+    },
+    resumePlaybook: (sg: OrchSuggestion): string => {
+      if (!h.playbooks || !sg.playbookId) throw new Error('Playbooks are not available')
+      const v = h.playbooks.setPaused(sg.companyId, sg.playbookId, false)
+      changed()
+      return `${playbookDef(v.id).name} runs again at ${levelLabel(v.level)}.`
+    },
     fileTask: (sg: OrchSuggestion): string => {
       const t = h.company.createTask({ companyId: sg.companyId, title: sg.title.slice(0, 200), description: `${sg.detail}\n\nSuggested by ${WHO}; you said yes.`.trim(), repoId: null, status: 'todo', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [] })
       changed()
@@ -236,7 +275,7 @@ export function startOrchestrator(h: Hive): Orchestrator {
     coordinator,
     suggestions,
     openSuggestions: (companyId) => fresh(suggestions.list(companyId)),
-    decideSuggestion: (id, decision) => suggestions.decide(id, decision, accept),
+    decideSuggestion: (id, decision, level) => suggestions.decide(id, decision, accept, { level }),
     decisions: (companyId, limit) => coordinator.recent(companyId, limit),
     dispose: () => {
       clearInterval(ticker)

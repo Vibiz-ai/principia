@@ -33,14 +33,15 @@ export function teamPatch(companyId: string, change: { on?: boolean; ai?: boolea
 }
 
 /** The button of a suggestion. */
-export function suggestionAction(s: Pick<OrchSuggestion, 'kind' | 'taskId' | 'routineId'>): string {
+export function suggestionAction(s: Pick<OrchSuggestion, 'kind' | 'taskId' | 'routineId'> & { breach?: boolean }): string {
+  if (s.kind === 'autopilot') return s.breach ? 'Resume' : 'Turn on'
   if (s.kind === 'routine') return s.routineId ? 'See the routine' : 'Make it a routine'
   if (s.kind === 'connection') return 'Set it up'
   return s.taskId ? 'Start it' : 'Add to To do'
 }
 /** The small label above a suggestion. */
 export function suggestionKind(s: Pick<OrchSuggestion, 'kind'>): string {
-  return s.kind === 'routine' ? 'Routine idea' : s.kind === 'connection' ? 'Connection' : 'Next step'
+  return s.kind === 'autopilot' ? 'Autopilot' : s.kind === 'routine' ? 'Routine idea' : s.kind === 'connection' ? 'Connection' : 'Next step'
 }
 
 const STATUS: Record<OrchDecisionResult['status'], string> = { done: '', refused: 'Refused', skipped: 'Skipped', shadow: 'Would do', failed: 'Failed' }

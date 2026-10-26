@@ -19,7 +19,7 @@ export function AutomationTabs({ value, onChange }: { value: AutomationTab; onCh
       className="no-drag"
       items={[
         { value: 'routines', label: 'Routines' },
-        { value: 'autopilots', label: 'Autopilots' },
+        { value: 'autopilots', label: 'Autopilot' },
         { value: 'schedules', label: 'Schedules' },
         { value: 'workflows', label: 'Workflows' },
         { value: 'slack', label: 'Slack triggers' }

@@ -63,6 +63,29 @@ describe('Principia MCP gateway', () => {
       expect(other.error).not.toContain('co_b')
     } finally { service.close(); fs.rmSync(dir, { recursive: true, force: true }) }
   })
+  it('AUTOPILOT.md §6: a run’s call is checked before it is made, and a refusal goes back to the agent', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'principia-guard-'))
+    const key = crypto.randomBytes(32)
+    const cipher = { available: () => true, encrypt: (s: string) => { const nonce = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', key, nonce); return Buffer.concat([nonce, c.update(s), c.final(), c.getAuthTag()]) }, decrypt: (b: Buffer) => { const c = crypto.createDecipheriv('aes-256-gcm', key, b.subarray(0,12)); c.setAuthTag(b.subarray(-16)); return Buffer.concat([c.update(b.subarray(12,-16)), c.final()]).toString() } }
+    const seen: unknown[] = []
+    const service = new GatewayService({ userData: dir, mainDir: dir, cipher, vault: { addRedactions() {} } as unknown as Vault, baseEnv: () => ({}), guard: (c) => (seen.push(c), c.tool === 'pause_ad' ? 'Level 1 only watches and reports' : null) })
+    try {
+      service.save({ id: 'meta', name: 'Meta', transport: 'stdio', command: 'unused-command-xyz', enabled: true, roots: [], scope: 'global' })
+      const spec = service.attachment(dir, 'co_a', 'run_1')!
+      const id = crypto.randomBytes(16).toString('hex')
+      fs.writeFileSync(path.join(spec.env.PRINCIPIA_GATEWAY_DIR, id + '.request'), JSON.stringify({ method: 'call', connection: 'meta', tool: 'pause_ad', arguments: { ad_id: '1' } }))
+      let answer: { ok: boolean; error: string } | null = null
+      for (let i = 0; i < 40 && !answer; i++) { try { answer = JSON.parse(fs.readFileSync(path.join(spec.env.PRINCIPIA_GATEWAY_DIR, id + '.answer'), 'utf8')) } catch { await new Promise(r => setTimeout(r, 50)) } }
+      expect(answer).toEqual({ ok: false, error: 'Refused by Principia: Level 1 only watches and reports.' })
+      expect(seen).toEqual([{ runId: 'run_1', companyId: 'co_a', connection: 'meta', tool: 'pause_ad', args: { ad_id: '1' }, readOnly: false, connector: null }])
+      // a session's grant (no run) is asked too: main lets it through unless a money playbook runs now
+      const free = service.attachment(dir, 'co_a')!
+      const id2 = crypto.randomBytes(16).toString('hex')
+      fs.writeFileSync(path.join(free.env.PRINCIPIA_GATEWAY_DIR, id2 + '.request'), JSON.stringify({ method: 'call', connection: 'meta', tool: 'pause_ad', arguments: {} }))
+      for (let i = 0; i < 40 && seen.length < 2; i++) await new Promise(r => setTimeout(r, 50))
+      expect(seen[1]).toMatchObject({ runId: null, companyId: 'co_a', tool: 'pause_ad' })
+    } finally { service.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
   it('adds the default Vibiz connection once, keeps a removal, and grants it only after sign-in', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'principia-defaults-'))
     const key = crypto.randomBytes(32)

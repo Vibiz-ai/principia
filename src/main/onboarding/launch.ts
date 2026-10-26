@@ -520,6 +520,8 @@ export class LaunchService {
       (p) => ({ kind: 'company', id: p.id }),
       (p) => {
         if (p.id === PERSONAL_COMPANY_ID) throw new HiveError('internal', 'A business can’t be created as Personal')
+        // AUTOPILOT.md §7: a business set up here gets Autopilot from Start now / 'Start the first week' (start() below),
+        // never at creation: before Start nothing is set to run, so the chip and Home must not say 'Autopilot on'
         j.companyId = p.id
         j.companyName = p.name
         // pm-review E12: the Instagram the founder named during setup is this company's account (drafts only), so
@@ -975,6 +977,35 @@ export class LaunchService {
 
   // ---------- start (§7.5) ----------
 
+  /**
+   * AUTOPILOT.md §7: what Start the first week turns on, before it is pressed (never switched on silently): Autopilot
+   * (with tasks at once), the agents that will start work on their own, and the schedules that will start running.
+   * Read-only.
+   */
+  startPreview(req: { journalId: string; scheduleRefs: string[] }): import('../../shared/ipc').OnboardingStartPreview {
+    const j = this.journalOr404(req.journalId)
+    const companyId = this.own(j)
+    const board = this.departmentsOn()
+    const canRun = this.d.profileAdapters().length > 0
+    const deps = new Map(this.d.company.departments.list(companyId).map((d) => [d.id, d.name]))
+    const agents: string[] = []
+    for (const id of j.refs.autoAgents) {
+      const a = this.d.company.departments.getAgent(id)
+      if (!a || a.companyId !== companyId || a.archivedAt) continue
+      const name = a.data.persona?.name || a.name
+      agents.push(a.departmentId && deps.get(a.departmentId) ? `${name} (${deps.get(a.departmentId)})` : name)
+    }
+    const wanted = new Set(req.scheduleRefs)
+    const schedules: { name: string; when: string }[] = []
+    for (const r of j.scheduleRefs) {
+      if (!wanted.has(r.ref)) continue
+      const sch = this.d.store.getSchedule(r.id)
+      if (!sch || (sch.companyId ?? PERSONAL_COMPANY_ID) !== companyId) continue
+      schedules.push({ name: sch.name, when: sch.sentence })
+    }
+    return { autopilot: board && canRun, noAgentCli: !canRun, maxInFlight: START_MAX_IN_FLIGHT, agents: board ? agents : [], schedules }
+  }
+
   async start(req: { journalId: string; autopilot: boolean; scheduleRefs: string[] }): Promise<BoardSettings | null> {
     const j0 = this.journalOr404(req.journalId)
     return this.locked(j0.draftId, async () => {
@@ -998,6 +1029,9 @@ export class LaunchService {
         }
         if (canRun) this.d.company.setAutopilot(companyId, true, START_MAX_IN_FLIGHT)
       }
+      // I'll review first holds Autopilot off (the founder's choice); with no agent CLI every run would fail and park
+      // its task, so it waits off until one is installed
+      if ((!req.autopilot || !canRun) && this.d.company.boardSettings(companyId).autopilot) this.d.company.setAutopilot(companyId, false)
       const wanted = new Set(req.scheduleRefs)
       for (const r of j.scheduleRefs) {
         if (!wanted.has(r.ref)) continue

@@ -199,8 +199,8 @@ describe('plan and launch inputs', () => {
 
 describe('IPC schemas', () => {
   const channels = INVOKE_CHANNELS.filter((c) => c.startsWith('onboarding:'))
-  it('registers all 16 onboarding channels and both events', () => {
-    expect(channels).toHaveLength(16)
+  it('registers all 17 onboarding channels and both events', () => {
+    expect(channels).toHaveLength(17)
     for (const c of channels) expect(REQUEST_SCHEMAS[c], c).toBeDefined()
     expect(EVENT_NAMES).toContain('onboarding:progress')
     expect(EVENT_NAMES).toContain('onboarding:cloneProgress')

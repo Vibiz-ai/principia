@@ -318,6 +318,7 @@ export function registerOnboardingHandlers(h: Hive): void {
   })
   handle('onboarding:discard', (req) => launch.discard(req))
   handle('onboarding:start', (req) => launch.start(req))
+  handle('onboarding:startPreview', (req) => launch.startPreview(req))
 
   // keys never outlive the window, and plan calls never outlive their screen
   const wipe = () => {

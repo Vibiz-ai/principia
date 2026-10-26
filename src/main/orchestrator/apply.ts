@@ -507,6 +507,8 @@ export class RunApplier {
     if (!task || !x.preRan) for (const a of this.forFounder(x, task)) out.push(a)
     // 7. suggestions: kept for the chief of staff
     for (const sg of r.suggestions) out.push({ kind: 'suggestion', status: 'proposed', detail: `Idea: ${clip(flat(sg.text), 300)}`, ...(sg.kind === 'connection' && sg.connectionId ? { link: connectLink(sg.connectionId) } : {}) })
+    // AUTOPILOT.md §6: the chief of staff turns it into a "Put … on autopilot?" offer (never turned on without a yes)
+    if (r.recurring) out.push({ kind: 'suggestion', status: 'proposed', detail: `Keep it on autopilot${r.recurring.playbook ? ` (${clip(r.recurring.playbook, 40)})` : ''}: ${clip(flat(r.recurring.why), 300)}` })
     return out
   }
 

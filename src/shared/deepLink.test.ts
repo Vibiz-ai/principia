@@ -99,3 +99,15 @@ describe('principia:// deep links', () => {
     expect(connectToolId('nope')).toBeNull()
   })
 })
+
+describe('principia://automations/autopilots (AUTOPILOT.md §6)', () => {
+  it('opens Automations › Autopilots, with an autopilot card to turn on; round-trips', () => {
+    expect(parseDeepLink('principia://automations/autopilots')).toEqual({ kind: 'automations', tab: 'autopilots' })
+    const l = parseDeepLink('principia://automations/autopilots?add=ads-watch&company=co_abc')
+    expect(l).toEqual({ kind: 'automations', tab: 'autopilots', add: 'ads-watch', companyId: 'co_abc' })
+    expect(parseDeepLink(formatDeepLink(l!))).toEqual(l)
+    expect(parseDeepLink('principia://autopilots?add=site-watch')).toEqual({ kind: 'automations', tab: 'autopilots', add: 'site-watch' })
+    expect(parseDeepLink('principia://automations/autopilots?add=Bad Id')).toBeNull()
+    expect(parseDeepLink('principia://automations/autopilots/extra')).toBeNull()
+  })
+})

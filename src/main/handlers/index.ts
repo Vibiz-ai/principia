@@ -22,6 +22,7 @@ import { registerMarketplaceHandlers } from './marketplace'
 import { registerOnboardingHandlers } from './onboarding'
 import { registerForumHandlers } from './forum'
 import { registerOrchestratorHandlers } from './orchestrator'
+import { registerPlaybookHandlers } from './playbooks'
 import { registerCloudHandlers } from './cloud'
 import { registerDashboardHandlers } from './dashboards'
 import { registerTaskWorkHandlers } from './taskWork'
@@ -44,6 +45,7 @@ export function registerAllHandlers(h: Hive): void {
   registerWorkflowHandlers(h)
   registerRunHandlers(h)
   registerScheduleHandlers(h)
+  registerPlaybookHandlers(h)
   registerSecretHandlers(h)
   registerArtifactHandlers(h)
   registerMemoryHandlers(h)

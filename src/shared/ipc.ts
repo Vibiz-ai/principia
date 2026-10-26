@@ -232,7 +232,19 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   /** Five doors C9: "Pause this task". The run ends; the task goes back to To do with its work kept, held until Start. */
   'tasks:pause': [{ id: Id }, CompanyTask]
   /** The company's Autopilot switch (default off); maxInFlight optional (default 3). */
-  'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number }, BoardSettings]
+  'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number; confirmed?: boolean }, BoardSettings]
+  /** AUTOPILOT.md §7: the To do tasks turning Autopilot on would start ("N tasks will start") */
+  'board:autopilotPreview': [{ companyId: Id }, import('./company').AutopilotPreview]
+  /** AUTOPILOT.md §6: autopilot playbooks of one company (every playbook, on or off) */
+  'playbooks:list': [{ companyId: Id }, import('./autopilotPlaybooks').PlaybookView[]]
+  /** the playbooks on in every company (the header chip, Home, the rail, All companies) */
+  'playbooks:summary': [undefined, import('./autopilotPlaybooks').PlaybookSummary]
+  'playbooks:overview': [{ companyId: Id }, import('./autopilotOverview').AutopilotOverview]
+  /** the founder's yes: creates the playbook's schedule; a money playbook above Level 2 needs raise: true */
+  'playbooks:turnOn': [{ companyId: Id; playbookId: string; level: number; raise?: boolean; limits?: { maxChanges?: number; budgetCapUsd?: number | null; targets?: string[] } }, import('./autopilotPlaybooks').PlaybookView]
+  'playbooks:configure': [{ companyId: Id; playbookId: string; level?: number; raise?: boolean; limits?: { maxChanges?: number; budgetCapUsd?: number | null; targets?: string[] } }, import('./autopilotPlaybooks').PlaybookView]
+  'playbooks:setPaused': [{ companyId: Id; playbookId: string; paused: boolean }, import('./autopilotPlaybooks').PlaybookView]
+  'playbooks:turnOff': [{ companyId: Id; playbookId: string }, void]
   // WORKTREE.md: a code task's own worktree, branch and PR
   /** Start: a new worktree + branch and the agent on it (in_progress), or queued beyond maxInFlight. */
   'taskWork:start': [{ id: Id; profileId?: Id }, { task: CompanyTask; queued: boolean; message: string }]
@@ -274,7 +286,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'orchestrator:forRun': [{ runId: Id }, import('./orchestrator').RunOrchestration | null]
   /** ORCHESTRATOR.md §3: what Principia suggests to the founder (Needs you), and the founder's yes or no */
   'orchestrator:suggestions': [{ companyId?: Id | null } | undefined, import('./orchestrator').OrchSuggestion[]]
-  'orchestrator:decideSuggestion': [{ id: Id; decision: 'accept' | 'dismiss' }, { suggestion: import('./orchestrator').OrchSuggestion; detail: string }]
+  /** 'never': an autopilot offer that never comes back; `level`: the level an autopilot offer is turned on at */
+  'orchestrator:decideSuggestion': [{ id: Id; decision: 'accept' | 'dismiss' | 'never'; level?: number }, { suggestion: import('./orchestrator').OrchSuggestion; detail: string }]
   /** ORCHESTRATOR.md §5: the chief of staff's latest batches (Activity) */
   'orchestrator:decisions': [{ companyId: Id; limit?: number }, import('./orchestrator').OrchDecisionRecord[]]
 
@@ -553,6 +566,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'onboarding:discard': [{ journalId: string }, { undone: string[] }]
   /** Only for the journal's own company; scheduleRefs are plan refs of schedules this journal created. */
   'onboarding:start': [{ journalId: string; autopilot: boolean; scheduleRefs: string[] }, BoardSettings | null]
+  'onboarding:startPreview': [{ journalId: string; scheduleRefs: string[] }, OnboardingStartPreview]
   // Principia Cloud (CLOUD.md §13.1): the desktop link. No response carries a token, key or credential.
   'cloud:state': [V, CloudLinkState]
   /** the connect link (`<url>/pair#XXXX-XXXX`), or url + code from the hidden fallback */
@@ -796,7 +810,8 @@ export const INVOKE_CHANNELS = [
   'departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets',
   'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
   'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'tasks:pause',
-  'board:autopilot',
+  'board:autopilot', 'board:autopilotPreview',
+  'playbooks:list', 'playbooks:summary', 'playbooks:overview', 'playbooks:turnOn', 'playbooks:configure', 'playbooks:setPaused', 'playbooks:turnOff',
   'taskWork:start', 'taskWork:merge', 'taskWork:remove', 'taskWork:resolveGone', 'taskWork:refresh', 'taskWork:openEditor',
   'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
   'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
@@ -840,7 +855,7 @@ export const INVOKE_CHANNELS = [
   'slackTriggers:setEnabled', 'slackTriggers:test', 'slackTriggers:events',
   'onboarding:status', 'onboarding:pickFolders', 'onboarding:inspectFolders', 'onboarding:scan', 'onboarding:fetchSite',
   'onboarding:github', 'onboarding:pickCloneDir', 'onboarding:key', 'onboarding:plan', 'onboarding:cancelPlan',
-  'onboarding:brief', 'onboarding:cancelBrief', 'onboarding:launch', 'onboarding:skipStep', 'onboarding:discard', 'onboarding:start',
+  'onboarding:brief', 'onboarding:cancelBrief', 'onboarding:launch', 'onboarding:skipStep', 'onboarding:discard', 'onboarding:start', 'onboarding:startPreview',
   'cloud:state', 'cloud:pair', 'cloud:unlink', 'cloud:summary', 'cloud:providers', 'cloud:providerPut', 'cloud:providerDelete',
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
@@ -877,3 +892,16 @@ const _exhaustiveEv: [_MissingEv] extends [never] ? true : _MissingEv = true
 void _exhaustiveEv
 
 export const eventChannel = (e: EventName): string => `evt:${e}`
+
+/** AUTOPILOT.md §7: what Start the first week turns on, shown before it is pressed. */
+export interface OnboardingStartPreview {
+  /** Autopilot (Auto-start) goes on; false with departments off or no agent CLI installed */
+  autopilot: boolean
+  noAgentCli: boolean
+  /** tasks at once once it starts */
+  maxInFlight: number
+  /** agents that will start work on their own ("Marcus (Marketing)") */
+  agents: string[]
+  /** schedules that will start running, with when */
+  schedules: { name: string; when: string }[]
+}

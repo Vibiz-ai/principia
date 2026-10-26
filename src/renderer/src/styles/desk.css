@@ -387,3 +387,9 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 /* the chat or its terminal inside a conversation */
 .chat-surface__term { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .chat-surface__termbody { position: relative; flex: 1; min-height: 0; }
+/* AUTOPILOT.md §7: what Start the first week turns on, before it is pressed */
+.week1__turns { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.week1__turns-title { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.week1__turns-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+.week1__turns-list b { color: var(--text-primary); font-weight: 600; }
+.week1__turns-note { font-size: var(--text-xs); color: var(--text-tertiary); }

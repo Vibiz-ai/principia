@@ -13,11 +13,11 @@ export function registerOrchestratorHandlers(h: Hive): void {
     return o.forRun(runId)
   })
   handle('orchestrator:suggestions', (q) => h.orchestrator?.openSuggestions(q?.companyId ?? null) ?? [])
-  handle('orchestrator:decideSuggestion', ({ id, decision }) => {
+  handle('orchestrator:decideSuggestion', ({ id, decision, level }) => {
     const o = h.orchestrator
     if (!o) throw new HiveError('conflict', 'Principia’s team layer is not running')
     try {
-      return o.decideSuggestion(id, decision)
+      return o.decideSuggestion(id, decision, level)
     } catch (e) {
       if (e instanceof HiveError) throw e
       throw new HiveError('conflict', e instanceof Error ? e.message : String(e))

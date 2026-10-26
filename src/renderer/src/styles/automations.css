@@ -1,4 +1,4 @@
-/* Five doors step 5: Automations › Autopilots (design §2.3) */
+/* Five doors step 5: Automations › Autopilot (design §2.3) */
 .auto-tab { max-width: 860px; padding: 20px 28px 32px; display: flex; flex-direction: column; gap: 18px; }
 .auto-tab__switch { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); padding: 14px 16px; }
 .auto-tab__title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }

@@ -18,10 +18,14 @@ import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
 import { AGENT_STATUSES } from '../shared/live'
 import { USAGE_RANGES } from '../shared/usage'
 import { ROUTINE_IDS, type RoutineId } from '../shared/routines'
+import { PLAYBOOK_IDS } from '../shared/autopilotPlaybooks'
 import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
 import { BRIEF_MAX, GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
+/** AUTOPILOT.md §6 */
+const playbookId = z.enum(PLAYBOOK_IDS)
+const playbookLimitsInput = z.object({ maxChanges: z.number().int().min(1).max(5).optional(), budgetCapUsd: z.number().min(1).max(100_000).nullable().optional(), targets: z.array(z.string().max(120)).max(50).optional() }).strict()
 const routineRecord = z.object({ scheduleId: id, workflowId: id.nullable().optional(), onAt: z.string().max(40) }).strict()
 const none = z.unknown().transform(() => undefined)
 const adapter = z.enum(ADAPTER_IDS)
@@ -632,7 +636,15 @@ export const REQUEST_SCHEMAS = {
   'tasks:takeover': z.object({ id, ...ptySize }).strict(),
   'tasks:stop': z.object({ id }).strict(),
   'tasks:pause': z.object({ id }).strict(),
-  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional() }).strict(),
+  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional(), confirmed: z.boolean().optional() }).strict(),
+  'board:autopilotPreview': z.object({ companyId: id }).strict(),
+  'playbooks:list': z.object({ companyId: id }).strict(),
+  'playbooks:summary': none,
+  'playbooks:overview': z.object({ companyId: id }).strict(),
+  'playbooks:turnOn': z.object({ companyId: id, playbookId: playbookId, level: z.number().int().min(1).max(3), raise: z.boolean().optional(), limits: playbookLimitsInput.optional() }).strict(),
+  'playbooks:configure': z.object({ companyId: id, playbookId: playbookId, level: z.number().int().min(1).max(3).optional(), raise: z.boolean().optional(), limits: playbookLimitsInput.optional() }).strict(),
+  'playbooks:setPaused': z.object({ companyId: id, playbookId: playbookId, paused: z.boolean() }).strict(),
+  'playbooks:turnOff': z.object({ companyId: id, playbookId: playbookId }).strict(),
   // WORKTREE.md
   'taskWork:start': z.object({ id, profileId: id.optional() }).strict(),
   'taskWork:merge': z.object({ id }).strict(),
@@ -685,7 +697,7 @@ export const REQUEST_SCHEMAS = {
   'forum:runConversation': z.object({ runId: id }).strict(),
   'orchestrator:forRun': z.object({ runId: id }).strict(),
   'orchestrator:suggestions': optObj({ companyId: id.nullish() }),
-  'orchestrator:decideSuggestion': z.object({ id, decision: z.enum(['accept', 'dismiss']) }).strict(),
+  'orchestrator:decideSuggestion': z.object({ id, decision: z.enum(['accept', 'dismiss', 'never']), level: z.number().int().min(1).max(3).optional() }).strict(),
   'orchestrator:decisions': z.object({ companyId: id, limit: z.number().int().min(1).max(100).optional() }).strict(),
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
@@ -997,6 +1009,7 @@ export const REQUEST_SCHEMAS = {
   'onboarding:skipStep': z.object({ journalId: obHandle, step: z.enum(SOFT_LAUNCH_STEPS) }).strict(),
   'onboarding:discard': z.object({ journalId: obHandle }).strict(),
   'onboarding:start': z.object({ journalId: obHandle, autopilot: z.boolean(), scheduleRefs: z.array(obRef).max(8) }).strict(),
+  'onboarding:startPreview': z.object({ journalId: obHandle, scheduleRefs: z.array(obRef).max(8) }).strict(),
   // USAGE.md
   'usage:summary': z.object({ range: z.enum(USAGE_RANGES), companyId }),
   'usage:disk': optObj({ fresh: z.boolean().optional() }),

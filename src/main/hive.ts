@@ -128,6 +128,8 @@ export class Hive {
   dashboards: DashboardService | null = null
   /** ORCHESTRATOR.md: Principia's own layer between runs (null until startOrchestrator / on failure). */
   orchestrator: import('./orchestrator/wire').Orchestrator | null = null
+  /** AUTOPILOT.md §6: autopilot playbooks (company/playbooks.ts; null until registerPlaybookHandlers / on failure). */
+  playbooks: import('./company/playbooks').Playbooks | null = null
   /** PASSPORT.md §12: the suggestion pipeline (run report facts become proposals through it); null without memory. */
   memorySuggest: import('./memory/vault/suggest').SuggestionPipeline | null = null
   /** LINEAR.md: optional Linear sync per company (null until wired / on failure). */

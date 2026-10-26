@@ -2,6 +2,7 @@
  * Company rail (COMPANY.md §8.1-8.2): All tile, one avatar per company with live badges, Personal and "+" at the
  * bottom. Shown once there is more than Personal; stays visible when the sidebar is collapsed.
  */
+import { AutopilotMark } from '../components/autopilot/AutopilotChip'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanyPassport } from '@shared/company'
 import type { Id } from '@shared/types'
@@ -259,6 +260,8 @@ export function CompanyRail(): React.JSX.Element | null {
         {b && b.needsYou > 0 && <span className="rail__count">{b.needsYou > 99 ? '99+' : b.needsYou}</span>}
         {/* A4: the paused mark, grey line art; needs-you items raised before the pause still count */}
         {paused && <span className="rail__paused" aria-hidden>‖</span>}
+        {/* AUTOPILOT.md §7: a thin ring when Autopilot is on (the same truth as the header chip) */}
+        {!paused && <AutopilotMark company={c} />}
       </button>
     )
   }
@@ -343,6 +346,7 @@ export function RailPopover({ company, top, onEnter, onLeave, onClose }: { compa
         <span className="rail-pop__name">{companyLabel(company, true)}</span>
         {company.client && <span className="rail-pop__tag">client</span>}
         {paused && <span className="rail-pop__state" title="Nothing in this company starts until you resume it">‖ Paused</span>}
+        {!paused && <AutopilotMark company={company} label />}
       </div>
       {shown.length + shownTasks.length === 0 ? (
         <div className="rail-pop__empty">{paused ? 'Paused. Click to enter and resume.' : 'Nothing running. Click to enter.'}</div>
@@ -453,6 +457,7 @@ function NewCompanyInner(): React.JSX.Element {
             ))}
           </div>
           <div className="text-tertiary co-new__hint">Its repositories, sessions, keys and Passport stay separate from your other companies.</div>
+          <div className="text-tertiary co-new__hint">It starts with Auto-start on: agents you set to work on their own start what you assign them. Nothing is assigned yet, so nothing starts. Turn it off from the Autopilot chip.</div>
         </div>
       </div>
     </Sheet>

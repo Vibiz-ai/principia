@@ -130,7 +130,7 @@ describe('BoardView', () => {
     const html = renderToStaticMarkup(createElement(TasksView))
     expect(html).toContain('>Board<')
     for (const lane of ['To do', 'Working', 'Needs you', 'Done']) expect(html).toContain(`aria-label="${lane}"`)
-    // design §5 row 10: the switch lives in Automations › Autopilots only; the Board carries no copy of it
+    // design §5 row 10: the switch lives in Automations › Autopilot only; the Board carries no copy of it
     expect(html).not.toContain('role="switch"')
     expect(html).not.toContain('Autopilot on')
     expect(html).toContain('aria-label="New task title"')

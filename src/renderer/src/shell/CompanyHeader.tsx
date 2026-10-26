@@ -2,6 +2,8 @@
  * Five doors §2.5: the sidebar header is "you are here". It names the company you are in and its live state, and opens
  * the company menu (native, like every other menu here): Company settings, Pause/Resume agents, Autopilot, Switch to,
  * New company. It replaces the CompanySwitcher dropdown and the OTHER COMPANIES footer; the rail stays the switcher.
+ * AUTOPILOT.md §7: under Running / Paused, the Autopilot chip says whether Autopilot is on and opens its panel. The
+ * whole header stays one click target (an invisible button behind it), so the chip can be its own button.
  */
 import { DEPARTMENT_PRESETS, type CompanyPassport, type DepartmentPresetKey } from '@shared/company'
 import { companyMenuItems } from '../lib/companyMenu'
@@ -21,6 +23,7 @@ import {
   useStore
 } from '../state/store'
 import { CompanyAvatar } from './CompanyRail'
+import { AutopilotChip } from '../components/autopilot/AutopilotChip'
 
 export type HeaderState = { kind: 'paused' } | { kind: 'running'; working: number }
 
@@ -65,13 +68,8 @@ export function CompanyHeader({ company, flat = false }: { company: CompanyPassp
   const name = company ? companyLabel(company, true) : 'All companies'
   const line = flat ? 'Add a company to give agents a business' : company ? headerLine(st) : `${count} compan${count === 1 ? 'y' : 'ies'}${withPersonal ? ' + Personal' : ''}${st.kind === 'running' && st.working ? ` · ${st.working} working` : ''}`
   return (
-    <button
-      type="button"
-      className={`co-head no-drag ${st.kind === 'paused' ? 'is-paused' : st.working > 0 ? 'is-working' : ''}`}
-      aria-haspopup="menu"
-      title={`${name}: company menu`}
-      onClick={() => void companyMenu(company, st.kind === 'paused')}
-    >
+    <div className={`co-head no-drag ${st.kind === 'paused' ? 'is-paused' : st.working > 0 ? 'is-working' : ''}`}>
+      <button type="button" className="co-head__hit" aria-haspopup="menu" aria-label={`${name}: company menu`} title={`${name}: company menu`} onClick={() => void companyMenu(company, st.kind === 'paused')} />
       {company ? (
         <CompanyAvatar company={company} size={26} className="co-head__avatar" />
       ) : (
@@ -83,10 +81,16 @@ export function CompanyHeader({ company, flat = false }: { company: CompanyPassp
         <span className="co-head__name">{name}</span>
         <span className="co-head__state">
           {!flat && company && <span className={`co-head__glyph ${st.kind === 'paused' ? 'co-head__glyph--paused' : ''}`} aria-hidden>{st.kind === 'paused' ? '‖' : '●'}</span>}
-          {line}
+          <span className="co-head__line">{line}</span>
         </span>
+        {/* its own row, so neither "Running" nor the chip's words are cut short */}
+        {!flat && company && (
+          <span className="co-head__ap">
+            <AutopilotChip company={company} />
+          </span>
+        )}
       </span>
       <Icon name="chevronDown" size={12} className="co-head__chev" />
-    </button>
+    </div>
   )
 }

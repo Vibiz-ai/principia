@@ -111,7 +111,9 @@ export interface EngineContext {
    */
   orchestrator?: { stepContext(req: OrchestratorStepRequest): string | null }
   /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
-  gateway?: { attachment(cwd: string, companyId?: Id | null): McpServerSpec | null }
+  gateway?: { attachment(cwd: string, companyId?: Id | null, runId?: Id | null): McpServerSpec | null }
+  /** AUTOPILOT.md §6: a money autopilot's run loads only Principia's own MCP servers (outside calls go through the gateway). */
+  autopilot?: { strictMcp(runId: Id): boolean }
   /**
    * BROWSER.md §3: the principia-browser MCP server for one claude / codex spawn of a company (its own token, bound to
    * that company's browser). null = no company, or the browser is off.

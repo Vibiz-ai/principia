@@ -12,7 +12,7 @@ import { Button, Sheet } from '../ui'
 import type { ChecklistAction } from '../../lib/checklist'
 import { enableAutopilot, goneSteps, pauseAutopilot, removeAutopilot, withoutSteps, type AutopilotDeps } from '../../lib/autopilotApply'
 import { confirmNative, errorMessage, hive } from '../../lib/hive'
-import { getState, navigate, toast, updateSettings, useStore } from '../../state/store'
+import { getState, navigate, requestAutopilot, toast, updateSettings, useStore } from '../../state/store'
 import type { CompanySetup } from './useCompanySetup'
 
 const hiveDeps: AutopilotDeps = {
@@ -108,7 +108,7 @@ export function AutopilotSheet({ id, setup, onClose, onFix }: { id: AutopilotId;
       if (res.record) await saveRecord(ctx.companyId, id, res.record)
       if (publishChanged) await updateContentPrompt().catch((e) => toast(`Content step: ${errorMessage(e)}`, 'error'))
       if (letAgentsStart && boardOff && res.created.some((sid) => plans.find((p) => p.def.id === sid)?.def.kind === 'task')) {
-        await hive.board.autopilot({ companyId: ctx.companyId, on: true }).catch((e) => toast(`Board autopilot: ${errorMessage(e)}`, 'error'))
+        await requestAutopilot({ companyId: ctx.companyId, on: true }).catch((e) => toast(`Auto-start: ${errorMessage(e)}`, 'error'))
       }
       setup.reload()
       if (res.error) toast(res.error, 'error')
@@ -229,7 +229,7 @@ export function AutopilotSheet({ id, setup, onClose, onFix }: { id: AutopilotId;
           {boardOff && newTaskSteps && (
             <label className="ck-publish__row">
               <input type="checkbox" checked={letAgentsStart} onChange={(e) => setLetAgentsStart(e.target.checked)} />
-              <span>Let agents start these on their own (turns on the board’s Autopilot for {company?.name})</span>
+              <span>Let agents start these on their own (turns on Auto-start for {company?.name})</span>
             </label>
           )}
           {manualAgents.length > 0 && (

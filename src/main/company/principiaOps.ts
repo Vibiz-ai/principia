@@ -123,7 +123,7 @@ const RULES: readonly Rule[] = [
   {
     needs: [['task_report']],
     kinds: ['task'],
-    text: 'A recurring need you notice: say so in task_report so the founder can schedule it, with the routine link when one fits (principia://automations/routines?add=weekly-review).'
+    text: 'A recurring need you notice: say so in task_report so the founder can schedule it, with the routine link when one fits (principia://automations/routines?add=weekly-review). Ads, posts, a site or outreach you launched: say "I\'ll keep this on autopilot" with principia://automations/autopilots?add=ads-watch (or site-watch…).'
   }
 ]
 

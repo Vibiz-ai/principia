@@ -59,6 +59,11 @@ body[data-phase='pair'] .bottom, body[data-phase='out'] .bottom, body[data-phase
 .page { display: flex; flex-direction: column; gap: 12px; }
 .title { font: 500 27px/1.15 var(--font-display); letter-spacing: .01em; margin-top: 8px; color: var(--ink); overflow-wrap: anywhere; }
 .lede { color: var(--soft); margin-top: -4px; }
+/* AUTOPILOT.md §7: read-only, the Mac's switch; a white ring that gains its centre when on */
+.lede .ap { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 1px 8px 1px 6px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 12px; color: var(--soft); vertical-align: 1px; }
+.lede .ap::before { content: ''; width: 7px; height: 7px; border-radius: 50%; border: 1px solid currentColor; box-sizing: border-box; }
+.lede .ap.is-on { color: var(--ink); border-color: var(--ln-2); }
+.lede .ap.is-on::before { background: radial-gradient(circle, currentColor 45%, transparent 50%); }
 .sec { display: flex; align-items: center; gap: 12px; font: 600 10.5px/1 var(--font-display); letter-spacing: .24em; text-transform: uppercase; color: var(--muted); margin: 16px 2px 2px; }
 .sec::after { content: ''; height: 1px; flex: 1; background: linear-gradient(90deg, rgba(255, 255, 255, .14), transparent); }
 .sub { color: var(--faint); font-size: 13px; }

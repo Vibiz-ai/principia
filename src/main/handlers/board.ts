@@ -7,7 +7,7 @@
  * tasks:openSession / tasks:takeover and session stops belong to the dispatcher (D4), reached through the optional
  * `h.dispatcher`; until it is wired they refuse with "not available".
  */
-import { departmentsEnabled, type BoardSettings, type CompanyTask } from '../../shared/company'
+import { agentActive, departmentsEnabled, startsWithoutAutopilot, type AutopilotPreview, type BoardSettings, type CompanyTask } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import type { ExperimentalFlags, Session } from '../../shared/types'
 import type { CompanyStore } from '../company'
@@ -117,13 +117,41 @@ export function boardActions(h: BoardHost, onChange: (companyId: string) => void
     }),
     openSession: (q: { id: string } & PtySize) => actAsync(q.id, async () => h.dispatcher?.openSession ? h.dispatcher.openSession(q.id, { cols: q.cols, rows: q.rows }) : notAvailable()),
     takeover: (q: { id: string } & PtySize) => actAsync(q.id, async () => h.dispatcher?.takeover ? h.dispatcher.takeover(q.id, { cols: q.cols, rows: q.rows }) : notAvailable()),
-    autopilot: (q: { companyId: string; on: boolean; maxInFlight?: number }): BoardSettings => {
+    /**
+     * AUTOPILOT.md §7: what turning Autopilot on would start: the To do tasks of agents that act on their own (not a
+     * plan's, not held by your Pause, not work that starts anyway). Shown before the switch flips.
+     */
+    autopilotPreview: (q: { companyId: string }): AutopilotPreview => {
       gate()
+      return autopilotPreview(c, q.companyId)
+    },
+    autopilot: (q: { companyId: string; on: boolean; maxInFlight?: number; confirmed?: boolean }): BoardSettings => {
+      gate()
+      // old leftover work never starts silently: turning Autopilot on with work waiting needs the founder's confirm
+      if (q.on && !c.boardSettings(q.companyId).autopilot && q.confirmed !== true) {
+        const p = autopilotPreview(c, q.companyId)
+        if (p.count > 0) throw new HiveError('conflict', `${p.count} task${p.count === 1 ? '' : 's'} will start when Autopilot goes on. Confirm first.`)
+      }
       const out = c.setAutopilot(q.companyId, q.on, q.maxInFlight)
       onChange(q.companyId)
       return out
     }
   }
+}
+
+const num = (identifier: string): number => Number(/(\d+)$/.exec(identifier)?.[1] ?? 0)
+/** The To do tasks Autopilot would start in a company, oldest first (shared by the preview and the guard). */
+export function autopilotPreview(c: CompanyStore, companyId: string): AutopilotPreview {
+  const s = c.boardSettings(companyId)
+  const seats = new Set(c.departments.listAgents({ companyId }).filter((a) => a.companyId === companyId && agentActive(a) && a.data.autonomy === 'auto' && a.data.mode !== 'session').map((a) => a.id))
+  const held = c.store.db.prepare('SELECT kind, actor FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+  const tasks = c.listTasks(companyId).filter((t) => {
+    if (t.companyId !== companyId || t.status !== 'todo' || !t.agentId || !seats.has(t.agentId) || t.plan || startsWithoutAutopilot(t)) return false
+    const last = held.get(t.id) as { kind: string; actor: string | null } | undefined
+    return !(last?.kind === 'paused' && last.actor === 'human')
+  }).sort((x, y) => num(x.identifier) - num(y.identifier))
+  const inFlight = c.listTasks(companyId).filter((t) => t.status === 'in_progress').length
+  return { companyId, count: tasks.length, tasks: tasks.slice(0, 8).map((t) => ({ id: t.id, identifier: t.identifier, title: t.title.slice(0, 160) })), maxInFlight: s.maxInFlight, inFlight }
 }
 
 export function registerBoardHandlers(h: Hive & { dispatcher?: BoardDispatcher | null }): void {
@@ -147,4 +175,5 @@ export function registerBoardHandlers(h: Hive & { dispatcher?: BoardDispatcher |
   handle('tasks:openSession', async q => { const out = await a.openSession(q); h.statusChanged(); return out })
   handle('tasks:takeover', async q => { const out = await a.takeover(q); h.statusChanged(); return out })
   handle('board:autopilot', q => { const out = a.autopilot(q); emit('data:changed', { domain: 'company' }); return out })
+  handle('board:autopilotPreview', q => a.autopilotPreview(q))
 }

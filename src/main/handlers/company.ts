@@ -11,6 +11,7 @@ import type { CompanyPassport } from '../../shared/company'
 import { CompanyLogoStore, type Shrink } from '../company/logoStore'
 import { planBoardStart } from '../company/planBoard'
 import { setCompanyPaused } from '../company/pauseCompany'
+import { newCompanyAutopilotOn } from '../company/newCompany'
 import { log } from '../log'
 import { notify } from '../notify'
 import { usageSummary } from '../usage/summary'
@@ -86,7 +87,9 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('company:list',q=>c.listPassports({includeArchived:!!q?.includeArchived}))
   handle('company:save',({id,passport})=>{const p=c.savePassport(passport,id);changed('company');reposChanged();return p})
   // COMPANY.md §7
-  handle('company:create',input=>{const p=c.create(input);changed('company');reposChanged();return p})
+  // AUTOPILOT.md §7: a new company starts with Autopilot on (it has no work yet, so nothing starts by itself; the
+  // limits stay: tasks at once, the monthly cap, Pause). Existing companies keep their switch.
+  handle('company:create',input=>{const p=newCompanyAutopilotOn(c,c.create(input));changed('company');reposChanged();return p})
   handle('company:update',({id,patch})=>{const p=c.update(id,patch);changed('company');return p})
   handle('company:archive',({id,archived})=>{const p=c.archive(id,archived??true);changed('company');return p})
   handle('company:reorder',({ids})=>{const list=c.reorder(ids);changed('company');return list})
@@ -164,3 +167,4 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('companyAgents:pause',({id})=>{gate();const a=d.pauseAgent(id);changed('departments');return a})
   handle('companyAgents:resume',({id})=>{gate();const a=d.resumeAgent(id);changed('departments');return a})
 }
+

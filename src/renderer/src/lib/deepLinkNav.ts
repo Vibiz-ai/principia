@@ -6,6 +6,7 @@ import type { CompanyTask } from '@shared/company'
 import { CONNECTION_CATALOG } from '@shared/connectionCatalog'
 import { parseDeepLink, type DeepLink } from '@shared/deepLink'
 import { cadenceOf, isRoutineId, parseAt, parseDays, routineDef, routineTimeOf, type RoutineId, type RoutineTime } from '@shared/routines'
+import { isPlaybookId, playbookDef } from '@shared/autopilotPlaybooks'
 import type { Id } from '@shared/types'
 import type { NavTarget } from './nav'
 
@@ -29,6 +30,7 @@ export function deepLinkView(l: DeepLink, o: { nonce: number; taskId?: Id | null
     case 'agent':
       return { name: 'agentSeat', id: l.agentId, nonce: o.nonce }
     case 'automations':
+      if (l.tab === 'autopilots') return { name: 'schedules', tab: 'autopilots', ...(l.add ? { addPlaybook: l.add } : {}), nonce: o.nonce }
       return { name: 'schedules', ...(l.tab === 'routines' || l.add ? { tab: 'routines' as const } : {}), ...(l.add ? { addRoutine: l.add } : {}), ...(l.add && (l.at || l.days) ? { routineTime: { ...(l.at ? { at: l.at } : {}), ...(l.days ? { days: l.days } : {}) } } : {}), nonce: o.nonce }
     case 'knowledge':
       return { name: 'passport', ...(l.note ? { search: l.note } : {}), nonce: o.nonce }
@@ -74,6 +76,7 @@ export function deepLinkLabel(href: string): string | null {
     case 'agent':
       return 'Open the agent’s desk'
     case 'automations':
+      if (l.tab === 'autopilots') return l.add && isPlaybookId(l.add) ? `Put ${playbookDef(l.add).thing} on autopilot` : 'Open Autopilot'
       if (l.add && isRoutineId(l.add) && (l.at || l.days)) return `Change the ${routineDef(l.add).name} to ${suggestedCadence(l.add, l.at, l.days)}`
       return l.add ? (isRoutineId(l.add) ? `Set up the ${routineDef(l.add).name} routine` : 'See this routine in Automations') : l.tab ? 'Open Routines' : 'Open Automations'
     case 'knowledge':

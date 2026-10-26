@@ -220,7 +220,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       { id: 'a:slackSearch', group: 'Actions', label: 'Search Slack…', hint: 'Principia’s local copy of your Slack', icon: 'search', run: () => void navigate({ name: 'slack', search: true, nonce: Date.now() }) },
       { id: 'a:slackTriggers', group: 'Actions', label: 'Slack Triggers', hint: 'run a workflow when someone mentions @hive', icon: 'slack', run: () => void navigate({ name: 'schedules', tab: 'slack', nonce: Date.now() }) },
       ...(scope && companies.some((c) => c.id === scope && !c.system)
-        ? [{ id: 'a:checklist', group: 'Actions', label: 'Show Setup Checklist', hint: 'get the most out of Principia: connections, dashboards, autopilots', icon: 'check', run: () => showChecklist(scope) }]
+        ? [{ id: 'a:checklist', group: 'Actions', label: 'Show Setup Checklist', hint: 'get the most out of Principia: connections, dashboards, schedule packs', icon: 'check', run: () => showChecklist(scope) }]
         : []),
       { id: 'a:slackConnect', group: 'Actions', label: 'Slack Connection…', hint: 'Settings › Connections', icon: 'settings', run: () => void navigate({ name: 'settings', section: 'connections' }) },
       { id: 'a:linear', group: 'Actions', label: 'Linear Sync…', hint: 'Settings › Connections › Linear: issues and the Board in step, with a preview first', keywords: 'linear issues sync tracker', exact: ['linear', 'linear sync'], icon: 'link', run: () => void navigate({ name: 'settings', section: 'connections', connect: 'linear', nonce: Date.now() }) },

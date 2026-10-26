@@ -395,7 +395,10 @@ d_('DEPARTMENTS.md §10 isolation: IPC (departments:*, companyAgents:*, tasks:*,
     const tB = task(w.B)
     expect(w.c.boardSettings(w.B.co.id).autopilot).toBe(false)
     const before = betaState()
-    const out = await invoke('board:autopilot', { companyId: w.A.co.id, on: true, maxInFlight: 1 })
+    // AUTOPILOT.md §7: A has work waiting, so turning it on needs the founder's confirm; B's work is not counted
+    expect((await invoke('board:autopilotPreview', { companyId: w.A.co.id }) as { count: number }).count).toBe(1)
+    await expect(invoke('board:autopilot', { companyId: w.A.co.id, on: true, maxInFlight: 1 })).rejects.toThrow(/1 task will start/)
+    const out = await invoke('board:autopilot', { companyId: w.A.co.id, on: true, maxInFlight: 1, confirmed: true })
     expect(out).toEqual({ companyId: w.A.co.id, autopilot: true, maxInFlight: 1 })
     await settle()
     for (let i = 0; i < 3; i++) await w.d.tick()
@@ -405,7 +408,7 @@ d_('DEPARTMENTS.md §10 isolation: IPC (departments:*, companyAgents:*, tasks:*,
     expect(betaState()).toBe(before)
     // A's in-flight cap never limits B, and B's switch never starts A's queue
     const tA2 = task(w.A, { title: 'Second', departmentId: w.A.only.id, agentId: w.A.other.id })
-    await invoke('board:autopilot', { companyId: w.B.co.id, on: true })
+    await invoke('board:autopilot', { companyId: w.B.co.id, on: true, confirmed: true })
     await settle()
     expect(w.c.task(tB.id).status).toBe('in_progress')
     expect(w.c.task(tA2.id).status).toBe('todo')

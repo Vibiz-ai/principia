@@ -16,7 +16,7 @@ import { BOARD_LANES, TASK_DRAG_TYPE, agentDrop, autopilotToggle, dropSeats, fil
 import { departmentsOf, taskDepartment, taskReason, type LaneContext } from '../lib/departments'
 import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { relative } from '../lib/time'
-import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, saveJson, toast, useStore } from '../state/store'
+import { departmentsOn, loadJson, navigate, openBoard, openNewCompany, refreshCompanies, requestAutopilot, saveJson, toast, useStore } from '../state/store'
 import { CompanyChip, useScope } from '../components/CompanyChip'
 import { AgentBust, agentLabel, agentNameNow, useAgentName } from '../shell/DepartmentGroup'
 import { LatinLine, MosaicEmpty } from '../components/roman'
@@ -207,7 +207,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
   if (embedded) return <div className="board board--embedded">{!nothing && filterBar}{error && <div className="company-error" role="alert">{error}<Button size="sm" onClick={reload}>Retry</Button></div>}<div className="board-main">{body}</div>{editor}</div>
   return <div className="view company-view board">
     <Toolbar title="Board" sub={<span className="company-toolbar-meta">{!code && company ? 'Your team’s to-do list · ' : ''}{counts.working} working{counts.elsewhere > 0 ? ` · ${counts.elsewhere} in progress ${counts.inLinear ? 'in Linear' : 'with no agent on it'}` : ''} · {counts.needs} {counts.needs === 1 ? 'needs' : 'need'} you</span>}>
-      {/* design §5 row 10: the Autopilot switch lives in Automations › Autopilots only (and the company menu) */}
+      {/* design §5 row 10: the Autopilot switch lives in Automations › Autopilot only (and the company menu) */}
       <Button icon="plus" variant="primary" onClick={newTask}>{companies.length ? 'New task' : 'Create a company'}</Button>
       {company && <IconButton icon="more" label="Board options" title={linear.status?.connected ? linearLine(linear.status) : 'Board options'} onClick={() => void linearMenu()} />}
     </Toolbar>
@@ -259,20 +259,21 @@ export function AutopilotSwitch({ company }: { company: CompanyPassport }): Reac
   const busy = state.busy
   // the company row catches up (data:changed company); drop the optimistic value once it does
   useEffect(() => setView((v) => ({ ...v, pending: null })), [company.autopilot])
-  const toggle = useMemo(() => autopilotToggle((q) => hive.board.autopilot(q), company.id, setView), [company.id])
+  // AUTOPILOT.md §7: on goes through "N tasks will start"; a no keeps the switch where main has it
+  const toggle = useMemo(() => autopilotToggle(async (q) => (await requestAutopilot(q)) ?? { companyId: q.companyId, autopilot: !q.on, maxInFlight: company.maxInFlight ?? 3 }, company.id, setView), [company.id, company.maxInFlight])
   const flip = (next: boolean): void => {
     void toggle.flip(next).then(
-      (s) => { if (!s) return; toast(s.autopilot ? `Autopilot on for ${company.name}: auto agents start assigned work, up to ${s.maxInFlight} at once` : `Autopilot off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
+      (s) => { if (!s) return; toast(s.autopilot ? `Auto-start on for ${company.name}: agents set to work on their own start assigned work, up to ${s.maxInFlight} at once` : `Auto-start off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
       (e: unknown) => toast(errorMessage(e), 'error')
     )
   }
   // A4: a paused company starts nothing, so its switch reads "Off while paused" and is greyed out (as in the company menu)
-  if (company.pausedAt) return <div className="board-autopilot is-held" title={`Resume ${company.name} to turn Autopilot on`}>
-    <label className="board-autopilot__label"><span>Autopilot: off while paused</span><Switch checked={false} onChange={() => undefined} disabled label={`Autopilot for ${company.name}: off while paused`} /></label>
+  if (company.pausedAt) return <div className="board-autopilot is-held" title={`Resume ${company.name} to turn Auto-start on`}>
+    <label className="board-autopilot__label"><span>Auto-start: off while paused</span><Switch checked={false} onChange={() => undefined} disabled label={`Auto-start for ${company.name}: off while paused`} /></label>
   </div>
   return <div className="board-autopilot">
-    {on && <button type="button" className="board-autopilot__pill" onClick={() => void navigate({ name: 'agents' })} title="See what the agents are doing"><Pill tone="running">Autopilot on</Pill></button>}
-    <label className="board-autopilot__label"><span>Autopilot</span><Switch checked={on} onChange={flip} disabled={busy} label={`Autopilot for ${company.name}`} /></label>
+    {on && <button type="button" className="board-autopilot__pill" onClick={() => void navigate({ name: 'agents' })} title="See what the agents are doing"><Pill tone="running">Auto-start on</Pill></button>}
+    <label className="board-autopilot__label"><span>Auto-start</span><Switch checked={on} onChange={flip} disabled={busy} label={`Auto-start for ${company.name}`} /></label>
   </div>
 }
 

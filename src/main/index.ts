@@ -190,7 +190,9 @@ if (!app.requestSingleInstanceLock()) {
     hive = h
     // COMPANY.md §6: a connection limited to some companies reaches only their spawns
     h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(), seedDefaults: true,
-      companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) } })
+      companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) },
+      // AUTOPILOT.md §6: an autopilot's run is checked call by call against its level, before each call is made
+      guard: (c) => h.playbooks?.gatewayCall(c) ?? null })
     app.on('will-quit', () => h.gateway?.close())
 
     // shared memory (MEMORY.md): separate memory.db, opened + migrated by main only. Failure = memory off, Hive runs.
@@ -360,6 +362,7 @@ if (!app.requestSingleInstanceLock()) {
       log,
       gateway: h.gateway ?? undefined,
       browser: h.browser?.service ?? undefined,
+      autopilot: { strictMcp: (runId) => h.playbooks?.strictMcpFor(runId) ?? false },
       memory: h.memory ?? undefined,
       live: liveBridge,
       reaper,

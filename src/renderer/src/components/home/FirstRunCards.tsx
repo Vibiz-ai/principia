@@ -3,9 +3,13 @@
  * - Things moved (pm-review Risks): for people who used the old app, where each old page went, and Customize sidebar.
  * - Your team is ready. Start the first week? (design §6.7): a new company lands on Home with this as its one primary
  *   card: each agent and its first task, Start the first week (Autopilot on, the schedules ticked on Ready) or Look
- *   around first (nothing starts; each task waits in To do with Start).
+ *   around first (nothing starts; each task waits in To do with Start). AUTOPILOT.md §7: before either is pressed, the
+ *   card says exactly what Start the first week turns on (onboarding:startPreview): Autopilot in one sentence, the
+ *   agents that will start work on their own, and the schedules that will run and when. Nothing turns on silently.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { OnboardingStartPreview } from '@shared/ipc'
+import { AUTOPILOT_SENTENCE } from '@shared/autopilotState'
 import type { Id } from '@shared/types'
 import { Button } from '../ui'
 import { AgentBust } from '../../shell/DepartmentGroup'
@@ -62,6 +66,20 @@ export function FirstWeekCard({ companyId }: { companyId: Id }): React.JSX.Eleme
   const who = useAgentDisplay()
   const rows = useMemo(() => firstWeekRows(companyId, agents, tasks), [companyId, agents, tasks])
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<OnboardingStartPreview | null>(null)
+  const refsKey = JSON.stringify(pending?.scheduleRefs ?? [])
+  useEffect(() => {
+    if (!pending) return
+    let live = true
+    hive.onboarding.startPreview({ journalId: pending.journalId, scheduleRefs: pending.scheduleRefs }).then(
+      (p) => live && setPreview(p),
+      () => live && setPreview(null)
+    )
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.journalId, refsKey])
   if (!pending || !company) return null
   const clear = async (): Promise<void> => {
     const st = getState()
@@ -137,6 +155,28 @@ export function FirstWeekCard({ companyId }: { companyId: Id }): React.JSX.Eleme
           )
         })}
       </ul>
+      <div className="week1__turns" aria-label="What Start the first week turns on">
+        <div className="week1__turns-title">Start the first week turns on</div>
+        <ul className="week1__turns-list">
+          <li>
+            <b>Autopilot</b>
+            {preview?.autopilot === false
+              ? preview.noAgentCli
+                ? ': stays off until an agent CLI is installed. The first tasks below still start.'
+                : ': stays off (departments are off). The first tasks below still start.'
+              : `. ${AUTOPILOT_SENTENCE} Up to ${preview?.maxInFlight ?? 2} tasks at once.`}
+          </li>
+          {preview?.autopilot !== false && (
+            <li>
+              <b>Starts work on its own</b>: {preview ? (preview.agents.length ? preview.agents.join(', ') : 'nobody yet; every agent waits for your Start') : '…'}
+            </li>
+          )}
+          <li>
+            <b>Schedules</b>: {preview ? (preview.schedules.length ? preview.schedules.map((x) => `${x.name} (${x.when})`).join(' · ') : 'none') : '…'}
+          </li>
+        </ul>
+        <div className="week1__turns-note">Look around first turns nothing on.</div>
+      </div>
       <div className="week1__actions">
         <Button variant="primary" icon="play" disabled={busy || signedOut} title={signedOut ? 'Sign in to Claude first' : undefined} onClick={() => void start()}>
           Start the first week

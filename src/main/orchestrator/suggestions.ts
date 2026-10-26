@@ -8,6 +8,10 @@
  * - a connection: the principia://connect/<id> link (the founder sets it up; Principia never connects anything itself);
  * - a task: start a task a manual agent waits on, or file a task the team suggested.
  *
+ * - an autopilot offer (AUTOPILOT.md §6): "Put your ads on autopilot?" with a level; accepting turns the playbook on
+ *   for the company at the level the founder picked. One offer per company per day at most, never one already on,
+ *   and "Never for this" keeps it away for good. A paused autopilot (a run went above its level) is a card too.
+ *
  * Each suggestion has a fingerprint. The same fingerprint is never open twice, and after the founder dismissed (or
  * accepted) one it waits 14 days before it may come back. At most 3 new suggestions per company per day. Text is
  * redacted and clipped. No Electron imports.
@@ -17,6 +21,7 @@ import type Database from 'better-sqlite3'
 import { SUGGESTION_LIMITS, type OrchSuggestion, type SuggestionKind, type SuggestionStatus } from '../../shared/orchestrator'
 import { connectLink, formatDeepLink } from '../../shared/deepLink'
 import { DAY_KEYS, routineDef, routineTimeOf, type RoutineId } from '../../shared/routines'
+import { isPlaybookId, isPlaybookLevel, levelLabel, maxLevel, OFFER_MAX_LEVEL, playbookDef, type PlaybookLevel } from '../../shared/autopilotPlaybooks'
 
 const DAY = 86_400_000
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
@@ -60,6 +65,15 @@ export interface SuggestInput {
   taskId?: string
   taskIdentifier?: string
   agentId?: string
+  /** autopilot: the playbook and the level the offer preselects */
+  playbookId?: string
+  level?: number
+  /** autopilot: Principia paused it (the card offers Resume) */
+  breach?: boolean
+  /** autopilot (money): the daily budget the work named, the offer's budget cap */
+  budgetUsd?: number
+  /** autopilot: the connection it needs is missing (the card says "Connect … first"; turning on waits for it) */
+  needs?: { label: string; connectId: string }
 }
 export interface SuggestResult { status: 'created' | 'skipped'; detail: string; id?: string }
 
@@ -71,12 +85,17 @@ export interface AcceptDeps {
   startTask(taskId: string): string
   /** a task suggestion without a task: file it in To do; returns its identifier */
   fileTask(s: OrchSuggestion): string
+  /** an autopilot offer: turn the playbook on for the company at `level`; a paused one: resume it. Returns plain words. */
+  turnOnPlaybook?(s: OrchSuggestion, level: PlaybookLevel): string
+  resumePlaybook?(s: OrchSuggestion): string
 }
 
 export interface SuggestionsDeps {
   db: Database.Database
   /** a ready-made routine is already on for the company (Settings.routines) */
   routineOn?: (companyId: string, id: RoutineId) => boolean
+  /** a playbook is already on for the company (paused counts: it is never offered again) */
+  playbookOn?: (companyId: string, id: string) => boolean
   redact?: (s: string) => string
   now?: () => Date
   onChange?: (companyId: string) => void
@@ -107,18 +126,20 @@ export class Suggestions {
     try {
       const title = this.text(i.title, SUGGESTION_LIMITS.title)
       if (!title) return { status: 'skipped', detail: 'nothing to suggest' }
+      if (i.kind === 'autopilot') return this.offer(i, title)
       const template = i.kind === 'routine' ? routineTemplateFor(`${i.title} ${i.detail ?? ''}`) : null
       if (template && this.d.routineOn?.(i.companyId, template)) return { status: 'skipped', detail: `the ${routineDef(template).name} routine is already on` }
       const print = template && !i.fingerprint ? `routine:${template}` : Suggestions.fingerprint(i)
       const now = this.now()
       const prev = this.d.db.prepare('SELECT * FROM orch_suggestions WHERE company_id=? AND fingerprint=? ORDER BY created_at DESC LIMIT 1').get(i.companyId, print) as Row | undefined
       if (prev?.status === 'open') return { status: 'skipped', detail: 'already suggested, waiting for you', id: prev.id }
+      if (prev?.status === 'never') return { status: 'skipped', detail: 'you said never for this' }
       if (prev && prev.status !== 'expired') {
         const since = prev.decided_at ?? prev.created_at
         if (now.getTime() - Date.parse(since) < SUGGESTION_LIMITS.cooldownDays * DAY) return { status: 'skipped', detail: `you ${prev.status === 'accepted' ? 'took' : 'dismissed'} this less than ${SUGGESTION_LIMITS.cooldownDays} days ago` }
       }
       const dayAgo = new Date(now.getTime() - DAY).toISOString()
-      const today = (this.d.db.prepare('SELECT COUNT(*) AS n FROM orch_suggestions WHERE company_id=? AND created_at>=?').get(i.companyId, dayAgo) as { n: number }).n
+      const today = (this.d.db.prepare("SELECT COUNT(*) AS n FROM orch_suggestions WHERE company_id=? AND status!='queued' AND created_at>=?").get(i.companyId, dayAgo) as { n: number }).n
       if (today >= SUGGESTION_LIMITS.perDay) return { status: 'skipped', detail: `Principia already suggested ${SUGGESTION_LIMITS.perDay} things today` }
       const cron = i.kind === 'routine' ? safeCron(i.cron) : null
       const data = {
@@ -138,6 +159,96 @@ export class Suggestions {
     } catch (e) {
       return { status: 'skipped', detail: `could not suggest: ${clip(String(e instanceof Error ? e.message : e), 120)}` }
     }
+  }
+
+  /**
+   * Whether an autopilot offer for this playbook could be made now (not on, not open or queued, not "Never", not in
+   * its quiet period). The chief of staff skips the ones that cannot, so the next best playbook gets the offer.
+   */
+  offerable(companyId: string, playbookId: string): boolean {
+    if (!isPlaybookId(playbookId) || this.d.playbookOn?.(companyId, playbookId)) return false
+    const prev = this.d.db.prepare('SELECT * FROM orch_suggestions WHERE company_id=? AND fingerprint=? ORDER BY created_at DESC LIMIT 1').get(companyId, `autopilot:${playbookId}`) as Row | undefined
+    if (!prev || prev.status === 'expired') return true
+    if (prev.status === 'open' || prev.status === 'queued' || prev.status === 'never') return false
+    return this.now().getTime() - Date.parse(prev.decided_at ?? prev.created_at) >= SUGGESTION_LIMITS.cooldownDays * DAY
+  }
+
+  /**
+   * The oldest offer kept for later (the day's offer was already made) comes out once a day is free: it was real work,
+   * so it is not lost. One that no longer fits (turned on meanwhile) expires.
+   */
+  private promoteQueued(companyId: string | null): void {
+    const rows = (companyId
+      ? this.d.db.prepare("SELECT * FROM orch_suggestions WHERE company_id=? AND status='queued' ORDER BY created_at LIMIT 20").all(companyId)
+      : this.d.db.prepare("SELECT * FROM orch_suggestions WHERE status='queued' ORDER BY created_at LIMIT 50").all()) as Row[]
+    if (!rows.length) return
+    const now = this.now()
+    const dayAgo = new Date(now.getTime() - DAY).toISOString()
+    const done = new Set<string>()
+    for (const r of rows) {
+      if (done.has(r.company_id)) continue
+      let data: Record<string, string> = {}
+      try {
+        data = JSON.parse(r.data_json) as Record<string, string>
+      } catch {
+        data = {}
+      }
+      if (data.playbookId && this.d.playbookOn?.(r.company_id, data.playbookId)) {
+        this.d.db.prepare("UPDATE orch_suggestions SET status='expired', decided_at=? WHERE id=?").run(now.toISOString(), r.id)
+        continue
+      }
+      const offers = (this.d.db.prepare("SELECT COUNT(*) AS n FROM orch_suggestions WHERE company_id=? AND kind='autopilot' AND fingerprint LIKE 'autopilot:%' AND status!='queued' AND created_at>=?").get(r.company_id, dayAgo) as { n: number }).n
+      done.add(r.company_id)
+      if (offers >= SUGGESTION_LIMITS.autopilotPerDay) continue
+      this.d.db.prepare("UPDATE orch_suggestions SET status='open', created_at=? WHERE id=?").run(now.toISOString(), r.id)
+      this.changed(r.company_id)
+    }
+  }
+
+  /**
+   * An autopilot offer: never one already on, never after "Never for this", 14 days after Not now, at most one a day
+   * per company (and inside the daily 3). A paused-autopilot card skips the daily caps: it is about something that
+   * already happened.
+   */
+  private offer(i: SuggestInput, title: string): SuggestResult {
+    if (!isPlaybookId(i.playbookId)) return { status: 'skipped', detail: 'not an autopilot Principia knows' }
+    const def = playbookDef(i.playbookId)
+    const now = this.now()
+    const print = i.breach ? `autopilot-paused:${i.playbookId}:${now.toISOString().slice(0, 10)}` : `autopilot:${i.playbookId}`
+    if (!i.breach && this.d.playbookOn?.(i.companyId, i.playbookId)) return { status: 'skipped', detail: `${def.name} is already on` }
+    const prev = this.d.db.prepare('SELECT * FROM orch_suggestions WHERE company_id=? AND fingerprint=? ORDER BY created_at DESC LIMIT 1').get(i.companyId, print) as Row | undefined
+    if (prev?.status === 'open') return { status: 'skipped', detail: 'already offered, waiting for you', id: prev.id }
+    if (prev?.status === 'queued') return { status: 'skipped', detail: 'already kept for a later day', id: prev.id }
+    if (prev?.status === 'never') return { status: 'skipped', detail: 'you said never for this' }
+    if (prev && prev.status !== 'expired' && now.getTime() - Date.parse(prev.decided_at ?? prev.created_at) < SUGGESTION_LIMITS.cooldownDays * DAY) return { status: 'skipped', detail: `you answered this less than ${SUGGESTION_LIMITS.cooldownDays} days ago` }
+    // the day's offer already made: this one is kept for a later day, not lost
+    let status: 'open' | 'queued' = 'open'
+    if (!i.breach) {
+      const dayAgo = new Date(now.getTime() - DAY).toISOString()
+      const offers = (this.d.db.prepare("SELECT COUNT(*) AS n FROM orch_suggestions WHERE company_id=? AND kind='autopilot' AND fingerprint LIKE 'autopilot:%' AND status!='queued' AND created_at>=?").get(i.companyId, dayAgo) as { n: number }).n
+      const today = (this.d.db.prepare("SELECT COUNT(*) AS n FROM orch_suggestions WHERE company_id=? AND status!='queued' AND created_at>=?").get(i.companyId, dayAgo) as { n: number }).n
+      if (offers >= SUGGESTION_LIMITS.autopilotPerDay || today >= SUGGESTION_LIMITS.perDay) status = 'queued'
+    }
+    // an offer never preselects more than Level 2 (Level 3 is its own step, behind a confirm, in Automations)
+    const level = Math.min(isPlaybookLevel(i.level) ? i.level : def.defaultLevel, maxLevel(def, false), OFFER_MAX_LEVEL)
+    const budget = def.money && typeof i.budgetUsd === 'number' && Number.isFinite(i.budgetUsd) && i.budgetUsd >= 1 ? Math.round(Math.min(i.budgetUsd, 100_000)) : null
+    const data = {
+      playbookId: i.playbookId,
+      level: String(level),
+      ...(i.breach ? { breach: '1' } : {}),
+      ...(i.agentId ? { agentId: i.agentId } : {}),
+      ...(budget ? { budgetUsd: String(budget) } : {}),
+      ...(i.needs ? { needsLabel: i.needs.label.slice(0, 80), needsId: i.needs.connectId.slice(0, 40), link: connectLink(i.needs.connectId, i.companyId) } : {}),
+      ...(i.taskIdentifier ? { taskIdentifier: i.taskIdentifier.slice(0, 40) } : {})
+    }
+    const id = `osg_${randomBytes(6).toString('hex')}`
+    const detail = i.detail ?? `${def.summary} ${def.cadence}. ${levelLabel(level as PlaybookLevel)}.`
+    this.d.db
+      .prepare("INSERT INTO orch_suggestions(id,company_id,kind,fingerprint,title,detail,data_json,status,created_at) VALUES (?,?,'autopilot',?,?,?,?,?,?)")
+      .run(id, i.companyId, print, title, this.text(detail, SUGGESTION_LIMITS.detail), JSON.stringify(data), status, now.toISOString())
+    if (status === 'queued') return { status: 'created', detail: `kept for tomorrow (Principia already offered an autopilot today): ${title}`, id }
+    this.changed(i.companyId)
+    return { status: 'created', detail: `offered to you: ${title}`, id }
   }
 
   private changed(companyId: string): void {
@@ -165,6 +276,11 @@ export class Suggestions {
       ...(data.cron ? { cron: data.cron } : {}),
       ...(data.link ? { link: data.link } : {}),
       ...(data.routineId ? { routineId: data.routineId } : {}),
+      ...(data.playbookId ? { playbookId: data.playbookId } : {}),
+      ...(data.level && isPlaybookLevel(Number(data.level)) ? { level: Number(data.level) } : {}),
+      ...(data.breach ? { breach: true } : {}),
+      ...(data.budgetUsd && Number(data.budgetUsd) > 0 ? { budgetUsd: Number(data.budgetUsd) } : {}),
+      ...(data.needsLabel && data.needsId ? { needs: { label: data.needsLabel, connectId: data.needsId } } : {}),
       ...(data.taskId ? { taskId: data.taskId } : {}),
       ...(data.taskIdentifier ? { taskIdentifier: data.taskIdentifier } : {}),
       ...(data.agentId ? { agentId: data.agentId } : {}),
@@ -179,6 +295,11 @@ export class Suggestions {
   }
   /** Open suggestions of a company (or every company), oldest first. */
   list(companyId?: string | null): OrchSuggestion[] {
+    try {
+      this.promoteQueued(companyId ?? null)
+    } catch {
+      /* a later read tries again */
+    }
     const rows = (companyId
       ? this.d.db.prepare("SELECT * FROM orch_suggestions WHERE company_id=? AND status='open' ORDER BY created_at LIMIT 50").all(companyId)
       : this.d.db.prepare("SELECT * FROM orch_suggestions WHERE status='open' ORDER BY created_at LIMIT 200").all()) as Row[]
@@ -195,12 +316,27 @@ export class Suggestions {
   }
 
   /** The founder's answer. Accepting runs the suggestion's one action; a failed action leaves it open. */
-  decide(id: string, decision: 'accept' | 'dismiss', act: AcceptDeps): { suggestion: OrchSuggestion; detail: string } {
+  decide(id: string, decision: 'accept' | 'dismiss' | 'never', act: AcceptDeps, opts: { level?: number } = {}): { suggestion: OrchSuggestion; detail: string } {
     const s = this.get(id)
     if (!s) throw new Error('That suggestion is gone')
     if (s.status !== 'open') return { suggestion: s, detail: 'Already handled' }
     let detail = 'Dismissed. Principia will not suggest it again for two weeks.'
-    if (decision === 'accept') {
+    if (decision === 'never') {
+      if (s.kind !== 'autopilot' || s.breach) throw new Error('Only an autopilot offer can be turned down for good')
+      detail = 'Got it. Principia will not offer this autopilot again.'
+    } else if (s.kind === 'autopilot' && decision === 'dismiss' && s.breach) detail = 'It stays paused. Resume it in Automations › Autopilot when you want.'
+    else if (s.kind === 'autopilot' && decision === 'accept') {
+      if (s.breach) {
+        if (!act.resumePlaybook) throw new Error('Playbooks are not available')
+        detail = act.resumePlaybook(s)
+      } else {
+        if (!act.turnOnPlaybook || !s.playbookId || !isPlaybookId(s.playbookId)) throw new Error('Playbooks are not available')
+        const level = opts.level ?? s.level ?? playbookDef(s.playbookId).defaultLevel
+        // the offer card turns on at most Level 2 (Level 3 is a separate, explicit step behind a confirm in Automations)
+        if (!isPlaybookLevel(level) || level > Math.min(OFFER_MAX_LEVEL, maxLevel(playbookDef(s.playbookId), false))) throw new Error(`${playbookDef(s.playbookId).name} can be turned on at Level 1 or 2 here. Choose Level 3 in Automations › Autopilot.`)
+        detail = act.turnOnPlaybook(s, level)
+      }
+    } else if (decision === 'accept') {
       // a ready-made routine is turned on in Routines (the founder presses Turn on there), never made twice here
       if (s.kind === 'routine' && s.routineId && s.link) detail = `Open ${s.link} and press Turn on.`
       else if (s.kind === 'routine') detail = `Made the routine "${act.createRoutine(s)}".`
@@ -208,7 +344,7 @@ export class Suggestions {
       else if (s.taskId) detail = act.startTask(s.taskId)
       else detail = `Filed ${act.fileTask(s)} in To do.`
     }
-    this.d.db.prepare('UPDATE orch_suggestions SET status=?, decided_at=? WHERE id=?').run(decision === 'accept' ? 'accepted' : 'dismissed', this.now().toISOString(), id)
+    this.d.db.prepare('UPDATE orch_suggestions SET status=?, decided_at=? WHERE id=?').run(decision === 'accept' ? 'accepted' : decision === 'never' ? 'never' : 'dismissed', this.now().toISOString(), id)
     this.changed(s.companyId)
     return { suggestion: this.get(id)!, detail }
   }

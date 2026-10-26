@@ -121,8 +121,8 @@ export interface AutopilotDef {
   tagline: string
 }
 export const AUTOPILOTS: readonly AutopilotDef[] = [
-  { id: 'marketing', name: 'Marketing autopilot', tagline: 'A weekly SEO and AI-visibility report, a content calendar with drafts for your channels, and a competitor watch.' },
-  { id: 'company', name: 'Company autopilot', tagline: 'A weekly review across departments, a finance digest from Stripe, and a daily triage of the board.' }
+  { id: 'marketing', name: 'Marketing pack', tagline: 'A weekly SEO and AI-visibility report, a content calendar with drafts for your channels, and a competitor watch.' },
+  { id: 'company', name: 'Company pack', tagline: 'A weekly review across departments, a finance digest from Stripe, and a daily triage of the board.' }
 ]
 export const autopilotDef = (id: AutopilotId): AutopilotDef => AUTOPILOTS.find((a) => a.id === id)!
 export const stepsOf = (id: AutopilotId): AutopilotStepDef[] => AUTOPILOT_STEPS.filter((s) => s.autopilot === id)

@@ -25,7 +25,7 @@ const ADAPTER_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex',
 
 type SchedTab = 'routines' | 'autopilots' | 'schedules' | 'slack'
 
-export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, routineTime }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab; addRoutine?: string; routineTime?: { at?: string; days?: string } }): React.JSX.Element {
+export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, addPlaybook, routineTime }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab; addRoutine?: string; addPlaybook?: string; routineTime?: { at?: string; days?: string } }): React.JSX.Element {
   // a deep link to a schedule (or a seed) opens Schedules; Automations itself opens on Autopilots
   const [cur, setCur] = useState<SchedTab>(tab ?? 'schedules')
   useEffect(() => setCur(tab ?? 'schedules'), [tab, nonce])
@@ -43,7 +43,7 @@ export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, routin
       <div className="view">
         <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
         <div className="scroll view__body">
-          <AutopilotsTab />
+          <AutopilotsTab focus={tab === 'autopilots' ? addPlaybook : undefined} nonce={nonce} />
         </div>
       </div>
     )

@@ -107,7 +107,7 @@ beforeAll(async () => {
     ['Spend', async () => el((await import('../views/UsageView')).UsageView, {})],
     // step 5: Automations opens on Autopilots (this company's switch and recipes), the Customize sidebar sheet, the
     // first-week card of a company just set up, and the Things moved card
-    ['Automations › Autopilots', async () => el((await import('../views/SchedulesView')).SchedulesView, { tab: 'autopilots' })],
+    ['Automations › Autopilot', async () => el((await import('../views/SchedulesView')).SchedulesView, { tab: 'autopilots' })],
     ['Customize sidebar', async () => el((await import('./CustomizeSidebar')).CustomizeSidebarSheet, { onClose: () => {} })],
     [
       'Home › first week',
@@ -166,7 +166,7 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     store.setState({ view: { name: 'home' } })
     // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it
     expect((await surface('Home › first week')).toLowerCase()).toContain('ledgerline writer')
-    expect(await surface('Automations › Autopilots')).toContain('Autopilot for Ledgerly App')
+    expect(await surface('Automations › Autopilot')).toContain('Auto-start for Ledgerly App')
     // step 5 QA (A2): the rail's hover label lists the Board task that needs you, as the badge counts it
     const hover = await surface('Rail hover label')
     expect(hover).toContain('ledgerline homepage copy')

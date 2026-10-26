@@ -13,6 +13,8 @@
  *   principia://agent/<id>                     an agent's desk
  *   principia://automations[/routines][?add=<templateId>[&at=6:30][&days=tue-sun]]  Automations (the routine to add,
  *                                              and a time for it, are only suggested: the person presses Save)
+ *   principia://automations/autopilots[?add=<playbookId>]  Automations › Autopilot, with that autopilot's card open
+ *                                              (the person picks the level and presses Turn on)
  *   principia://knowledge[?note=<title>]       Knowledge (the company Passport), searching for that note
  *   principia://forum[/join/<code>]            the Forum
  *   principia://home                           Home
@@ -50,7 +52,7 @@ export type DeepLink = { companyId?: string } & (
   | { kind: 'board'; task?: string; newTitle?: string }
   | { kind: 'chats'; filter?: DeepLinkChatFilter; chat?: { kind: 'session' | 'agent'; id: string } }
   | { kind: 'agent'; agentId: string }
-  | { kind: 'automations'; tab?: 'routines'; add?: string; at?: string; days?: string }
+  | { kind: 'automations'; tab?: 'routines' | 'autopilots'; add?: string; at?: string; days?: string }
   | { kind: 'knowledge'; note?: string }
   | { kind: 'forum'; joinCode?: string }
   | { kind: 'home' }
@@ -142,8 +144,20 @@ export function parseDeepLink(raw: unknown): DeepLink | null {
     case 'agent':
     case 'agents':
       return a && ID.test(a) && none(2) ? { kind: 'agent', agentId: a, ...scope } : null
+    case 'autopilots': {
+      if (a !== undefined) return null
+      const add = q.get('add')
+      if (add !== null && !TEMPLATE_ID.test(add)) return null
+      return { kind: 'automations', tab: 'autopilots', ...(add ? { add } : {}), ...scope }
+    }
     case 'automations':
     case 'routines': {
+      if (page === 'automations' && a?.toLowerCase() === 'autopilots') {
+        if (!none(2)) return null
+        const add = q.get('add')
+        if (add !== null && !TEMPLATE_ID.test(add)) return null
+        return { kind: 'automations', tab: 'autopilots', ...(add ? { add } : {}), ...scope }
+      }
       const tab = page === 'routines' || a?.toLowerCase() === 'routines'
       if (a !== undefined && a.toLowerCase() !== 'routines') return null
       if (!none(2)) return null
@@ -201,6 +215,7 @@ export function formatDeepLink(l: DeepLink): string {
     case 'agent':
       return withQuery(`principia://agent/${enc(l.agentId)}`, { company: c })
     case 'automations':
+      if (l.tab === 'autopilots') return withQuery('principia://automations/autopilots', { add: l.add, company: c })
       return withQuery(`principia://automations${l.tab ? '/routines' : ''}`, { add: l.add, at: l.at, days: l.days, company: c })
     case 'knowledge':
       return withQuery('principia://knowledge', { note: l.note, company: c })

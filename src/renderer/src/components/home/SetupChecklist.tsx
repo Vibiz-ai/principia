@@ -157,7 +157,7 @@ export function SetupChecklist({ companyId, chip = false }: { companyId: Id; chi
         <div className="ck-card__titles">
           <h2 className="ck-card__title">{chip ? `Setup ${done} of ${total}` : 'Get the most out of Principia'}</h2>
           <div className="ck-card__sub">
-            {done === total ? 'Everything is set up. Your autopilots can use all of it.' : `${done} of ${total} done${next && pref.collapsed ? ` · Next: ${next.title}` : ''}`}
+            {done === total ? 'Everything is set up. Your schedules and playbooks can use all of it.' : `${done} of ${total} done${next && pref.collapsed ? ` · Next: ${next.title}` : ''}`}
           </div>
         </div>
         <span className="flex1" />
@@ -239,7 +239,7 @@ export function AutopilotTiles({ companyId, setup, onOpen }: { companyId: Id; se
   if (!plans.length) return null
   return (
     <div className="ck-auto">
-      <div className="ck-auto__eyebrow">Autopilots</div>
+      <div className="ck-auto__eyebrow">Schedule packs</div>
       <div className="ck-auto__grid">
         {plans.map(({ a, steps }) => {
           const rec = setup.autopilots?.[a.id]

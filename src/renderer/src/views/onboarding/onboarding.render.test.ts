@@ -316,7 +316,7 @@ describe('OnboardingFlow screens (§2 copy)', () => {
     const t = text(html)
     expect(t).toContain('Sunday Bakery is ready.')
     expect(t).toContain('(off)')
-    expect(t).toContain('Next, Home asks whether to start the first week.')
+    expect(t).toContain('Nothing starts yet. Next, Home asks whether to start the first week and says exactly what that turns on.')
     expect(t).toContain('Open Sunday Bakery')
     expect(t).not.toContain("I'll review first")
     expect(t).toContain('Will start on their own:')
