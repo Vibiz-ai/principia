@@ -575,6 +575,12 @@ export interface Settings {
   slackAutoPaused?: boolean
   /** Marketplace: https link to a remote index.json, listed next to the built-in catalog. Default null. */
   marketplaceUrl?: string | null
+  /**
+   * REMOTE.md RA6: Settings › App › Phone › "Phone app address", the hosted phone app the pairing link opens and the one
+   * origin the Phone server accepts cross-origin. null (default): the official address (PHONE_SITE_URL); '': none (the
+   * Mac's own page).
+   */
+  phoneSiteUrl?: string | null
   /** COMPANY.md §1.3, §8.6: the renderer's active company (UI state only; main never reads it). Default 'all'. */
   activeCompanyId?: Id | 'all'
   /** COMPANY.md §8.3: All-mode sidebar groups, companyId -> expanded. Missing = default (expanded). */
@@ -590,6 +596,11 @@ export interface Settings {
   personas?: boolean
   /** AGENT-COLLAB.md §2: agents asking agents and its guards. Absent fields = DEFAULT_AGENT_COLLAB (src/shared/collab.ts). */
   agentCollab?: Partial<AgentCollabSettings>
+  /**
+   * ORCHESTRATOR.md §6: Principia's own layer between runs (context before, report applied after, the mailbox), the
+   * same on every harness. Absent fields = DEFAULT_ORCHESTRATOR (src/shared/orchestrator.ts). Gated by the board flags.
+   */
+  orchestrator?: Partial<import('./orchestrator').OrchestratorSettings>
   /**
    * AUTOPILOT.md §4: per company, what each enabled autopilot created (its schedules and workflows), so Pause and Remove
    * act on exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.

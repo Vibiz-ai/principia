@@ -3,7 +3,7 @@
  * separate switch. Off (or quit) = tunnel and server stopped, every socket closed, every phone signed out. No Electron
  * imports: wire.ts gives it the host and the event sink.
  */
-import type { RemotePairLink, RemoteState } from '../../shared/remote'
+import { pairLinkFor, type RemotePairLink, type RemoteState } from '../../shared/remote'
 import { RemoteAuth } from './auth'
 import { PhoneApi, type PhoneHost } from './api'
 import { RemoteServer, type RemoteApi } from './server'
@@ -14,6 +14,8 @@ export interface RemoteServiceDeps {
   bundleDir: string | null
   emit: (s: RemoteState) => void
   tunnel: Pick<TunnelDeps, 'bin' | 'spawn' | 'timeoutMs'>
+  /** RA6: the hosted phone app's origin (Settings › App › Phone › Phone app address), or null: the Mac's own page only */
+  site?: () => string | null
   log?: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
 }
 
@@ -65,7 +67,7 @@ export class RemoteService {
             this.changed()
           }
         }
-        const s = new RemoteServer({ auth: this.auth, api: counted, bundleDir: this.d.bundleDir, extraHosts: () => (this.tunnel.host ? [this.tunnel.host] : []), log: this.d.log })
+        const s = new RemoteServer({ auth: this.auth, api: counted, bundleDir: this.d.bundleDir, extraHosts: () => (this.tunnel.host ? [this.tunnel.host] : []), allowedOrigins: () => this.siteOrigins(), log: this.d.log })
         await s.start()
         this.api = api
         this.server = s
@@ -90,12 +92,28 @@ export class RemoteService {
     })
   }
 
-  /** A fresh one-time link: through the tunnel when it is on, else this Mac only. */
+  private site(): string | null {
+    try {
+      return this.d.site?.() ?? null
+    } catch {
+      return null
+    }
+  }
+  private siteOrigins(): string[] {
+    const s = this.site()
+    return s ? [s] : []
+  }
+
+  /**
+   * A fresh one-time link: through the tunnel when it is on, else this Mac only. With a hosted phone app it opens that
+   * site with this Mac's address in the fragment (`<site>/#mac=…&code=…`); without one, the Mac's own page.
+   */
   pairLink(): RemotePairLink {
     if (!this.server?.localUrl) throw Object.assign(new Error('Turn Phone on first'), { code: 'conflict' })
     const { code, expiresAt } = this.auth.createCode()
-    const base = this.tunnel.state.url ?? this.server.localUrl
-    return { link: `${base}/#pair=${code}`, expiresAt: new Date(expiresAt).toISOString(), public: !!this.tunnel.state.url }
+    const mac = this.tunnel.state.url ?? this.server.localUrl
+    const site = this.site()
+    return { link: pairLinkFor({ site, mac, code }), expiresAt: new Date(expiresAt).toISOString(), public: !!this.tunnel.state.url, site }
   }
 
   revoke(id: string): RemoteState {

@@ -17,6 +17,7 @@ import { EMPTY_CHAT_META } from '@shared/chat'
 import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg } from '@shared/remote'
 import { PairError, RemoteAuth } from './auth'
 import { RemoteServer, bundleFiles, parseCookies } from './server'
+import type { OrchSuggestion } from '../../shared/orchestrator'
 import { PHONE_CHANNELS, PhoneApi, terminalReply, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared, parseTunnelUrl } from './tunnel'
@@ -56,7 +57,8 @@ function world() {
     channels: [channel('ch_a', 'co_a'), channel('ch_b', 'co_b')],
     members: [member('mb_owner_a', 'co_a', { kind: 'human', role: 'owner', handle: 'you' }), member('mb_ag_a', 'co_a', { agentId: 'ag_a', handle: 'livia', name: 'Livia' }), member('mb_ag_b', 'co_b', { agentId: 'ag_b', handle: 'marcus' })],
     runs: [] as { id: string; companyId: string; agentId: string | null; title: string; status: string }[],
-    calls: [] as { channel: string; req: unknown }[]
+    calls: [] as { channel: string; req: unknown }[],
+    suggestions: [] as OrchSuggestion[]
   }
   const listeners = new Set<(e: string, p: unknown) => void>()
   const host: PhoneHost = {
@@ -73,6 +75,7 @@ function world() {
         case 'companyAgents:list': return req?.companyId ? d.seats.filter((s) => s.companyId === req.companyId) : d.seats
         case 'departments:list': return [] as Department[]
         case 'repos:list': return []
+        case 'orchestrator:suggestions': return d.suggestions
         case 'runs:list': return d.runs.filter((r) => !req?.companyId || r.companyId === req.companyId)
         case 'chat:snapshot': return snap(req.id)
         case 'app:dashboard': return { done: [] }
@@ -367,6 +370,19 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(chats.rows.map((r) => r.key).sort()).toEqual(['agent:ag_a', 'session:se_a'])
     const text = JSON.stringify([needs, chats, await api.handle('now', { companyId: 'co_a' }, {}, dev), await api.handle('room', { companyId: 'co_a' }, {}, dev)])
     for (const leak of ['co_b', 'se_b', 'ag_b', 'ask_b', 'tb_rev', 'Harbor', 'Recall letters', 'marcus', 'ch_b']) expect(text).not.toContain(leak)
+  })
+  it('Principia\'s open suggestions count in Needs you and show for their company only (decided on the Mac)', async () => {
+    const { host, d } = world()
+    const sg = (id: string, companyId: string): OrchSuggestion => ({ id, companyId, kind: 'routine', title: `Idea ${id}`, detail: 'Every weekday.', status: 'open', createdAt: T, decidedAt: null })
+    d.suggestions = [sg('osg_a', 'co_a'), sg('osg_b', 'co_b')]
+    const api = new PhoneApi(host)
+    const before = (await new PhoneApi(world().host).handle('needs', { companyId: 'co_a' }, {}, dev)) as PhoneNeeds
+    const needs = (await api.handle('needs', { companyId: 'co_a' }, {}, dev)) as PhoneNeeds
+    expect(needs.count).toBe(before.count + 1)
+    const idea = needs.tasks.find((t) => t.kind === 'idea')!
+    expect(idea).toMatchObject({ taskId: 'osg_a', title: 'Idea osg_a' })
+    expect(idea.text).toContain('Decide on your Mac')
+    expect(JSON.stringify(needs)).not.toContain('osg_b')
   })
   it('answers go through the desktop actions, with the phone’s limits', async () => {
     const { host, d } = world()

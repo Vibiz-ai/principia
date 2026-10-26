@@ -45,3 +45,8 @@
 .run-forum__msg span { color: var(--text-tertiary); }
 .run-forum__msg p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text-primary); }
 .run-forum__open { margin: 6px 12px 0; }
+
+/* ORCHESTRATOR.md §5: "Principia after this run" (reuses the run-forum rows) */
+.run-principia__action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.run-principia__action .pill { flex: none; }
+.run-principia__link { display: block; width: 100%; margin-top: 2px; font-size: 11px; color: var(--text-tertiary); }

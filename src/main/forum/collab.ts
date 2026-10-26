@@ -70,7 +70,7 @@ export interface CollabOutcome {
   depth: number
 }
 
-interface WakeRow {
+export interface WakeRow {
   id: string; company_id: string; thread_seq: number; message_seq: number; channel_id: string; from_member: string; to_member: string
   from_agent: string | null; to_agent: string | null; from_run: string | null; to_run: string | null; depth: number; chain: string; via: string
   why: string; status: string; refusal: string | null; note: string; created_at: string; answered_at: string | null
@@ -93,6 +93,12 @@ const REFUSAL_TEXT: Record<CollabRefusal, (h: string, s: AgentCollabSettings) =>
 const LIVE = "status IN ('started','queued','answered')"
 
 export class AgentCollab {
+  /**
+   * ORCHESTRATOR.md §2: the woken teammate replied in the thread (`text`: its reply). The mailbox picks the asking task
+   * back up from a question asked by @mention.
+   */
+  onReplied?: (e: { rows: WakeRow[]; text: string }) => void
+
   constructor(private readonly d: CollabDeps) {}
 
   private now(): Date {
@@ -102,8 +108,12 @@ export class AgentCollab {
     return this.d.store()
   }
 
-  /** Depth and chain of a new wake asked from `caller`'s run. */
-  provenance(caller: Pick<ForumCaller, 'runId' | 'memberId'>): { depth: number; chain: string[] } {
+  /**
+   * Depth and chain of a new wake asked from `caller`'s run. ORCHESTRATOR.md §2: the mailbox passes the run whose report
+   * asked (`originRunId`), so a question sent after the run ended keeps its place in the chain.
+   */
+  provenance(caller: Pick<ForumCaller, 'runId' | 'memberId'>, originRunId?: string | null): { depth: number; chain: string[] } {
+    if (originRunId !== undefined) caller = { ...caller, runId: originRunId }
     if (caller.runId) {
       const row = this.d.db.prepare(`SELECT depth, chain FROM forum_agent_wakes WHERE to_run=? AND ${LIVE} ORDER BY created_at DESC LIMIT 1`).get(caller.runId) as { depth: number; chain: string } | undefined
       if (row) {
@@ -147,7 +157,18 @@ export class AgentCollab {
    * An agent's message asks (`ask`) or mentions (`mention`) these agents: check each, record, wake. Never throws.
    * `msg` is the message that asked; its thread root is where the conversation lives.
    */
-  request(caller: ForumCaller, msg: ForumMessage, targets: ForumMember[], via: 'ask' | 'mention', why: string): CollabOutcome[] {
+  request(
+    caller: ForumCaller,
+    msg: ForumMessage,
+    targets: ForumMember[],
+    via: 'ask' | 'mention' | 'report',
+    why: string,
+    /**
+     * ORCHESTRATOR.md §2 (the mailbox): deliver this wake another way (into the target's in-flight task) instead of a
+     * reply run. Returning null falls back to the responder's wake.
+     */
+    opts: { deliver?: (req: CollabWakeRequest) => CollabWakeResult | null } = {}
+  ): CollabOutcome[] {
     const out: CollabOutcome[] = []
     let asker: ForumMember | null = null
     try {
@@ -189,7 +210,8 @@ export class AgentCollab {
       this.insert({ ...base, to_run: null, status: 'queued', refusal: null, note: '' })
       let res: CollabWakeResult
       try {
-        res = this.d.wake ? this.d.wake({ wakeId: id, target, asker, message: msg, depth: v.depth, maxHops: st.maxHops, why: base.why }) : { runId: null, queued: false, error: 'no responder' }
+        const req: CollabWakeRequest = { wakeId: id, target, asker, message: msg, depth: v.depth, maxHops: st.maxHops, why: base.why }
+        res = opts.deliver?.(req) ?? (this.d.wake ? this.d.wake(req) : { runId: null, queued: false, error: 'no responder' })
       } catch (e) {
         res = { runId: null, queued: false, error: String(e) }
       }
@@ -214,14 +236,14 @@ export class AgentCollab {
   }
 
   /** A record without a wake (forum_ask_agent refused before posting): visible in the panel like any refusal. */
-  recordRefusal(caller: ForumCaller, target: ForumMember | null, refusal: CollabRefusal, why: string, channelId: string): string {
+  recordRefusal(caller: ForumCaller, target: ForumMember | null, refusal: CollabRefusal, why: string, channelId: string, via: 'ask' | 'mention' | 'report' = 'ask'): string {
     const v = this.provenance(caller)
     const note = target ? `@${target.handle} not woken: ${this.refusalText(refusal, target)}` : this.refusalText(refusal, null)
     if (!target || refusal === 'self' || refusal === 'not_agent') return note
     this.insert({
       id: `fwk_${randomBytes(6).toString('hex')}`, company_id: caller.companyId, thread_seq: 0, message_seq: 0, channel_id: channelId, from_member: caller.memberId, to_member: target.id,
       from_agent: this.s().member(caller.memberId)?.agentId ?? null, to_agent: target.agentId, from_run: caller.runId, to_run: null, depth: v.depth, chain: JSON.stringify(v.chain),
-      via: 'ask', why: clip(why.trim(), 300), status: 'refused', refusal, note, created_at: this.now().toISOString()
+      via, why: clip(why.trim(), 300), status: 'refused', refusal, note, created_at: this.now().toISOString()
     })
     this.d.log?.warn('agent collab: refused', { companyId: caller.companyId, to: target.handle, refusal, depth: v.depth, runId: caller.runId })
     return note
@@ -244,8 +266,16 @@ export class AgentCollab {
   }
 
   /** The target wrote in the thread (reply, answered ask): its wakes there are answered. */
-  noteReplied(memberId: string, threadSeq: number): void {
+  noteReplied(memberId: string, threadSeq: number, text?: string): void {
+    const rows = this.d.db.prepare("SELECT * FROM forum_agent_wakes WHERE thread_seq=? AND to_member=? AND status IN ('started','queued')").all(threadSeq, memberId) as WakeRow[]
+    if (!rows.length) return
     this.d.db.prepare("UPDATE forum_agent_wakes SET status='answered', answered_at=? WHERE thread_seq=? AND to_member=? AND status IN ('started','queued')").run(this.now().toISOString(), threadSeq, memberId)
+    if (text === undefined || !this.onReplied) return
+    try {
+      this.onReplied({ rows, text })
+    } catch {
+      /* the wake bookkeeping never fails a reply */
+    }
   }
 
   // ---------- views ----------
@@ -264,7 +294,7 @@ export class AgentCollab {
       id: r.id, companyId: r.company_id, threadMessageId: threadId, messageId, channelId: r.channel_id, fromMemberId: r.from_member, toMemberId: r.to_member,
       fromName: this.s().member(r.from_member)?.name ?? 'someone', toName: this.s().member(r.to_member)?.name ?? 'someone',
       fromAgentId: r.from_agent, toAgentId: r.to_agent, fromRunId: r.from_run, toRunId: r.to_run, depth: r.depth, chain: parse<string[]>(r.chain, []),
-      via: r.via === 'mention' ? 'mention' : 'ask', why: r.why, status: r.status as CollabWakeStatus, refusal: (r.refusal as CollabRefusal | null) ?? null, note: r.note,
+      via: r.via === 'mention' ? 'mention' : r.via === 'report' ? 'report' : 'ask', why: r.why, status: r.status as CollabWakeStatus, refusal: (r.refusal as CollabRefusal | null) ?? null, note: r.note,
       createdAt: r.created_at, answeredAt: r.answered_at, costUsd: cost.usd, costEstimated: cost.estimated, tokens: cost.tokens
     }
   }

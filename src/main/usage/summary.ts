@@ -17,6 +17,8 @@ export const NO_DEPARTMENT = 'No department'
 /** Five doors §4.9: chats you had yourself (no agent seat) read as yours, not as a missing seat. */
 export const OWN_CHATS = 'Your own chats'
 export const OTHER_RUNS = 'Other runs'
+/** ORCHESTRATOR.md §5: Principia's own cheap calls (usage source `orchestrator`, table orch_usage). */
+export const PRINCIPIA_ROW = 'Principia (chief of staff)'
 
 interface RootRow {
   id: string
@@ -155,6 +157,16 @@ export function usageSummary(d: SummaryDeps, q: { range: UsageRange; companyId?:
      LEFT JOIN company_agents ca ON ca.id = COALESCE(r.agent_id, (SELECT t.agent_id FROM company_tasks t WHERE t.id = s.task_id))
      WHERE a.parent_id IS NULL AND a.started_at >= ? ${companyId ? `AND COALESCE(a.company_id, '${PERSONAL_COMPANY_ID}') = ?` : ''}`,
     companyId ? [since, companyId] : [since]
+  )
+  // the chief of staff's and the fallback extractor's calls: one "Principia (chief of staff)" row per company
+  rows.push(
+    ...tryAll<RootRow>(
+      d.db,
+      `SELECT id, 'orchestrator' AS kind, cli AS provider, model, tokens_in, tokens_out, cost_usd, NULL AS model_usage_json, at AS started_at, company_id,
+         'principia:' || company_id AS seat_id, '${PRINCIPIA_ROW}' AS seat_name, NULL AS seat_dep, NULL AS task_dep, NULL AS sess_dep
+       FROM orch_usage WHERE at >= ? ${companyId ? 'AND company_id = ?' : ''}`,
+      companyId ? [since, companyId] : [since]
+    )
   )
   const deps = new Map(tryAll<{ id: string; name: string; company_id: string }>(d.db, 'SELECT id, name, company_id FROM company_departments', []).map((x) => [x.id, x]))
 

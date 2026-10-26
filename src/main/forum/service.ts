@@ -103,6 +103,13 @@ export class ForumService implements ForumBridge {
   readonly collab: AgentCollab
   /** responder.ts wakeForAgent (set by wire.ts; absent in tests that do not wake) */
   collabWake: ((req: CollabWakeRequest) => CollabWakeResult) | null = null
+  /**
+   * ORCHESTRATOR.md §1.3: true = Principia will post this task step's update from its run report, so the automatic post
+   * of the step's final answer is skipped (reply runs always keep theirs: it answers the message). Set by its wire.
+   */
+  deferAutoPost: ((e: { runId: string; stepId: string; output: string }) => boolean) | null = null
+  /** ORCHESTRATOR.md §2: an ask was answered (the mailbox wakes a blocked asker). Set by its wire. */
+  onAskAnswered: ((m: ForumMessage, opts: { waited: boolean }) => void) | null = null
 
   constructor(private readonly d: ForumServiceDeps) {
     this.store = new ForumStore(d.db, { directory: d.directory, now: d.now, redact: d.redact, onEvent: (e) => this.onStoreEvent(e) })
@@ -390,7 +397,15 @@ export class ForumService implements ForumBridge {
     if (!replyId) this.store.post(by.id, { channelId: msg.channelId, threadId: msg.id, text })
     const next: ForumAsk = { ...ask, status: 'answered', answer: clip(this.d.redact ? this.d.redact(text) : text, 4000), answeredBy: by.id, answeredAt: this.now().toISOString() }
     let updated = this.store.patchPayload(msg.id, { ask: next })
+    // AGENT-COLLAB.md: an answer in the thread answers the wakes there too
+    if (by.kind === 'agent') this.collab.noteReplied(by.id, msg.seq)
+    // a tool still waiting for this answer gets it in the same turn (the asking task needs no wake)
     const hadWaiter = !!this.waiters.get(msg.id)?.size
+    try {
+      this.onAskAnswered?.(updated, { waited: hadWaiter })
+    } catch (e) {
+      this.d.log?.warn('forum: ask answered hook failed', { messageId: msg.id, error: String(e) })
+    }
     for (const w of [...(this.waiters.get(msg.id) ?? [])]) w.resolve(updated)
     // the board: a parked task wakes with the answer; a running one gets it when it parks (unless a tool was waiting)
     if (ask.taskId && this.d.tasks && !hadWaiter) {
@@ -518,8 +533,26 @@ export class ForumService implements ForumBridge {
     return t
   }
 
-  /** messages an agent already filed as a task (forum_reply `task`): one task per message */
+  /** messages an agent already filed as a task (forum_reply `task`, or Principia from its reply run's report): one task per message */
   private readonly filed = new Map<string, string>()
+  /** The task already filed from this person's message, if any. */
+  taskFiledFor(messageId: string): string | null {
+    return this.filed.get(messageId) ?? null
+  }
+  /**
+   * ORCHESTRATOR.md §1.3: Principia filed a reply run's follow-up for the person's message (the agent had no Forum
+   * tools, or put it in its report): one task per message, and the thread says so like Make task does.
+   */
+  noteFiledFromReply(messageId: string, task: { id: string; identifier: string }, agentName: string): void {
+    if (this.filed.has(messageId)) return
+    this.filed.set(messageId, task.id)
+    try {
+      const msg = this.store.message(messageId)
+      this.store.systemPost(msg.channelId, `${agentName} made ${task.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
+    } catch {
+      /* the line is a courtesy */
+    }
+  }
   /** forum_reply `task`: the person's message as a Board task for the agent who replied (like Make task). */
   private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string } | null {
     if (msg.companyId !== companyId || me.companyId !== companyId) fail('That message is not in your company')
@@ -577,7 +610,9 @@ export class ForumService implements ForumBridge {
       }
       const wrote = applied > 0 || this.stepWrites.has(e.stepId)
       this.stepWrites.delete(e.stepId)
-      if (!wrote && e.status === 'passed') this.autoPost(e, member, row.task_id, reply)
+      // ORCHESTRATOR.md §1.3: a task step with a run report gets its update from Principia instead (one post, not two)
+      const deferred = !reply && !!this.deferAutoPost && safeBool(() => this.deferAutoPost!(e))
+      if (!wrote && e.status === 'passed' && !deferred) this.autoPost(e, member, row.task_id, reply)
       return applied
     } catch (err) {
       this.d.log?.warn('forum: harvest failed', { runId: e.runId, error: String(err) })
@@ -595,7 +630,7 @@ export class ForumService implements ForumBridge {
         const posted = this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
         // AGENT-COLLAB.md: the answer of a woken agent that did not reply itself still answers the ask it was woken for
         const root = this.store.message(posted.threadId ?? reply.messageId)
-        this.collab.noteReplied(member.id, root.seq)
+        this.collab.noteReplied(member.id, root.seq, text)
         if (root.kind === 'ask' && root.ask?.status === 'open' && root.ask.to.includes(member.id)) {
           try {
             this.answer(root.id, member.id, text, posted.id)
@@ -616,6 +651,61 @@ export class ForumService implements ForumBridge {
     } catch (err) {
       this.d.log?.warn('forum: automatic post failed', { runId: e.runId, stepId: e.stepId, error: String(err) })
     }
+  }
+
+  // ---------- Principia posts for an agent (ORCHESTRATOR.md §1.3) ----------
+
+  /**
+   * Posts as an agent seat's member, on Principia's behalf (from the agent's run report): origin `principia:<runId>`, so
+   * the message reads "via Principia" and is never mistaken for the agent's own tool call. Default channel: the seat's
+   * department channel, else #general. `opKey` makes it idempotent. Returns null when the seat has no active member.
+   */
+  postAsAgent(input: { companyId: string; agentId: string; runId: string; text: string; channelId?: string | null; threadId?: string | null; ask?: ForumAsk; opKey: string }): ForumMessage | null {
+    this.store.sync(input.companyId)
+    const member = this.store.memberForAgent(input.agentId)
+    if (!member || member.companyId !== input.companyId || member.status !== 'active') return null
+    const channelId = input.channelId ?? this.homeChannel(input.companyId, member.id)?.id
+    if (!channelId) return null
+    const text = clip(input.text.trim(), FORUM_LIMITS.agentText)
+    if (!text) return null
+    return this.store.post(member.id, {
+      channelId,
+      text,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.ask ? { kind: 'ask' as const, ask: input.ask } : {}),
+      origin: `principia:${input.runId}`,
+      opKey: input.opKey
+    })
+  }
+
+  /**
+   * ORCHESTRATOR.md §3: a line from Principia itself (the chief of staff's digest) in the Team room (#general), shown as
+   * "Principia (chief of staff)". A system line: it mentions and wakes nobody. Idempotent by `opKey`.
+   */
+  postAsPrincipia(input: { companyId: string; text: string; opKey: string }): ForumMessage | null {
+    this.store.sync(input.companyId)
+    const general = this.d.db.prepare("SELECT id FROM forum_channels WHERE company_id=? AND system='general' LIMIT 1").get(input.companyId) as { id: string } | undefined
+    if (!general) return null
+    const text = clip(input.text.trim(), 1000)
+    if (!text) return null
+    return this.store.systemPost(general.id, text, undefined, { origin: 'principia:coordinator', opKey: input.opKey })
+  }
+
+  /**
+   * What this run already wrote to the Forum itself (its steps' tool calls, CLI and fenced ops; the automatic post of a
+   * step's answer too unless `own`).
+   */
+  postsOfRun(runId: string, opts: { own?: boolean } = {}): ForumMessage[] {
+    let stepIds: string[] = []
+    try {
+      stepIds = (this.d.db.prepare('SELECT id FROM run_steps WHERE run_id=?').all(runId) as { id: string }[]).map((x) => x.id)
+    } catch {
+      stepIds = []
+    }
+    if (!stepIds.length) return []
+    const auto = opts.own ? " AND COALESCE(json_extract(data,'$.opKey'),'') NOT LIKE '%:auto'" : ''
+    const rows = this.d.db.prepare(`SELECT seq FROM forum_messages WHERE origin IN (${stepIds.map(() => '?').join(',')}) AND kind!='system'${auto} ORDER BY seq`).all(...stepIds.map((x) => `agent:${x}`)) as { seq: number }[]
+    return rows.map((r) => this.store.message(r.seq))
   }
 
   // ---------- renderer state ----------
@@ -655,5 +745,13 @@ export class ForumService implements ForumBridge {
   me(companyId: string): ForumMember {
     this.store.sync(companyId)
     return this.store.owner(companyId)
+  }
+}
+
+function safeBool(f: () => boolean): boolean {
+  try {
+    return f()
+  } catch {
+    return false
   }
 }

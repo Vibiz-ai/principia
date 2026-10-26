@@ -111,6 +111,7 @@ export const TASK_TOOL_DEFS: Record<TaskTool | SessionTaskTool, ToolDef> = {
         title: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.title, description: 'In your own words, never the message pasted in.' },
         description: { type: 'string', maxLength: TASK_LIMITS.description, description: 'Goal, context, acceptance criteria as "- [ ]" lines.' },
         departmentKey: { type: 'string', maxLength: 80, description: 'Department key (e.g. marketing). On a task: omit to let the board route it. In a chat: defaults to the chat\'s department.' },
+        agent: { type: 'string', maxLength: 120, description: 'On a task: the teammate who should do it, by @handle, name or role ("@marcus", "Marcus", "Brand Voice Writer"). Omit to let the board route it.' },
         blocksCurrent: { type: 'boolean', default: false, description: 'On a task only.' },
         parent: { ...TASK_ID, description: 'Chats: a task this chat tracks, to group this one under it.' },
         start: { type: 'boolean', default: false, description: 'Chats: start it now (in_progress).' }

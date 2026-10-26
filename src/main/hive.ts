@@ -124,6 +124,10 @@ export class Hive {
   forum: ForumService | null = null
   /** DASHBOARDS.md: department dashboards (null until wired / on failure). */
   dashboards: DashboardService | null = null
+  /** ORCHESTRATOR.md: Principia's own layer between runs (null until startOrchestrator / on failure). */
+  orchestrator: import('./orchestrator/wire').Orchestrator | null = null
+  /** PASSPORT.md §12: the suggestion pipeline (run report facts become proposals through it); null without memory. */
+  memorySuggest: import('./memory/vault/suggest').SuggestionPipeline | null = null
   /** LINEAR.md: optional Linear sync per company (null until wired / on failure). */
   linear: import('./company/sync/service').LinearSyncService | null = null
   /** REMOTE.md: Phone (off at every launch; null until wired / on failure). */

@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { AUTHORING_ADDED_COLUMNS, COMPANY_ADDED_COLUMNS, DDL_AUTHORING, DDL_COMPANY, DDL_COMPANY_INDEXES, DDL_SLACK, DDL_V1, DDL_V2_SCHEDULE_EVENTS, DDL_V2_TABLES, PRAGMAS, SCHEMA_VERSION, SLACK_ADDED_COLUMNS, V2_ADDED_COLUMNS } from './schema'
+import { AUTHORING_ADDED_COLUMNS, COMPANY_ADDED_COLUMNS, DDL_AUTHORING, DDL_COMPANY, DDL_COMPANY_INDEXES, DDL_ORCHESTRATOR, DDL_SLACK, DDL_V1, DDL_V2_SCHEDULE_EVENTS, DDL_V2_TABLES, PRAGMAS, SCHEMA_VERSION, SLACK_ADDED_COLUMNS, V2_ADDED_COLUMNS } from './schema'
 import { backupBeforeCompanyMigration, migrateCompanyData } from './companyMigration'
 import { migrateSlackData } from './slackMigration'
 import { ensureForumSchema } from '../forum/schema'
@@ -92,6 +92,8 @@ function healV2Columns(db: DB): void {
   migrateCompanyData(db)
   // FORUM.md §1: the Forum tables, still schema v2 (older builds ignore them)
   ensureForumSchema(db)
+  // ORCHESTRATOR.md: run reports, the mailbox and the call budget, still schema v2
+  db.exec(DDL_ORCHESTRATOR)
 }
 
 /** Columns added to the v1 DDL during the build. CREATE IF NOT EXISTS won't add them to an older db, so add them here. */

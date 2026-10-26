@@ -8,14 +8,14 @@ import { emit, handle, invokeLocal, onEmit } from '../ipc'
 import { log } from '../log'
 import { HiveError } from '../../shared/errors'
 import type { InvokeReq, InvokeRes } from '../../shared/ipc'
-import type { RemoteState } from '../../shared/remote'
+import { phoneSiteOrigin, type RemoteState } from '../../shared/remote'
 import { PHONE_CHANNELS, type PhoneChannel, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared } from './tunnel'
 
 const allowed = new Set<string>(PHONE_CHANNELS)
 
-export function createRemote(o: { mainDir: string; envPath: () => string | undefined }): RemoteService {
+export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined }): RemoteService {
   const host: PhoneHost = {
     invoke: <C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> => {
       // defense in depth: the type already limits the list
@@ -30,6 +30,8 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
     bundleDir: path.join(o.mainDir, '..', 'phone'),
     emit: (s) => emit('remote:changed', s),
     tunnel: { bin: () => findCloudflared(o.envPath()) },
+    // RA6: read each time, so a new Phone app address applies to the next code and request
+    site: () => phoneSiteOrigin(o.siteSetting?.()),
     log
   })
 }

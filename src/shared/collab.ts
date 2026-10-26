@@ -89,7 +89,8 @@ export interface CollabWake {
   depth: number
   /** member ids of the agents already in this chain, the asker last */
   chain: string[]
-  via: 'ask' | 'mention'
+  /** ask: forum_ask_agent; mention: an @mention; report: a question in a run report, sent by Principia (ORCHESTRATOR.md §2) */
+  via: 'ask' | 'mention' | 'report'
   why: string
   status: CollabWakeStatus
   refusal: CollabRefusal | null

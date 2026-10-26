@@ -132,6 +132,9 @@ describe('screens', () => {
     const t = renderNeeds({ ...baseView(), tab: 'needs', needs }, noop)
     expect(btns(t)).toEqual(expect.arrayContaining(['Allow', 'Deny', 'Approve', 'Send back', 'Yes', 'No', 'Send']))
     expect(findAll(t, (n) => n.tag === 'textarea')).toHaveLength(1)
+    // a short lettered tag, then the task's title in plain type (long titles stay readable)
+    expect(findAll(t, (n) => n.attrs.class === 'kicker').map(textOf)).toEqual(['Ready for your OK', 'A question'])
+    expect(findAll(t, (n) => n.attrs.class === 'card__t').map(textOf)).toEqual(['Instagram week', 'Prices'])
   })
   it('Send back opens its box (Needs you and the conversation), then sends what you wrote', () => {
     const needs: PhoneNeeds = { companyId: 'co_a', count: 1, asks: [], tasks: [{ taskId: 'ta_1', kind: 'review', title: 'Instagram week', text: 'Seven posts are ready.', who: null, agentId: 'ag_a', at: T, options: [] }] }

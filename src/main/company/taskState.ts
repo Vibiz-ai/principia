@@ -34,6 +34,8 @@ export interface TransitionCtx {
   work?: 'pr_ready' | 'changes_requested' | 'merged' | 'approved'
   /** WORKTREE.md: the task's worktree is gone and the founder chose Back to Backlog */
   worktreeGone?: boolean
+  /** ORCHESTRATOR.md §2: a teammate answered the blocking question the agent parked this task on */
+  teammateAnswered?: boolean
 }
 
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
@@ -78,6 +80,9 @@ export const TRANSITIONS: readonly Rule[] = [
   { row: 'in_progress → todo (handoff at run end)', from: 'in_progress', to: 'todo', actors: SYSTEM },
   { row: 'blocked(needs_input) → todo (answer)', from: s => s.status === 'blocked' && s.blockReason === 'needs_input', to: 'todo', actors: HUMAN,
     check: ctx => ctx.answer === undefined || !blank(ctx.answer) ? null : 'Write an answer first' },
+  // ORCHESTRATOR.md §2: the agent parked itself waiting on a teammate's answer; the answer puts the task back in To do
+  { row: 'blocked(agent) → todo (a teammate answered)', from: s => s.status === 'blocked' && s.blockReason === 'agent', to: 'todo', actors: SYSTEM,
+    check: ctx => ctx.teammateAnswered ? null : 'Only a teammate\'s answer moves a task the agent parked' },
   { row: 'blocked(not deps) → todo (Unpark)', from: parked, to: 'todo', actors: HUMAN,
     // an answer attempt is held to the answer row, whatever the reason
     check: ctx => ctx.answer !== undefined && blank(ctx.answer) ? 'Write an answer first' : null },

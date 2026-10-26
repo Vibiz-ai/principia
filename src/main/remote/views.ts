@@ -11,6 +11,7 @@ import { resolvePersonas } from '../../shared/personas'
 import type { PhoneAgent, PhoneAsk, PhoneChatRef, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneTaskNeed, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
 import { liveTruth, needsIn, workingIn, type LiveTruth } from '../../renderer/src/lib/liveTruth'
 import { reposOf, taskCounts, taskNeedsIn } from '../../renderer/src/lib/companyModel'
+import { suggestionCounts, type OrchSuggestion } from '../../shared/orchestrator'
 import { laneContext } from '../../renderer/src/lib/departments'
 import { needsYouTasks } from '../../renderer/src/lib/board'
 import { isLive, lastSaid } from '../../renderer/src/lib/live'
@@ -35,6 +36,8 @@ export interface PhoneData {
   departmentsOn: boolean
   /** idle session roots looked at from the phone (A3 "seen") */
   seen: ReadonlySet<Id>
+  /** ORCHESTRATOR.md §3: Principia's open suggestions (they count in Needs you; decided on the Mac) */
+  suggestions?: OrchSuggestion[]
 }
 
 const PROVIDER: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', shell: 'Terminal' }
@@ -51,6 +54,7 @@ export function truthOf(d: PhoneData): LiveTruth {
   const counts = d.departmentsOn ? taskCounts(d.tasks, laneContext(asksById, d.companyAgents, paused)) : {}
   const taskNeeds: Record<Id, number> = {}
   for (const id of Object.keys(counts)) taskNeeds[id] = taskNeedsIn(counts, id)
+  if (d.departmentsOn) for (const [id, n] of Object.entries(suggestionCounts(d.suggestions ?? []))) taskNeeds[id] = (taskNeeds[id] ?? 0) + n
   const listed = new Set(d.companies.map((c) => c.id))
   const code = new Set(d.companies.filter((c) => reposOf(d.repos, c.id).length > 0).map((c) => c.id))
   const t = liveTruth({ agents: d.agents, asks: d.asks, seen: d.seen, sessions: d.sessions, tasks: d.tasks, taskNeeds, listed, code })
@@ -218,6 +222,12 @@ export function phoneNeeds(d: PhoneData, companyId: Id): PhoneNeeds {
       else tasks.push({ ...base, kind: 'stuck', text: item.group === 'unassigned' ? `${task.title} has no agent yet. Assign it on your Mac.` : `${task.title} is stopped. Look at it on your Mac.` })
     }
   }
+  // Principia's suggestions: shown so the count adds up, decided on the Mac (each one is the founder's own yes there)
+  if (d.departmentsOn)
+    for (const sg of d.suggestions ?? []) {
+      if (sg.companyId !== companyId || sg.status !== 'open') continue
+      tasks.push({ taskId: sg.id, kind: 'idea', title: sg.title, text: sg.detail ? `${sg.detail} Decide on your Mac, in Needs you.` : 'Decide on your Mac, in Needs you.', who: null, agentId: null, at: sg.createdAt, options: [] })
+    }
   return { companyId, count: slice.count, asks, tasks }
 }
 

@@ -32,7 +32,9 @@ export const PHONE_CHANNELS = [
   'company:list', 'agents:list', 'asks:list', 'sessions:list', 'tasks:list', 'tasks:get', 'companyAgents:list',
   'departments:list', 'repos:list', 'runs:list', 'settings:get', 'chat:snapshot', 'forum:state', 'forum:messages', 'forum:thread', 'app:dashboard',
   'asks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:answer', 'company:pause', 'chat:send', 'chat:interrupt',
-  'chat:answer', 'agents:reply', 'tasks:comment', 'tasks:create', 'tasks:start', 'forum:post', 'forum:markRead'
+  'chat:answer', 'agents:reply', 'tasks:comment', 'tasks:create', 'tasks:start', 'forum:post', 'forum:markRead',
+  // read only: Principia's open suggestions count in Needs you (deciding one stays on the Mac)
+  'orchestrator:suggestions'
 ] as const
 export type PhoneChannel = (typeof PHONE_CHANNELS)[number]
 
@@ -116,7 +118,7 @@ export class PhoneApi implements RemoteApi {
     const h = this.h
     const settings = await h.invoke('settings:get', undefined)
     const on = departmentsEnabled(settings.experimental)
-    const [companies, agents, asks, sessions, tasks, companyAgents, departments, repos] = await Promise.all([
+    const [companies, agents, asks, sessions, tasks, companyAgents, departments, repos, suggestions] = await Promise.all([
       h.invoke('company:list', undefined),
       this.safe(() => h.invoke('agents:list', { status: ['starting', 'working', 'needs_you', 'idle'], since: new Date(Date.now() - DAY).toISOString(), limit: 1000 }), []),
       this.safe(() => h.invoke('asks:list', { status: 'open', limit: 500 }), []),
@@ -124,9 +126,10 @@ export class PhoneApi implements RemoteApi {
       this.safe(() => h.invoke('tasks:list', undefined), []),
       on ? this.safe(() => h.invoke('companyAgents:list', undefined), []) : Promise.resolve([]),
       on ? this.safe(() => h.invoke('departments:list', undefined), []) : Promise.resolve([]),
-      this.safe(() => h.invoke('repos:list', undefined), [])
+      this.safe(() => h.invoke('repos:list', undefined), []),
+      on ? this.safe(() => h.invoke('orchestrator:suggestions', {}), []) : Promise.resolve([])
     ])
-    return { companies: companies.filter((c) => !c.archivedAt), agents, asks, sessions, tasks, companyAgents, departments, repos, personas: settings.personas !== false, departmentsOn: on, seen: this.seen }
+    return { companies: companies.filter((c) => !c.archivedAt), agents, asks, sessions, tasks, companyAgents, departments, repos, personas: settings.personas !== false, departmentsOn: on, seen: this.seen, suggestions: Array.isArray(suggestions) ? suggestions : [] }
   }
 
   private company(d: PhoneData, companyId: string | undefined): Id {

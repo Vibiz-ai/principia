@@ -268,7 +268,7 @@ export class ForumAgentApi {
     this.d.presence?.(c, 'working', null)
     // a woken agent that writes in the thread it was woken for has answered (AGENT-COLLAB.md §2)
     try {
-      this.d.collab?.noteReplied(me.id, t.root.seq)
+      this.d.collab?.noteReplied(me.id, t.root.seq, a.text)
     } catch {
       /* bookkeeping only */
     }
@@ -304,7 +304,7 @@ export class ForumAgentApi {
     const open = this.s.openAsks(c.companyId, me.id)
     if (open.length >= FORUM_LIMITS.openAsksPerAgent) refuse(`You have ${open.length} open asks (${open.map((m) => m.ref).join(', ')}); wait for answers or end your turn.`)
     const to = (a.to?.length ? a.to : []).map((h) => {
-      const m = this.s.memberByHandle(c.companyId, h)
+      const m = this.s.memberByHandle(c.companyId, h) ?? this.s.agentByName(c.companyId, h)
       if (!m || m.status !== 'active') refuse(`No member ${h.startsWith('@') ? h : `@${h}`} in this company`)
       if (m!.kind === 'guest') refuse('Agents do not ask guests; ask a human member')
       return m!.id
@@ -487,7 +487,11 @@ export class ForumAgentApi {
       if (!lm || lm.status !== 'active') refuse(`#${dep.name} has no agent that can answer`)
       return lm!
     }
-    return refuse(`No agent or department @${h} in this company`)
+    // a name or role an agent wrote ("Marcus", "Brand Voice Writer"), in this company only
+    const named = this.s.agentByName(c.companyId, raw)
+    if (named) return named
+    const mates = this.s.roster(c.companyId).filter((t) => t.memberId !== c.memberId).slice(0, 8).map((t) => `@${t.handle}`).join(', ')
+    return refuse(`No agent or department @${h} in this company${mates ? ` (teammates: ${mates})` : ''}`)
   }
 
   private async askAgent(c: ForumCaller, me: ForumMember, a: ForumArgs['forum_ask_agent'], origin: string, opts: { signal?: AbortSignal; opKey?: string }): Promise<string> {

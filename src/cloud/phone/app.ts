@@ -3,23 +3,59 @@
  * (#/c/<company>/<tab>[/session|agent/<id>]), one state object, screens rebuilt from VNodes (text nodes only), and a
  * composer dock that is never rebuilt while you type. Live over one WebSocket: the Mac says what changed, the phone
  * refetches what is on screen; an open chat follows the Mac's own chat ops.
+ *
+ * Hosted (REMOTE.md RA6, the build for its own https site): the pairing link names the Mac's address
+ * (`#mac=…&code=…`), the token is kept in this site's localStorage and sent as a bearer, and the socket's first message
+ * carries it. The site itself holds no data: everything comes from the Mac, which is the authority.
  */
 import type { ChatOp, ChatSnapshot } from '../../shared/chat'
-import type { PhoneAgent, PhoneChats, PhoneCompany, PhoneMe, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneChatRef } from '../../shared/remote'
-import { ApiError, createApi, NotPaired } from './api'
+import { parsePairHash, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef } from '../../shared/remote'
+import { ApiError, createApi, MacGone, NotPaired } from './api'
+import { forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
-import { ChatReplica, placeMessage, deviceName, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash, type Route, type Tab } from './model'
+import { ChatReplica, placeMessage, deviceName, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
 import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, type Actions, type View } from './render'
 
-const api = createApi()
+declare const __PHONE_HOSTED__: boolean
+/** the build for its own site (vite.phone-site.config.ts); the Mac's own bundle is same-origin */
+const HOSTED = typeof __PHONE_HOSTED__ !== 'undefined' && __PHONE_HOSTED__
+const store: StorageLike | null = (() => {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+})()
+let paired: PairedMac | null = HOSTED ? loadMac(store) : null
+/** hosted, while pairing: the Mac named by the link */
+let pairMac: string | null = null
+const api = createApi(undefined, { base: () => (HOSTED ? (pairMac ?? paired?.mac ?? '') : ''), token: () => (HOSTED ? (paired?.token ?? null) : null) })
+const pairOf = (hash: string): { code: string; mac: string | null } | null => {
+  const p = parsePairHash(hash)
+  // the Mac's own page pairs with itself; the hosted site needs the Mac's address
+  if (!p) return null
+  if (HOSTED && !p.mac) return null
+  return p
+}
+/** a Home Screen app (iOS keeps its storage apart from Safari's, and the QR always opens Safari) */
+const STANDALONE = (() => {
+  try {
+    return (navigator as { standalone?: boolean }).standalone === true || matchMedia('(display-mode: standalone)').matches
+  } catch {
+    return false
+  }
+})()
 const $ = (id: string): HTMLElement => document.getElementById(id)!
 const doc = document as unknown as Parameters<typeof mount>[1]
 
 interface State {
   phase: 'boot' | 'pair' | 'out' | 'in'
-  outReason: 'unpaired' | 'off' | 'revoked'
+  /** gone: hosted, the Mac's last address does not answer (the tunnel stopped or changed) */
+  outReason: 'unpaired' | 'off' | 'revoked' | 'gone'
   pairError: string | null
+  /** hosted, signed out: why a pasted link was not a pairing link */
+  pasteError: string | null
   me: PhoneMe | null
   route: Route
   online: boolean
@@ -36,7 +72,7 @@ interface State {
   replica: ChatReplica | null
   agent: PhoneAgent | null
 }
-const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null }
+const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, pasteError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null }
 let live: Live | null = null
 try {
   // the app scrolls itself (a chat opens at its newest message); the browser never restores an old position
@@ -97,12 +133,20 @@ function say(text: string): void {
   }, 2600)
   renderToast()
 }
-function fail(e: unknown): void {
-  if (e instanceof NotPaired) {
-    st.phase = 'out'
-    st.outReason = 'unpaired'
-    return render()
+/** Signed out on the Mac's side: hosted, the kept token is worthless now, so it goes. */
+function signedOut(reason: State['outReason']): void {
+  if (reason !== 'gone' && HOSTED) {
+    forgetMac(store)
+    paired = null
+    live?.close()
+    live = null
   }
+  st.phase = 'out'
+  st.outReason = reason
+  render()
+}
+function fail(e: unknown): void {
+  if (e instanceof NotPaired) return signedOut('unpaired')
   say(e instanceof ApiError ? e.message : e instanceof TypeError ? 'Your Mac is not reachable right now.' : e instanceof Error ? e.message : String(e))
 }
 async function busy<T>(key: string, f: () => Promise<T>): Promise<T | undefined> {
@@ -238,10 +282,7 @@ function onLive(m: PhoneServerMsg): void {
       return
     }
     case 'bye':
-      st.phase = 'out'
-      st.outReason = m.reason
-      render()
-      return
+      return signedOut(m.reason)
     default:
       return
   }
@@ -380,19 +421,40 @@ const actions: Actions = {
     })()
   },
   pair() {
-    const code = pairCode(location.hash)
-    if (!code) return
+    const p = pairOf(location.hash)
+    if (!p) return
+    const code = p.code
     const name = (st.drafts['pair:name'] ?? deviceName(navigator.userAgent)).trim() || 'Phone'
     void (async () => {
       st.busy.add('pair')
       st.pairError = null
       render()
       try {
-        await api.call('pair', { body: { code, name } })
+        if (HOSTED) pairMac = p.mac
+        const out = await api.call<PhonePairResponse>('pair', { body: { code, name } })
+        if (HOSTED) {
+          if (!out.token) throw new Error('Your Mac does not know this phone app yet. On your Mac, check Settings › App › Phone › Phone app address.')
+          paired = { mac: p.mac!, token: out.token, device: out.device, pairedAt: new Date().toISOString() }
+          saveMac(store, paired)
+          live?.close()
+          live = null
+        }
         history.replaceState(null, '', '#/')
         st.route = parseRoute('#/')
         await start()
       } catch (e) {
+        if (HOSTED) {
+          pairMac = null
+          // an old or used link on a phone already paired with this Mac: just go in
+          if (e instanceof ApiError && e.status === 400 && paired?.mac === p.mac) {
+            history.replaceState(null, '', remembered() ?? '#/')
+            st.route = parseRoute(location.hash)
+            await start()
+            if (st.phase === 'in') return say('This phone is already paired')
+          }
+          st.pairError = e instanceof MacGone ? 'Your Mac did not answer, or it does not know this phone app. On your Mac, check that Phone is on and shared and that Settings › App › Phone › Phone app address is this site, then scan a new code.' : e instanceof Error ? e.message : String(e)
+          return
+        }
         // an old or used link on a phone that is already paired: just go in
         const signedIn = e instanceof ApiError && e.status === 400 ? await api.me().then(() => true, () => false) : false
         if (signedIn) {
@@ -402,13 +464,32 @@ const actions: Actions = {
           say('This phone is already paired')
         } else st.pairError = e instanceof Error ? e.message : String(e)
       } finally {
+        pairMac = null
         st.busy.delete('pair')
         render()
       }
     })()
   },
+  pasteLink(text) {
+    const frag = pastedPairHash(text, location.origin)
+    if (!frag) {
+      st.pasteError = 'That is not a pairing link for this app. Copy the whole link from your Mac and paste it again.'
+      return render()
+    }
+    st.pasteError = null
+    st.drafts['pair:paste'] = ''
+    location.hash = frag
+  },
   retry() {
     void start()
+  },
+  forget() {
+    forgetMac(store)
+    paired = null
+    live?.close()
+    live = null
+    st.outReason = 'unpaired'
+    render()
   },
   draft(key, value) {
     st.drafts[key] = value
@@ -459,14 +540,17 @@ function render(o: { live?: boolean } = {}): void {
   if (st.phase === 'pair') {
     swap($('hdr'), null)
     swap($('tabs'), null)
-    swap(main, renderPair(st.drafts['pair:name'] ?? deviceName(navigator.userAgent), st.pairError, st.busy.has('pair'), actions))
+    const linkMac = pairOf(location.hash)?.mac ?? null
+    // a link naming a different Mac than the one kept: say so before it replaces that pairing (a forged link)
+    const replaces = HOSTED && paired && linkMac && paired.mac !== linkMac ? macHost(paired.mac) : null
+    swap(main, renderPair({ name: st.drafts['pair:name'] ?? deviceName(navigator.userAgent), error: st.pairError, busy: st.busy.has('pair'), mac: macHost(linkMac) || null, replaces, browserTab: HOSTED && !STANDALONE }, actions))
     dock(null)
     return
   }
   if (st.phase === 'out') {
     swap($('hdr'), null)
     swap($('tabs'), null)
-    swap(main, renderSignedOut(st.outReason, actions))
+    swap(main, renderSignedOut({ reason: st.outReason, hosted: HOSTED, mac: macHost(paired?.mac) || null, error: st.error, standalone: STANDALONE, paste: st.drafts['pair:paste'] ?? '', pasteError: st.pasteError }, actions))
     dock(null)
     return
   }
@@ -674,8 +758,15 @@ async function stopChat(): Promise<void> {
 // ---------- boot ----------
 
 async function start(): Promise<void> {
-  if (pairCode(location.hash)) {
+  st.error = null
+  if (pairOf(location.hash)) {
     st.phase = 'pair'
+    return render()
+  }
+  // hosted with no Mac kept: nothing to ask, show how to pair
+  if (HOSTED && !paired) {
+    st.phase = 'out'
+    st.outReason = 'unpaired'
     return render()
   }
   if (!location.hash || location.hash === '#' || location.hash === '#/') {
@@ -689,12 +780,16 @@ async function start(): Promise<void> {
     await loadMe()
     st.phase = 'in'
   } catch (e) {
+    if (e instanceof NotPaired) return signedOut('unpaired')
     st.phase = 'out'
-    st.outReason = 'unpaired'
-    if (!(e instanceof NotPaired)) st.error = e instanceof Error ? e.message : String(e)
+    st.outReason = e instanceof MacGone ? 'gone' : 'unpaired'
+    if (!(e instanceof MacGone)) st.error = e instanceof Error ? e.message : String(e)
     return render()
   }
   live ??= openLive({
+    url: liveUrl(HOSTED ? (paired?.mac ?? '') : '', location),
+    token: () => (HOSTED ? (paired?.token ?? null) : null),
+    onUnauthorized: () => signedOut('unpaired'),
     onMessage: onLive,
     onState: (on) => {
       st.online = on
@@ -712,7 +807,8 @@ async function start(): Promise<void> {
 }
 
 window.addEventListener('hashchange', () => {
-  if (pairCode(location.hash)) {
+  if (pairOf(location.hash)) {
+    st.pairError = null
     st.phase = 'pair'
     return render()
   }

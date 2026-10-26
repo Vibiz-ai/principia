@@ -349,6 +349,23 @@ export class Dispatcher {
     return out
   }
 
+  /**
+   * ORCHESTRATOR.md §2: Principia's own wake for a task (a teammate's question for its seat, the answer to a question it
+   * asked). Like a system wake: coalesced into pendingWake while in flight, queued for the next turn otherwise; and a
+   * task its run left in review or blocked by the agent gets its follow-up turn now (same guard, autopilot and seat gates
+   * as a run end). Never throws.
+   */
+  addWake(taskId: string, reason: string): BoardTask | null {
+    try {
+      const out = this.wake(taskId, reason, 'system')
+      if (out && out.status !== 'in_progress') this.followUp(this.c.task(taskId))
+      return out
+    } catch (err) {
+      this.warn('wake failed', { taskId, error: String(err) })
+      return null
+    }
+  }
+
   /** runHooks: every run.updated. At a task run's end: sync (idempotent), capture the session, follow up, pump. */
   onRunUpdated(run: Run): void {
     if (!TERMINAL.has(run.status) || this.ended.has(run.id)) return

@@ -34,6 +34,7 @@
     "src/cloud/**/*",
     "vite.cloud.config.ts",
     "vite.phone.config.ts",
+    "vite.phone-site.config.ts",
     "src/renderer/src/lib/liveTruth.ts",
     "src/renderer/src/lib/companyModel.ts",
     "src/renderer/src/lib/departments.ts",

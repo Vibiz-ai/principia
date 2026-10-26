@@ -1,15 +1,18 @@
 /**
- * REMOTE.md RA1-RA3: the Phone server. HTTP + one WebSocket path, bound to 127.0.0.1 only on a random port. It serves
- * exactly the files of its own bundle (a fixed list read at start, never a path from the request), the pairing route,
- * and the Phone API, where every request carries a device token and every write the device's CSRF value. Unknown Host
- * headers are refused (DNS rebinding). No Electron imports.
+ * REMOTE.md RA1-RA3, RA6: the Phone server. HTTP + one WebSocket path, bound to 127.0.0.1 only on a random port. It
+ * serves exactly the files of its own bundle (a fixed list read at start, never a path from the request), the pairing
+ * route, and the Phone API, where every request carries a device token. Two ways to carry it:
+ * - same-origin (the Mac serves the app): an httpOnly SameSite=Strict cookie, and every write the device's CSRF value;
+ * - hosted (the app on its own https site): `Authorization: Bearer`, CORS for that one origin (exact match), and the
+ *   socket's first message. A bearer is never sent by a browser on its own, so it needs no CSRF value.
+ * Unknown Host headers are refused (DNS rebinding) in both. No Electron imports.
  */
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { matchRemoteRoute, REMOTE_COOKIE, REMOTE_CSRF_HEADER, type RemoteRouteName } from '../../shared/remote'
+import { matchRemoteRoute, REMOTE_AUTH_SCHEME, REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_WS_AUTH_MS, type RemoteRouteName } from '../../shared/remote'
 import { PairError, type RemoteAuth, type StoredDevice } from './auth'
 
 export class HttpError extends Error {
@@ -35,6 +38,10 @@ export interface RemoteServerOptions {
   bundleDir: string | null
   /** hosts besides 127.0.0.1:<port> and localhost:<port> that may call (the tunnel host) */
   extraHosts: () => string[]
+  /** RA6: origins of the hosted phone app that may call cross-origin (exact match; never a wildcard) */
+  allowedOrigins?: () => string[]
+  /** how long a hosted socket may wait before its auth message (tests shorten it) */
+  wsAuthMs?: number
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
 }
 
@@ -44,6 +51,7 @@ const TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.webp': 'image/webp',
   '.webmanifest': 'application/manifest+json',
   '.json': 'application/json',
   '.woff2': 'font/woff2'
@@ -79,11 +87,32 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out
 }
 
+/** `Authorization: Bearer <token>` -> the token, else null (any other scheme, or junk). */
+export function bearerOf(header: string | string[] | undefined): string | null {
+  if (typeof header !== 'string') return null
+  const m = /^\s*(\S+)\s+([A-Za-z0-9_-]{16,200})\s*$/.exec(header)
+  return m && m[1]!.toLowerCase() === REMOTE_AUTH_SCHEME.toLowerCase() ? m[2]! : null
+}
+
+/**
+ * Sockets that opened but have not said who they are yet (hosted mode). Origin is only a header, so a script outside a
+ * browser can open these too: each caller (CF-Connecting-IP through the tunnel) may hold a few and open only so many a
+ * minute, and when the whole pool is full the oldest waiting socket goes, never the newcomer. The real phone says who it
+ * is within one round trip, so a flood can delay it at most until it reconnects, never shut it out.
+ */
+export const PENDING_MAX = 64
+export const PENDING_PER_CALLER = 4
+export const UPGRADES_PER_MINUTE = 30
+
 export class RemoteServer {
   private server: http.Server | null = null
   private wss: WebSocketServer | null = null
   private files = new Map<string, string>()
   private sockets = new Map<WebSocket, string>()
+  /** waiting socket -> who opened it (insertion order = oldest first) */
+  private pending = new Map<WebSocket, string>()
+  /** caller -> times of their recent hosted upgrades (the attempt limit) */
+  private upgrades = new Map<string, number[]>()
   private port = 0
 
   constructor(private readonly o: RemoteServerOptions) {}
@@ -110,16 +139,38 @@ export class RemoteServer {
     server.requestTimeout = 30_000
     const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 })
     server.on('upgrade', (req, socket, head) => {
-      const device = this.upgradeDevice(req)
-      if (!device) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      const gate = this.upgradeGate(req)
+      const no = (status: string): void => {
+        socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
         socket.destroy()
-        return
       }
+      if (!gate) return no('401 Unauthorized')
+      const caller = gate === 'first-message' ? this.callerOf(req) : ''
+      if (gate === 'first-message' && !this.mayWait(caller)) return no('429 Too Many Requests')
       wss.handleUpgrade(req, socket, head, (ws) => {
-        this.sockets.set(ws, device.id)
-        ws.on('close', () => this.sockets.delete(ws))
-        this.o.api.socket(ws, device)
+        if (gate !== 'first-message') return this.admit(ws, gate)
+        // RA6: the hosted app says who it is in its first message; nothing else is read before that
+        this.makeRoom()
+        this.pending.set(ws, caller)
+        const timer = setTimeout(() => this.refuse(ws), this.o.wsAuthMs ?? REMOTE_WS_AUTH_MS)
+        ws.once('message', (raw) => {
+          clearTimeout(timer)
+          this.pending.delete(ws)
+          let token: unknown = null
+          try {
+            const m = JSON.parse(String(raw)) as { t?: unknown; token?: unknown }
+            if (m?.t === 'auth') token = m.token
+          } catch {
+            /* not JSON: refused below */
+          }
+          const device = typeof token === 'string' ? this.o.auth.verify(token) : null
+          if (!device || !this.server) return this.refuse(ws)
+          this.admit(ws, device)
+        })
+        ws.on('close', () => {
+          clearTimeout(timer)
+          this.pending.delete(ws)
+        })
       })
     })
     this.server = server
@@ -136,9 +187,59 @@ export class RemoteServer {
     return this.port
   }
 
+  /** a caller may hold PENDING_PER_CALLER waiting sockets and open UPGRADES_PER_MINUTE hosted sockets a minute */
+  private mayWait(caller: string): boolean {
+    const now = Date.now()
+    const recent = (this.upgrades.get(caller) ?? []).filter((t) => now - t < 60_000)
+    if (recent.length >= UPGRADES_PER_MINUTE) {
+      this.upgrades.set(caller, recent)
+      return false
+    }
+    let held = 0
+    for (const c of this.pending.values()) if (c === caller) held++
+    if (held >= PENDING_PER_CALLER) return false
+    recent.push(now)
+    this.upgrades.set(caller, recent)
+    // the map never grows without bound: callers with nothing recent go
+    if (this.upgrades.size > 1024) for (const [c, ts] of this.upgrades) if (!ts.some((t) => now - t < 60_000)) this.upgrades.delete(c)
+    return true
+  }
+  /** the pool is full: the oldest waiting socket goes (a newcomer is never refused for someone else's flood) */
+  private makeRoom(): void {
+    while (this.pending.size >= PENDING_MAX) {
+      const oldest = this.pending.keys().next().value as WebSocket | undefined
+      if (!oldest) return
+      this.refuse(oldest)
+    }
+  }
+
+  private admit(ws: WebSocket, device: StoredDevice): void {
+    this.sockets.set(ws, device.id)
+    ws.on('close', () => this.sockets.delete(ws))
+    this.o.api.socket(ws, device)
+  }
+  /** 4401: not signed in (unknown, revoked, or no auth message in time). The phone app shows how to pair again. */
+  private refuse(ws: WebSocket): void {
+    this.pending.delete(ws)
+    try {
+      ws.close(4401, 'unauthorized')
+    } catch {
+      /* gone */
+    }
+  }
+
   async stop(): Promise<void> {
     const server = this.server
     this.server = null
+    for (const ws of this.pending.keys()) {
+      try {
+        ws.terminate()
+      } catch {
+        /* gone */
+      }
+    }
+    this.pending.clear()
+    this.upgrades.clear()
     for (const ws of this.sockets.keys()) {
       try {
         ws.close(1001, 'off')
@@ -189,14 +290,43 @@ export class RemoteServer {
     return `local:${req.socket.remoteAddress ?? '?'}`
   }
 
-  private deviceOf(req: http.IncomingMessage): StoredDevice | null {
-    return this.o.auth.verify(parseCookies(req.headers.cookie)[REMOTE_COOKIE])
+  /** RA6: the hosted app's origin, exactly as configured (scheme, host and port), or false */
+  private originAllowed(origin: string | string[] | undefined): origin is string {
+    if (typeof origin !== 'string' || !origin) return false
+    return (this.o.allowedOrigins?.() ?? []).some((o) => o === origin)
   }
 
-  private upgradeDevice(req: http.IncomingMessage): StoredDevice | null {
+  /** an Origin that is neither this host (the Mac's own page) nor the hosted app; no Origin (not a browser) is not foreign */
+  private foreignOrigin(req: http.IncomingMessage): boolean {
+    const origin = req.headers.origin
+    if (typeof origin !== 'string' || !origin) return false
+    if (this.originAllowed(origin)) return false
+    try {
+      return new URL(origin).host.toLowerCase() !== (req.headers.host ?? '').toLowerCase()
+    } catch {
+      return true
+    }
+  }
+
+  /** The device and how it proved itself: a bearer (hosted, no CSRF) or the cookie (same-origin, CSRF on writes). */
+  private deviceOf(req: http.IncomingMessage): { device: StoredDevice; bearer: boolean } | null {
+    const auth = req.headers.authorization
+    if (auth !== undefined) {
+      // a bearer never falls back to a cookie: a bad one is a no
+      const d = this.o.auth.verify(bearerOf(auth))
+      return d ? { device: d, bearer: true } : null
+    }
+    const d = this.o.auth.verify(parseCookies(req.headers.cookie)[REMOTE_COOKIE])
+    return d ? { device: d, bearer: false } : null
+  }
+
+  /**
+   * Who may open the live socket: the page must be ours (same host, with the cookie) or the hosted app (allowed origin,
+   * whose socket must name its token in the first message).
+   */
+  private upgradeGate(req: http.IncomingMessage): StoredDevice | 'first-message' | null {
     if (!this.hostOk(req.headers.host)) return null
     if (new URL(req.url ?? '/', 'http://x').pathname !== '/api/live') return null
-    // the page that opens the socket must be ours (same host)
     const origin = req.headers.origin
     if (!origin) return null
     let oh: string
@@ -205,8 +335,10 @@ export class RemoteServer {
     } catch {
       return null
     }
-    if (oh !== (req.headers.host ?? '').toLowerCase()) return null
-    return this.deviceOf(req)
+    // the Mac's own page: the cookie, checked now (as before RA6)
+    if (oh === (req.headers.host ?? '').toLowerCase()) return this.o.auth.verify(parseCookies(req.headers.cookie)[REMOTE_COOKIE])
+    // the hosted app: no cookie crosses origins, so the token comes in the first message
+    return this.originAllowed(origin) ? 'first-message' : null
   }
 
   private secure(req: http.IncomingMessage): boolean {
@@ -217,7 +349,7 @@ export class RemoteServer {
   private headers(req: http.IncomingMessage, extra: Record<string, string> = {}): Record<string, string> {
     const host = req.headers.host ?? ''
     return {
-      'content-security-policy': `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' wss://${host} ws://${host}; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+      'content-security-policy': `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss://${host} ws://${host}; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
       'x-frame-options': 'DENY',
@@ -231,7 +363,7 @@ export class RemoteServer {
 
   private json(req: http.IncomingMessage, res: http.ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
     const text = JSON.stringify(body ?? null)
-    res.writeHead(status, this.headers(req, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra }))
+    res.writeHead(status, this.headers(req, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...this.cors(req), ...extra }))
     res.end(text)
   }
 
@@ -243,6 +375,7 @@ export class RemoteServer {
       }
       const url = new URL(req.url ?? '/', 'http://x')
       const method = req.method ?? 'GET'
+      if (url.pathname.startsWith('/api/') && method === 'OPTIONS') return this.preflight(req, res)
       if (url.pathname.startsWith('/api/')) return await this.onApi(req, res, method, url.pathname)
       if (method !== 'GET' && method !== 'HEAD') return this.json(req, res, 405, { message: 'Not allowed' })
       return this.serveFile(req, res, url.pathname)
@@ -251,6 +384,36 @@ export class RemoteServer {
       if (!res.headersSent) this.json(req, res, 500, { message: 'Something went wrong on the Mac' })
       else res.end()
     }
+  }
+
+  /** RA6: CORS for the hosted app only, exact origin; no credentials (the bearer is a header, not a cookie). */
+  private cors(req: http.IncomingMessage): Record<string, string> {
+    const origin = req.headers.origin
+    if (!this.originAllowed(origin)) return { vary: 'Origin' }
+    return { 'access-control-allow-origin': origin, vary: 'Origin', 'cross-origin-resource-policy': 'cross-origin' }
+  }
+  private preflight(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const origin = req.headers.origin
+    const method = String(req.headers['access-control-request-method'] ?? '').toUpperCase()
+    const asked = String(req.headers['access-control-request-headers'] ?? '')
+      .toLowerCase()
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+    const okHeaders = asked.every((x) => x === 'authorization' || x === 'content-type' || x === 'accept')
+    if (!this.originAllowed(origin) || (method !== 'GET' && method !== 'POST') || !okHeaders) {
+      res.writeHead(403, { vary: 'Origin', 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      return void res.end('Not allowed')
+    }
+    res.writeHead(204, {
+      'access-control-allow-origin': origin,
+      'access-control-allow-methods': 'GET, POST',
+      'access-control-allow-headers': 'authorization, content-type, accept',
+      'access-control-max-age': '600',
+      vary: 'Origin',
+      'cache-control': 'no-store'
+    })
+    res.end()
   }
 
   private serveFile(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): void {
@@ -296,14 +459,20 @@ export class RemoteServer {
     if (!route || route.name === 'live') return this.json(req, res, 404, { message: 'Not found' })
     try {
       if (route.name === 'pair') {
+        // a page on another origin the Mac does not allow would get a cookie it can never use: refuse before the code
+        // is spent, so the same link still works once the Mac's Phone app address is right
+        if (this.foreignOrigin(req)) return this.json(req, res, 403, { message: 'Your Mac does not know this phone app yet. On your Mac, check Settings › App › Phone › Phone app address, then scan a new code.', code: 'origin' })
         const b = (await this.body(req)) as { code?: unknown; name?: unknown }
         const { token, device } = this.o.auth.pair(b?.code, b?.name, this.callerOf(req))
+        // RA6: the hosted app (an allowed origin) keeps the token itself and sends it as a bearer; no cookie crosses
+        if (this.originAllowed(req.headers.origin)) return this.json(req, res, 200, { device: { id: device.id, name: device.name }, token })
         const cookie = `${REMOTE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`
         return this.json(req, res, 200, { device: { id: device.id, name: device.name } }, { 'set-cookie': cookie })
       }
-      const device = this.deviceOf(req)
-      if (!device) return this.json(req, res, 401, { message: 'Open the pairing link from Principia on your Mac.' })
-      if (method !== 'GET') {
+      const who = this.deviceOf(req)
+      if (!who) return this.json(req, res, 401, { message: 'Open the pairing link from Principia on your Mac.' })
+      const device = who.device
+      if (method !== 'GET' && !who.bearer) {
         if (!this.o.auth.checkCsrf(device.id, req.headers[REMOTE_CSRF_HEADER] as string | undefined)) return this.json(req, res, 403, { message: 'Reload the page and try again.' })
       }
       const body = method === 'GET' ? {} : await this.body(req)

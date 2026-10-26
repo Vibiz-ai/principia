@@ -3,11 +3,11 @@
  * a one-time link, and the paired phones with Revoke. Plain words about what it opens and what it never does.
  */
 import { useEffect, useState } from 'react'
-import type { RemotePairLink } from '@shared/remote'
+import { PHONE_SITE_URL, phoneSiteOrigin, siteOrigin, type RemotePairLink } from '@shared/remote'
 import { Button, RelativeTime, Switch } from '../ui'
 import { QrCode } from '../cloud/bits'
 import { hive } from '../../lib/hive'
-import { attempt, toast } from '../../state/store'
+import { attempt, toast, updateSettings, useStore } from '../../state/store'
 import { setRemote, useRemote } from '../../state/remote'
 import '../../styles/cloud.css'
 import '../../styles/phone.css'
@@ -19,6 +19,7 @@ export function PhoneSettings(): React.JSX.Element {
   const [link, setLink] = useState<RemotePairLink | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
+  const site = phoneSiteOrigin(useStore((x) => x.settings?.phoneSiteUrl))
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
@@ -26,9 +27,9 @@ export function PhoneSettings(): React.JSX.Element {
   // a link made before the tunnel came up (or went away) points at the wrong address: make a new one
   useEffect(() => {
     if (!on) setLink(null)
-    else if (link && link.public !== (tunnel.state === 'on')) void fresh()
+    else if (link && (link.public !== (tunnel.state === 'on') || (link.site ?? null) !== site)) void fresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [on, tunnel.state])
+  }, [on, tunnel.state, site])
   const expired = !!link && Date.parse(link.expiresAt) <= now
   const fresh = async (): Promise<void> => {
     const l = await attempt(() => hive.remote.pairLink(), 'Phone')
@@ -90,6 +91,7 @@ export function PhoneSettings(): React.JSX.Element {
             </div>
           </div>
         )}
+        <PhoneSiteRow />
       </div>
 
       {on && (
@@ -163,8 +165,62 @@ export function PhoneSettings(): React.JSX.Element {
           <li>Off by default, and off again every time Principia starts. Turning it off signs every phone out.</li>
           <li>The server listens on this Mac only (127.0.0.1). The tunnel is outbound, and only while it is on.</li>
           <li>From the phone: watch, answer, approve, send back, pause a company, chat. Never settings, keys, shell commands, repositories, workflows, deleting or spending.</li>
+          <li>The phone app address is only a page: it keeps no data. Everything it shows comes from this Mac, and only a paired phone gets in.</li>
         </ul>
       </div>
     </>
+  )
+}
+
+/**
+ * REMOTE.md RA6: "Phone app address", the hosted phone app the code opens, and the one origin this Mac accepts from a
+ * browser on another site. Empty: the code opens this Mac's own page through the tunnel.
+ */
+function PhoneSiteRow(): React.JSX.Element {
+  const saved = useStore((x) => x.settings?.phoneSiteUrl)
+  const shown = saved === '' ? '' : (saved ?? PHONE_SITE_URL ?? '')
+  const [v, setV] = useState(shown)
+  const [bad, setBad] = useState(false)
+  useEffect(() => setV(shown), [shown])
+  const commit = (): void => {
+    const url = v.trim().replace(/\/+$/, '')
+    if (url === shown) return setBad(false)
+    if (url && siteOrigin(url) !== url) return setBad(true)
+    setBad(false)
+    // the official address again = null (follows the default if it ever moves)
+    void updateSettings({ phoneSiteUrl: url === (PHONE_SITE_URL ?? '') && url ? null : url })
+  }
+  const official = saved == null
+  return (
+    <div className="srow">
+      <div className="srow__text">
+        <div>Phone app address</div>
+        <div className="srow__desc">
+          {bad
+            ? 'Use the site address only, like https://phone.example.com.'
+            : v.trim()
+              ? `The code opens this page, which then talks to this Mac directly. It keeps no data.${official && PHONE_SITE_URL ? ' (the official address)' : ''}`
+              : 'Empty: the code opens this Mac’s own page through the tunnel.'}
+        </div>
+      </div>
+      <div className="srow__ctl" style={{ gap: 8 }}>
+        <input
+          className="input"
+          style={{ width: 260 }}
+          placeholder="https://…"
+          aria-label="Phone app address"
+          value={v}
+          spellCheck={false}
+          onChange={(e) => setV(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === 'Enter' && commit()}
+        />
+        {!official && PHONE_SITE_URL && (
+          <Button size="sm" onClick={() => void updateSettings({ phoneSiteUrl: null })}>
+            Use official
+          </Button>
+        )}
+      </div>
+    </div>
   )
 }

@@ -323,8 +323,10 @@ export function MessageRow({ m, head, inThread = false, highlight = false }: { m
   const d = ctx.display(m.authorId)
   if (m.kind === 'system') {
     return (
-      <div className="fm-system" id={`fm-${m.id}`}>
+      <div className={`fm-system ${m.via === 'principia' ? 'fm-system--principia' : ''}`} id={`fm-${m.id}`}>
         <span className="fm-tessera fm-tessera--line" aria-hidden />
+        {/* ORCHESTRATOR.md §3: the chief of staff's digest is Principia's own line */}
+        {m.via === 'principia' && <b className="fm-system__who">Principia (chief of staff)</b>}
         <RichText text={m.text} from={m} />
         <span className="fm-system__time">{timeLabel(m.createdAt)}</span>
       </div>
@@ -345,7 +347,18 @@ export function MessageRow({ m, head, inThread = false, highlight = false }: { m
               {timeLabel(m.createdAt)}
             </span>
             <span className="fm-msg__ref">{m.ref}</span>
+            {m.via === 'principia' && (
+              <span className="fm-msg__via" title="Principia posted this for the agent, from the report at the end of its run">
+                via Principia
+              </span>
+            )}
           </div>
+        )}
+        {/* a Principia post grouped under the agent's own message still says so */}
+        {!head && m.via === 'principia' && (
+          <span className="fm-msg__via fm-msg__via--cont" title="Principia posted this for the agent, from the report at the end of its run">
+            via Principia
+          </span>
         )}
         {m.deletedAt ? (
           <div className="fm-msg__text fm-msg__text--deleted">This message was deleted.</div>

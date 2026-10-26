@@ -244,6 +244,10 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .week1__task { flex: 1; min-width: 0; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* CHAT-UI.md inside Chats: the chat pane fills the column, its composer at the bottom */
 .chats5-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* ORCHESTRATOR.md §3: Principia's suggestions in Needs you (white line mark, no warm colours) */
+.orch-sugs { margin-top: 8px; }
+.orch-sug__mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--rm-ln-1, var(--border-strong, var(--border))); color: var(--text-primary); font-size: 12px; font-weight: 600; background: transparent; }
+.orch-sug__link { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
 
 /* Home: one suggestion at a time (NudgeCard), quiet white line art */
 .nudge { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); padding: 10px 12px 10px 14px; margin: 4px 0 2px; }

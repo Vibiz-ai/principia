@@ -26,6 +26,7 @@ import { ApprovalCard } from '../components/author/ApprovalCard'
 import { AgentFace, useAgentDisplay } from '../components/board/NeedsYouTasks'
 import { AskForm } from '../components/board/AskForm'
 import { CloudNeedsYou } from '../components/cloud/NeedsYou'
+import { PrincipiaSuggestions, usePrincipiaSuggestions } from '../components/orchestrator/PrincipiaTeam'
 import { SetupChecklist } from '../components/home/SetupChecklist'
 import { ArchFrame } from '../components/roman'
 import { AskBox, DraftCard, pauseTask, useIsCode } from '../components/desk/Desk'
@@ -70,7 +71,9 @@ export function HomeView(): React.JSX.Element {
   const own = useMemo(() => tasks.filter((t) => t.companyId === scope), [tasks, scope])
   const ctx = useLaneContext()
   const reviews = useMemo(() => needsYouTasks(own, ctx, scope, { skipLiveAsks: true }).filter((i) => i.group === 'review').length, [own, ctx, scope])
-  const needsTotal = needs.count + drafts.length
+  // ORCHESTRATOR.md §3: Principia's suggestions (a routine, a connection, a next step) wait on you too
+  const sugs = usePrincipiaSuggestions(scope)
+  const needsTotal = needs.count + drafts.length + sugs.items.length
   const short = useCompanyShortName(scope, name)
   const personal = scope === PERSONAL_COMPANY_ID
   const tiles = useMemo(() => weekTiles(own, { now: new Date(), code, waitingReview: reviews, paused: !!pausedAt }), [own, code, reviews, pausedAt])
@@ -146,6 +149,7 @@ export function HomeView(): React.JSX.Element {
           </SectionHeader>
           {pausedAt && needsTotal > 0 && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
           <NeedsList scope={scope} code={code} drafts={drafts} empty={needsTotal === 0} paused={!!pausedAt} />
+          <PrincipiaSuggestions items={sugs.items} onChanged={sugs.reload} />
 
           <SectionHeader title="Working now" count={working.count || undefined}>
             <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">

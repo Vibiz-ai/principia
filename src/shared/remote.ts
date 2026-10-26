@@ -16,6 +16,64 @@ export const REMOTE_PAIR_TTL_MS = 5 * 60_000
 export const REMOTE_PAIR_PER_MINUTE = 5
 export const REMOTE_LIMITS = { name: 60, text: 8000, answer: 4000 } as const
 
+// ---------- hosted mode (REMOTE.md RA6): the phone app on its own https site, talking to this Mac cross-origin ----------
+
+/**
+ * The official address of the hosted phone app (a static site: it holds no data, the Mac is the authority). Settings ›
+ * App › Phone › "Phone app address" defaults to it. null until it is deployed: the pairing link then opens the Mac's own
+ * page (same-origin mode).
+ */
+export const PHONE_SITE_URL: string | null = 'https://principia-phone.vibiz.dev'
+/** the bearer scheme in hosted mode (Safari blocks third-party cookies, so no cookie crosses origins) */
+export const REMOTE_AUTH_SCHEME = 'Bearer'
+/** a socket from the hosted app must say who it is (`{ t: 'auth', token }`) within this long, or it is closed */
+export const REMOTE_WS_AUTH_MS = 5_000
+
+const LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\])$/
+/**
+ * `https://x.example/any/path` -> `https://x.example`, or null. https only, except a loopback http address (a phone app
+ * served on this Mac for testing). No credentials, no wildcard.
+ */
+export function siteOrigin(url: string | null | undefined): string | null {
+  if (typeof url !== 'string' || !url.trim() || url.length > 2048) return null
+  let u: URL
+  try {
+    u = new URL(url.trim())
+  } catch {
+    return null
+  }
+  if (u.username || u.password) return null
+  // a plain host name (letters, digits, dots, dashes) or loopback: never a wildcard or anything odd
+  if (!/^[a-z0-9.-]+$/.test(u.hostname) && !LOOPBACK.test(u.hostname)) return null
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK.test(u.hostname))) return null
+  return u.origin
+}
+/**
+ * The setting -> the phone app origin the Mac links to and accepts (CORS, WebSocket Origin). Absent or null: the official
+ * address; '' (the person cleared it): none, the Mac's own page only.
+ */
+export function phoneSiteOrigin(setting: string | null | undefined, official: string | null = PHONE_SITE_URL): string | null {
+  if (setting === '') return null
+  return siteOrigin(setting ?? official)
+}
+/**
+ * The pairing link. Hosted: `<site>/#mac=<this Mac's address>&code=<one-time code>`. Same-origin: `<mac>/#pair=<code>`.
+ * Both live in the fragment, so neither the code nor the Mac's address reaches a server log.
+ */
+export function pairLinkFor(o: { site: string | null; mac: string; code: string }): string {
+  const mac = o.mac.replace(/\/+$/, '')
+  return o.site ? `${o.site}/#mac=${encodeURIComponent(mac)}&code=${o.code}` : `${mac}/#pair=${o.code}`
+}
+/** A pairing fragment: `#mac=…&code=…` (hosted) or `#pair=…` (same-origin, mac null). */
+export function parsePairHash(hash: string): { code: string; mac: string | null } | null {
+  const q = new URLSearchParams(hash.replace(/^#\/?/, ''))
+  const code = q.get('code') ?? q.get('pair')
+  if (!code || !/^[0-9a-f]{32}$/.test(code)) return null
+  if (!q.has('mac')) return q.has('pair') ? { code, mac: null } : null
+  const mac = siteOrigin(q.get('mac'))
+  return mac ? { code, mac } : null
+}
+
 // ---------- desktop (Settings › App › Phone) ----------
 
 export interface RemoteDevice {
@@ -40,6 +98,8 @@ export interface RemotePairLink {
   expiresAt: string
   /** the link goes through the tunnel (reachable from a phone), else it opens only on this Mac */
   public: boolean
+  /** the hosted phone app this link opens (its origin), or null: the Mac's own page */
+  site?: string | null
 }
 
 export interface RemoteInvokeMap {
@@ -187,7 +247,8 @@ export interface PhoneAsk {
 }
 export interface PhoneTaskNeed {
   taskId: Id
-  kind: 'review' | 'question' | 'stuck'
+  /** idea: a suggestion from Principia (taskId is the suggestion's id; decided on the Mac) */
+  kind: 'review' | 'question' | 'stuck' | 'idea'
   title: string
   text: string
   who: PhoneWho | null
@@ -277,6 +338,11 @@ export interface PhonePairRequest {
   code: string
   name: string
 }
+/** POST /api/pair: hosted mode (an allowed cross-origin caller) also gets the token, to send as a bearer */
+export interface PhonePairResponse {
+  device: { id: Id; name: string }
+  token?: string
+}
 export interface PhoneAnswerRequest {
   optionId?: string
   text?: string
@@ -301,6 +367,8 @@ export type PhoneLiveView = 'now' | 'needs' | 'chats' | 'room' | 'companies'
 export type PhoneClientMsg =
   | { t: 'sub'; companyId: Id; sessionId?: Id | null; channelId?: Id | null }
   | { t: 'ping' }
+  /** hosted mode: the first message on the socket (the token never goes in the URL) */
+  | { t: 'auth'; token: string }
 export type PhoneServerMsg =
   | { t: 'hello' }
   | { t: 'pong' }

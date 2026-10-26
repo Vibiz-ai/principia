@@ -132,8 +132,10 @@ export interface ForumMessage {
   reactions: Record<string, string[]>
   ask?: ForumAsk
   proposal?: ForumProposal
-  /** 'local' | 'agent:<stepId>' (FORUM.md §7) */
+  /** 'local' | 'agent:<stepId>' (FORUM.md §7) | 'principia:<runId>' (ORCHESTRATOR.md: Principia posted it for the agent) */
   origin: string
+  /** ORCHESTRATOR.md: 'principia' when Principia posted this for the agent (from its run report), not the agent's own tool */
+  via?: 'principia'
 }
 
 export type ForumInviteStatus = 'active' | 'expired' | 'used' | 'revoked'

@@ -130,3 +130,10 @@
 .cs-rail__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .cs-rail__row .cs-prefix { width: 72px; }
 .cs-rail__client { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-secondary); flex: none; white-space: nowrap; }
+/* ORCHESTRATOR.md §5: what Principia did lately (Team & autonomy) */
+.orch-lately .srow__text { width: 100%; }
+.orch-lately__list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.orch-lately__item { border-left: 1px solid var(--border); padding-left: 10px; }
+.orch-lately__line { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+.orch-lately__line--done { color: var(--text-primary); }
+.orch-lately__line--refused, .orch-lately__line--failed, .orch-lately__line--skipped { color: var(--text-tertiary); }

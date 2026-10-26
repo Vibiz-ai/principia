@@ -21,6 +21,7 @@ import { registerSlackHandlers } from './slack'
 import { registerMarketplaceHandlers } from './marketplace'
 import { registerOnboardingHandlers } from './onboarding'
 import { registerForumHandlers } from './forum'
+import { registerOrchestratorHandlers } from './orchestrator'
 import { registerCloudHandlers } from './cloud'
 import { registerDashboardHandlers } from './dashboards'
 import { registerTaskWorkHandlers } from './taskWork'
@@ -51,6 +52,7 @@ export function registerAllHandlers(h: Hive): void {
   registerMarketplaceHandlers(h)
   registerOnboardingHandlers(h)
   registerForumHandlers(h)
+  registerOrchestratorHandlers(h)
   registerCloudHandlers(h)
   registerDashboardHandlers(h)
   registerTaskWorkHandlers(h)

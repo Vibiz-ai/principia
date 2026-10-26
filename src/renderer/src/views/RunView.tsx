@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CollabWake, RunConversation } from '@shared/collab'
+import type { OrchAction, RunOrchestration } from '@shared/orchestrator'
 import '../styles/agentTalk.css'
 import type { Artifact, RunDetail, RunStep, RunWorktree } from '@shared/types'
 import type { AgentNode } from '@shared/live'
@@ -205,6 +206,7 @@ export function RunView({ runId, stepId, agentId }: { runId: string; stepId?: st
           {run.worktree && <WorktreeChip wt={run.worktree} />}
           <RunSlackDrafts runId={run.id} />
           <RunForumConversation runId={run.id} active={active} />
+          <RunPrincipiaAfter runId={run.id} active={active} />
           <div className="run__label">Steps</div>
           {steps.length === 0 && <div className="text-tertiary run__pad">{active ? 'Starting…' : 'No steps recorded.'}</div>}
           {steps.map((s) => {
@@ -583,6 +585,45 @@ function RunForumConversation({ runId, active }: { runId: string; active: boolea
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+const ORCH_SOURCE: Record<RunOrchestration['source'], string> = {
+  fence: 'Read the report at the end of the agent\'s answer.',
+  file: 'Read the report file the agent wrote.',
+  extracted: 'The agent left no report, so Principia read its answer. Ideas from it only wait for you; nothing was started.',
+  mcp: 'The agent did this itself with Principia\'s tools. Nothing was left to do.',
+  none: 'The agent left no report.'
+}
+const ORCH_STATUS: Record<OrchAction['status'], string> = { done: 'Done', skipped: 'Skipped', shadow: 'Would do', proposed: 'For you', failed: 'Did not work' }
+
+/** ORCHESTRATOR.md §5: what Principia did with this run's report (or, in trial mode, what it would have done). */
+function RunPrincipiaAfter({ runId, active }: { runId: string; active: boolean }): React.JSX.Element | null {
+  const [o, setO] = useState<RunOrchestration | null>(null)
+  const load = useCallback(() => {
+    hive.orchestrator.forRun({ runId }).then(setO, () => setO(null))
+  }, [runId])
+  useEffect(() => load(), [load, active])
+  // the after-run work lands a moment after the run ends (and may wait on one cheap model call)
+  useHiveEvent('data:changed', (e) => {
+    if (e.domain === 'tasks') load()
+  })
+  if (!o || (!o.actions.length && o.source === 'none')) return null
+  return (
+    <div className="run-forum run-principia">
+      <div className="run__label">Principia after this run</div>
+      <div className="run-forum__wake">
+        {o.mode === 'shadow' && <strong>Trial mode: nothing was done. </strong>}
+        {ORCH_SOURCE[o.source]}
+        {!o.appliedAt && ' Working on it…'}
+      </div>
+      {o.actions.map((a, i) => (
+        <div key={i} className="run-forum__wake run-principia__action">
+          <Pill tone={a.status === 'done' || a.status === 'proposed' ? 'accent' : 'idle'}>{ORCH_STATUS[a.status]}</Pill> <span className="selectable">{a.detail}</span>
+          {a.link && <code className="run-principia__link selectable">{a.link}</code>}
+        </div>
+      ))}
     </div>
   )
 }

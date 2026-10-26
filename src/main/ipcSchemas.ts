@@ -9,6 +9,7 @@ import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
 import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
 import { REMOTE_REQUEST_SCHEMAS } from './remote/remoteSchemas'
+import { siteOrigin } from '../shared/remote'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
@@ -199,6 +200,14 @@ const settingsPatch = z
       .url()
       .refine((u) => u.startsWith('https://'), 'Use an https:// link')
       .nullable(),
+    // REMOTE.md RA6: an https origin (or loopback http, for a phone app served on this Mac); '' = none, null = official
+    phoneSiteUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((u) => u === '' || siteOrigin(u) === u.replace(/\/+$/, ''), 'Use the site address, like https://phone.example.com')
+      .transform((u) => (u === '' ? '' : siteOrigin(u)!))
+      .nullable(),
     // COMPANY.md §8.6: UI state only (main never reads it to decide anything)
     activeCompanyId: z.union([z.literal('all'), id]),
     expandedCompanies: z.record(id, z.boolean()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
@@ -218,6 +227,21 @@ const settingsPatch = z
         perCompanyPerDay: z.number().int().min(1).max(500),
         waitDefaultS: z.number().int().min(0).max(600),
         waitMaxS: z.number().int().min(0).max(600)
+      })
+      .partial()
+      .strict(),
+    // ORCHESTRATOR.md §6: Principia's own layer between runs (ranges = ORCHESTRATOR_RANGES)
+    orchestrator: z
+      .object({
+        mode: z.enum(['off', 'shadow', 'on']),
+        coordinator: z.enum(['off', 'rules', 'model']),
+        cli: z.enum(['auto', 'claude', 'codex']),
+        callsPerDay: z.number().int().min(0).max(200),
+        extractFallback: z.boolean(),
+        // This company > Team & autonomy > "Principia runs the team"
+        companies: z
+          .record(id, z.object({ mode: z.enum(['off', 'on']), coordinator: z.enum(['off', 'rules', 'model']), callsPerDay: z.number().int().min(0).max(200) }).partial().strict())
+          .refine((r) => Object.keys(r).length <= 1000, 'Too many companies')
       })
       .partial()
       .strict(),
@@ -656,6 +680,10 @@ export const REQUEST_SCHEMAS = {
   'forum:toTask': z.object({ messageId: id, agentId: id.nullish() }).strict(),
   'forum:collab': z.object({ companyId: id }).strict(),
   'forum:runConversation': z.object({ runId: id }).strict(),
+  'orchestrator:forRun': z.object({ runId: id }).strict(),
+  'orchestrator:suggestions': optObj({ companyId: id.nullish() }),
+  'orchestrator:decideSuggestion': z.object({ id, decision: z.enum(['accept', 'dismiss']) }).strict(),
+  'orchestrator:decisions': z.object({ companyId: id, limit: z.number().int().min(1).max(100).optional() }).strict(),
   'marketplace:list': optObj({ refresh: z.boolean().optional() }),
   'marketplace:preview': marketRef,
   'marketplace:install': marketRef.extend({ overwrite: z.boolean().optional(), companyId }),

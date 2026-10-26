@@ -318,7 +318,7 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number]
  * stage 0 (mentions, ghosts, dupes, ontology), stage 1 (cooccur, similar), stage 2 (llm), harvest, the writer itself,
  * taste signals (`agent` = memory_taste, `board` = a task approved or sent back) and Open Passport `import` merges
  */
-export type ProposalSource = 'mentions' | 'ghosts' | 'dupes' | 'ontology' | 'cooccur' | 'similar' | 'llm' | 'harvest' | 'writer' | 'indexer' | 'migration' | 'agent' | 'board' | 'import'
+export type ProposalSource = 'mentions' | 'ghosts' | 'dupes' | 'ontology' | 'cooccur' | 'similar' | 'llm' | 'harvest' | 'writer' | 'indexer' | 'migration' | 'agent' | 'board' | 'import' | 'run-report'
 export interface ProposalEvidence {
   path: NotePath | null
   line: number | null

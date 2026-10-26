@@ -80,6 +80,9 @@
 .fm-msg__name { font-weight: var(--weight-semibold); color: var(--text-primary); }
 .fm-msg__dep { font-size: 11.5px; color: var(--text-tertiary); }
 .fm-msg__time { font-size: 11.5px; color: var(--text-tertiary); }
+/* ORCHESTRATOR.md: posted by Principia from the agent's run report */
+.fm-msg__via { font-size: 11px; color: var(--text-tertiary); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.fm-msg__via--cont { display: inline-block; margin: 2px 0; }
 .fm-msg__ref { font: 10.5px var(--font-mono); color: var(--text-disabled); opacity: 0; }
 .fm-msg:hover .fm-msg__ref { opacity: 1; }
 .fm-msg__text { color: var(--text-primary); line-height: 1.5; overflow-wrap: anywhere; }
@@ -257,3 +260,6 @@
 /* ---------- app sidebar section ---------- */
 .fm-side-row.is-unread .side-row__label { color: var(--text-primary); font-weight: var(--weight-semibold); }
 .fm-side-row__lead { width: 16px; display: inline-flex; justify-content: center; color: var(--text-tertiary); flex: none; }
+/* ORCHESTRATOR.md §3: the chief of staff's digest (Principia's own line) */
+.fm-system--principia { color: var(--text-secondary); }
+.fm-system__who { font-weight: 600; color: var(--text-primary); white-space: nowrap; }

@@ -595,6 +595,23 @@ export class CompanyStore {
       return next
     })()
   }
+  /**
+   * ORCHESTRATOR.md §2: a teammate answered the blocking question this task waits on. A task its agent parked
+   * (blocked(agent)) goes back to To do, so the founder sees it is ready for its next turn; any other state only gets the
+   * Activity line. Never a founder's ask: that one waits for the founder. Returns the task, or null (not moved).
+   */
+  resumeOnAnswer(id: string, message: string): BoardTask | null {
+    return this.store.db.transaction(()=> {
+      const t=this.task(id)
+      if(t.status!=='blocked'||t.blockReason!=='agent'||(t.ask&&!t.ask.answer)) { this.activity(id,'woke',message,'system');return null }
+      assertTransition(t,{status:'todo'},'system',{teammateAnswered:true})
+      const next:BoardTask={...t,status:'todo',blockReason:null,updatedAt:new Date().toISOString()}
+      const locked=this.lockDeps(next)
+      this.writeTask(next);this.activity(id,'woke',message,'system')
+      if(locked) this.activity(id,'parked',locked)
+      return next
+    })()
+  }
   /** tasks:approve: in_review → done, human only, with a non-empty done note (§0.7). Heals the tasks waiting on it. */
   approve(id: string, doneNote: string, by: ActivityBy = 'human'): BoardTask {
     const out=this.store.db.transaction(()=> {

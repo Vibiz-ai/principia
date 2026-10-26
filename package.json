@@ -13,6 +13,8 @@
     "start": "electron-vite preview",
     "build": "electron-vite build && npm run -s phone:build",
     "phone:build": "vite build --config vite.phone.config.ts",
+    "build:phone-site": "vite build --config vite.phone-site.config.ts",
+    "preview:phone-site": "vite preview --config vite.phone-site.config.ts --port 4318",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "verify:native": "electron scripts/verify-native.cjs",

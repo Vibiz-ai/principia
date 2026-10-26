@@ -14,3 +14,5 @@ cloud/workspace/
 .env
 .env.local
 .env.gcp
+dist-phone-site/
+.vercel/

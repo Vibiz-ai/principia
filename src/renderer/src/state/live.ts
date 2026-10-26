@@ -157,12 +157,14 @@ let truthMemo: { deps: unknown[]; truth: LiveTruth } | null = null
  */
 export function truthOf(s: State): LiveTruth {
   const on = departmentsOn(s)
-  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, s.companiesLoaded, s.companyError, on, s.repos]
+  const deps: unknown[] = [s.agents, s.asks, s.seenIdle, s.sessions, s.tasks, s.companyAgents, s.companies, s.companiesLoaded, s.companyError, on, s.repos, s.suggestionCounts]
   if (truthMemo && truthMemo.deps.every((d, i) => d === deps[i])) return truthMemo.truth
   const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
   const counts = on ? taskCounts(s.tasks, laneContext(s.asks, s.companyAgents, paused)) : {}
   const taskNeeds: Record<Id, number> = {}
   for (const id of Object.keys(counts)) taskNeeds[id] = taskNeedsIn(counts, id)
+  // ORCHESTRATOR.md §3: Principia's open suggestions wait on the founder too
+  if (on) for (const [id, n] of Object.entries(s.suggestionCounts ?? {})) taskNeeds[id] = (taskNeeds[id] ?? 0) + n
   // an archived company's asks and agents leave every count with it (the rail lists only the others)
   const listed = s.companiesLoaded && !s.companyError ? new Set(s.companies.map((c) => c.id)) : undefined
   const code = new Set(s.companies.filter((c) => reposOf(s.repos, c.id).length > 0).map((c) => c.id))

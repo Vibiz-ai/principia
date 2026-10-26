@@ -36,7 +36,8 @@ import { HALT_NODE_TYPES, detectHalt } from './authoring'
 import { booleanValue, isDryRun } from '../../shared/inputs'
 import { baseBranch, installPushGuard, pushGuardEnv } from './pushGuard'
 import { geminiAgentNames, unroutedAsksNotice, usesGate, type Adapter } from './adapters'
-import { buildChildEnv, childKeyNames } from './env'
+import { buildChildEnv, childKeyNames, runReportPath } from './env'
+import { RUN_REPORT_ENV } from '../../shared/orchestrator'
 import { effectiveDeps, loopBody, topoOrder, descendants, type DepMap } from './graph'
 import { eventToChunk, parseVerdict } from './parse'
 import {
@@ -871,12 +872,14 @@ export class Execution {
         }
       }
       // PROACTIVE.md §1: a board task turn ends with the "Use Principia" section, from the tools this step really has;
-      // a resumed turn (its conversation already holds the section) gets a one-line reminder
-      const prompt = this.withOps(s, briefed, [
+      // a resumed turn (its conversation already holds the section) gets a one-line reminder. ORCHESTRATOR.md §1.1: then
+      // Principia's own context and the run report contract, on every harness
+      const principia = this.withPrincipia(s, stepId, briefed, [
         ...(mem?.attachment ? (mem.servers ?? []).flatMap((x) => x.toolNames) : []),
         ...(forum?.server ? forum.toolNames : []),
         ...(gatewayOn ? GATEWAY_TOOLS : [])
       ])
+      const prompt = principia.prompt
       const logDir = join(this.ctx.paths.runLogsDir, this.run.id)
       mkdirSync(logDir, { recursive: true })
       const logPath = join(logDir, `${stepId}.log`)
@@ -998,6 +1001,8 @@ export class Execution {
         ...(this.ctx.reaper?.tag(stepId) ?? {})
       }, this.secretOverride(), this.run.companyId)
       if (s.extraEnv) Object.assign(env, s.extraEnv)
+      // ORCHESTRATOR.md §1.2: the step's report file, for agents that write files more reliably than they format
+      if (principia.reportPath) env[RUN_REPORT_ENV] = principia.reportPath
       if (mem?.attachment) Object.assign(env, mem.attachment.env)
       // FORUM.md §4.1: PRINCIPIA_FORUM_* and the `forum` CLI on PATH, for any harness
       if (forum) {
@@ -1202,6 +1207,28 @@ export class Execution {
     const ops = principiaOps({ tools, kind: 'task' })
     if (!ops) return prompt
     return s.resumeId ? `${prompt}\n\nKeep following the "Use Principia" rules from the start of this conversation.` : `${prompt}\n\n${ops}`
+  }
+
+  /**
+   * ORCHESTRATOR.md §1.1: withOps, then Principia's own block (inbox, related tasks, teammates' work) and the run report
+   * contract, for every non-shell step of a company run that has an agent (a task run or a seat run), on every adapter.
+   * The report file path goes to the env as $PRINCIPIA_RUN_REPORT. A failing bridge never fails the step.
+   */
+  private withPrincipia(s: StepSpec, stepId: string, prompt: string, tools: string[]): { prompt: string; reportPath: string | null } {
+    const withOps = this.withOps(s, prompt, tools)
+    const bridge = this.ctx.orchestrator
+    const agentId = this.task?.agentId ?? this.seatAgentId ?? null
+    const companyId = this.run.companyId ?? null
+    if (!bridge || s.adapterId === 'shell' || !companyId || (!this.task && !agentId)) return { prompt: withOps, reportPath: null }
+    const reportPath = runReportPath(this.ctx.paths.runLogsDir, this.run.id, stepId)
+    let block: string | null = null
+    try {
+      block = bridge.stepContext({ runId: this.run.id, stepId, companyId, taskId: this.task?.taskId ?? null, agentId, adapter: s.adapterId, resumed: !!s.resumeId, reportPath })
+    } catch (e) {
+      this.ctx.log.warn('engine: orchestrator context failed; step runs without it', { runId: this.run.id, stepId, error: String(e) })
+    }
+    if (!block) return { prompt: withOps, reportPath: null }
+    return { prompt: `${withOps}\n\n${this.redact(block)}`, reportPath }
   }
 
   private openMemory(s: StepSpec, stepId: string, adapter: Adapter, live: StepLive | null): OpenMemory | null {

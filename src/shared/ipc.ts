@@ -269,6 +269,13 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   /** AGENT-COLLAB.md §5: agent conversations of a company (Agent talk panel) and the Forum conversation of one run */
   'forum:collab': [{ companyId: Id }, CollabState]
   'forum:runConversation': [{ runId: Id }, RunConversation | null]
+  /** ORCHESTRATOR.md §5: what Principia did after one run (the Run view's "Principia after this run") */
+  'orchestrator:forRun': [{ runId: Id }, import('./orchestrator').RunOrchestration | null]
+  /** ORCHESTRATOR.md §3: what Principia suggests to the founder (Needs you), and the founder's yes or no */
+  'orchestrator:suggestions': [{ companyId?: Id | null } | undefined, import('./orchestrator').OrchSuggestion[]]
+  'orchestrator:decideSuggestion': [{ id: Id; decision: 'accept' | 'dismiss' }, { suggestion: import('./orchestrator').OrchSuggestion; detail: string }]
+  /** ORCHESTRATOR.md §5: the chief of staff's latest batches (Activity) */
+  'orchestrator:decisions': [{ companyId: Id; limit?: number }, import('./orchestrator').OrchDecisionRecord[]]
 
   'gateway:connect': [{ id: string }, import('./gateway').GatewayConnection]
   'gateway:disconnect': [{ id: string }, import('./gateway').GatewayConnection]
@@ -793,6 +800,7 @@ export const INVOKE_CHANNELS = [
   'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
   'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
   'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask', 'forum:collab', 'forum:runConversation',
+  'orchestrator:forRun', 'orchestrator:suggestions', 'orchestrator:decideSuggestion', 'orchestrator:decisions',
   'gateway:connect', 'gateway:disconnect', 'gateway:list', 'gateway:save', 'gateway:remove', 'gateway:test',
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',

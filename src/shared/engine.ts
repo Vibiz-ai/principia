@@ -105,6 +105,11 @@ export interface EngineLogger {
 }
 
 export interface EngineContext {
+  /**
+   * ORCHESTRATOR.md §1.1: Principia's context block and report contract for one non-shell step of a company run (a task
+   * run or a seat run), on every harness. null = nothing to add (the layer is off, or the run is no agent's).
+   */
+  orchestrator?: { stepContext(req: OrchestratorStepRequest): string | null }
   /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
   gateway?: { attachment(cwd: string, companyId?: Id | null): McpServerSpec | null }
   /**
@@ -260,6 +265,20 @@ export interface TaskRunBridge {
 export const TASK_WRAP_UP_MS = 2 * 60_000
 export const TASK_WRAP_UP_TEXT =
   'Principia: about 2 minutes are left before this task run is stopped. Wrap up now: save your work and call task_report (or task_ask if you need the human).'
+
+/** ORCHESTRATOR.md §1.1: one step asking for its Principia context. */
+export interface OrchestratorStepRequest {
+  runId: Id
+  stepId: Id
+  companyId: Id
+  taskId: Id | null
+  agentId: Id | null
+  adapter: AdapterId
+  /** a resumed conversation (it already holds the full block): only the inbox delta and the footer */
+  resumed: boolean
+  /** the step's $PRINCIPIA_RUN_REPORT file */
+  reportPath: string
+}
 
 /** EngineContext.onStepOutput (PASSPORT.md §7.6). `output` is the step's final answer, already redacted. */
 export interface StepOutputEvent {

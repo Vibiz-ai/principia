@@ -354,7 +354,31 @@ export class SuggestionPipeline {
     if (res.created.length) this.deps.log.info('passport: harvested agent notes', { runId: e.runId, stepId: e.stepId, proposals: res.created.length })
     return res
   }
+
+  /**
+   * ORCHESTRATOR.md §1.3: the `facts` of a run report, filed as proposals (source `run-report`), one per topic note.
+   * Screened like harvested notes; never written to the vault: the founder accepts them. null = no vault runtime.
+   */
+  fileRunFacts(companyId: string, run: { runId: string; stepId: string; adapter: StepOutputEvent['adapter'] }, facts: { text: string; topic?: string }[]): FileResult | null {
+    const rt = this.rt()
+    if (!rt || !facts.length) return null
+    rt.ensure(companyId)
+    const byTopic = new Map<string, { category: string; text: string }[]>()
+    for (const f of facts) {
+      const topic = (f.topic?.trim() || RUN_FACTS_NOTE).replace(/[[\]]/g, '').slice(0, 120) || RUN_FACTS_NOTE
+      byTopic.set(topic, [...(byTopic.get(topic) ?? []), { category: 'fact', text: f.text }])
+    }
+    const parsed = [...byTopic].map(([title, list]) => ({ title, type: null, facts: list, relations: [] }))
+    const { notes, dropped } = screenHarvest(parsed, rt.fingerprints())
+    if (dropped.length) this.deps.log.warn('passport: run report facts dropped', { runId: run.runId, count: dropped.length, reasons: [...new Set(dropped.map((d) => d.reason))] })
+    if (!notes.length) return { created: [], known: 0, throttled: 0, capped: 0 }
+    const candidates = harvestCandidates(rt.db, loadVaultView(rt.db, companyId), { runId: run.runId, stepId: run.stepId, nodeId: '', adapter: run.adapter }, notes).map((c) => ({ ...c, source: 'run-report' as const, key: `run-report:${c.key}` }))
+    return this.queue(rt).file(companyId, candidates)
+  }
 }
+
+/** ORCHESTRATOR.md §1.3: the note a run-report fact without a topic lands on. */
+export const RUN_FACTS_NOTE = 'Team notes'
 
 function readNote(rt: SuggestRuntime, companyId: string, rel: string): NoteText | null {
   try {

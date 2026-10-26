@@ -29,6 +29,7 @@ import { useIsCode } from '../components/desk/Desk'
 import { useDeskAgents } from '../state/desk'
 import { ConnectionsPage } from '../components/connections/ConnectionsPage'
 import { DiskSection } from '../components/usage/DiskSection'
+import { PrincipiaRunsTeam } from '../components/orchestrator/PrincipiaTeam'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
 import { CompanyAvatar } from '../shell/CompanyRail'
 import { PassportView } from './PassportView'
@@ -175,8 +176,9 @@ function CompanyPick({ companies, section }: { companies: CompanyPassport[]; sec
 }
 
 /**
- * Team & autonomy (design §2.4): this company's Pause and Autopilot, how many tasks run at once, and each agent's one
- * autonomy phrase (the same words as Team and onboarding). Nothing here touches another company.
+ * Team & autonomy (design §2.4): this company's Pause and Autopilot, how many tasks run at once, "Principia runs the
+ * team" (ORCHESTRATOR.md) and each agent's one autonomy phrase (the same words as Team and onboarding). Nothing here
+ * touches another company.
  */
 function TeamAutonomy({ company: c }: { company: CompanyPassport }): React.JSX.Element {
   const agents = useDeskAgents(c.id)
@@ -209,6 +211,7 @@ function TeamAutonomy({ company: c }: { company: CompanyPassport }): React.JSX.E
           />
         </SRow>
       </div>
+      <PrincipiaRunsTeam companyId={c.id} companyName={c.name} />
       <div className="sgroup">
         <div className="sgroup__title">
           Each agent

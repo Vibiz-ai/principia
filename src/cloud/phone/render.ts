@@ -1,6 +1,8 @@
 /**
  * The phone screens as VNodes (text nodes only: agent text can never become markup). Mobile first, one hand: the
- * company switcher on top, four tabs at the bottom, big targets. Same dark tokens and white line art as the Mac.
+ * company switcher on top, four tabs at the bottom, big targets. The landing page's look: Cinzel lettering for titles,
+ * cool greys on near-black, and a white line engraving only where the screen is otherwise empty (pairing, nothing to
+ * show yet).
  */
 import { h, type VNode } from '../console/dom'
 import { bust } from '../console/render'
@@ -25,7 +27,11 @@ export interface Actions {
   pickOption(key: string, option: string, multi: boolean): void
   channel(id: string): void
   pair(): void
+  /** hosted: open a pairing link pasted into the app (a Home Screen app on iPhone cannot be reached by the QR) */
+  pasteLink(text: string): void
   retry(): void
+  /** hosted: forget the Mac this phone remembers (its address and token) */
+  forget(): void
   draft(key: string, value: string): void
 }
 
@@ -53,12 +59,13 @@ const face = (w: PhoneWho | null, size: 'sm' | 'md' = 'md'): VNode => h('span', 
 const ring = (): VNode => h('svg', { class: 'ring', viewBox: '0 0 40 40' }, h('circle', { cx: '20', cy: '20', r: '19' }))
 const whoLine = (w: PhoneWho | null, fallback: string): VNode => h('span', { class: 'who' }, h('b', null, w?.name ?? fallback), w?.role ? h('span', { class: 'role' }, ` · ${w.role}`) : null)
 const tile = (k: 'ok' | 'needs' | 'fail' | 'run' | 'q'): VNode => h('span', { class: `tes tes--${k}`, 'aria-hidden': 'true' })
-const btn = (label: string, on: () => void, o: { kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; key?: string; small?: boolean } = {}): VNode =>
-  h('button', { type: 'button', class: `btn${o.kind ? ` btn--${o.kind}` : ''}${o.small ? ' btn--sm' : ''}`, disabled: o.disabled, 'data-key': o.key, on: { click: () => on() } }, label)
-const empty = (title: string, line: string): VNode => h('div', { class: 'empty' }, mosaic(), h('b', null, title), h('p', null, line))
-/** the line-art arch, the app's empty state */
-const mosaic = (): VNode =>
-  h('svg', { class: 'arch', viewBox: '0 0 64 64', 'aria-hidden': 'true' }, h('path', { d: 'M10 54h44M15 54V30a17 17 0 0 1 34 0v24', 'stroke-opacity': '.9' }), h('path', { d: 'M23 54V31a9 9 0 0 1 18 0v23', 'stroke-opacity': '.35' }))
+const btn = (label: string, on: () => void, o: { kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; key?: string; small?: boolean; wide?: boolean } = {}): VNode =>
+  h('button', { type: 'button', class: `btn${o.kind ? ` btn--${o.kind}` : ''}${o.small ? ' btn--sm' : ''}${o.wide ? ' btn--wide' : ''}`, disabled: o.disabled, 'data-key': o.key, on: { click: () => on() } }, label)
+/** the white line engravings (public/art, from the landing page), used sparingly */
+export type Plate = 'arch' | 'senate' | 'scribe' | 'forum'
+const plate = (name: Plate, eager = false): VNode =>
+  h('figure', { class: 'plate', 'aria-hidden': 'true' }, h('img', { src: `/art/${name}.webp`, alt: '', width: '900', height: '503', decoding: 'async', loading: eager ? 'eager' : 'lazy', fetchpriority: eager ? 'high' : undefined }))
+const empty = (title: string, line: string, art: Plate): VNode => h('div', { class: 'empty' }, plate(art), h('b', null, title), h('p', null, line))
 
 export function renderHeader(v: View, a: Actions): VNode {
   const co = v.companies.find((c) => c.id === v.companyId)
@@ -139,7 +146,7 @@ function doneRow(d: PhoneDone, now: number): VNode {
 export function renderNeeds(v: View, a: Actions, now = Date.now()): VNode {
   const n = v.needs
   if (!n) return loading()
-  if (!n.asks.length && !n.tasks.length) return h('section', { class: 'page' }, empty('Nothing needs you', 'Your team asks here when they need a decision.'))
+  if (!n.asks.length && !n.tasks.length) return h('section', { class: 'page' }, empty('Nothing needs you', 'Your team asks here when they need a decision.', 'senate'))
   return h('section', { class: 'page' }, h('h1', { class: 'title' }, 'Needs you'), h('div', { class: 'list' }, ...n.asks.map((x) => askCard(x, v, a, now)), ...n.tasks.map((t) => taskCard(t, v, a, now))))
 }
 function askCard(x: PhoneAsk, v: View, a: Actions, now: number): VNode {
@@ -163,8 +170,9 @@ function taskCard(t: PhoneTaskNeed, v: View, a: Actions, now: number): VNode {
   return h(
     'article',
     { class: 'card ask' },
-    h('div', { class: 'card__h' }, face(t.who, 'sm'), whoLine(t.who, 'Board'), h('span', { class: 'tm' }, ago(t.at, now))),
-    h('p', { class: 'kicker' }, t.kind === 'review' ? `Ready for your OK · ${t.title}` : t.kind === 'question' ? `Asks about ${t.title}` : t.title),
+    h('div', { class: 'card__h' }, face(t.who, 'sm'), whoLine(t.who, t.kind === 'idea' ? 'Principia' : 'Board'), h('span', { class: 'tm' }, ago(t.at, now))),
+    h('p', { class: 'kicker' }, t.kind === 'review' ? 'Ready for your OK' : t.kind === 'question' ? 'A question' : t.kind === 'idea' ? 'Idea' : 'Stuck'),
+    h('b', { class: 'card__t' }, t.title),
     h('p', { class: 'q' }, t.text),
     t.kind === 'review'
       ? reviewButtons(t.taskId, v, a)
@@ -199,7 +207,7 @@ function reviewButtons(taskId: string, v: View, a: Actions, small = false): VNod
 export function renderChats(v: View, a: Actions, now = Date.now()): VNode {
   const c = v.chats
   if (!c) return loading()
-  if (!c.rows.length) return h('section', { class: 'page' }, empty('No chats yet', 'Conversations with your agents and Claude show here.'))
+  if (!c.rows.length) return h('section', { class: 'page' }, empty('No chats yet', 'Conversations with your agents and Claude show here.', 'scribe'))
   return h('section', { class: 'page' }, h('h1', { class: 'title' }, 'Chats'), h('div', { class: 'list rows' }, ...c.rows.map((r) => chatRow(r, a, now))))
 }
 function chatRow(r: PhoneChatRow, a: Actions, now: number): VNode {
@@ -339,7 +347,7 @@ function threadItem(i: PhoneThreadItem, v: View, a: Actions, now: number): VNode
 export function renderRoom(v: View, a: Actions, now = Date.now()): VNode {
   const r = v.room
   if (!r) return loading()
-  if (!r.enabled) return h('section', { class: 'page' }, empty('The team room is off', r.message ?? 'Turn on Companies and Departments on your Mac.'))
+  if (!r.enabled) return h('section', { class: 'page' }, empty('The team room is off', r.message ?? 'Turn on Companies and Departments on your Mac.', 'forum'))
   const by = new Map(r.members.map((m) => [m.id, m]))
   const agents = r.members.filter((m) => m.kind === 'agent')
   const whoOpen = v.drafts['room:who:open'] === '1'
@@ -378,21 +386,96 @@ export function loading(): VNode {
   return h('div', { class: 'page' }, h('div', { class: 'skel' }), h('div', { class: 'skel' }), h('div', { class: 'skel short' }))
 }
 
-export function renderPair(name: string, error: string | null, busy: boolean, a: Actions): VNode {
+/** "Principia" in Cinzel over the arch: the pairing and signed-out screens */
+const lettering = (): VNode[] => [plate('arch', true), h('h1', { class: 'brand' }, 'Principia')]
+const status = (tile: 'ok' | 'needs' | 'fail' | 'run' | 'q', text: string): VNode => h('p', { class: 'status', role: 'status' }, h('span', { class: `tes tes--${tile}`, 'aria-hidden': 'true' }), h('span', null, text))
+
+export interface PairView {
+  name: string
+  error: string | null
+  busy: boolean
+  /** hosted: the Mac's host the link names ("quiet-tree-42.trycloudflare.com"); null on the Mac's own page */
+  mac: string | null
+  /** hosted: this phone is already paired with another Mac (its host); pairing replaces it */
+  replaces?: string | null
+  /** hosted, in the browser (not a Home Screen app): say where the pairing lives */
+  browserTab?: boolean
+}
+export function renderPair(p: PairView, a: Actions): VNode {
   return h(
     'section',
     { class: 'pairing' },
-    mosaic(),
-    h('h1', { class: 'brand' }, 'PRINCIPIA'),
-    h('p', { class: 'lede' }, 'Pair this phone with your Mac. You can watch your agents and keep work going from here.'),
-    h('label', { class: 'field' }, h('span', null, 'Name this phone'), h('input', { class: 'inp', 'data-k': 'pair:name', value: name, maxlength: '60', autocomplete: 'off', on: { input: (e: Event) => a.draft('pair:name', (e.target as HTMLInputElement).value) } })),
-    error ? h('p', { class: 'err' }, error) : null,
-    btn(busy ? 'Pairing…' : 'Pair this phone', () => a.pair(), { kind: 'primary', disabled: busy }),
-    h('p', { class: 'sub' }, 'The link works once and for 5 minutes. Settings › App › Phone on your Mac lists this phone, with Revoke.')
+    ...lettering(),
+    h('p', { class: 'lede' }, 'Pair this phone with your Mac to watch your agents and keep the work going.'),
+    p.busy ? status('run', 'Pairing') : p.error ? status('fail', 'Code not accepted') : status('needs', 'One-time code'),
+    p.mac ? h('p', { class: 'fine' }, `Your Mac: ${p.mac}`) : null,
+    p.replaces ? h('p', { class: 'notice notice--warn', role: 'alert' }, `This phone is paired with another Mac (${p.replaces}). Pair only if this link came from your own Mac: pairing here replaces it.`) : null,
+    h('div', { class: 'fill' }),
+    h('label', { class: 'field' }, h('span', null, 'Name this phone'), h('input', { class: 'inp', 'data-k': 'pair:name', value: p.name, maxlength: '60', autocomplete: 'off', on: { input: (e: Event) => a.draft('pair:name', (e.target as HTMLInputElement).value) } })),
+    p.error ? h('p', { class: 'err' }, p.error) : null,
+    btn(p.busy ? 'Pairing…' : p.replaces ? 'Replace and pair' : 'Pair this phone', () => a.pair(), { kind: 'primary', disabled: p.busy, wide: true }),
+    h('p', { class: 'fine' }, 'The code works once, for 5 minutes. Your Mac lists this phone in Settings › App › Phone, with Revoke.'),
+    p.browserTab ? h('p', { class: 'fine' }, 'Want it on your Home Screen? On iPhone the Home Screen app keeps its own sign-in: add it first, open it, and paste this link there.') : null
   )
 }
 
-export function renderSignedOut(reason: 'unpaired' | 'off' | 'revoked', a: Actions): VNode {
-  const line = reason === 'off' ? 'Phone was turned off on your Mac. Turn it on again and scan a new code.' : reason === 'revoked' ? 'This phone was removed on your Mac. Scan a new code to pair it again.' : 'On your Mac, open Settings › App › Phone, turn it on and scan the code with this phone.'
-  return h('section', { class: 'pairing' }, mosaic(), h('h1', { class: 'brand' }, 'PRINCIPIA'), h('p', { class: 'lede' }, line), btn('Try again', () => a.retry(), { kind: 'ghost' }))
+export interface OutView {
+  reason: 'unpaired' | 'off' | 'revoked' | 'gone'
+  /** the app runs on its own site (hosted mode) */
+  hosted: boolean
+  /** hosted: the Mac this phone remembers */
+  mac: string | null
+  error: string | null
+  /** hosted: a Home Screen app (the QR opens the browser, never this app), so pasting the link is the way in */
+  standalone?: boolean
+  /** hosted: what is in the paste field, and why it was not a pairing link */
+  paste?: string
+  pasteError?: string | null
+}
+/**
+ * Hosted: the pairing link, pasted. On iPhone a Home Screen app keeps its own storage and the camera's QR always opens
+ * the browser, so the app itself needs a way in: copy the link on the Mac (Universal Clipboard) or long-press the QR in
+ * the camera and Copy Link, then paste it here.
+ */
+function pasteField(o: OutView, a: Actions): VNode {
+  const read = (el: EventTarget | null): string => ((el as HTMLElement | null)?.closest('.paste')?.querySelector('input') as HTMLInputElement | null)?.value ?? ''
+  return h(
+    'div',
+    { class: 'paste' },
+    h(
+      'label',
+      { class: 'field' },
+      h('span', null, o.standalone ? 'Paste the pairing link' : 'Or paste the pairing link'),
+      h('input', { class: 'inp', 'data-k': 'pair:paste', value: o.paste ?? '', type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'https://…#mac=…&code=…', on: { input: (e: Event) => a.draft('pair:paste', (e.target as HTMLInputElement).value), keydown: (e: Event) => (e as KeyboardEvent).key === 'Enter' && a.pasteLink(read(e.target)) } })
+    ),
+    o.pasteError ? h('p', { class: 'err' }, o.pasteError) : null,
+    h('button', { type: 'button', class: `btn btn--wide${o.standalone ? ' btn--primary' : ''}`, on: { click: (e: Event) => a.pasteLink(read(e.target)) } }, 'Open the link'),
+    o.standalone ? h('p', { class: 'fine' }, 'On your Mac, Copy link under the code, or long-press the code in the Camera and Copy Link.') : null
+  )
+}
+
+export function renderSignedOut(o: OutView, a: Actions): VNode {
+  const line =
+    o.reason === 'gone'
+      ? 'Your Mac is not at its last address. Phone may be off there, or its address changed.'
+      : o.reason === 'off'
+        ? 'Phone was turned off on your Mac. Turn it on again and scan a new code.'
+        : o.reason === 'revoked'
+          ? 'This phone was removed on your Mac. Scan a new code to pair it again.'
+          : 'On your Mac, open Settings › App › Phone, turn it on and scan the code with this phone.'
+  const head = o.reason === 'gone' ? status('q', 'Scan again on your Mac') : o.reason === 'unpaired' ? status('q', 'Not paired') : status('fail', o.reason === 'off' ? 'Phone is off' : 'Removed on your Mac')
+  return h(
+    'section',
+    { class: 'pairing' },
+    ...lettering(),
+    h('p', { class: 'lede' }, line),
+    head,
+    o.error ? h('p', { class: 'err' }, o.error) : null,
+    o.reason === 'gone' && o.mac ? h('p', { class: 'fine' }, `Last address: ${o.mac}`) : null,
+    h('div', { class: 'fill' }),
+    o.hosted ? pasteField(o, a) : null,
+    btn('Try again', () => a.retry(), { kind: o.reason === 'gone' && !o.standalone ? 'primary' : 'ghost', wide: true }),
+    o.reason === 'gone' ? btn('Forget this Mac', () => a.forget(), { kind: 'ghost', wide: true }) : null,
+    o.hosted ? h('p', { class: 'fine' }, 'This page keeps nothing but the key to your Mac. Your work stays on the Mac.') : null
+  )
 }

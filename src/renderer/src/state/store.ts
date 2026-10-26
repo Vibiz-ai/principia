@@ -20,6 +20,7 @@ import type { MemoryOverview } from '@shared/memory'
 import type { CompanyAgent, CompanyLogo, CompanyOverview, LogoPick, CompanyPassport, CompanyTask, CompanyUpdateInput, Department, DepartmentPresetKey } from '@shared/company'
 import { DEPARTMENT_PRESETS, PERSONAL_COMPANY_ID, coolAccent, departmentsEnabled } from '@shared/company'
 import type { CompanyProposal } from '@shared/chatCompany'
+import { suggestionCounts } from '@shared/orchestrator'
 import type { AgentNode as LiveAgent, Ask } from '@shared/live'
 import type { AuthorDraft } from '@shared/authoring'
 import { LAUNCH_STEP_LABELS, type CloneProgressEvent, type JournalMeta, type LaunchStepName, type OnboardingDraft, type OnboardingPlan, type OnboardingStatus, type ProgressEvent } from '@shared/onboarding'
@@ -189,6 +190,8 @@ export interface State {
   logoPickerFor: Id | null
   /** Company tasks (Tasks page), loaded with the companies. */
   tasks: CompanyTask[]
+  /** ORCHESTRATOR.md §3: open suggestions per company (they count in every Needs you badge) */
+  suggestionCounts: Record<Id, number>
   /** DEPARTMENTS.md: every company's departments (archived included), loaded with the companies. Empty while the flag is off. */
   departments: Department[]
   /** DEPARTMENTS.md: every company's agent seats (archived included). Empty while the flag is off. */
@@ -259,6 +262,7 @@ const initial: State = {
   chatProposals: [],
   logoPickerFor: null,
   tasks: [],
+  suggestionCounts: {},
   departments: [],
   companyAgents: [],
   expandedCompanies: {},
@@ -1199,11 +1203,21 @@ export async function setCompanyLogo(companyId: Id, pick: LogoPick): Promise<Com
 /** Every company's tasks as main lists them; `state.tasks` keeps only the listed (not archived) companies' rows. */
 let rawTasks: CompanyTask[] = []
 export async function refreshTasks(): Promise<void> {
+  void refreshSuggestionCounts()
   try {
     rawTasks = await hive.tasks.list()
     setState((s) => ({ tasks: listedRows(rawTasks, s.companyError ? [] : s.companies), companyError: null }))
   } catch (e) {
     setState({ companyError: errorMessage(e) })
+  }
+}
+/** Open Principia suggestions per company (Needs you badges). A failed read keeps the last counts. */
+async function refreshSuggestionCounts(): Promise<void> {
+  try {
+    const list = await hive.orchestrator.suggestions({})
+    setState({ suggestionCounts: suggestionCounts(list) })
+  } catch {
+    /* no orchestrator here */
   }
 }
 let tasksTimer: ReturnType<typeof setTimeout> | null = null

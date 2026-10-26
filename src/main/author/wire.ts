@@ -185,6 +185,14 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       emit('data:changed', { domain: 'tasks' })
       h.statusChanged()
     },
+    // task_create {agent}: a teammate of the same company by @handle, name or role (the Forum's roster)
+    teammate: (companyId, raw) => {
+      const store = h.forum?.store
+      if (!store) return { teammates: [] }
+      const m = store.agentByName(companyId, raw)
+      if (m?.agentId && m.companyId === companyId) return { agentId: m.agentId }
+      return { teammates: store.roster(companyId).map((t) => `@${t.handle}`) }
+    },
     // a handed-off task wakes its auto target now (null until startDispatcher; the tick covers it then)
     pump: (companyId) => void h.dispatcher?.pump(companyId),
     // §9 company_create_department: the UI's departments:save path (department note), then the sidebar refreshes

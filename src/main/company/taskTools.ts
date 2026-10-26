@@ -72,6 +72,11 @@ export interface TaskToolsDeps {
    */
   pump?: (companyId: string) => void
   /** §9 company_create_department: departments:save as the UI does it (department note, data:changed). Absent = departments.save. */
+  /**
+   * task_create {agent}: the active agent of this company that `raw` names (@handle, name, role), else the teammates to
+   * pick from. Only ever inside `companyId`. Absent = the field is refused.
+   */
+  teammate?: (companyId: string, raw: string) => { agentId: string } | { teammates: string[] }
   createDepartment?: (input: { companyId: string; name: string; key?: string; does: string; doesNot: string }) => { id: string; key: string; name: string }
   now?: () => Date
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
@@ -105,6 +110,7 @@ const ARGS = {
     title: z.string().trim().min(1).max(TASK_LIMITS.title),
     description: z.string().max(TASK_LIMITS.description).default(''),
     departmentKey: z.string().trim().min(1).max(80).optional(),
+    agent: z.string().trim().min(1).max(120).optional(),
     blocksCurrent: z.boolean().default(false),
     parent: idArg.optional(),
     start: z.boolean().default(false)
@@ -426,13 +432,24 @@ export class TaskTools {
       dep = this.c.departments.byKey(caller.companyId, a.departmentKey.toLowerCase())
       if (!dep || dep.archivedAt || dep.companyId !== caller.companyId) fail(`No department "${a.departmentKey}" in this company. Known: ${this.c.departments.list(caller.companyId).map(d => d.key).join(', ') || 'none'}`)
     }
+    let agentId: string | null = null
+    if (a.agent) {
+      if (!this.d.teammate) fail('Naming a teammate is not available here: leave agent out')
+      const found = this.d.teammate!(caller.companyId, a.agent)
+      if (!('agentId' in found)) fail(`No teammate "${clip(a.agent, 80)}" in this company (teammates: ${found.teammates.join(', ') || 'none'})`)
+      const agent = this.c.departments.listAgents({ companyId: caller.companyId }).find(x => x.id === (found as { agentId: string }).agentId && !x.archivedAt)
+      if (!agent || agent.companyId !== caller.companyId) fail(`No teammate "${clip(a.agent, 80)}" in this company`)
+      if (dep && agent!.departmentId && agent!.departmentId !== dep.id) fail(`${agent!.name} is not in ${a.departmentKey}`)
+      agentId = agent!.id
+      if (!dep && agent!.departmentId) dep = this.c.departments.get(agent!.departmentId)
+    }
     const company = this.c.passport(caller.companyId)
     const repoId = parent?.repoId && company.repoIds.includes(parent.repoId) ? parent.repoId : null
     const created = db.transaction(() => {
       const t = this.c.createTask({
         companyId: caller.companyId, title: clip(this.redact(a.title), TASK_LIMITS.title), description: this.redact(a.description), repoId,
         status: dep ? 'todo' : 'triage', priority: parent?.priority ?? 0, source: 'agent', sourceUrl: null, externalId,
-        assigneeProfileId: null, parentId: parent?.id ?? null, dependencyIds: [], departmentId: dep?.id ?? null
+        assigneeProfileId: null, parentId: parent?.id ?? null, dependencyIds: [], departmentId: dep?.id ?? null, ...(agentId ? { agentId } : {})
       })
       if (a.blocksCurrent && parent) this.addDependency(parent, t.id)
       return t

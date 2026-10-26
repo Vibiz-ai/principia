@@ -41,6 +41,7 @@ import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
 import { wireTaskWork } from './company/taskWorkWire'
 import { wireLinearSync } from './company/sync/wire'
+import { startOrchestrator } from './orchestrator/wire'
 import { SlackService } from './connectors/slack/service'
 import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
 
@@ -218,6 +219,7 @@ if (!app.requestSingleInstanceLock()) {
           env: (companyId: string, cli: LlmCli) => strippedChildEnv(vault.resolveCompanyOnly(LLM_CLI_KEYS[cli], companyId))
         }
       })
+      h.memorySuggest = suggest
       app.on('will-quit', () => suggest.stop())
       // §6.3: window focus rescans every watched vault (edits made in Obsidian while Principia was in the background)
       app.on('browser-window-focus', () => {
@@ -272,7 +274,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     // REMOTE.md: Phone (built idle: no listener until the user turns it on)
     try {
-      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH })
+      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl })
     } catch (e) {
       log.error('phone unavailable', { e: String(e) })
     }
@@ -338,6 +340,8 @@ if (!app.requestSingleInstanceLock()) {
       passportContext: (cwd, companyId, departmentId) => h.passportContext(cwd, companyId, departmentId),
       company: h.companyBridge(),
       onStepOutput: (e) => h.onStepOutput(e),
+      // ORCHESTRATOR.md §1.1: Principia's context and report contract for every company step (wired after the dispatcher)
+      orchestrator: { stepContext: (req) => h.orchestrator?.stepContext(req) ?? null },
       getWorkflow: (id) => store.getWorkflow(id),
       emit: (e) => h.onEngineEvent(e),
       log,
@@ -487,6 +491,12 @@ if (!app.requestSingleInstanceLock()) {
       h.startDispatcher()
     } catch (e) {
       log.error('dispatcher start failed', { e: String(e) })
+    }
+    // ORCHESTRATOR.md: after the Forum, authoring and the dispatcher (its run hook is the last one); failure = off
+    try {
+      h.orchestrator = startOrchestrator(h)
+    } catch (e) {
+      log.error('orchestrator unavailable', { e: String(e) })
     }
     h.safe(() => h.taskWork?.start(), undefined)
 

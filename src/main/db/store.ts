@@ -82,6 +82,8 @@ export const DEFAULT_SETTINGS: Settings = {
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,
   marketplaceUrl: null,
+  // REMOTE.md RA6: null = the official phone app address
+  phoneSiteUrl: null,
   // COMPANY.md §8.6 (UI state) and §6 (guards warn while experimental.companies is off)
   activeCompanyId: 'all',
   expandedCompanies: {},
@@ -91,6 +93,8 @@ export const DEFAULT_SETTINGS: Settings = {
   personas: true,
   // AGENT-COLLAB.md §2 (stored as given; collabSettings() clamps and fills the defaults)
   agentCollab: {},
+  // ORCHESTRATOR.md §6 (stored as given; orchestratorSettings() clamps and fills the defaults)
+  orchestrator: {},
   // AUTOPILOT.md §4 (UI bookkeeping)
   autopilots: {},
   // Automations › Routines and Home suggestions (UI bookkeeping)
@@ -216,7 +220,16 @@ export class Store {
       const experimental = patch.experimental ? { ...this.getSettings().experimental, ...patch.experimental } : undefined
       // AGENT-COLLAB.md: the collaboration guards are patched field by field too
       const agentCollab = patch.agentCollab ? { ...(this.getSettings().agentCollab ?? {}), ...patch.agentCollab } : undefined
-      for (const [k, v] of Object.entries({ ...patch, ...(experimental ? { experimental } : {}), ...(agentCollab ? { agentCollab } : {}) })) {
+      // ORCHESTRATOR.md §6: field by field as well
+      const prevOrch = this.getSettings().orchestrator ?? {}
+      // a company's own switches merge company by company, field by field
+      const orchCompanies = patch.orchestrator?.companies
+        ? Object.fromEntries(
+            [...new Set([...Object.keys(prevOrch.companies ?? {}), ...Object.keys(patch.orchestrator.companies)])].map((k) => [k, { ...(prevOrch.companies?.[k] ?? {}), ...(patch.orchestrator!.companies![k] ?? {}) }])
+          )
+        : undefined
+      const orchestrator = patch.orchestrator ? { ...prevOrch, ...patch.orchestrator, ...(orchCompanies ? { companies: orchCompanies } : {}) } : undefined
+      for (const [k, v] of Object.entries({ ...patch, ...(experimental ? { experimental } : {}), ...(agentCollab ? { agentCollab } : {}), ...(orchestrator ? { orchestrator } : {}) })) {
         if (v === undefined || !(SETTINGS_KEYS as string[]).includes(k)) continue
         stmt.run(k, JSON.stringify(v))
       }
