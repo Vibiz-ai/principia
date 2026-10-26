@@ -48,9 +48,17 @@ final class LiveSocket {
     private var lastSub: String?
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
+    private var deadlineTask: Task<Void, Never>?
+    /// messages heard on the current socket (a ping waits for this to move)
+    private var heard = 0
     private(set) var connected = false
     /// test hook: the backoff waits (seconds)
     var sleep: (Double) async -> Void = { s in try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
+    /// test hook: how long a ping waits for an answer before the socket counts as dead (seconds)
+    var pongWait: (Double) async -> Void = { s in try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
+    static let pingEvery: Double = 25
+    static let pongWithin: Double = 10
+    static let pongWithinOnKick: Double = 5
 
     init(connector: LiveConnector, mac: String, origin: String, token: @escaping () -> String?, handlers: Handlers) {
         self.connector = connector
@@ -72,9 +80,8 @@ final class LiveSocket {
         pingTask?.cancel()
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 25_000_000_000)
-                guard let self, let c = self.ready else { continue }
-                try? await c.send(#"{"t":"ping"}"#)
+                try? await Task.sleep(nanoseconds: UInt64(Self.pingEvery * 1_000_000_000))
+                self?.checkAlive(within: Self.pongWithin)
             }
         }
     }
@@ -83,6 +90,7 @@ final class LiveSocket {
         closed = true
         retryTask?.cancel()
         pingTask?.cancel()
+        deadlineTask?.cancel()
         conn?.close()
         conn = nil
         ready = nil
@@ -99,9 +107,40 @@ final class LiveSocket {
         if let c = ready { Task { try? await c.send(s) } }
     }
 
-    /// back in the foreground, or the network came back: reconnect now if the socket is gone
+    /// back in the foreground, or the network came back: reconnect now if the socket is gone. One that still looks open
+    /// must answer a ping soon (a socket from before the phone slept is often dead without a close).
     func kick() {
-        guard !closed, !(connected && conn != nil) else { return }
+        guard !closed else { return }
+        if connected && conn != nil {
+            checkAlive(within: Self.pongWithinOnKick)
+            return
+        }
+        retryTask?.cancel()
+        retryTask = nil
+        tries = max(tries, 1)
+        connect()
+    }
+
+    /// A ping, and the socket must say anything (its pong) in time, or it is dropped and opened again.
+    private func checkAlive(within wait: Double) {
+        guard !closed, let c = ready, deadlineTask == nil else { return }
+        let before = heard
+        Task { try? await c.send(#"{"t":"ping"}"#) }
+        deadlineTask = Task { [weak self] in
+            await self?.pongWait(wait)
+            guard let self, !Task.isCancelled else { return }
+            self.deadlineTask = nil
+            if self.conn === c, self.heard == before { self.drop(c) }
+        }
+    }
+
+    /// a half-open socket: close it and connect again now
+    private func drop(_ c: LiveConnection) {
+        guard conn === c else { return }
+        conn = nil
+        ready = nil
+        c.close()
+        setUp(false)
         retryTask?.cancel()
         retryTask = nil
         tries = max(tries, 1)
@@ -119,6 +158,8 @@ final class LiveSocket {
         let c = connector.open(url: url, origin: origin)
         conn = c
         ready = nil
+        deadlineTask?.cancel()
+        deadlineTask = nil
         Task { await run(c) }
     }
 
@@ -127,11 +168,16 @@ final class LiveSocket {
             // RA6: who we are, first; nothing else goes before it
             if let t = token() { try await c.send(LiveSocket.authMessage(t)) }
             guard conn === c else { return }
-            if let s = lastSub { try await c.send(s) }
+            let sent = lastSub
+            if let s = sent { try await c.send(s) }
+            guard conn === c else { return }
             ready = c
+            // a subscribe() while those were on their way found no ready socket: the newest one goes now
+            if let s = lastSub, s != sent { try await c.send(s) }
             while true {
                 let text = try await c.receive()
                 guard conn === c else { return }
+                heard += 1
                 guard let m = PhoneServerMsg.decode(text) else { continue }
                 if case .hello = m {
                     let again = tries > 0

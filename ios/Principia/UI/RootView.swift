@@ -67,6 +67,8 @@ struct Screen<Content: View>: View {
                 .stone()
                 .toolbar { TopBar() }
                 .toolbarBackground(.hidden, for: .navigationBar)
+                // what scrolls under the floating company and Pause buttons fades out, never under their words
+                .scrollEdgeEffectStyle(.hard, for: .top)
         }
     }
 }

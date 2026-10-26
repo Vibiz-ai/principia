@@ -161,19 +161,20 @@ export function renderNeeds(v: View, a: Actions, now = Date.now()): VNode {
   if (!n.asks.length && !n.tasks.length) return h('section', { class: 'page' }, empty('Nothing needs you', 'Your team asks here when they need a decision.', 'senate'))
   return h('section', { class: 'page' }, h('h1', { class: 'title' }, 'Needs you'), h('div', { class: 'list' }, ...n.asks.map((x) => askCard(x, v, a, now)), ...n.tasks.map((t) => taskCard(t, v, a, now))))
 }
-function askCard(x: PhoneAsk, v: View, a: Actions, now: number): VNode {
+/** inChat: inside that very conversation, it reads like the chat's own permission card (no face, no link to itself) */
+function askCard(x: PhoneAsk, v: View, a: Actions, now: number, inChat = false): VNode {
   const busy = v.busy.has(`ask:${x.id}`)
   const key = `ask:${x.id}`
   return h(
     'article',
-    { class: 'card ask' },
-    h('div', { class: 'card__h' }, face(x.who, 'sm'), whoLine(x.who, 'Agent'), h('span', { class: 'tm' }, ago(x.at, now))),
-    h('p', { class: 'q' }, x.question ?? x.title),
+    { class: inChat ? 'card ask ask--chat' : 'card ask' },
+    inChat ? null : h('div', { class: 'card__h' }, face(x.who, 'sm'), whoLine(x.who, 'Agent'), h('span', { class: 'tm' }, ago(x.at, now))),
+    h('p', { class: 'q' }, x.question ?? x.heading ?? x.title),
     x.detail && x.detail !== x.question ? h('p', { class: 'detail mono' }, x.detail) : null,
     x.options.length ? h('div', { class: 'opts' }, ...x.options.map((o) => btn(o.label, () => a.answerAsk(x.id, o.id), { kind: o.kind === 'deny' ? 'ghost' : 'primary', disabled: busy, key: `${key}:${o.id}` }))) : null,
     x.text ? h('div', { class: 'free' }, h('textarea', { class: 'inp', rows: '2', 'data-k': key, placeholder: 'Your answer', on: { input: (e: Event) => a.draft(key, (e.target as HTMLTextAreaElement).value) } }), btn('Send', () => a.answerAsk(x.id, null), { kind: 'primary', disabled: busy || !(v.drafts[key] ?? '').trim() })) : null,
-    !x.options.length && !x.text && !x.open ? h('p', { class: 'sub' }, 'Answer this on your Mac.') : null,
-    x.open ? h('button', { type: 'button', class: 'link', on: { click: () => a.open(x.open!) } }, 'Open the conversation ›') : null
+    !x.options.length && !x.text && (!x.open || inChat) ? h('p', { class: 'sub' }, 'Answer this on your Mac.') : null,
+    x.open && !inChat ? h('button', { type: 'button', class: 'link', on: { click: () => a.open(x.open!) } }, 'Open the conversation ›') : null
   )
 }
 function taskCard(t: PhoneTaskNeed, v: View, a: Actions, now: number): VNode {
@@ -299,7 +300,7 @@ export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
     ? [
         t.source === 'screen' && t.screen ? h('pre', { class: 'screen mono', 'aria-label': 'What the terminal shows' }, t.screen) : null,
         !lines.length && !t.screen && !t.ended ? h('p', { class: 'sub center' }, t.activity ? `${t.activity}. Its words show here as it works.` : t.canType ? 'It runs in a terminal on your Mac. Its words show here as it works; send a message below.' : 'It runs in a terminal on your Mac. Its words show here as it works.') : null,
-        ...(t.asks ?? []).map((x) => askCard(x, v, a, now)),
+        ...(t.asks ?? []).map((x) => askCard(x, v, a, now, true)),
         t.held && !(t.asks ?? []).length ? h('p', { class: 'notice notice--warn' }, t.held) : null,
         t.ended ? terminalEnd(t, !!lines.length, v, a) : null
       ]

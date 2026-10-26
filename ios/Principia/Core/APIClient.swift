@@ -210,7 +210,13 @@ final class APIClient: @unchecked Sendable {
     func notNeeded(_ co: String, taskId: String) async throws -> PhoneNeeds { try await call(.cancelTask(co, taskId: taskId), body: [:]) }
     func chats(_ co: String) async throws -> PhoneChats { try await call(.chats(co)) }
     func session(_ co: String, _ id: String) async throws -> PhoneSession { try await call(.session(co, sessionId: id)) }
-    func sessionSend(_ co: String, _ id: String, text: String) async throws { try await send(.sessionSend(co, sessionId: id), body: ["text": text]) }
+    /// an agent's ended chat reopens in a new session (same conversation): the session to follow, when the Mac says
+    @discardableResult
+    func sessionSend(_ co: String, _ id: String, text: String) async throws -> String? {
+        let r: Sent = try await call(.sessionSend(co, sessionId: id), body: ["text": text])
+        return r.sessionId
+    }
+    private struct Sent: Decodable { var sessionId: String? }
     func sessionStop(_ co: String, _ id: String, sendNow: Bool = false) async throws { try await send(.sessionStop(co, sessionId: id), body: sendNow ? ["sendNow": true] : [:]) }
     func sessionAnswer(_ co: String, _ id: String, requestId: String, decision: PhoneChatDecision) async throws {
         try await send(.sessionAnswer(co, sessionId: id), body: ["requestId": requestId, "decision": decision.json])
@@ -222,7 +228,12 @@ final class APIClient: @unchecked Sendable {
         return out.sessionId
     }
     func agent(_ co: String, _ id: String) async throws -> PhoneAgent { try await call(.agent(co, agentId: id)) }
-    func agentSend(_ co: String, _ id: String, text: String) async throws { try await send(.agentSend(co, agentId: id), body: ["text": text]) }
+    /// the agent answers in its own chat: the session to follow there, when the Mac says
+    func agentSend(_ co: String, _ id: String, text: String) async throws -> String? {
+        let r: AgentSent = try await call(.agentSend(co, agentId: id), body: ["text": text])
+        return r.sessionId
+    }
+    private struct AgentSent: Decodable { var sessionId: String? }
     func room(_ co: String, channelId: String?) async throws -> PhoneRoom { try await call(.room(co, channelId: channelId)) }
     func roomPost(_ co: String, channelId: String, text: String) async throws -> PhoneRoomMessage { try await call(.roomPost(co), body: ["channelId": channelId, "text": text]) }
 }

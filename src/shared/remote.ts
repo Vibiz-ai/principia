@@ -324,6 +324,8 @@ export interface PhoneNow {
 export interface PhoneAsk {
   id: Id
   title: string
+  /** a permission as a plain question ("Run a command?", "Create notes.txt?"); absent: an older Mac, or none */
+  heading?: string | null
   question: string | null
   detail: string | null
   who: PhoneWho | null
@@ -539,6 +541,12 @@ export type PhoneClientMsg =
 export type PhoneServerMsg =
   | { t: 'hello' }
   | { t: 'pong' }
+  /**
+   * the subscription took effect: from here on this socket gets the chat ops of `sessionId`. `seq` is that chat's last
+   * op number the Mac knows of (0: none yet). A phone whose replica is behind it missed ops between its snapshot and
+   * this subscription, and takes a fresh snapshot.
+   */
+  | { t: 'subbed'; sessionId: Id | null; seq: number }
   /** something in these views changed: refetch the ones on screen (companyId null: any company) */
   | { t: 'changed'; companyId: Id | null; what: PhoneLiveView[] }
   /** chat ops of the subscribed session (the desktop's own chat:ops) */

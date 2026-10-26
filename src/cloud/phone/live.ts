@@ -5,6 +5,12 @@
  */
 import type { PhoneClientMsg, PhoneServerMsg } from '../../shared/remote'
 
+const PING_MS = 25_000
+/** no answer to a ping in this long: the socket is dead */
+const PONG_MS = 10_000
+/** back in the foreground (or online again): a shorter wait, the page is in front of you */
+const KICK_PONG_MS = 5_000
+
 export interface Live {
   send(m: PhoneClientMsg): void
   close(): void
@@ -25,12 +31,40 @@ export function openLive(o: {
   let closed = false
   let tries = 0
   let timer: ReturnType<typeof setTimeout> | null = null
-  let ping: ReturnType<typeof setInterval> | null = null
+  let pinger: ReturnType<typeof setInterval> | null = null
   let last: PhoneClientMsg | null = null
   let up = false
   let byeSeen = false
   /** the open socket that has said who it is (hosted: auth went first); nothing else is sent before */
   let ready: WebSocket | null = null
+  /** a ping waits for its pong (or anything): none in time means a dead socket that still looks open */
+  let deadline: ReturnType<typeof setTimeout> | null = null
+  const alive = (): void => {
+    if (deadline) clearTimeout(deadline)
+    deadline = null
+  }
+  /** a half-open socket (the phone slept, the network changed): drop it and connect again now */
+  const drop = (): void => {
+    alive()
+    const sock = ws
+    if (!sock) return
+    ws = null
+    ready = null
+    sock.onopen = sock.onmessage = sock.onclose = sock.onerror = null
+    try {
+      sock.close()
+    } catch {
+      /* already gone */
+    }
+    setUp(false)
+    tries = Math.max(tries, 1)
+    connect()
+  }
+  const ping = (wait: number): void => {
+    if (!ready || ready.readyState !== 1) return
+    ready.send(JSON.stringify({ t: 'ping' } satisfies PhoneClientMsg))
+    if (!deadline) deadline = setTimeout(drop, wait)
+  }
   const url = o.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`
   const setUp = (v: boolean): void => {
     if (up === v) return
@@ -58,6 +92,7 @@ export function openLive(o: {
       if (again) o.onReconnect()
     }
     sock.onmessage = (ev) => {
+      if (ws === sock) alive()
       try {
         const m = JSON.parse(String(ev.data)) as PhoneServerMsg
         if (m.t === 'bye') byeSeen = true
@@ -68,6 +103,7 @@ export function openLive(o: {
     }
     sock.onclose = (ev) => {
       if (ws !== sock) return
+      alive()
       ws = null
       ready = null
       setUp(false)
@@ -93,11 +129,12 @@ export function openLive(o: {
       if (timer) clearTimeout(timer)
       timer = null
       connect()
+      return
     }
+    // it looks open: prove it (a socket from before the phone slept is often dead without a close)
+    ping(KICK_PONG_MS)
   }
-  ping = setInterval(() => {
-    if (ready && ready.readyState === 1) ready.send(JSON.stringify({ t: 'ping' }))
-  }, 25_000)
+  pinger = setInterval(() => ping(PONG_MS), PING_MS)
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && kick())
   window.addEventListener('online', kick)
   window.addEventListener('pageshow', kick)
@@ -110,7 +147,8 @@ export function openLive(o: {
     close() {
       closed = true
       if (timer) clearTimeout(timer)
-      if (ping) clearInterval(ping)
+      if (pinger) clearInterval(pinger)
+      alive()
       ws?.close()
     },
     get connected() {
