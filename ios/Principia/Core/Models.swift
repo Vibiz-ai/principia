@@ -134,10 +134,33 @@ struct ChatSnapshot: Codable, Sendable {
 }
 
 struct PhoneSession: Codable, Sendable {
+    /// A session that runs in a terminal on the Mac. Newer Macs also send its transcript as `chat` (live, mode
+    /// "terminal") and say what the phone may do; older ones send only the first three.
     struct Terminal: Codable, Sendable {
         var activity: String?
         var canReply: Bool
         var ended: Bool
+        /// a message can be typed into it now (nil: an older Mac)
+        var canType: Bool?
+        /// why it cannot take a message now
+        var held: String?
+        /// "transcript" (the chat holds it), "screen" (`screen` holds it) or nil (nothing to show yet)
+        var source: String?
+        /// the terminal's last lines, when it has no transcript yet
+        var screen: String?
+        /// what it asks right now (answered like Needs you)
+        var asks: [PhoneAsk]?
+        /// ended: Continue opens it again on the Mac, same conversation
+        var canContinue: Bool?
+
+        /// Its message box (a newer Mac): none once it ended or for a shell; while it cannot take a message (it asks
+        /// something, shows a choice) the reason is the placeholder and Send is off.
+        func composer(name: String) -> (placeholder: String, held: Bool)? {
+            if ended { return nil }
+            if canType == true || canReply { return ("Message \(name)", false) }
+            if let held { return (held, true) }
+            return nil
+        }
     }
     var ref: PhoneChatRef
     var title: String
@@ -198,6 +221,11 @@ struct PhoneRoom: Codable, Sendable {
     var answering: [String]?
 }
 
+/// POST …/sessions/:id/continue: the session that carries the conversation on
+struct ContinueResponse: Codable, Sendable {
+    var sessionId: String?
+}
+
 struct PhonePairResponse: Codable, Sendable {
     struct Device: Codable, Sendable { var id: String; var name: String }
     var device: Device
@@ -210,6 +238,8 @@ enum PhoneServerMsg: Sendable, Equatable {
     case pong
     case changed(companyId: String?, what: [String])
     case chat(sessionId: String, seq: Int, ops: [JSONValue])
+    /// a terminal session's last lines (no transcript to show as a chat yet)
+    case screen(sessionId: String, text: String)
     case room(PhoneRoomMessage)
     case bye(reason: String)
     case unknown
@@ -224,6 +254,9 @@ enum PhoneServerMsg: Sendable, Equatable {
         case "chat":
             guard let sid = v["sessionId"]?.string, let seq = v["seq"]?.int else { return nil }
             return .chat(sessionId: sid, seq: seq, ops: v["ops"]?.array ?? [])
+        case "screen":
+            guard let sid = v["sessionId"]?.string, let text = v["text"]?.string else { return nil }
+            return .screen(sessionId: sid, text: text)
         case "room":
             guard let m = v["message"], let d = try? JSONEncoder().encode(m), let msg = try? JSONDecoder().decode(PhoneRoomMessage.self, from: d) else { return nil }
             return .room(msg)

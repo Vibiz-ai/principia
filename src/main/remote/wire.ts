@@ -10,6 +10,7 @@ import { HiveError } from '../../shared/errors'
 import type { InvokeReq, InvokeRes } from '../../shared/ipc'
 import { phoneSiteOrigin, type RemoteState } from '../../shared/remote'
 import { PHONE_CHANNELS, type PhoneChannel, type PhoneHost } from './api'
+import type { PhoneTerminalHost } from './terminalFeed'
 import type { DB } from '../db'
 import { SqliteDeviceStore } from './devices'
 import { RemoteService } from './service'
@@ -17,7 +18,7 @@ import { findCloudflared } from './tunnel'
 
 const allowed = new Set<string>(PHONE_CHANNELS)
 
-export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined }): RemoteService {
+export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined; terminal?: PhoneTerminalHost }): RemoteService {
   const host: PhoneHost = {
     invoke: <C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> => {
       // defense in depth: the type already limits the list
@@ -25,6 +26,7 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
       return invokeLocal(channel, req)
     },
     onEvent: (fn) => onEmit(fn),
+    ...(o.terminal ? { terminal: o.terminal } : {}),
     log
   }
   return new RemoteService({

@@ -240,12 +240,20 @@ final class AppModel {
             Task { await refresh(views) }
             if openRef?.kind == .agent { Task { await reloadOpen() } }
         case .chat(let sid, let seq, let ops):
+            if Self.reloadsOnChat(sid, replica: replica, session: session) { Task { await reloadOpen() }; return }
             guard sid == replica?.sessionId, var r = replica else { return }
             switch r.apply(seq: seq, ops: ops) {
             case .ok: replica = r
             case .old: break
             case .gap: Task { await reloadOpen() }
             }
+        case .screen(let sid, let text):
+            // a terminal with no transcript yet: its last lines, live
+            guard var s = session, s.ref.id == sid, var t = s.terminal else { return }
+            t.screen = text
+            t.source = "screen"
+            s.terminal = t
+            session = s
         case .room(let msg):
             guard var r = room, msg.channelId == r.channelId else { return }
             r.messages = Self.place(r.messages, msg)
@@ -321,6 +329,8 @@ final class AppModel {
             try await self.api.answerAsk(co, askId: ask.id, optionId: optionId, text: text)
             self.say("Sent")
             await self.refresh([.needs, .now])
+            // answered inside a terminal's conversation: its card goes and the composer comes back
+            if self.openRef?.kind == .session, self.session?.terminal != nil { await self.reloadOpen() }
         }
     }
     func approve(_ taskId: String) async {
@@ -373,6 +383,12 @@ final class AppModel {
         subscribe()
     }
 
+    /// A terminal opened before its transcript existed has no replica: the Mac's empty chat ops then say "read it
+    /// again" (its transcript appeared, it ended, it asks something).
+    static func reloadsOnChat(_ sid: String, replica: ChatReplica?, session: PhoneSession?) -> Bool {
+        replica == nil && session?.ref.id == sid && session?.terminal != nil
+    }
+
     func reloadOpen() async {
         if let r = openRef { await load(r) }
     }
@@ -387,7 +403,11 @@ final class AppModel {
         await run("send") {
             switch ref.kind {
             case .session:
-                if self.replica != nil { try await self.api.sessionSend(co, ref.id, text: t) } else { try await self.api.sessionReply(co, ref.id, text: t); await self.reloadOpen() }
+                if let term = self.session?.terminal, term.canType != nil {
+                    // a terminal on the Mac: typed in now, or read right after its current step
+                    try await self.api.sessionSend(co, ref.id, text: t)
+                    self.say(self.replica?.busy == true ? "Sent. It reads it right after this step." : "Sent")
+                } else if self.replica != nil { try await self.api.sessionSend(co, ref.id, text: t) } else { try await self.api.sessionReply(co, ref.id, text: t); await self.reloadOpen() }
             case .agent:
                 try await self.api.agentSend(co, ref.id, text: t)
                 await self.reloadOpen()
@@ -400,6 +420,16 @@ final class AppModel {
     func stop(sendNow: Bool = false) async {
         guard let co = companyId, let ref = openRef, ref.kind == .session else { return }
         await run(sendNow ? "sendNow" : "stop") { try await self.api.sessionStop(co, ref.id, sendNow: sendNow) }
+    }
+
+    /// An ended terminal session opens again on the Mac, in the same conversation; the phone follows it there.
+    func continueSession() async {
+        guard let co = companyId, let ref = openRef, ref.kind == .session else { return }
+        await run("continue") {
+            let next = try await self.api.sessionContinue(co, ref.id)
+            self.say("Continuing on your Mac")
+            if let n = next, n != ref.id { self.chatPath = [PhoneChatRef(kind: .session, id: n)] } else { await self.reloadOpen() }
+        }
     }
 
     func chatAnswer(_ requestId: String, _ d: PhoneChatDecision) async {

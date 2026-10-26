@@ -8,6 +8,8 @@ import { StringDecoder } from 'node:string_decoder'
 
 export interface TailerOptions {
   pollMs?: number
+  /** start this many bytes before the end of a file that is already longer (its first, partial line is dropped) */
+  backlog?: number
   onLine(line: unknown): void
   onBadLine?(text: string): void
 }
@@ -21,6 +23,7 @@ export class JsonlTailer {
   private warned = false
   private reading = false
   private decoder = new StringDecoder('utf8')
+  private skipFirst = false
 
   constructor(
     readonly file: string,
@@ -28,6 +31,18 @@ export class JsonlTailer {
   ) {}
 
   start(): void {
+    const max = this.opts.backlog
+    if (max !== undefined && this.offset === 0) {
+      try {
+        const size = fs.statSync(this.file).size
+        if (size > max) {
+          this.offset = size - max
+          this.skipFirst = true
+        }
+      } catch {
+        /* not there yet: read it from the start when it comes */
+      }
+    }
     this.attachWatcher()
     this.timer = setInterval(() => this.read(), this.opts.pollMs ?? 500)
     this.timer.unref?.()
@@ -64,6 +79,7 @@ export class JsonlTailer {
           // truncated / replaced: start over
           this.offset = 0
           this.partial = ''
+          this.skipFirst = false
           this.decoder = new StringDecoder('utf8')
         }
         if (size === this.offset) return
@@ -84,6 +100,11 @@ export class JsonlTailer {
     const all = this.partial + text
     const lines = all.split('\n')
     this.partial = lines.pop() ?? ''
+    // a backlog start lands mid-line: that first piece is never a whole record
+    if (this.skipFirst && lines.length) {
+      lines.shift()
+      this.skipFirst = false
+    }
     for (const raw of lines) {
       const t = raw.trim()
       if (!t) continue

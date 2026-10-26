@@ -7,7 +7,7 @@ import type { ChatItem, ChatOp, ChatSnapshot, ChatToolItem } from '../../shared/
 import { ChatModel } from '../../shared/chatReduce'
 import { buildBlocks, duration, type ChatBlock } from '../../shared/chatView'
 import { groupSummary, permissionTitle, toolLine } from '../../shared/toolVerbs'
-import type { PhoneChatRef, PhoneRoomMember } from '../../shared/remote'
+import type { PhoneChatRef, PhoneRoomMember, PhoneSession } from '../../shared/remote'
 
 // ---------- routes ----------
 
@@ -217,4 +217,26 @@ export function placeMessage<T extends { id: string; threadId: string | null }>(
     if (x.id === m.threadId || x.threadId === m.threadId) at = i
   })
   return at < 0 ? [...list, m] : [...list.slice(0, at + 1), m, ...list.slice(at + 1)]
+}
+
+/**
+ * A { t: 'chat' } message for the open conversation: its ops go into the replica. A terminal opened before its
+ * transcript existed has no replica, and the Mac's empty ops there say "read it again" (its transcript appeared, it
+ * ended, it asks something).
+ */
+export function chatMessageAction(o: { openId: string | null; session: PhoneSession | null; hasReplica: boolean }, sessionId: string): 'apply' | 'reload' | 'ignore' {
+  if (o.openId !== sessionId) return 'ignore'
+  if (o.hasReplica) return 'apply'
+  return o.session?.ref.id === sessionId && o.session.terminal ? 'reload' : 'ignore'
+}
+
+/**
+ * The composer of a terminal on the Mac: none once it ended, or for a shell (nothing to type into); otherwise the box
+ * stays, and while it cannot take a message (it asks something, shows a choice) the reason is the placeholder and
+ * Send is off.
+ */
+export function terminalComposer(t: NonNullable<PhoneSession['terminal']>, name: string): { placeholder: string; held: boolean } | null {
+  if (t.ended) return null
+  if (t.canType || t.canReply) return { placeholder: `Message ${name}`, held: false }
+  return t.held ? { placeholder: t.held, held: true } : null
 }

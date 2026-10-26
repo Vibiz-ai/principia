@@ -23,6 +23,8 @@ export interface Actions {
   notNeeded(taskId: string): void
   /** the queued messages go now: the turn stops and they follow (the Mac's Send now) */
   sendNow(): void
+  /** an ended terminal session opens again on the Mac, same conversation, and the phone follows it */
+  continueSession(): void
   /** insert @handle in the composer */
   mention(handle: string): void
   answerTask(taskId: string, option: string | null): void
@@ -224,17 +226,45 @@ function chatRow(r: PhoneChatRow, a: Actions, now: number): VNode {
   )
 }
 
-export function renderSession(v: View, a: Actions): VNode {
+export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
   const s = v.session
   if (!s) return loading()
-  const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, s.title), h('span', { class: 'row__s' }, v.replica ? turnWords(v.replica) : s.terminal?.ended ? 'Ended' : 'In a terminal on your Mac')))
-  if (!v.replica) {
-    const t = s.terminal
-    return h('section', { class: 'page chat' }, head, h('div', { class: 'card quiet' }, t?.activity ? h('p', { class: 'activity' }, h('i', { class: 'dot' }), t.activity) : null, h('p', null, t?.canReply ? 'It finished and waits for you. Reply below and it carries on.' : 'This one runs in a terminal on your Mac. You can reply here when it waits for you.')))
+  const t = s.terminal
+  const sub = v.replica ? turnWords(v.replica) : t?.ended ? 'Ended' : t ? 'In a terminal on your Mac' : ''
+  const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, s.title), h('span', { class: 'row__s' }, sub)))
+  const lines = v.replica ? chatLines(v.replica.items) : []
+  const q = v.replica?.snap.queue ?? []
+  // a terminal on the Mac: its screen while there is no transcript, what it asks, and how it ended
+  const term: (VNode | null)[] = t
+    ? [
+        t.source === 'screen' && t.screen ? h('pre', { class: 'screen mono', 'aria-label': 'What the terminal shows' }, t.screen) : null,
+        !lines.length && !t.screen && !t.ended ? h('p', { class: 'sub center' }, t.activity ? `${t.activity}. Its words show here as it works.` : t.canType ? 'It runs in a terminal on your Mac. Its words show here as it works; send a message below.' : 'It runs in a terminal on your Mac. Its words show here as it works.') : null,
+        ...(t.asks ?? []).map((x) => askCard(x, v, a, now)),
+        t.held && !(t.asks ?? []).length ? h('p', { class: 'notice notice--warn' }, t.held) : null,
+        t.ended ? terminalEnd(t, !!lines.length, v, a) : null
+      ]
+    : []
+  if (!v.replica && !t) return h('section', { class: 'page chat' }, head)
+  if (!v.replica && t && t.canType === undefined) {
+    // an older Mac: only the live line, and a reply when it waits at its prompt
+    return h('section', { class: 'page chat' }, head, h('div', { class: 'card quiet' }, t.activity ? h('p', { class: 'activity' }, h('i', { class: 'dot' }), t.activity) : null, h('p', null, t.ended ? 'This session ended.' : t.canReply ? 'It finished and waits for you. Reply below and it carries on.' : 'It is working in a terminal on your Mac. You can reply here when it waits for you.')))
   }
-  const lines = chatLines(v.replica.items)
-  const q = v.replica.snap.queue
-  return h('section', { class: 'page chat' }, head, h('div', { class: 'msgs', 'data-scroll': 'chat' }, ...lines.map((l) => chatLine(l, v, a)), ...q.map((x, n) => h('div', { class: 'msg me queued' }, h('p', null, x.text), h('span', { class: 'qline' }, h('span', null, v.replica!.busy ? 'Queued: sends when it finishes' : 'Waiting to send'), n === q.length - 1 ? h('button', { type: 'button', class: 'qnow', disabled: v.busy.has('sendNow'), on: { click: () => a.sendNow() } }, v.replica!.busy ? 'Stop and send now' : 'Send now') : null)))))
+  return h(
+    'section',
+    { class: 'page chat' },
+    head,
+    h(
+      'div',
+      { class: 'msgs', 'data-scroll': 'chat' },
+      ...lines.map((l) => chatLine(l, v, a)),
+      ...q.map((x, n) => h('div', { class: 'msg me queued' }, h('p', null, x.text), h('span', { class: 'qline' }, h('span', null, v.replica!.busy ? 'Queued: sends when it finishes' : 'Waiting to send'), n === q.length - 1 ? h('button', { type: 'button', class: 'qnow', disabled: v.busy.has('sendNow'), on: { click: () => a.sendNow() } }, v.replica!.busy ? 'Stop and send now' : 'Send now') : null))),
+      ...term
+    )
+  )
+}
+function terminalEnd(t: NonNullable<PhoneSession['terminal']>, history: boolean, v: View, a: Actions): VNode {
+  if (t.canContinue) return h('div', { class: 'card quiet col' }, h('p', null, history ? 'This session ended. Continue it and it picks up right here, on your Mac.' : 'This session ended. Continue it and it picks up where it stopped, on your Mac.'), h('div', { class: 'opts' }, btn('Continue', () => a.continueSession(), { kind: 'primary', disabled: v.busy.has('continue') })))
+  return h('p', { class: 'end' }, history ? 'This session ended. Open it on your Mac to start it again.' : 'This session ended, and it left nothing to read here. Open it on your Mac.')
 }
 function turnWords(r: ChatReplica): string {
   const t = r.snap.turn

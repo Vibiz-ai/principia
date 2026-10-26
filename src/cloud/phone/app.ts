@@ -14,7 +14,7 @@ import { ApiError, createApi, MacGone, NotPaired } from './api'
 import { checkMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
-import { ChatReplica, placeMessage, deviceName, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
+import { ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
 import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, type Actions, type View } from './render'
 
 declare const __PHONE_HOSTED__: boolean
@@ -334,10 +334,20 @@ function onLive(m: PhoneServerMsg): void {
       return
     case 'chat': {
       const r = st.replica
-      if (!r || st.route.open?.kind !== 'session' || st.route.open.id !== m.sessionId) return
+      const act = chatMessageAction({ openId: st.route.open?.kind === 'session' ? st.route.open.id : null, session: st.session, hasReplica: !!r }, m.sessionId)
+      if (act === 'reload') void loadSession(m.sessionId).then(() => render({ live: true }), () => undefined)
+      if (act !== 'apply' || !r) return
       const res = r.apply(m.seq, m.ops as ChatOp[])
       if (res === 'gap') void loadSession(m.sessionId).then(() => render({ live: true }), () => undefined)
       else if (res === 'ok') render({ live: true })
+      return
+    }
+    case 'screen': {
+      // a terminal with no transcript yet: its last lines, live
+      const s = st.session
+      if (!s?.terminal || s.ref.id !== m.sessionId || st.route.open?.id !== m.sessionId) return
+      st.session = { ...s, terminal: { ...s.terminal, screen: m.text, source: 'screen' } }
+      render({ live: true })
       return
     }
     case 'room': {
@@ -409,6 +419,9 @@ const actions: Actions = {
       setNeeds(await api.call<PhoneNeeds>('answerAsk', { params: { ...cid(), askId }, body: { ...(optionId ? { optionId } : {}), ...(text ? { text } : {}) } }))
       delete st.drafts[key]
       say('Sent')
+      // answered inside a terminal's conversation: its card goes and the composer comes back
+      const open = st.route.open
+      if (open?.kind === 'session' && st.session?.terminal) await loadSession(open.id)
     })
   },
   approve(taskId) {
@@ -456,6 +469,15 @@ const actions: Actions = {
     void busy(`req:${requestId}`, async () => {
       await api.call('sessionAnswer', { params: { ...cid(), sessionId: open.id }, body: { requestId, decision } })
       delete st.drafts[`qa:${requestId}`]
+    })
+  },
+  continueSession() {
+    const open = st.route.open
+    if (open?.kind !== 'session') return
+    void busy('continue', async () => {
+      const out = await api.call<{ ok: boolean; sessionId?: string }>('sessionContinue', { params: { ...cid(), sessionId: open.id }, body: {} })
+      say('Continuing on your Mac')
+      if (out?.sessionId && out.sessionId !== open.id) go({ open: { kind: 'session', id: out.sessionId } })
     })
   },
   sendNow() {
@@ -685,14 +707,23 @@ interface DockSpec {
   stop: boolean
   label: string
   mentions: boolean
+  /** it cannot take a message now: Send is off (the placeholder says why) */
+  held?: boolean
 }
 function dockSpec(): DockSpec | null {
   const r = st.route
   if (r.open?.kind === 'session') {
     const s = st.session
     if (!s) return null
+    const t = s.terminal
+    // a terminal on the Mac: write any time it runs (it takes the message now or right after this step); while it
+    // asks something the box stays, with the reason in it and Send off
+    if (t && t.canType !== undefined) {
+      const c = terminalComposer(t, s.who?.name ?? 'Claude')
+      return c && { key: `session:${s.ref.id}`, placeholder: c.placeholder, stop: false, label: 'Send', mentions: false, held: c.held }
+    }
     if (st.replica) return { key: `session:${s.ref.id}`, placeholder: `Message ${s.who?.name ?? 'Claude'}`, stop: st.replica.busy, label: st.replica.busy ? 'Queue' : 'Send', mentions: false }
-    return s.terminal?.canReply ? { key: `reply:${s.ref.id}`, placeholder: 'Reply', stop: false, label: 'Send', mentions: false } : null
+    return t?.canReply ? { key: `reply:${s.ref.id}`, placeholder: 'Reply', stop: false, label: 'Send', mentions: false } : null
   }
   if (r.open?.kind === 'agent') return st.agent ? { key: `agent:${st.agent.ref.id}`, placeholder: `Message ${st.agent.who.name}`, stop: false, label: 'Send', mentions: false } : null
   if (r.tab === 'room' && st.room?.enabled && st.room.channelId) return { key: `room:${st.room.channelId}`, placeholder: `Message ${st.room.channels.find((c) => c.id === st.room!.channelId)?.label ?? ''}`, stop: false, label: 'Send', mentions: true }
@@ -716,6 +747,8 @@ function dock(spec: DockSpec | null): void {
   if (sameConversation && prev) {
     // only the buttons changed (working / your turn): keep the field and the keyboard
     el.querySelector('.dock__btns')?.replaceWith(dockButtons(spec))
+    prev.placeholder = spec.placeholder
+    prev.setAttribute('aria-label', spec.placeholder)
     return
   }
   const ta = document.createElement('textarea')
@@ -764,6 +797,7 @@ function dockButtons(spec: DockSpec): HTMLElement {
   go.type = 'button'
   go.className = 'btn btn--primary'
   go.textContent = spec.label
+  go.disabled = !!spec.held
   // keep the keyboard up: a tap on Send never steals focus from the field
   go.addEventListener('pointerdown', (e) => e.preventDefault())
   go.addEventListener('click', () => void send(spec, $('dock').querySelector('textarea')!))
@@ -796,7 +830,8 @@ function mentionStrip(ta: HTMLTextAreaElement, strip: HTMLElement): void {
 let sendingDock = false
 async function send(spec: DockSpec, ta: HTMLTextAreaElement): Promise<void> {
   const text = ta.value.trim()
-  if (!text || sendingDock) return
+  // the Enter key keeps the spec the field was built with: ask again whether it is held now
+  if (!text || sendingDock || spec.held || dockSpec()?.held) return
   sendingDock = true
   const r = st.route
   try {
@@ -804,6 +839,8 @@ async function send(spec: DockSpec, ta: HTMLTextAreaElement): Promise<void> {
       // an agent's ended chat reopens in a new session (same conversation): follow it there
       const out = await api.call<{ ok: boolean; sessionId?: string }>('sessionSend', { params: { ...cid(), sessionId: r.open.id }, body: { text } })
       if (out?.sessionId && out.sessionId !== r.open.id) go({ open: { kind: 'session', id: out.sessionId } })
+      // a terminal shows the message once the agent takes it (its transcript), so say it went
+      else if (st.session?.terminal) say(st.replica?.busy ? 'Sent. It reads it right after this step.' : 'Sent')
       else if (st.replica && !st.replica.snap.available) await loadSession(r.open.id)
     }
     else if (r.open?.kind === 'session') {

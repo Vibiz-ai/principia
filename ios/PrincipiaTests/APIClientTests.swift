@@ -53,6 +53,8 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual((body["decision"] as? [String: String]), ["kind": "deny", "message": "no"])
         XCTAssertEqual(Route.room("co_a", channelId: "ch_1").path, "/api/c/co_a/room?channelId=ch_1")
         XCTAssertEqual(Route.cancelTask("co_a", taskId: "ta_1").path, "/api/c/co_a/tasks/ta_1/cancel")
+        XCTAssertEqual(Route.sessionContinue("co_a", sessionId: "se_1").path, "/api/c/co_a/sessions/se_1/continue")
+        XCTAssertEqual(Route.sessionContinue("co_a", sessionId: "se_1").method, "POST")
         XCTAssertEqual(Route.now("co_a").method, "GET")
         XCTAssertEqual(Route.pause("co_a").method, "POST")
     }

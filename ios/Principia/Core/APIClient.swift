@@ -8,6 +8,7 @@ enum Route: Sendable, Equatable {
     case approveTask(String, taskId: String), sendBackTask(String, taskId: String), answerTask(String, taskId: String), cancelTask(String, taskId: String)
     case chats(String), session(String, sessionId: String)
     case sessionSend(String, sessionId: String), sessionStop(String, sessionId: String), sessionAnswer(String, sessionId: String), sessionReply(String, sessionId: String)
+    case sessionContinue(String, sessionId: String)
     case agent(String, agentId: String), agentSend(String, agentId: String)
     case room(String, channelId: String?), roomPost(String)
 
@@ -40,6 +41,7 @@ enum Route: Sendable, Equatable {
         case .sessionStop(let co, let id): return "\(c(co))/sessions/\(e(id))/stop"
         case .sessionAnswer(let co, let id): return "\(c(co))/sessions/\(e(id))/answer"
         case .sessionReply(let co, let id): return "\(c(co))/sessions/\(e(id))/reply"
+        case .sessionContinue(let co, let id): return "\(c(co))/sessions/\(e(id))/continue"
         case .agent(let co, let id): return "\(c(co))/agents/\(e(id))"
         case .agentSend(let co, let id): return "\(c(co))/agents/\(e(id))/send"
         case .room(let co, let ch):
@@ -200,6 +202,11 @@ final class APIClient: @unchecked Sendable {
         try await send(.sessionAnswer(co, sessionId: id), body: ["requestId": requestId, "decision": decision.json])
     }
     func sessionReply(_ co: String, _ id: String, text: String) async throws { try await send(.sessionReply(co, sessionId: id), body: ["text": text]) }
+    /// an ended terminal session opens again on the Mac (same conversation): the session to follow
+    func sessionContinue(_ co: String, _ id: String) async throws -> String? {
+        let out: ContinueResponse = try await call(.sessionContinue(co, sessionId: id), body: [:])
+        return out.sessionId
+    }
     func agent(_ co: String, _ id: String) async throws -> PhoneAgent { try await call(.agent(co, agentId: id)) }
     func agentSend(_ co: String, _ id: String, text: String) async throws { try await send(.agentSend(co, agentId: id), body: ["text": text]) }
     func room(_ co: String, channelId: String?) async throws -> PhoneRoom { try await call(.room(co, channelId: channelId)) }

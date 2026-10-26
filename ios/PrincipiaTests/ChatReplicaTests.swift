@@ -56,4 +56,54 @@ final class ChatReplicaTests: XCTestCase {
         XCTAssertNil(Words.mentionQuery("hi there"))
         XCTAssertEqual(Words.insertMention("hi @li", handle: "livia"), "hi @livia ")
     }
+
+    /// A terminal on the Mac: its transcript as the chat (mode "terminal"), what it asks, and Continue once it ended.
+    func testTerminalSessionDecodesAsAChat() throws {
+        let json = #"""
+        {"ref":{"kind":"session","id":"se_t"},"title":"shop · Claude","who":null,
+         "chat":{"sessionId":"se_t","mode":"terminal","available":false,"turn":"working","activity":"Running tests","turnStartedAt":null,
+                 "items":[{"id":"u1","parent":null,"kind":"user","text":"Fix the footer","images":0,"state":"sent"}],"queue":[],"meta":{},"seq":0,"note":null,"startedAs":"terminal"},
+         "terminal":{"activity":"Running tests","canReply":false,"ended":false,"canType":false,"held":"It is asking you something.","source":"transcript","screen":null,
+                     "asks":[{"id":"ask_1","title":"Bash","question":"Run git push?","detail":null,"who":null,"options":[{"id":"allow","label":"Allow","kind":"allow"}],"text":false,"at":"2026-10-26T10:00:00.000Z","open":null}],
+                     "canContinue":false}}
+        """#
+        let s = try JSONDecoder().decode(PhoneSession.self, from: Data(json.utf8))
+        XCTAssertEqual(s.chat?.mode, "terminal")
+        XCTAssertEqual(s.terminal?.canType, false)
+        XCTAssertEqual(s.terminal?.asks?.first?.id, "ask_1")
+        let r = ChatReplica(s.chat!)
+        XCTAssertEqual(ChatLines.build(r.items), [.me(id: "u1", text: "Fix the footer", queued: false)])
+        // an older Mac sends only the first three
+        let old = try JSONDecoder().decode(PhoneSession.self, from: Data(#"{"ref":{"kind":"session","id":"se_t"},"title":"t","who":null,"chat":null,"terminal":{"activity":null,"canReply":true,"ended":false}}"#.utf8))
+        XCTAssertNil(old.terminal?.canType)
+    }
+
+    /// A terminal opened before its transcript existed (no replica): the Mac's empty chat ops reload it.
+    @MainActor
+    func testTerminalWithNoTranscriptReloadsOnChatOps() throws {
+        let s = try JSONDecoder().decode(PhoneSession.self, from: Data(#"{"ref":{"kind":"session","id":"se_t"},"title":"t","who":null,"chat":null,"terminal":{"activity":null,"canReply":false,"ended":false,"canType":true,"source":"screen","screen":"Reading"}}"#.utf8))
+        XCTAssertTrue(AppModel.reloadsOnChat("se_t", replica: nil, session: s))
+        XCTAssertFalse(AppModel.reloadsOnChat("se_other", replica: nil, session: s))
+        XCTAssertFalse(AppModel.reloadsOnChat("se_t", replica: ChatReplica(snap("[]")), session: s))
+        var chat = s
+        chat.terminal = nil
+        XCTAssertFalse(AppModel.reloadsOnChat("se_t", replica: nil, session: chat))
+    }
+
+    /// Its message box: held shows the reason with Send off; ended and a shell have none.
+    func testTerminalComposer() {
+        let t = PhoneSession.Terminal(activity: nil, canReply: false, ended: false, canType: true)
+        XCTAssertEqual(t.composer(name: "Claude")?.placeholder, "Message Claude")
+        var held = t
+        held.canType = false
+        held.held = "It is asking you something."
+        XCTAssertEqual(held.composer(name: "Claude")?.placeholder, "It is asking you something.")
+        XCTAssertEqual(held.composer(name: "Claude")?.held, true)
+        var shell = t
+        shell.canType = false
+        XCTAssertNil(shell.composer(name: "Shell"))
+        var ended = t
+        ended.ended = true
+        XCTAssertNil(ended.composer(name: "Claude"))
+    }
 }

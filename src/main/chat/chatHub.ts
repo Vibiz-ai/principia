@@ -318,22 +318,24 @@ export class ChatHub {
     return this.need(id).toChat(!!force)
   }
 
-  /** Claude's transcript for a conversation id (read-only; ~/.claude/projects/<slug>/<id>.jsonl). */
-  transcript(conv: string): unknown[] {
-    if (!/^[A-Za-z0-9-]+$/.test(conv)) return []
+  /** Where Claude keeps a conversation's transcript (~/.claude/projects/<slug>/<id>.jsonl), or null. */
+  transcriptFile(conv: string): string | null {
+    if (!/^[A-Za-z0-9-]+$/.test(conv)) return null
     const projects = path.join(this.d.claudeDir(), 'projects')
-    let file: string | null = null
     try {
       for (const dir of fs.readdirSync(projects)) {
         const f = path.join(projects, dir, `${conv}.jsonl`)
-        if (fs.existsSync(f)) {
-          file = f
-          break
-        }
+        if (fs.existsSync(f)) return f
       }
     } catch {
-      return []
+      return null
     }
+    return null
+  }
+
+  /** Claude's transcript for a conversation id (read-only; ~/.claude/projects/<slug>/<id>.jsonl). */
+  transcript(conv: string): unknown[] {
+    const file = this.transcriptFile(conv)
     if (!file) return []
     try {
       const st = fs.statSync(file)

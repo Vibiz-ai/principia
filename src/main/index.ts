@@ -6,6 +6,8 @@
 import { GatewayService } from './gateway/service'
 import { app, BrowserWindow, crashReporter, nativeTheme, powerMonitor, safeStorage } from 'electron'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import * as pty from 'node-pty'
 import { Reaper, StallMonitor, createEngine, stallThresholdMs } from './engine'
 import { applyUserDataOverride, resolvePaths } from './paths'
@@ -26,7 +28,8 @@ import { emit, setEventTargets, setTrustedSender } from './ipc'
 import { registerAllHandlers } from './handlers'
 import { importWorkflowFromDialog } from './handlers/workflows'
 import { closeLog, initLog, log, setLogRedactor } from './log'
-import { claudeConversationExists, trustFolderForClaude } from './claudeTrust'
+import { claudeConversationExists, claudeDataDir, trustFolderForClaude } from './claudeTrust'
+import { historyRoots } from './history'
 import { MemoryService, resolveServerScript } from './memory/service'
 import { createMigrator } from './memory/vault/migrate'
 import { LLM_CLI_KEYS, LLM_CLI_ORDER, installSuggestions, type LlmCli } from './memory/vault/suggest'
@@ -37,6 +40,7 @@ import { SessionLiveHub } from './live/sessionLive'
 import { chatLink, createChatHub } from './chat/wire'
 import { AgentChats } from './chat/agentChat'
 import { createRemote } from './remote/wire'
+import { terminalHost } from './remote/terminalHost'
 import { createBrowser } from './browser/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
@@ -287,7 +291,16 @@ if (!app.requestSingleInstanceLock()) {
     }
     // REMOTE.md: Phone (built idle: no listener until the user turns it on)
     try {
-      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart })
+      // a terminal session reads on the phone as a chat: its CLI's transcript (or screen), and messages typed into it
+      const terminal = terminalHost({
+        live: (sid) => h.sessionLive?.get(sid) ?? null,
+        claudeFile: (conv) => h.chats?.transcriptFile(conv) ?? null,
+        claudeRoots: () => [...historyRoots(baseChildEnv()), path.join(claudeDataDir(baseChildEnv()), 'projects')],
+        codexHome: () => baseChildEnv().CODEX_HOME?.trim() || path.join(os.homedir(), '.codex'),
+        redact: (t) => h.vault.redact(t),
+        log
+      })
+      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart, terminal })
       // RA8: paired phones find this Mac again after a restart (when the founder wants it, by default once one is paired)
       void h.remote.autoStartIfWanted().catch((e) => log.warn('phone did not start at launch', { e: String(e) }))
     } catch (e) {

@@ -55,11 +55,35 @@ it is canceled, never deleted, and can be reopened from the Board on the Mac); r
 while it works, Stop); message an agent (the desk path: a task, or a comment on its open task); read and post in the
 team room (Forum channels), with @mentions that wake agents through the Forum responder.
 
-A chat that runs in a terminal on the Mac can get a reply only when it waits at its prompt, and only plain words:
-text that starts with `!`, `/` or `#` (a shell command, a slash command such as `/permissions`, a memory note) is
-refused, and control characters and line breaks are taken out before it is typed in.
+A chat that runs in a terminal on the Mac (Claude Code or Codex in a pane, the default for repo sessions) reads on the
+phone as a chat, live (`src/main/remote/terminalFeed.ts`):
 
-Cannot: settings, keys, terminals (beyond that plain reply), repositories, workflow editing, deleting anything, starting new companies, spending
+- **What it says and does.** Its CLI's own transcript is tailed, read-only, while a phone looks at it (plus 30 s), and
+  folded by the chat reducer into the same items and numbered ops a chat sends, redacted the same way, so the phone
+  shows the same tool lines, plan and subagent cards. Claude Code: the `transcript_path` its hooks report (kept after
+  the pane exits), else `<claude dir>/projects/<slug>/<conversation id>.jsonl`, and only inside those folders. Codex
+  (no hooks): the rollout under `$CODEX_HOME/sessions/YYYY/MM/DD` that began in the session's folder right after it
+  started (`transcript.ts` turns its records into the same shapes). Until there is a transcript (a CLI that writes
+  none, a first-run dialog), the phone gets what the terminal shows instead (its last lines replayed onto a grid,
+  `{ t: 'screen' }` while it changes) and switches to the chat once the transcript appears (an empty `{ t: 'chat' }`
+  tells a phone with no chat yet to read it again; so does its ending or asking something).
+- **Writing to it.** Any time it runs: waiting at its prompt it is the guarded reply (`agents:reply`, as before);
+  while it works the words go in as one bracketed paste and then Enter, which Claude Code and Codex read right after
+  the current step. Never into a dialog: an open ask (its card shows in the conversation), a prompt detected on
+  screen, or any numbered choice on screen (`› 1. …`) refuses it in plain words and the composer says why. Only plain
+  words: text that starts with `!`, `/` or `#` (a shell command, a slash command such as `/permissions`, a memory note)
+  is refused; control characters are dropped, and line breaks stay inside the paste (a reply at the prompt joins them).
+  The Enter is checked again after the paste: if a choice or ask opened meanwhile (a Codex approval has no hook) it
+  is not pressed, the words stay unsent in its prompt, and the app log says so. The paste is only for Claude Code and
+  Codex (a CLI that has not turned paste mode on would read its ESC as an interrupt): Gemini and Cursor take a message
+  only at their prompt, and a shell has no composer. While it cannot take one, the composer stays with the reason as
+  its placeholder and Send off. The app log notes that the phone typed (never the words).
+- **Ended.** Its history reads, and **Continue** (`POST …/sessions/:id/continue`) is the Mac's Restart: the same
+  profile, folder and company, resuming the same conversation (Claude Code sessions with a conversation id; a second
+  tap or one continued on the Mac already follows the running session). Codex panes start fresh on Restart, so the
+  phone offers no Continue for them.
+
+Cannot: settings, keys, terminals (beyond those plain messages), repositories, workflow editing, deleting anything, starting new companies, spending
 (no "always allow" rules, no plan or billing changes). The server serves only its own bundle (`out/phone/`), never
 another file from disk.
 

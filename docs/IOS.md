@@ -36,6 +36,11 @@ made once with fontTools' `varLib.instancer`), because iOS does not load woff2.
   this phone was revoked.
 - **Links into the app.** `principia://pair?site=<site>#mac=…&code=…` pairs (the site defaults to the official one),
   `principia://tab/needs`, `principia://chat/session/<id>`, `principia://chat/agent/<id>`, `principia://settings`.
+- **A terminal on the Mac** reads as its chat (REMOTE.md RA3): its transcript through the same replica and ops, its
+  screen (`{t:'screen'}`) until it has one (an empty `{t:'chat'}` reloads it), its open asks as cards, a composer
+  whenever it runs (`…/send`; while it asks something the box shows why and Send is off; no Stop: that stays on the
+  Mac), and Continue once it ended (`POST /api/c/:companyId/sessions/:sessionId/continue`, then the
+  app follows the session it returns). An older Mac still gets the old card.
 - **Not needed** on a Needs you task calls `POST /api/c/:companyId/tasks/:taskId/cancel` (added with this app; the web
   app has it too): only a task that waits on you, only to canceled, reopen it from the Board.
 
