@@ -14,21 +14,38 @@ A GitHub release `vX.Y.Z` on https://github.com/Vibiz-ai/principia with:
 | --- | --- |
 | `Principia-arm64.dmg` | the website's Download button (always the newest, same name every release) |
 | `Principia-X.Y.Z-arm64.dmg` | a versioned copy, for links to one exact version |
-| `Principia-arm64.zip` + `.blockmap` | the updater installs from the zip |
-| `latest-mac.yml` | the updater reads this to learn the newest version |
+| `Principia-arm64.zip` | the updater installs from the zip (whole: differential downloads are off, so no blockmap) |
+| `latest-mac.yml` | the updater reads this to learn the newest stable version (stable releases only) |
+| `beta-mac.yml` | the same for people on the beta channel (§4.1); every release has it |
+| `SHA256SUMS.txt` | the SHA-256 of every file above, to check a download (§5.3) |
+
+Releases built by GitHub Actions (§5.2) also carry a **build-provenance attestation** for the dmg, the zip and
+`SHA256SUMS.txt`: a Sigstore-signed statement that those exact bytes were built by this repository's `release`
+workflow from the tagged commit (§5.3).
+
+A release is created as a **draft**, every file is uploaded to it and checked there (names, sizes and SHA-256), and
+only then is it published. With **immutable releases** on (Settings › General › Releases), a published release can
+never gain, lose or replace a file and its tag can never move, so nothing is ever added after publishing: a fix is a
+new version. That includes `latest-mac.yml`: it cannot be edited in place.
 
 Because the names stay the same, these links always point at the newest release:
 
 - https://github.com/Vibiz-ai/principia/releases/latest/download/Principia-arm64.dmg
 - https://github.com/Vibiz-ai/principia/releases/latest/download/latest-mac.yml
 
+A beta (`vX.Y.Z-beta.N`) is published as a GitHub **pre-release** (§4.1). GitHub's `releases/latest` never points at a
+pre-release, so the links above and the stable updater feed always stay on the newest stable release.
+
 Apple Silicon only, macOS 13 (Ventura) or later.
 
 ## 2. Signing and entitlements
 
-`electron-builder.yml` turns on the hardened runtime (Apple requires it for notarization) and signs the app with
-`build/entitlements.mac.plist` and every binary inside it with `build/entitlements.mac.inherit.plist`. They grant
-only what Principia needs; `electron-builder.yml` says why for each one:
+`scripts/mac-sign.mjs` signs a release with Apple's `codesign`, inside-out: every Mach-O file and nested bundle
+first (the Electron framework and its libraries, the helper apps, Squirrel's ShipIt, the database and terminal native
+modules, node-pty's `spawn-helper`), each with `build/entitlements.mac.inherit.plist`, then the app itself with
+`build/entitlements.mac.plist`. Everything gets the **hardened runtime** (Apple requires it for notarization) and a
+secure timestamp. electron-builder only builds the app, unsigned (§5.1). The entitlements grant only what Principia
+needs; `electron-builder.yml` says why for each one:
 
 - **allow-jit**: JavaScript (V8) needs it, in the app, its helpers, and the MCP servers Principia runs on its own
   binary.
@@ -122,6 +139,30 @@ macOS installs an update only when it is signed by the same Developer ID as the 
 the first signed release on. Updates are off in development builds and in test instances (`HIVE_USER_DATA`,
 `HIVE_SMOKE`); `HIVE_NO_UPDATES=1` turns them off on a Mac.
 
+### 4.1 Beta channel
+
+Settings › About › **Get beta updates** (off by default, stored as `betaUpdates`).
+
+- **Off**: the updater reads `releases/latest/download/latest-mac.yml`, the newest **stable** release. Someone already
+  on a beta stays on it until a stable version is newer; the updater never downgrades.
+- **On**: the updater reads the repository's release list (`releases.atom`, no API call and no rate limit), takes the
+  newest stable or beta release, and reads its `beta-mac.yml`. Stable releases carry `beta-mac.yml` too, so beta users
+  also get every stable release.
+
+Which files a version publishes (`scripts/update-info.mjs`, tested in `scripts/update-info.test.mjs`):
+
+| Version | GitHub release | Update manifests |
+| --- | --- | --- |
+| `0.3.0` | normal, marked latest | `latest-mac.yml` and `beta-mac.yml` |
+| `0.3.0-beta.1` (any `-prerelease`) | pre-release, never latest | `beta-mac.yml` only |
+
+The policy lives in `src/shared/updates.ts` (`updateChannelPolicy`): channel `latest` or `beta`, `allowPrerelease`,
+and `allowDowngrade` always false (electron-updater turns it on whenever the channel is set, so it is set back).
+
+To ship a beta, push its tag (`git tag v0.3.0-beta.1 && git push origin v0.3.0-beta.1`, §5.2) or run
+`npm run release:mac -- 0.3.0-beta.1`. `package.json` is not changed for a beta: the version comes from the tag.
+Dogfood a beta on your own Macs first (turn the switch on in each one).
+
 ## 5. Releasing
 
 There are two ways to run the same release script, `scripts/release-mac.mjs`. Both publish exactly the same files.
@@ -152,25 +193,50 @@ What it does, stopping at the first problem (nothing is published unless every s
 1. **Preflight**: clean working tree; the version is new and higher than the latest release; a Developer ID
    Application certificate in the keychain; notary credentials set (the key outside the repository, `chmod 600`);
    `gh` signed in; Xcode tools present.
-2. **Build** into `release/<version>/`: the app is signed with the hardened runtime, notarized by Apple and
-   stapled; then the dmg and zip are made from it. The version comes from the command, so `package.json` is not
-   edited (bump it afterwards in a normal pull request).
-3. **The dmg** is signed, notarized and stapled too.
-4. **Verify**: `codesign --verify --deep --strict` on the app, hardened runtime and entitlements, `spctl` (Gatekeeper)
-   on the app and the dmg, `stapler validate` on both, `latest-mac.yml` and the app's version.
-5. **Publish**: `gh release create vX.Y.Z` with the dmg (both names), zip, blockmap and `latest-mac.yml`, then checks
-   that the site's download link answers.
+2. **Build** the app **unsigned** into `release/<version>/mac-arm64/` (electron-builder, identity off). The version
+   comes from the command, so `package.json` is not edited (release-please bumps it, §5.2).
+3. **Sign and package** (`scripts/mac-sign.mjs`, Apple's tools only): sign the app inside-out with the hardened
+   runtime (§2); notarize it (`xcrun notarytool submit --wait`) and staple the ticket; zip the stapled app for the
+   updater (`ditto`); make the dmg (`hdiutil`, the app and an Applications link); sign, notarize and staple the dmg.
+   A rejected notarization prints Apple's log and stops.
+4. **Verify**: `codesign --verify --deep --strict` on the app and on the app inside the zip, hardened runtime, Team
+   ID and entitlements; `spctl` must report `source=Notarized Developer ID` for the app and the dmg; `stapler
+   validate` on the app, the zip's app and the dmg; the app's version.
+5. **Update manifests and checksums**: writes `latest-mac.yml` and `beta-mac.yml` (a beta: `beta-mac.yml` only) with
+   the zip's sha512 and size (`scripts/update-info.mjs`), then `SHA256SUMS.txt` for the dmg (both names), the zip and
+   the manifests, checked with `shasum -a 256 -c`.
+6. **Draft, then publish**: `gh release create vX.Y.Z --draft` with all those files and `SHA256SUMS.txt` (a beta:
+   `--prerelease --latest=false`); checks the draft holds exactly them (sizes and SHA-256 as GitHub reports them); then
+   publishes the draft (`gh release edit vX.Y.Z --draft=false`) and checks that the site's download link answers. A
+   draft left by an earlier failed attempt (or made by release-please) was never public and is replaced, keeping its
+   notes. If a run stops after the draft was made, `npm run release:mac -- 0.2.0 --publish-draft` checks and publishes
+   it without building again.
+
+The stages can also run apart, which is what GitHub Actions does (§5.2): `--build-only` stops after step 2, and
+`--prepackaged <Principia.app>` starts at step 3 with an app built elsewhere (it must be outside `release/<version>/`,
+which is emptied, and carry the release's version).
 
 Notarization usually takes a few minutes per file.
 
 ### 5.2 From GitHub (push a tag)
 
-`.github/workflows/release.yml` runs the script on a GitHub-hosted Apple Silicon Mac when a `v*` tag is pushed. The
-job uses the `release` environment: it waits until the release approver approves it, and that environment's secrets
-exist only for this job. The certificate is imported into a temporary keychain made for the job (random password), the
-API key is written to the runner's temp folder with `chmod 600`, and both are deleted at the end even if a step fails.
-In this mode (`--ci`) the script releases only the pushed tag and signs only with the identity in that temporary
-keychain.
+`.github/workflows/release.yml` runs the same script on GitHub-hosted Apple Silicon Macs for a `v*` tag, split so
+that no dependency's code ever runs next to the signing secrets:
+
+| Job | Secrets | What runs |
+| --- | --- | --- |
+| **build** | none (no environment, read-only token) | `npm ci` (every package's install scripts), then `release-mac.mjs --ci --build-only`: the unsigned `Principia.app`, archived with `ditto` and uploaded as an artifact; its SHA-256 goes to the next job as an output |
+| **sign-and-publish** | the `release` environment: approval, certificate, notary key | **no `npm ci`, no `node_modules`**: a checkout for the release scripts (Node built-ins and Apple's tools only). Downloads the app and checks its SHA-256, imports the certificate into a temporary keychain, runs `release-mac.mjs --ci --prepackaged <app> --draft-only` (steps 3 to 6 of §5.1), deletes the keychain and key, attests the files, publishes the draft |
+| **post-release** | none (`actions: write` only) | dispatches `post-release.yml` (§5.4) |
+
+The certificate is imported into a temporary keychain made for the job (random password), the API key is written to
+the runner's temp folder with `chmod 600`, and both are deleted right after signing even if a step fails. In this mode
+(`--ci`) the script releases only the run's tag, refuses to build and sign in one process, and signs only with the
+identity in that temporary keychain.
+
+The split protects the certificate and the notary key from a compromised dependency. It does not make the build
+trustworthy by itself: the app is what `npm ci` and the build produced from `package-lock.json`, which is why the
+lockfile needs the code owner's review (§9) and pull requests run dependency review.
 
 **Once: add the secrets** to Settings › Environments › `release` › Environment secrets (never as repository secrets):
 
@@ -200,16 +266,85 @@ To make the .p12 (on the Mac that holds the certificate, §3.1):
    rm -P ~/Desktop/principia-developer-id.p12
    ```
 
-**Each release:** from an up-to-date `main` of the public repository, tag the commit and push the tag:
+**Each release (release-please):** `.github/workflows/release-please.yml` keeps one pull request open, titled
+`chore(main): release …`. It bumps the version in `package.json` / `package-lock.json` and adds the changelog
+section to `CHANGELOG.md`, from the Conventional Commit titles merged since the last release (`feat` → minor while
+below 1.0, `fix` → patch, `feat!` → breaking; CONTRIBUTING.md). Config: `release-please-config.json` and
+`.release-please-manifest.json` (the current version).
+
+1. Review the release pull request like any other and merge it when you want to ship.
+2. release-please then creates the tag `vX.Y.Z` on the merge commit and a **draft** release holding the changelog
+   section. A draft, because a published release could never gain the dmg and zip with immutable releases on.
+3. It starts `release.yml` on that tag itself (workflow_dispatch). A tag created with the workflow's `GITHUB_TOKEN`
+   triggers no other workflow; dispatch is GitHub's one exception, so no personal token or GitHub App is needed. The
+   `Protect release tags` ruleset blocks moving and deleting `v*` tags, not creating them, so release-please may
+   create the tag.
+4. Open Actions › **release**, check the run is for the tag you meant, and **Approve and deploy**. The release keeps
+   release-please's notes.
+
+A pull request opened by `GITHUB_TOKEN` gets no `pull_request` Checks run either, so release-please.yml also
+dispatches **Checks** on the release branch each time it opens or updates the pull request; `all-green` then shows on
+it. To choose a version yourself, put `Release-As: 1.0.0` in the body of a commit merged to `main`.
+
+**Or push a tag yourself** (a beta, or a release outside release-please): from an up-to-date `main` of the public
+repository,
 
 ```sh
 git checkout main && git pull
-git tag v0.2.1 && git push origin v0.2.1
+git tag v0.3.0-beta.1 && git push origin v0.3.0-beta.1
 ```
 
-Then open Actions › **release**, check the run is for the tag you meant, and **Approve and deploy**. The log shows the
-same preflight, build, verification and publish steps as §5.1. Tags `v*` cannot be moved or deleted, so a failed run
-is fixed with a new version, not by re-tagging. The `cloud-images` workflow publishes the cloud image for the same tag.
+then approve the run as above. The **build** job's log shows the preflight and build (§5.1 steps 1-2); the
+**sign-and-publish** job's log shows signing, notarization, verification and the draft (steps 3-6, `--draft-only`).
+Then that job deletes the keychain and the API key, attests the dmg, zip and `SHA256SUMS.txt`
+(`actions/attest-build-provenance`), and publishes the draft (`--publish-draft`). Tags `v*` cannot be moved or
+deleted, so a failed run is fixed with a new version, not by re-tagging; if it failed after the draft was made, re-run
+the failed jobs (the draft is replaced). The unsigned app artifact is kept 3 days. The `cloud-images`
+workflow publishes the cloud image for the same tag; it uses the same `release` environment, so it waits for its own
+approval.
+
+### 5.3 Verifying a download
+
+Anyone can check that a dmg or zip is the one this repository's release workflow built and published:
+
+```sh
+cd ~/Downloads
+# 1. the checksums: download SHA256SUMS.txt from the same release, then
+curl -fsSLO https://github.com/Vibiz-ai/principia/releases/latest/download/SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing      # "Principia-arm64.dmg: OK"
+
+# 2. the build provenance (GitHub CLI): built by .github/workflows/release.yml in example-org/principia
+gh attestation verify Principia-arm64.dmg -R example-org/principia \
+  --signer-workflow example-org/principia/.github/workflows/release.yml
+
+# 3. the release itself (with immutable releases on): tag, commit and files as published
+gh release verify vX.Y.Z -R example-org/principia
+gh release verify-asset vX.Y.Z Principia-arm64.dmg -R example-org/principia
+```
+
+The cloud image is attested the same way: `gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:X.Y.Z -R
+example-org/principia` ([CLOUD.md](CLOUD.md) §12.1).
+
+### 5.4 Post-release verification
+
+`.github/workflows/post-release.yml` checks every published release on a fresh GitHub-hosted Mac, downloading it the
+way a person does: `releases/latest/download/...` for a stable release (and it checks that `releases/latest` is that
+release), the tag's own download links for a beta. It checks:
+
+- `SHA256SUMS.txt` against the dmg and zip, and `latest-mac.yml` / `beta-mac.yml` (version, sha512, size) against the
+  zip;
+- the dmg: `spctl -a -t open --context context:primary-signature` must say `source=Notarized Developer ID` (on a Mac
+  with Gatekeeper assessments off spctl accepts anything, so the source is required), and `xcrun stapler validate`;
+- the app inside the dmg and the app inside the updater zip: `codesign --verify --deep --strict`, `spctl -t exec`
+  (notarized), `stapler validate`, and the version;
+- `gh attestation verify` for the dmg and zip, signed by this repository's `release.yml`. A release published from a
+  Mac (`npm run release:mac`) has no attestation; that is a warning, not a failure.
+
+If anything fails it opens an issue, `Post-release verification failed for vX.Y.Z` (or comments on the open one), and
+the run fails: then follow §8.1. It runs when a person publishes a release, and `release.yml` dispatches it after
+publishing (a release published with the workflow's `GITHUB_TOKEN` fires no `release` event). Run it by hand from
+Actions › **post-release** › Run workflow (empty tag: the latest release; untick *check-latest* to verify an older
+stable release).
 
 ## 6. Dry run (no certificate needed)
 
@@ -232,6 +367,24 @@ HIVE_USER_DATA=/tmp/principia-try HIVE_NO_SCHEDULER=1 \
 asks for your password, because the test copy is signed differently). `HIVE_UPDATES_IN_TEST=1` turns on update
 checks in such a test copy, to try the updater; it can only ever replace that copy.
 
+### 6.1 Packaged-app smoke test
+
+```sh
+npm run pack:dir                # unsigned Principia.app in release/mac-arm64 (no dmg, no signing, no notarization)
+npm run smoke:packaged          # Playwright drives it: e2e/packaged.spec.ts
+```
+
+The test launches the packaged app with a throwaway `HIVE_USER_DATA`, `HIVE_NO_SCHEDULER=1` and
+`--use-mock-keychain`, makes no AI or network calls, and checks: the window opens from the asar with the bridge and
+no Node in the renderer, Home renders, the database opens and takes a new company, a shell terminal spawns through
+node-pty and echoes, no uncaught errors, and the app quits with exit code 0. It takes a few seconds. To test another
+build: `PRINCIPIA_APP=/path/to/Principia.app npm run smoke:packaged` (or `-- -c.directories.output=<dir>` on
+`pack:dir` to package elsewhere). On a failure, `test-results/e2e` has the app's log and the last screenshot.
+
+CI (`.github/workflows/smoke.yml`, macOS) runs it nightly on `main`, and from Checks on pull requests and `main` pushes
+that touch `src/main`, `src/preload`, `build/`, `electron-builder.yml`, `electron.vite.config.ts`, `package.json`,
+`package-lock.json` or the test itself. `all-green` counts it when it ran.
+
 ## 7. The website
 
 The site's **Download for Mac** button is hidden until the first release exists, so the site never links to a
@@ -250,3 +403,43 @@ deploy it. Later releases need nothing on the site: the button always points at
   `xcrun notarytool log <submission id> --keychain-profile principia-notary` (or `--key/--key-id/--issuer`).
 - **First launch of a signed release asks for your keychain password** (only on a Mac that ran an earlier unsigned
   or development Principia): choose Always Allow once. The signed app is a new program to the keychain.
+
+### 8.1 Pulling a bad release (rollback)
+
+electron-updater never moves anyone back to an older version, and with immutable releases a published release's
+files can never be changed or removed. So a bad release is never "fixed in place": it is pulled from the download
+links, and a fixed **newer** version replaces it.
+
+1. **Stop new downloads**: point `releases/latest` back at the previous good release, and mark the bad one as a
+   pre-release so it can never become latest again:
+
+   ```sh
+   gh release edit vX.Y.(Z-1) --repo example-org/principia --latest           # the last good release
+   gh release edit vX.Y.Z --repo example-org/principia --prerelease --latest=false
+   ```
+
+   The website's Download button and the stable update feed (`releases/latest/download/...`) now serve the previous
+   good release; Macs that have not updated yet stop being offered the bad one. Beta users still see it (the beta feed
+   includes pre-releases) until the fix is out.
+2. **Say so**: edit the bad release's notes to say it was pulled and why (`gh release edit vX.Y.Z --notes-file ...`;
+   immutable releases lock the files and the tag, not the notes).
+3. **Ship the fix as a new patch version**, `vX.Y.(Z+1)`: revert or fix on `main`, then release it as usual (§5.2; the
+   release-please pull request, or a tag). Macs on the bad version update to it like any update. The whole path takes
+   under 30 minutes plus Apple's notarization.
+4. **If the bad build must not stay downloadable at all** (for example it leaks something), delete the release:
+   `gh release delete vX.Y.Z --repo example-org/principia` (keep the tag: the `Protect release tags` ruleset forbids
+   deleting it, and the version number is never reused). Do this after step 1, so `releases/latest` never points at
+   nothing.
+5. **Check**: run Actions › post-release on the good release (§5.4) and download the dmg from the website once.
+
+Never re-tag, never upload a replacement file under the same version, never edit `latest-mac.yml`: a version number
+names one build forever.
+
+## 9. Code owners
+
+`.github/CODEOWNERS` names the founder as owner of everything that decides what ships and how it is signed:
+`.github/` (workflows, Dependabot, this file), `scripts/release*`, `scripts/mac-sign*`, `scripts/update-info*`,
+`scripts/prepare-public-release*`, `electron-builder.yml`, `build/entitlements*`, `package-lock.json`, the
+release-please config, `cloud/Dockerfile` and `SECURITY.md`. It takes effect for merging once **Require review from
+Code Owners** is on in the `main` ruleset. The public export (`scripts/prepare-public-release.mjs`) keeps the `@owner`
+entries of this one file as they are.

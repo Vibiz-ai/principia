@@ -1,12 +1,90 @@
 name: Checks
+# Pull requests run once (pull_request); main runs again after a merge (push). A new commit on a pull request cancels
+# the run it supersedes; runs on main always finish. Only pull requests share a concurrency group: GitHub cancels a
+# PENDING run in a group as soon as a newer one queues, whatever cancel-in-progress says, so every other run gets its
+# own group (run_id) and quick successive merges to main never cancel each other. workflow_dispatch: release-please.yml
+# runs Checks on its release pull request this way (a branch pushed with GITHUB_TOKEN starts no pull_request run); a
+# dispatched run runs every job.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # Which path-filtered jobs this change needs (macOS minutes only when they can matter). Reads the changed files from
+  # the API: no checkout, no third-party action. A push that opens a branch, or a compare GitHub cannot list (over 300
+  # files), runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          all=false
+          if [ "$EVENT" = pull_request ]; then
+            gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' > changed.txt
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+            all=true; : > changed.txt
+          else
+            gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename' > changed.txt
+            if [ "$(wc -l < changed.txt)" -ge 300 ]; then all=true; fi
+          fi
+          echo "changed files: $(wc -l < changed.txt)"
+          match() { [ "$all" = true ] || grep -Eq "$1" changed.txt; }
+          flag() { if match "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
+          # the packaged app (smoke.yml): main process, preload, packaging, dependencies, the test itself
+          flag app '^(src/main/|src/preload/|build/|e2e/)|^(electron-builder\.yml|electron\.vite\.config\.ts|package\.json|package-lock\.json|playwright\.config\.ts|\.github/workflows/smoke\.yml)$'
+          # the iPhone app (ios.yml)
+          flag ios '^ios/|^\.github/workflows/ios\.yml$'
+          cat "$GITHUB_OUTPUT"
+  smoke:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    # `./`, not GitHub's `$/` self-repository form: actionlint 1.7.12 rejects `$/` (rhysd/actionlint#760). A job-level
+    # call has no earlier step that could swap the file, which is what `$/` protects against.
+    uses: ./.github/workflows/smoke.yml # zizmor: ignore[self-repository]
+  ios:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    uses: ./.github/workflows/ios.yml # zizmor: ignore[self-repository]
+  # Types and lint need no native modules: --ignore-scripts skips the electron-rebuild postinstall and the Electron binary
+  # download, so this runs on ubuntu in parallel with the macOS job.
+  lint-and-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run lint
   desktop-and-cloud:
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -16,7 +94,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
       - run: npm test
       - run: npm run build
       - run: npm run cloud:build
@@ -25,6 +102,7 @@ jobs:
       - run: npm run release:test
   website:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,3 +114,18 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: npm ci --prefix website
       - run: npm run build --prefix website
+  # The one check branch protection requires: green only when every job above succeeded. A failed or cancelled job
+  # fails it, and so does a skipped one unless it is listed in an `allowed-skips:` input (add one for path-filtered jobs), so
+  # adding, renaming or splitting jobs never needs a ruleset change: add the job to `needs` here.
+  all-green:
+    name: all-green
+    if: always()
+    needs: [changes, smoke, ios, lint-and-types, desktop-and-cloud, website]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          # path-filtered: skipped when the change does not touch them, counted when they ran
+          allowed-skips: smoke, ios
+          jobs: ${{ toJSON(needs) }}

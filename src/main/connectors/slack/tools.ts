@@ -136,6 +136,7 @@ export class SlackTools {
           throw new Error(`Unknown tool: ${tool}`)
       }
     } catch (e) {
+      // eslint-disable-next-line preserve-caught-error -- deliberate: the original error may carry unredacted secrets
       throw new Error(this.d.redact(e instanceof Error ? e.message : String(e)))
     }
     return this.finish(out)

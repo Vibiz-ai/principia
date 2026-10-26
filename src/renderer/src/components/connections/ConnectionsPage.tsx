@@ -58,7 +58,6 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
     void hive.gateway.list({ companyId: company.id }).then((l) => n.current === k && setConnections(l), () => n.current === k && setConnections([]))
     void hive.secrets.list({ companyId: company.id }).then((l) => n.current === k && setKeyNames(new Set(l.filter((s) => s.companyId === company.id).map((s) => s.name))), () => undefined)
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [company.id])
   useEffect(() => {
     setSheet(sheetOf(openFirst))

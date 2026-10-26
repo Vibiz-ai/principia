@@ -1,11 +1,17 @@
 # Keeps the SHA-pinned workflow actions and the npm lockfiles current. Every update arrives as a pull request and
-# goes through the same required checks as any other change.
+# goes through the same required checks as any other change (plus dependency-review.yml).
+# cooldown: a new version is proposed only once it is 5 days old (14 for a new major), the window in which hijacked
+# or broken npm releases are usually caught and yanked. groups: one pull request per ecosystem for all minor and
+# patch updates; majors stay separate pull requests.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
     groups:
       actions:
         patterns: ['*']
@@ -14,8 +20,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
     ignore:
-      # @types/node follows the Node line the app runs on (24); a major bump would type APIs that runtime lacks
+      # @types/node follows the Node major the app and CI run on (24), not the newest Node
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
   - package-ecosystem: npm
@@ -23,3 +35,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      website-minor-patch:
+        update-types: [minor, patch]

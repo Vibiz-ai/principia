@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { UpdateService, type Updater } from './updates'
-import { CHECK_EVERY_MS, FIRST_CHECK_DELAY_MS, type UpdateState, type WorkCounts } from '../shared/updates'
+import { CHECK_EVERY_MS, FIRST_CHECK_DELAY_MS, updateChannelPolicy, type UpdateState, type WorkCounts } from '../shared/updates'
 
 type Handler = (...a: unknown[]) => void
 function fakeUpdater() {
@@ -9,6 +9,21 @@ function fakeUpdater() {
     autoDownload: false,
     autoInstallOnAppQuit: false,
     disableDifferentialDownload: false,
+    allowPrerelease: false,
+    allowDowngrade: false,
+    _channel: null as string | null,
+    // like electron-updater: setting the channel turns allowDowngrade on
+    get channel(): string | null {
+      return this._channel
+    },
+    set channel(v: string | null) {
+      this._channel = v
+      this.allowDowngrade = true
+    },
+    feeds: [] as unknown[],
+    setFeedURL(feed: unknown) {
+      this.feeds.push(feed)
+    },
     logger: null as unknown,
     on: (e: string, fn: Handler) => handlers.set(e, fn),
     checkForUpdates: vi.fn(async () => undefined as unknown),
@@ -20,11 +35,11 @@ function fakeUpdater() {
 const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined }
 const idle: WorkCounts = { runningSessions: 0, runningRuns: 0, queuedRuns: 0 }
 
-function service(o: { offReason?: string | null; work?: () => WorkCounts } = {}) {
+function service(o: { offReason?: string | null; work?: () => WorkCounts; beta?: () => boolean } = {}) {
   const f = fakeUpdater()
   const emitted: UpdateState[] = []
   const load = vi.fn(async () => f.u)
-  const s = new UpdateService({ current: '0.1.0', offReason: o.offReason ?? null, work: o.work ?? (() => idle), emit: (x) => emitted.push(x), log: quiet, load })
+  const s = new UpdateService({ current: '0.1.0', offReason: o.offReason ?? null, work: o.work ?? (() => idle), emit: (x) => emitted.push(x), log: quiet, load, beta: o.beta })
   return { s, f, emitted, load }
 }
 
@@ -151,5 +166,63 @@ describe('UpdateService', () => {
     expect((await s.check()).phase).toBe('error')
     await s.check()
     expect(calls).toBe(2)
+  })
+
+  describe('Get beta updates', () => {
+    it('off (the default): the stable feed and channel, no prereleases, no downgrade', async () => {
+      const { s, f } = service()
+      await s.check()
+      expect(f.u.feeds).toEqual([updateChannelPolicy(false).feed])
+      expect(f.u.feeds[0]).toMatchObject({ provider: 'generic', channel: 'latest' })
+      expect(f.u.channel).toBe('latest')
+      expect(f.u.allowPrerelease).toBe(false)
+      expect(f.u.allowDowngrade).toBe(false)
+    })
+
+    it('on at launch: the release list and beta-mac.yml; the channel setter does not leave downgrades on', async () => {
+      const { s, f } = service({ beta: () => true })
+      await s.check()
+      expect(f.u.feeds).toEqual([updateChannelPolicy(true).feed])
+      expect(f.u.feeds[0]).toMatchObject({ provider: 'github', repo: 'principia', channel: 'beta' })
+      expect(f.u.channel).toBe('beta')
+      expect(f.u.allowPrerelease).toBe(true)
+      expect(f.u.allowDowngrade).toBe(false)
+    })
+
+    it('switching it re-points the loaded updater and checks again', async () => {
+      let beta = false
+      const { s, f } = service({ beta: () => beta })
+      await s.check()
+      f.fire('update-not-available')
+      beta = true
+      s.setBeta(true)
+      await vi.waitFor(() => expect(f.u.checkForUpdates).toHaveBeenCalledTimes(2))
+      expect(f.u.channel).toBe('beta')
+      expect(f.u.allowPrerelease).toBe(true)
+      f.fire('update-not-available')
+      beta = false
+      s.setBeta(false)
+      await vi.waitFor(() => expect(f.u.checkForUpdates).toHaveBeenCalledTimes(3))
+      expect(f.u.channel).toBe('latest')
+      expect(f.u.allowPrerelease).toBe(false)
+      expect(f.u.allowDowngrade).toBe(false)
+    })
+
+    it('a ready update is kept: switching does not start a check over it', async () => {
+      const { s, f } = service()
+      await s.check()
+      f.fire('update-downloaded', { version: '0.2.0' })
+      s.setBeta(true)
+      expect(f.u.checkForUpdates).toHaveBeenCalledTimes(1)
+      expect(f.u.channel).toBe('beta')
+      expect(s.state().phase).toBe('ready')
+    })
+
+    it('an off build ignores the switch', async () => {
+      const { s, load } = service({ offReason: 'Development build: updates come from git.' })
+      s.setBeta(true)
+      await Promise.resolve()
+      expect(load).not.toHaveBeenCalled()
+    })
   })
 })

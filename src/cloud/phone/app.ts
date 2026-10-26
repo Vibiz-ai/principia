@@ -170,7 +170,7 @@ function go(r: Partial<Route>): void {
   const next = { ...st.route, ...r }
   const hash = routeHash(next)
   if (location.hash !== hash) location.hash = hash
-  else onRoute()
+  else void onRoute()
 }
 
 // ---------- data ----------

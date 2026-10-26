@@ -114,7 +114,6 @@ export function CanvasView({ focusRunId }: { focusRunId?: string }): React.JSX.E
       (e) => setError(errorMessage(e))
     )
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [nonce])
   useEffect(() => mergeAgents(snap?.agents), [snap?.agents])
   // Coming back from the tray / from behind another app: resync from main instead of trusting the event stream.

@@ -41,6 +41,14 @@ test('exports source and cloud example, excludes private data and sanitizes loca
   await access(path.join(dest, 'vite.cloud.config.ts'))
   for (const p of ['cloud/.env', '.git/config', 'docs/qa/keys.png']) await assert.rejects(access(path.join(dest, p)))
 }))
+test('CODEOWNERS keeps its @owner entries; the handle is replaced everywhere else', async () => fixture(async ({ dest, put, run }) => {
+  await put('LICENSE', 'MIT')
+  await put('.github/CODEOWNERS', `/.github/ @${privateAccount}\n/docs/${privateAccount}/ @${privateAccount}\n# ask ${privateAccount}\n`)
+  await put('src/a.ts', `// @${privateAccount}`)
+  assert.equal(run().status, 0)
+  assert.equal(await readFile(path.join(dest, '.github/CODEOWNERS'), 'utf8'), `/.github/ @${privateAccount}\n/docs/example-user/ @${privateAccount}\n# ask example-user\n`)
+  assert.equal(await readFile(path.join(dest, 'src/a.ts'), 'utf8'), '// @example-user')
+}))
 test('fails before writing when source contains a credential and withholds its value', async () => fixture(async ({ dest, put, run }) => {
   await put('LICENSE', 'MIT')
   const token = 'ghp_' + 'A'.repeat(36)

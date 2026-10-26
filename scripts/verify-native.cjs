@@ -1,8 +1,6 @@
 // Run with: npm run verify:native  (executes inside the Electron main process, no window)
 const { app } = require('electron');
 const os = require('node:os');
-const path = require('node:path');
-const fs = require('node:fs');
 
 app.whenReady().then(async () => {
   const out = { electron: process.versions.electron, node: process.versions.node, modules: process.versions.modules };

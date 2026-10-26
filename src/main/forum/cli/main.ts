@@ -33,7 +33,7 @@ export async function callTool(tool: ForumTool, args: unknown, signal?: AbortSig
     const res = await fetch(`${url}/v1/${tool}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(args ?? {}), signal })
     return { ok: res.ok, text: await res.text() }
   } catch (e) {
-    if (signal?.aborted) throw new Error('canceled')
+    if (signal?.aborted) throw new Error('canceled', { cause: e })
     return { ok: false, text: `Principia is not reachable: ${e instanceof Error ? e.message : String(e)}` }
   }
 }

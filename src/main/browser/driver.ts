@@ -32,7 +32,7 @@ const CONSOLE_MAX = 300
 const NET_MAX = 400
 export const COMMAND_TIMEOUT_MS = 15_000
 
-type Any = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+type Any = Record<string, any>
 
 /** CDP key definitions for browser_press. */
 const KEYS: Record<string, { code: string; key: string; vk: number; text?: string }> = {

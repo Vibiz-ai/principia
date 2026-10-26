@@ -213,10 +213,10 @@ export class JournalStore {
       }
       if (j.status !== 'running') continue
       j.status = 'failed'
-      for (const s of j.steps) if (s.status === 'running') ((s.status = 'failed'), (s.error = INTERRUPTED_ERROR))
+      for (const s of j.steps) if (s.status === 'running') { s.status = 'failed'; s.error = INTERRUPTED_ERROR }
       if (!j.steps.some((s) => s.status === 'failed')) {
         const next = j.steps.find((s) => s.status === 'pending')
-        if (next) ((next.status = 'failed'), (next.error = INTERRUPTED_ERROR))
+        if (next) { next.status = 'failed'; next.error = INTERRUPTED_ERROR }
       }
       this.save(j)
       ids.push(j.id)

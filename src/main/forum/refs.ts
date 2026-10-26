@@ -43,7 +43,7 @@ export function parseText(text: string): ParsedText {
   const bare = urls.reduce((t, u) => t.split(u).join(' '), text)
   // five doors step 2: every company has its own prefix (NC-12, LA-3); uppercase only, so prose never reads as a task
   for (const m of bare.matchAll(/\b([A-Z][A-Z0-9]{1,4}-\d{1,7})\b/g)) add({ kind: 'task', id: m[1].toUpperCase(), label: m[1].toUpperCase() })
-  for (const m of bare.matchAll(/\[\[([^\[\]\n|#^]{1,200})(?:[#^|][^\]\n]*)?\]\]/g)) {
+  for (const m of bare.matchAll(/\[\[([^[\]\n|#^]{1,200})(?:[#^|][^\]\n]*)?\]\]/g)) {
     const title = m[1].trim()
     if (title) add({ kind: 'note', id: title, label: `[[${title}]]` })
   }

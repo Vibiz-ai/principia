@@ -25,7 +25,6 @@ export interface CloudWiring {
 }
 
 /** node-pty loads its native binding on import: load it at the first sign-in only (tests build a Hive without it). */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const loadPty = (): typeof import('node-pty') => require('node-pty') as typeof import('node-pty')
 
 const cipher = {

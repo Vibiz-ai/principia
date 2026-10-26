@@ -237,20 +237,19 @@ export class EngineHost {
   }
 
   private wrapStore(inner: EngineStore): EngineStore {
-    const self = this
     return new Proxy(inner, {
-      get(target, prop, receiver) {
+      get: (target, prop, receiver) => {
         // the run's artifacts folder (made by runs.start) is the agent's to write, before any step spawns
         if (prop === 'insertRun')
           return (run: Run, ...rest: unknown[]) => {
             const out = (target.insertRun as (r: Run, ...a: unknown[]) => unknown)(run, ...rest)
-            self.o.sandbox.grant(run.artifactsDir)
+            this.o.sandbox.grant(run.artifactsDir)
             return out
           }
         if (prop === 'insertStep')
           return (step: RunStep) => {
-            const st = self.byEngine.get(step.runId) ?? (self.starting && !self.starting.engineRunId ? self.starting : null)
-            if (st) self.stepRun.set(step.id, st)
+            const st = this.byEngine.get(step.runId) ?? (this.starting && !this.starting.engineRunId ? this.starting : null)
+            if (st) this.stepRun.set(step.id, st)
             return target.insertStep(step)
           }
         const v = Reflect.get(target, prop, receiver) as unknown

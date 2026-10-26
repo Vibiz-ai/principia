@@ -78,6 +78,8 @@ export const DEFAULT_SETTINGS: Settings = {
   slackMirrorNeedsYou: false,
   // Settings › Notifications: "Tell me when something needs me" (a Mac notification per ask / finished turn)
   notifyNeedsYou: true,
+  // RELEASING.md §4.1: stable releases only unless the founder opts in
+  betaUpdates: false,
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,

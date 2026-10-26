@@ -170,7 +170,7 @@ if (!app.requestSingleInstanceLock()) {
     wc.setWindowOpenHandler(() => ({ action: 'deny' }))
   })
 
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     installSignalHandlers()
     nativeTheme.themeSource = 'dark'
     const paths = resolvePaths()
@@ -550,6 +550,7 @@ if (!app.requestSingleInstanceLock()) {
       emit: (s) => emit('updates:changed', s),
       log,
       quit: (install) => h.requestQuit(install),
+      beta: () => store.getSettings().betaUpdates === true,
       load: async () => {
         // the getter-defined `autoUpdater` export is only on the CommonJS default when the bundle keeps import()
         const m = (await import('electron-updater')) as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }

@@ -180,7 +180,6 @@ function useHubNote(company: CompanyPassport): { status: VaultStatus | null; not
       }
     })()
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [enabled, company.id, company.name, company.vaultPath])
   return { status, note, reload: load }
 }

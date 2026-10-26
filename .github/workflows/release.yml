@@ -1,24 +1,48 @@
-# Publishes the signed, notarized macOS release for a version tag (docs/RELEASING.md §5.2): push `vX.Y.Z`, approve the
-# run in the `release` environment, and scripts/release-mac.mjs builds, signs, notarizes, staples, verifies and creates
-# the GitHub release. The Developer ID certificate lives only in a temporary keychain for this job and the App Store
-# Connect key only in the runner's temp folder; both are deleted at the end, whatever happened.
+# Publishes the signed, notarized macOS release for a version tag (docs/RELEASING.md §5.2), in two jobs so that no
+# dependency's install script ever runs next to the signing secrets:
+#
+#   build             no secrets, no environment, read-only token. `npm ci` (with every package's install scripts) and
+#                     `scripts/release-mac.mjs --build-only`: the UNSIGNED Principia.app, archived with ditto and
+#                     uploaded as an artifact (its SHA-256 passed on as a job output).
+#   sign-and-publish  the `release` environment (approval + its secrets). Never runs `npm ci` or any package code: it
+#                     checks out the repository for the release scripts, which use Node built-ins and Apple's tools only
+#                     (scripts/mac-sign.mjs, update-info.mjs, release-assets.mjs). It downloads the app (checking its
+#                     SHA-256), imports the Developer ID certificate into a temporary keychain, signs the app inside-out
+#                     with the hardened runtime and entitlements, notarizes and staples it, makes the updater zip and
+#                     the dmg (signed, notarized, stapled), writes latest-mac.yml / beta-mac.yml and SHA256SUMS.txt,
+#                     verifies everything and uploads a draft release (`--prepackaged ... --draft-only`). Then the
+#                     signing material is deleted, the files get a build-provenance attestation, and the draft is
+#                     published (`--publish-draft`).
+#   post-release      dispatches post-release.yml (a release published with GITHUB_TOKEN fires no `release` event).
+#
+# The split keeps the certificate and the notary key away from third-party code. It does not make the build itself
+# trustworthy: the app is whatever `npm ci` + the build produced from package-lock.json, which is reviewed (CODEOWNERS)
+# and checked by dependency review.
+#
+# Started by pushing a `v*` tag, or by release-please.yml (workflow_dispatch on the tag it created: a tag created with
+# GITHUB_TOKEN triggers no push run). Either way the run's ref is the tag; a dispatch on a branch does nothing.
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: release
+  # one group per tag: with a single shared group, a third release queued while one waits on approval or signing would
+  # silently cancel the second (pending) one. Two runs for the same tag still queue one after the other.
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  mac:
-    name: macOS (Apple Silicon)
+  build:
+    name: build the unsigned app
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: macos-15
-    environment: release
-    timeout-minutes: 120
+    timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      archive-sha256: ${{ steps.archive.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,9 +51,61 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
-      # before any secret is in the environment; npm ci checks every package against package-lock.json's integrity
+          # no dependency cache in the release build: a cache written by another workflow must never feed a release
+          package-manager-cache: false
+      # npm ci checks every package against package-lock.json's integrity hashes; this job holds no secret
       - run: npm ci
+      - name: Build the unsigned app
+        run: node scripts/release-mac.mjs "${GITHUB_REF_NAME#v}" --ci --build-only
+      - name: Archive it
+        id: archive
+        run: |
+          set -euo pipefail
+          # ditto keeps the bundle's symlinks, modes and extended attributes (an artifact upload alone would not)
+          ditto -c -k --keepParent "release/${GITHUB_REF_NAME#v}/mac-arm64/Principia.app" "$RUNNER_TEMP/Principia-unsigned-app.zip"
+          echo "sha256=$(shasum -a 256 "$RUNNER_TEMP/Principia-unsigned-app.zip" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: principia-unsigned-app
+          path: ${{ runner.temp }}/Principia-unsigned-app.zip
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0 # already a zip
+
+  sign-and-publish:
+    name: sign, notarize and publish
+    needs: build
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 90
+    permissions:
+      contents: write # the draft release and its files
+      id-token: write # Sigstore signing of the build-provenance attestation
+      attestations: write # stores the attestation on the repository
+    steps:
+      # the release scripts and entitlements only: nothing is installed in this job (no npm ci, no node_modules)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: principia-unsigned-app
+          path: ${{ runner.temp }}/unsigned
+      - name: Unpack the unsigned app (checking it is the build job's archive)
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.archive-sha256 }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/unsigned/Principia-unsigned-app.zip"
+          echo "$EXPECTED_SHA256  $archive" | shasum -a 256 -c - \
+            || { echo "::error::the downloaded app is not the archive the build job uploaded"; exit 1; }
+          ditto -x -k "$archive" "$RUNNER_TEMP/unsigned"
+          test -d "$RUNNER_TEMP/unsigned/Principia.app"
 
       - name: Import the Developer ID certificate into a temporary keychain
         env:
@@ -83,12 +159,12 @@ jobs:
           chmod 600 "$NOTARY_DIR/AuthKey.p8"
           echo "APPLE_API_KEY=$NOTARY_DIR/AuthKey.p8" >> "$GITHUB_ENV"
 
-      - name: Build, sign, notarize, verify and publish
+      - name: Sign, notarize, staple, package, verify and upload a draft release
         env:
           GH_TOKEN: ${{ github.token }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: node scripts/release-mac.mjs "${GITHUB_REF_NAME#v}" --ci
+        run: node scripts/release-mac.mjs "${GITHUB_REF_NAME#v}" --ci --prepackaged "$RUNNER_TEMP/unsigned/Principia.app" --draft-only
 
       - name: Delete the temporary keychain and the API key
         if: always()
@@ -96,3 +172,33 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/principia-signing.keychain-db"
           if [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
           rm -rf "$RUNNER_TEMP/principia-notary" "$RUNNER_TEMP/principia-signing.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+
+      # verify a download with: gh attestation verify Principia-arm64.dmg -R example-org/principia (RELEASING.md §5.3)
+      - name: Attest build provenance of the dmg, zip and checksums
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/*/Principia-*.dmg
+            release/*/Principia-*.zip
+            release/*/SHA256SUMS.txt
+
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-mac.mjs "${GITHUB_REF_NAME#v}" --ci --publish-draft
+
+  # post-release.yml checks the published download on a fresh Mac. A release published with this workflow's
+  # GITHUB_TOKEN triggers no `release` event, so it is dispatched (workflow_dispatch is GitHub's exception), from the
+  # default branch's copy of the workflow, in a job of its own: the signing job never holds `actions: write`.
+  post-release:
+    needs: sign-and-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run post-release.yml --repo "$REPO" --ref "$DEFAULT_BRANCH" -f tag="$GITHUB_REF_NAME"

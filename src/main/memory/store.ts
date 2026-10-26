@@ -1700,9 +1700,9 @@ export class VaultGrantStore {
   list(q: { runId?: Id; sessionId?: Id; companyId?: Id }): MemoryGrantInfo[] {
     const where: string[] = []
     const params: unknown[] = []
-    if (q.runId) where.push('g.run_id = ?'), params.push(q.runId)
-    if (q.sessionId) where.push('g.session_id = ?'), params.push(q.sessionId)
-    if (q.companyId) where.push('g.company_id = ?'), params.push(q.companyId)
+    if (q.runId) { where.push('g.run_id = ?'); params.push(q.runId) }
+    if (q.sessionId) { where.push('g.session_id = ?'); params.push(q.sessionId) }
+    if (q.companyId) { where.push('g.company_id = ?'); params.push(q.companyId) }
     const rows = this.db
       .prepare(
         `SELECT g.*,

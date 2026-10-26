@@ -158,10 +158,10 @@ export function ArtifactsView({ runId, sessionId }: { runId?: string; sessionId?
       setSel(a.id)
       document.querySelector(`[data-art="${a.id}"]`)?.scrollIntoView({ block: 'nearest' })
     }
-    if (e.key === 'ArrowRight') (e.preventDefault(), moveTo(i + 1))
-    else if (e.key === 'ArrowLeft') (e.preventDefault(), moveTo(i - 1))
-    else if (e.key === 'ArrowDown') (e.preventDefault(), moveTo(i < 0 ? 0 : i + cols))
-    else if (e.key === 'ArrowUp') (e.preventDefault(), moveTo(i - cols))
+    if (e.key === 'ArrowRight') { e.preventDefault(); moveTo(i + 1) }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveTo(i - 1) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); moveTo(i < 0 ? 0 : i + cols) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveTo(i - cols) }
     else if (!selected) return
     else if (e.key === ' ') {
       e.preventDefault()
