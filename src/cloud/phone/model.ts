@@ -11,13 +11,16 @@ import type { PhoneChatRef, PhoneRoomMember, PhoneSession } from '../../shared/r
 
 // ---------- routes ----------
 
-export type Tab = 'now' | 'needs' | 'chats' | 'room'
+/** tasks: the board (read only), reached from Now; not one of the four tabs at the bottom */
+export type Tab = 'now' | 'needs' | 'chats' | 'room' | 'tasks'
 export interface Route {
   companyId: string | null
   tab: Tab
   open: PhoneChatRef | null
+  /** the board: one task open (`#/c/co_1/tasks/ta_2`) */
+  task?: string
 }
-const TABS: readonly Tab[] = ['now', 'needs', 'chats', 'room']
+const TABS: readonly Tab[] = ['now', 'needs', 'chats', 'room', 'tasks']
 
 /** `#/c/co_1/chats/session/se_2` -> route. Anything else reads as Now of the first company. */
 export function parseRoute(hash: string): Route {
@@ -32,11 +35,12 @@ export function parseRoute(hash: string): Route {
   const tab = (TABS as readonly string[]).includes(parts[2] ?? '') ? (parts[2] as Tab) : 'now'
   const kind = parts[3]
   const open: PhoneChatRef | null = tab === 'chats' && (kind === 'session' || kind === 'agent') && parts[4] ? { kind, id: parts[4] } : null
-  return { companyId: parts[1], tab, open }
+  return { companyId: parts[1], tab, open, ...(tab === 'tasks' && parts[3] ? { task: parts[3] } : {}) }
 }
 export function routeHash(r: Route): string {
   if (!r.companyId) return '#/'
   const base = `#/c/${encodeURIComponent(r.companyId)}/${r.tab}`
+  if (r.tab === 'tasks' && r.task) return `${base}/${encodeURIComponent(r.task)}`
   return r.open && r.tab === 'chats' ? `${base}/${r.open.kind}/${encodeURIComponent(r.open.id)}` : base
 }
 /** `#pair=<code>` (the pairing link), or null. */

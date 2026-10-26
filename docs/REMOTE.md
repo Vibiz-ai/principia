@@ -55,6 +55,17 @@ it is canceled, never deleted, and can be reopened from the Board on the Mac); r
 while it works, Stop); message an agent (the desk path: a task, or a comment on its open task); read and post in the
 team room (Forum channels), with @mentions that wake agents through the Forum responder.
 
+**The board, read only** (`GET /api/c/:companyId/tasks`, `GET /api/c/:companyId/tasks/:taskId`; reached from Now on
+the web app and the iPhone app). The company's tasks from the same `tasks:list` the Board reads, in four lists: Needs
+you (Needs you's own task entries, plus anything in review), Working (in progress, with its agent and the live line
+its desk shows), Planned (triage, backlog, to do, blocked with why; urgent first, at most 60, then "and N more"), Done
+in the last 7 days (newest first, at most 30). Canceled tasks are not listed. One task shows its title, description,
+assignee, status, report summary, done note and dates, and its Needs you entry when it waits on you, so the phone
+offers exactly the actions it already has (Approve, Send back, answer, Not needed); nothing else is writable. Titles,
+descriptions, reports and notes pass the vault's redaction (`PhoneHost.redact`, the terminal feed's), so a key a task
+mentions reads `••••NAME`. Another company's task, a canceled one or an unknown id is 404. The board refreshes when
+the Mac says `now` or `needs` changed.
+
 A chat that runs in a terminal on the Mac (Claude Code or Codex in a pane, the default for repo sessions) reads on the
 phone as a chat, live (`src/main/remote/terminalFeed.ts`):
 
@@ -218,5 +229,10 @@ message. See docs/IOS.md.
   it needs a server-side store on the site (today a static site with no data), its own abuse limits and a deploy we
   cannot exercise from here, and it adds a write path from every Mac to a shared service. Worth doing once the site
   has a backend (or with Principia Cloud, CLOUD.md §13.2).
-- The iPhone app (RA7) does not have the "new address" field yet: after a restart with a new quick-tunnel address it
-  asks to pair again. It can use the same `POST /api/hello` check.
+- The iPhone app (RA7) does the same: its "Waiting for your Mac" screen takes the words, the move link (pasted, scanned
+  from the Mac's QR, or opened as `principia://pair?site=<site>#move=<the Mac's address>`) or a full
+  `https://<words>.trycloudflare.com` address, runs the same `POST /api/hello` check (same nonce, message and key,
+  compared in constant time) and only then keeps the new address and reconnects. It treats Cloudflare's answers for a
+  gone tunnel (530, error 1033 in HTML or JSON, a 502/503/504 page) and a name that no longer resolves, a refused or
+  timed-out connection as "the Mac moved or is off", never a status code, keeps its token, and tries the last
+  address again on the foreground and every 20 s.

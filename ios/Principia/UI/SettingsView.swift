@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var push = PushManager.shared
     @State private var confirmSignOut = false
+    @State private var confirmForget = false
 
     var body: some View {
         @Bindable var app = app
@@ -18,6 +19,16 @@ struct SettingsView: View {
                     }
                 } header: { Text("Your Mac") } footer: {
                     Text("This app keeps only the key to your Mac, in the Keychain. Your work stays on the Mac. Revoke this phone there any time: Settings › App › Phone.")
+                }
+                Section {
+                    Button("Disconnect from this Mac", role: .destructive) { confirmForget = true }
+                    if app.online {
+                        Button("Sign out on this phone and the Mac", role: .destructive) { confirmSignOut = true }
+                    }
+                } footer: {
+                    Text(app.online
+                         ? "Disconnect forgets the Mac on this phone only; the Mac still lists it until you Revoke it there. Sign out also removes this phone on the Mac."
+                         : "Disconnect forgets the Mac on this phone only. Your Mac is not answering now, so it still lists this phone: Revoke it there in Settings › App › Phone.")
                 }
                 Section {
                     Toggle("Lock with Face ID", isOn: $app.lockEnabled)
@@ -34,10 +45,6 @@ struct SettingsView: View {
                 } footer: {
                     Text("Pushes for \"needs you\" come with the Principia relay, which is not live yet. Allowing now only gets this phone ready.")
                 }
-                Section {
-                    Button("Sign out on this phone and the Mac", role: .destructive) { confirmSignOut = true }
-                    Button("Forget this Mac", role: .destructive) { app.forget(); dismiss() }
-                }
             }
             .scrollContentBackground(.hidden)
             .background(Theme.page)
@@ -47,8 +54,11 @@ struct SettingsView: View {
             .confirmationDialog("Sign out?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { Task { await app.signOut(); dismiss() } }
             } message: { Text("Your Mac removes this phone. Scan a new code to pair again.") }
+            .confirmationDialog("Disconnect from this Mac?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Disconnect", role: .destructive) { app.forget(); dismiss() }
+            } message: { Text("This phone forgets \(app.macHost.isEmpty ? "your Mac" : app.macHost) and its key. Scan a new code on your Mac to pair again.") }
             .task { await push.refresh() }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
     }
 }
