@@ -203,6 +203,20 @@ describe('TerminalFeeds (a terminal session shown live on the phone)', () => {
     f.dispose()
   })
 
+  it('a second phone opening after /clear also moves the first one to the new transcript', () => {
+    let file = path.join(dir, 'conv-1.jsonl')
+    write(file, [claude.user('Fix the footer')])
+    const f = feeds(host({ file: () => file }))
+    f.open(sess(), 'idle', null)
+    wanted.add('se_t')
+    file = path.join(dir, 'conv-2.jsonl')
+    write(file, [claude.user('Now the header')])
+    // the second phone opens before the next tick: the first one is told to take a fresh view
+    expect(f.open(sess(), 'idle', null).chat.items).toMatchObject([{ kind: 'user', text: 'Now the header' }])
+    expect(pushed.at(-1)!.m).toMatchObject({ t: 'chat', sessionId: 'se_t', ops: [] })
+    f.dispose()
+  })
+
   it('a menu answered on the Mac (no ask says so) frees Send: a change in why it is held refetches the view', () => {
     const file = path.join(dir, 'conv-1.jsonl')
     write(file, [claude.user('hi')])

@@ -118,7 +118,8 @@ export class TerminalFeeds {
     f.activity = activity
     f.idleSince = this.now()
     f.held = this.heldOf(s.id)
-    if (f.reducer) this.retarget(f)
+    // a phone already watching gets the new transcript too (else it keeps the old one and the ids collide)
+    if (f.reducer && this.retarget(f)) this.refetch(f)
     if (!f.reducer) this.attach(f)
     this.flush(f)
     if (!f.reducer) f.screen = this.screenOf(s.id)
