@@ -45,6 +45,9 @@ struct SignedOutView: View {
                 Lettering()
                 Text(line).font(.body).foregroundStyle(Theme.soft).multilineTextAlignment(.center).frame(maxWidth: 320)
                 StatusChip(tile: reason == .gone || reason == .unpaired ? .quiet : .fail, text: head)
+                if let e = app.outError {
+                    Text(e).font(.footnote).foregroundStyle(Theme.soft).multilineTextAlignment(.center).frame(maxWidth: 320)
+                }
                 if reason == .gone, !app.macHost.isEmpty {
                     Text("Last address: \(app.macHost)").font(.footnote).foregroundStyle(Theme.faint)
                 }
@@ -95,9 +98,9 @@ struct SignedOutView: View {
         .scrollBounceBehavior(.basedOnSize)
         .stone()
         .sheet(isPresented: $scanning) {
-            ScanSheet { link in
+            ScanSheet(accepts: { PairLink.parse($0) != nil }) { text in
                 scanning = false
-                app.open(link: link)
+                if let link = PairLink.parse(text) { app.open(link: link) }
             }
         }
     }
@@ -183,7 +186,10 @@ struct PairView: View {
 
 /// The camera, reading the QR code (VisionKit). Where the camera cannot scan (the simulator), it says so.
 struct ScanSheet: View {
-    let onLink: (PairLink) -> Void
+    /// what this scan takes (a pairing link; on "Waiting for your Mac" also the Mac's move link)
+    var accepts: (String) -> Bool
+    var prompt = "Point at the code on your Mac"
+    let onCode: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var message: String?
 
@@ -192,13 +198,13 @@ struct ScanSheet: View {
             ZStack {
                 Theme.page.ignoresSafeArea()
                 if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
-                    QRScanner { text in
-                        if let l = PairLink.parse(text) { onLink(l) } else { message = "That code is not a Principia pairing code." }
+                    QRScanner(accepts: accepts) { text in
+                        if accepts(text) { onCode(text) } else { message = "That code is not a Principia code." }
                     }
                     .ignoresSafeArea()
                     VStack {
                         Spacer()
-                        Text(message ?? "Point at the code on your Mac").font(.subheadline).foregroundStyle(Theme.ink)
+                        Text(message ?? prompt).font(.subheadline).foregroundStyle(Theme.ink)
                             .padding(.horizontal, 16).padding(.vertical, 10)
                             .glassEffect(.regular, in: .capsule)
                             .padding(.bottom, 30)
@@ -221,6 +227,7 @@ struct ScanSheet: View {
 }
 
 struct QRScanner: UIViewControllerRepresentable {
+    let accepts: (String) -> Bool
     let onText: (String) -> Void
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
@@ -230,19 +237,122 @@ struct QRScanner: UIViewControllerRepresentable {
         return vc
     }
     func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(onText: onText) }
+    func makeCoordinator() -> Coordinator { Coordinator(accepts: accepts, onText: onText) }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        let accepts: (String) -> Bool
         let onText: (String) -> Void
         private var done = false
-        init(onText: @escaping (String) -> Void) { self.onText = onText }
+        init(accepts: @escaping (String) -> Bool, onText: @escaping (String) -> Void) { self.accepts = accepts; self.onText = onText }
         func dataScanner(_ s: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
             for case .barcode(let b) in items {
                 guard !done, let v = b.payloadStringValue else { continue }
-                if PairLink.parse(v) != nil { done = true; s.stopScanning() }
+                if accepts(v) { done = true; s.stopScanning() }
                 onText(v)
                 return
             }
+        }
+    }
+}
+
+/// The Mac's last address does not answer (RA8): Phone is off there, or it restarted with a new quick-tunnel address.
+/// Type its words, paste or scan its link; the new address proves it is this phone's Mac before the key goes there.
+/// The last address is tried again on the foreground and every 20 s.
+struct WaitingForMacView: View {
+    @Environment(AppModel.self) private var app
+    @State private var words = ""
+    @State private var scanning = false
+    @State private var confirmForget = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                Lettering()
+                StatusChip(tile: app.retrying || app.moveBusy ? .run : .quiet, text: app.moveBusy ? "Checking the address" : app.retrying ? "Trying your Mac" : "Waiting for your Mac")
+                Text("Your Mac has a new address. On your Mac, open Settings › App › Phone and type the words shown under Paired phones, or scan its QR.")
+                    .font(.body).foregroundStyle(Theme.soft).multilineTextAlignment(.center).frame(maxWidth: 330)
+                if app.phoneOffline {
+                    Text("This phone seems to be offline. It tries again once it is back.").font(.footnote).foregroundStyle(Theme.soft).multilineTextAlignment(.center)
+                } else if !app.macHost.isEmpty {
+                    Text("Last address: \(app.macHost)").font(.footnote).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
+                }
+                GlassEffectContainer(spacing: 12) {
+                    VStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("The words on your Mac").font(.footnote).foregroundStyle(Theme.muted)
+                            HStack(spacing: 8) {
+                                TextField("quiet-tree-forty-two", text: $words)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                    .submitLabel(.go).onSubmit(connect).focused($focused)
+                                    .padding(.horizontal, 14).frame(minHeight: 46)
+                                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 14))
+                                    .accessibilityLabel("The words on your Mac, or its link")
+                                Button {
+                                    if let s = UIPasteboard.general.string { words = s; connect() }
+                                } label: { Image(systemName: "doc.on.clipboard").frame(width: 30, height: 34) }
+                                    .buttonStyle(.glass)
+                                    .accessibilityLabel("Paste the link from the clipboard")
+                            }
+                            if let e = app.moveError { Text(e).font(.footnote).foregroundStyle(Theme.soft) }
+                        }
+                        Button(action: connect) {
+                            Text(app.moveBusy ? "Checking…" : "Connect").frame(maxWidth: .infinity).padding(.vertical, 6)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(Theme.ink.opacity(0.9))
+                        .foregroundStyle(Theme.page)
+                        .disabled(app.moveBusy || words.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button { scanning = true } label: {
+                            Label("Scan the QR on your Mac", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity).padding(.vertical, 4)
+                        }
+                        .buttonStyle(.glass)
+                        HStack(spacing: 12) {
+                            Button { Task { await app.retry() } } label: { Text(app.retrying ? "Trying…" : "Try again").frame(maxWidth: .infinity) }
+                                .buttonStyle(.glass).disabled(app.retrying || app.moveBusy)
+                            Button(role: .destructive) { confirmForget = true } label: { Text("Disconnect from this Mac").frame(maxWidth: .infinity).lineLimit(1).minimumScaleFactor(0.8) }
+                                .buttonStyle(.glass)
+                        }
+                    }
+                }
+                Text("Your key is checked first: the new address must prove it is your Mac before this phone sends it anything. It also tries the last address every 20 seconds.")
+                    .font(.footnote).foregroundStyle(Theme.faint).multilineTextAlignment(.center).frame(maxWidth: 330)
+            }
+            .padding(.horizontal, 16).padding(.bottom, 24)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
+        .stone()
+        .confirmationDialog("Disconnect from this Mac?", isPresented: $confirmForget, titleVisibility: .visible) {
+            Button("Disconnect", role: .destructive) { app.forget() }
+        } message: { Text("This phone forgets your Mac and its key. Your Mac still lists this phone until you Revoke it there. Scan a new code to pair again.") }
+        .sheet(isPresented: $scanning) {
+            ScanSheet(accepts: accepts, prompt: "Point at the QR under Paired phones") { text in
+                scanning = false
+                Task { await app.move(text) }
+            }
+        }
+        // the last address, every 20 s while this screen shows (it goes away once the Mac answers)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard !Task.isCancelled else { return }
+                if !app.moveBusy && !focused { await app.retry() }
+            }
+        }
+    }
+
+    private func accepts(_ text: String) -> Bool {
+        PairLink.parse(text) != nil || app.paired.flatMap { MacMove.macFromTyped(text, site: $0.site) } != nil
+    }
+
+    private func connect() {
+        let t = words
+        guard !t.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        focused = false
+        Task {
+            await app.move(t)
+            if app.phase == .main { words = "" }
         }
     }
 }

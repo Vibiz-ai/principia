@@ -22,7 +22,7 @@ import { reposOf } from '../../renderer/src/lib/companyModel'
 import { HttpError, type RemoteApi } from './server'
 import type { StoredDevice } from './auth'
 import { TerminalFeeds, terminalSnapshot, terminalTurn, transcriptItems, type PhoneTerminalHost } from './terminalFeed'
-import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, providerName, whoResolver, type PhoneData } from './views'
+import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, phoneTaskDetail, phoneTasks, providerName, whoResolver, type PhoneData } from './views'
 
 /**
  * RA3: every desktop channel the Phone may reach. Nothing else is callable from here: no settings writes, keys,
@@ -52,6 +52,8 @@ export interface PhoneHost {
   onEvent(fn: <E extends EventName>(event: E, payload: EventMap[E]) => void): () => void
   /** a terminal session as a chat: its transcript or screen, and messages typed into it (absent: the old card) */
   terminal?: PhoneTerminalHost
+  /** masks the vault's secrets in text the phone reads (task titles, descriptions, reports); absent: the terminal's */
+  redact?(text: string): string
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
 }
 
@@ -128,6 +130,9 @@ export class PhoneApi implements RemoteApi {
 
   // ---------- data ----------
 
+  /** RA3: the vault's secrets never reach the phone in board text */
+  private readonly redact = (s: string): string => (this.h.redact ? this.h.redact(s) : this.h.terminal ? this.h.terminal.redact(s) : s)
+
   private async safe<T>(f: () => Promise<T>, fallback: T): Promise<T> {
     try {
       return await f()
@@ -193,6 +198,13 @@ export class PhoneApi implements RemoteApi {
       }
       case 'needs':
         return phoneNeeds(d, companyId)
+      case 'tasks':
+        return phoneTasks(d, companyId, this.redact)
+      case 'task': {
+        const v = phoneTaskDetail(d, companyId, this.task(d, companyId, params.taskId), this.redact)
+        if (!v) throw notFound('Task')
+        return v
+      }
       case 'answerAsk':
         return this.answerAsk(d, companyId, params.askId, body('answerAsk', raw))
       case 'approveTask': {

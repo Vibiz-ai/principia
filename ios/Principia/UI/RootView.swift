@@ -15,6 +15,8 @@ struct RootView: View {
                 .stone()
             case .pair(let link):
                 PairView(link: link)
+            case .out(.gone):
+                WaitingForMacView()
             case .out(let reason):
                 SignedOutView(reason: reason)
             case .main:

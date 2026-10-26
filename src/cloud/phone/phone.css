@@ -260,3 +260,9 @@ h3.md-h { font: 500 18px/1.25 var(--font-display); letter-spacing: .01em; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 body.has-dock .toast { bottom: calc(var(--tabs-h) + 88px + env(safe-area-inset-bottom)); }
 body[data-phase='pair'] .toast, body[data-phase='out'] .toast { bottom: calc(24px + env(safe-area-inset-bottom)); }
+
+/* the board (read only) */
+.card.row.boardlink { grid-template-columns: 1fr auto; align-items: center; min-height: 60px; }
+.boardlink .go { margin-left: auto; font-size: 20px; opacity: .6; }
+.tlink { width: 100%; text-align: left; background: none; color: inherit; font: inherit; border-left: 0; border-right: 0; border-bottom: 0; }
+.fact { display: grid; grid-template-columns: 104px 1fr; gap: 12px; padding: 4px 0; overflow-wrap: anywhere; }

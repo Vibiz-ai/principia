@@ -9,11 +9,11 @@ beyond what the web app already uses. SwiftUI, iOS 26, Liquid Glass, no third-pa
 | Path | What |
 |---|---|
 | `project.yml` | XcodeGen project (`xcodegen generate` makes `Principia.xcodeproj`, not committed) |
-| `Principia/Core` | `PairLink` (the `#mac=&code=` link), `APIClient` (routes, bearer, errors), `LiveSocket` (WebSocket, auth first, backoff), `ChatReplica` (the Mac's chat ops, chat lines), `Markdown` (blocks and AttributedString), `MacStore` (Keychain), `Push` (client side) |
+| `Principia/Core` | `PairLink` (the `#mac=&code=` link), `APIClient` (routes, bearer, errors), `LiveSocket` (WebSocket, auth first, backoff), `ChatReplica` (the Mac's chat ops, chat lines), `Markdown` (blocks and AttributedString), `MacStore` (Keychain), `MacMove` (RA8: the Mac's new address, the hello proof, what counts as "the Mac is gone"), `Push` (client side) |
 | `Principia/App` | `AppModel` (state and actions), `PrincipiaApp` |
-| `Principia/UI` | Pair and signed-out screens, Now, Needs you, Chats (chat, terminal, agent thread), Team room, Settings |
+| `Principia/UI` | Pair, signed-out and Waiting for your Mac screens, Now, the board (from Now), Needs you, Chats (chat, terminal, agent thread), Team room, Settings |
 | `Principia/Resources` | Cinzel (static Medium and SemiBold instances, OFL), the asset catalog: engravings, persona busts, app icon |
-| `PrincipiaTests` | Unit tests: link parsing, API client, socket auth order and reconnects, markdown, chat replica |
+| `PrincipiaTests` | Unit tests: link parsing, API client, the board's routes and decoding, socket auth order and reconnects, markdown, chat replica, the Mac's new address (error classification, words and move links, hello proof against the web app's fixture) |
 | `PrincipiaLiveUITests` | UI tests against a real, paired Mac (scheme `PrincipiaLive`, skipped unless told where) |
 
 `node scripts/ios-assets.mjs` copies the engravings (`src/cloud/phone/public/art`), every bust
@@ -28,19 +28,36 @@ made once with fontTools' `varLib.instancer`), because iOS does not load woff2.
   returns the device token in the body. The token goes to the Keychain (this device only, after first unlock). No
   cookies, ever.
 - **Calls.** `Authorization: Bearer <token>` and the same `Origin`. A 401 means signed out (the app forgets the
-  token); no answer at all, or an HTML 5xx from Cloudflare, means the Mac is gone: "Scan again on your Mac", with Try
-  again and Forget this Mac.
+  token). Cloudflare answering for a gone tunnel (530, error 1033 as HTML or JSON, a 502/503/504 that is not the
+  Mac's own JSON), a name that no longer resolves, a refused or timed-out connection: the Mac moved or is off (never a
+  status code on screen; the token stays). No internet on the phone says so instead. A Mac's own error without a
+  message reads "Your Mac could not do that just now".
+- **Waiting for your Mac** (REMOTE.md RA8). When the Mac is gone the app shows this screen: type the words shown on
+  the Mac under Paired phones (`quiet-tree-forty-two`, becomes `https://quiet-tree-forty-two.trycloudflare.com`),
+  paste the move link (`<site>/#move=…`, only for this phone's site) or a full address, or scan the Mac's QR (a move
+  link or a pairing link). The new address must answer `POST /api/hello {device, nonce}` (24 random bytes, base64url)
+  with `hex HMAC-SHA256(key = sha256hex(token), "principia-hello-v1|<address>|<nonce>")`, compared in constant time,
+  before the token goes there; then it is saved and REST and the live socket reconnect. A wrong proof, an unknown
+  device (it forgets the Mac: pair again) or no answer never sends the token. Try again, Disconnect from this Mac (with
+  a confirmation), and the last address is retried on the foreground and every 20 s. The live socket asks for the
+  same check when two upgrades in a row fail that way.
+- **Disconnect.** Settings opens full height; right under Your Mac: Disconnect from this Mac (this phone only, after a
+  confirmation) and, while the Mac answers, Sign out on this phone and the Mac.
 - **Live.** `wss://<mac>/api/live` with the same `Origin`; the first message is `{t:'auth', token}` (never the URL),
   then the subscription. A ping every 25 s, reconnect with backoff (0.5 s doubling, at most 15 s), and at once when the
   app comes back to the foreground. A 4401 close with no `bye` before it signs out; `bye` says Phone was turned off or
   this phone was revoked.
 - **Links into the app.** `principia://pair?site=<site>#mac=…&code=…` pairs (the site defaults to the official one),
+  `principia://pair?site=<site>#move=<the Mac's address>` checks and moves to the Mac's new address,
   `principia://tab/needs`, `principia://chat/session/<id>`, `principia://chat/agent/<id>`, `principia://settings`.
 - **A terminal on the Mac** reads as its chat (REMOTE.md RA3): its transcript through the same replica and ops, its
   screen (`{t:'screen'}`) until it has one (an empty `{t:'chat'}` reloads it), its open asks as cards, a composer
   whenever it runs (`…/send`; while it asks something the box shows why and Send is off; no Stop: that stays on the
   Mac), and Continue once it ended (`POST /api/c/:companyId/sessions/:sessionId/continue`, then the
   app follows the session it returns). An older Mac still gets the old card.
+- **The board** (REMOTE.md RA3, read only): The board on Now opens Needs you, Working (with the agent and its live
+  line), Planned and Done this week; a task shows its description, assignee, status, report and dates, and, when it
+  waits on you, the same card as Needs you (Approve, Send back, answer, Not needed). `GET …/tasks` and `…/tasks/:taskId`.
 - **Not needed** on a Needs you task calls `POST /api/c/:companyId/tasks/:taskId/cancel` (added with this app; the web
   app has it too): only a task that waits on you, only to canceled, reopen it from the Board.
 

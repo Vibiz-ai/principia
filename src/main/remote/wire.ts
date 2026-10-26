@@ -26,7 +26,7 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
       return invokeLocal(channel, req)
     },
     onEvent: (fn) => onEmit(fn),
-    ...(o.terminal ? { terminal: o.terminal } : {}),
+    ...(o.terminal ? { terminal: o.terminal, redact: (t: string) => o.terminal!.redact(t) } : {}),
     log
   }
   return new RemoteService({

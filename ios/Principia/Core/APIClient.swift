@@ -4,6 +4,7 @@ import Foundation
 enum Route: Sendable, Equatable {
     case pair, me, signOut
     case now(String), pause(String), needs(String)
+    case tasks(String), task(String, taskId: String)
     case answerAsk(String, askId: String)
     case approveTask(String, taskId: String), sendBackTask(String, taskId: String), answerTask(String, taskId: String), cancelTask(String, taskId: String)
     case chats(String), session(String, sessionId: String)
@@ -14,7 +15,7 @@ enum Route: Sendable, Equatable {
 
     var method: String {
         switch self {
-        case .me, .now, .needs, .chats, .session, .agent, .room: return "GET"
+        case .me, .now, .needs, .tasks, .task, .chats, .session, .agent, .room: return "GET"
         default: return "POST"
         }
     }
@@ -30,6 +31,8 @@ enum Route: Sendable, Equatable {
         case .now(let co): return "\(c(co))/now"
         case .pause(let co): return "\(c(co))/pause"
         case .needs(let co): return "\(c(co))/needs"
+        case .tasks(let co): return "\(c(co))/tasks"
+        case .task(let co, let id): return "\(c(co))/tasks/\(e(id))"
         case .answerAsk(let co, let id): return "\(c(co))/asks/\(e(id))/answer"
         case .approveTask(let co, let id): return "\(c(co))/tasks/\(e(id))/approve"
         case .sendBackTask(let co, let id): return "\(c(co))/tasks/\(e(id))/send-back"
@@ -54,8 +57,11 @@ enum Route: Sendable, Equatable {
 enum APIError: Error, Equatable, LocalizedError {
     /// 401: this phone is not paired, or the Mac signed it out
     case notPaired
-    /// the Mac's address did not answer at all (the quick tunnel stopped or changed)
+    /// the Mac's address did not answer at all, or Cloudflare answered for it (530, error 1033, a 5xx page): the quick
+    /// tunnel stopped or got a new address. The token stays.
     case macGone
+    /// this phone has no internet right now (not the Mac's fault)
+    case noInternet
     /// the Mac said no, in words
     case server(status: Int, message: String)
     case badResponse
@@ -64,6 +70,7 @@ enum APIError: Error, Equatable, LocalizedError {
         switch self {
         case .notPaired: return "Open the pairing link from Principia on your Mac."
         case .macGone: return "Your Mac is not reachable at its last address."
+        case .noInternet: return "This phone is offline."
         case .server(_, let m): return m
         case .badResponse: return "The Mac sent something this app does not understand."
         }
@@ -105,7 +112,7 @@ struct APITarget: Sendable, Equatable {
 /// The Phone API client (docs/REMOTE.md RA6, hosted mode). The token rides only in the Authorization header, never in a
 /// URL; no cookie is ever stored or sent.
 final class APIClient: @unchecked Sendable {
-    private let transport: HTTPTransport
+    let transport: HTTPTransport
     private let lock = NSLock()
     private var _target: APITarget?
 
@@ -160,15 +167,19 @@ final class APIClient: @unchecked Sendable {
             (data, res) = try await transport.send(req)
         } catch let e as APIError {
             throw e
+        } catch let e as URLError where e.code == .cancelled {
+            throw CancellationError()
         } catch {
-            throw APIError.macGone
+            // DNS failure, refused, timed out: the address is not there any more (RA8)
+            throw MacReach.isNoInternet(error) ? APIError.noInternet : APIError.macGone
         }
+        // a quick tunnel that is gone answers from Cloudflare's edge (530 / error 1033, a 5xx page, HTML or JSON)
+        if MacReach.isGone(status: res.statusCode, body: data) { throw APIError.macGone }
         if res.statusCode == 401 { throw APIError.notPaired }
         let json = try? JSONSerialization.jsonObject(with: data)
-        // a quick tunnel that is gone answers from Cloudflare's edge (HTML, 5xx): the Mac is not there
-        if res.statusCode >= 500, !(json is [String: Any]) { throw APIError.macGone }
         if !(200..<300).contains(res.statusCode) {
-            let msg = (json as? [String: Any])?["message"] as? String ?? "The Mac answered \(res.statusCode)."
+            // never a bare status code on screen
+            let msg = (json as? [String: Any])?["message"] as? String ?? "Your Mac could not do that just now. Try again in a moment."
             throw APIError.server(status: res.statusCode, message: msg)
         }
         return data
@@ -184,6 +195,9 @@ final class APIClient: @unchecked Sendable {
     func now(_ co: String) async throws -> PhoneNow { try await call(.now(co)) }
     func setPaused(_ co: String, _ paused: Bool) async throws -> PhoneNow { try await call(.pause(co), body: ["paused": paused]) }
     func needs(_ co: String) async throws -> PhoneNeeds { try await call(.needs(co)) }
+    /// the board, read only
+    func tasks(_ co: String) async throws -> PhoneTasks { try await call(.tasks(co)) }
+    func task(_ co: String, _ id: String) async throws -> PhoneTaskDetail { try await call(.task(co, taskId: id)) }
     func answerAsk(_ co: String, askId: String, optionId: String?, text: String?) async throws {
         var b: [String: Any] = [:]
         if let optionId { b["optionId"] = optionId }

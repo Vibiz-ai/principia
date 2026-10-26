@@ -91,6 +91,56 @@ struct PhoneTaskNeed: Codable, Hashable, Identifiable, Sendable {
     var id: String { "\(kind.rawValue):\(taskId)" }
 }
 
+/// The board on the phone (REMOTE.md RA3, read only): GET /api/c/:companyId/tasks and …/tasks/:taskId.
+struct PhoneTaskRow: Codable, Hashable, Identifiable, Sendable {
+    enum Column: String, Codable, Sendable { case planned, working, needs, done }
+    var id: String
+    var identifier: String
+    var title: String
+    var status: String
+    var column: Column
+    var who: PhoneWho?
+    var agentId: String?
+    /// working: what its agent does right now; needs: why it waits on you; planned: blocked by what; done: its report
+    var line: String?
+    var priority: Int
+    var at: String
+}
+
+struct PhoneTasks: Codable, Sendable {
+    var companyId: String
+    var planned: [PhoneTaskRow]
+    var working: [PhoneTaskRow]
+    var needs: [PhoneTaskRow]
+    var done: [PhoneTaskRow]
+    var more: Int
+}
+
+struct PhoneTaskDetail: Codable, Sendable {
+    var id: String
+    var identifier: String
+    var title: String
+    var status: String
+    var column: PhoneTaskRow.Column
+    var who: PhoneWho?
+    var agentId: String?
+    var line: String?
+    var priority: Int
+    var at: String
+    var description: String
+    var summary: String?
+    var doneNote: String?
+    var createdAt: String
+    var updatedAt: String
+    /// what the phone may do now (its Needs you entry), else nil
+    var need: PhoneTaskNeed?
+
+    /// "To do", "Waiting for your OK"…
+    static func statusWords(_ s: String) -> String {
+        ["triage": "New", "backlog": "Backlog", "todo": "To do", "in_progress": "Working", "in_review": "Waiting for your OK", "blocked": "Blocked", "done": "Done", "canceled": "Canceled"][s] ?? s
+    }
+}
+
 struct PhoneNeeds: Codable, Sendable {
     var companyId: String
     var count: Int
