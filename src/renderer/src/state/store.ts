@@ -29,6 +29,7 @@ import { confirmNative, errorCode, errorMessage, hive, nativeMenu } from '../lib
 import { focusAgent, goNextNeedsYou, loadLive, reportVisibleOwner, wireLiveEvents } from './live'
 import { loadDrafts, openApproval, wireAuthorEvents } from './authoring'
 import { loadSlack, wireSlackEvents } from './slack'
+import { wireUpdateEvents } from './updates'
 import { departmentNotePath } from '../lib/departments'
 import {
   clearStoredDraft,
@@ -436,6 +437,7 @@ export async function boot(): Promise<void> {
   wireLiveEvents()
   wireAuthorEvents()
   wireSlackEvents()
+  wireUpdateEvents()
   const results = await Promise.allSettled([
     hive.app.info().then((info) => setState({ info })),
     hive.settings.get().then((settings) => setState({ settings, activeCompanyId: settings.activeCompanyId ?? 'all', expandedCompanies: settings.expandedCompanies ?? {} })),

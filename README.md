@@ -65,7 +65,7 @@ npm run build
 npm run dist
 ```
 
-macOS packages are currently unsigned. Internal `HIVE_*` variables, `.hive.json` workflow files, data paths and some identifiers remain for compatibility with the earlier Hive prototype. Existing local data is not renamed or uploaded by this release.
+`npm run dist` makes an unsigned local package. Signed, notarized releases with automatic updates are made with `npm run release:mac`: see [Releasing](docs/RELEASING.md). Internal `HIVE_*` variables, `.hive.json` workflow files, data paths and some identifiers remain for compatibility with the earlier Hive prototype. Existing local data is not renamed or uploaded by this release.
 
 ## Connect company tools once
 

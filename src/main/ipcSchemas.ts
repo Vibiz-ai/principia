@@ -1026,7 +1026,11 @@ export const REQUEST_SCHEMAS = {
   // REMOTE.md: remote:*
   ...REMOTE_REQUEST_SCHEMAS,
   // BROWSER.md: browser:*
-  ...BROWSER_REQUEST_SCHEMAS
+  ...BROWSER_REQUEST_SCHEMAS,
+  // RELEASING.md §4: updates:*
+  'updates:state': none,
+  'updates:check': none,
+  'updates:restart': none
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {
