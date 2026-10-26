@@ -31,6 +31,8 @@ import { ConnectionsPage } from '../components/connections/ConnectionsPage'
 import { DiskSection } from '../components/usage/DiskSection'
 import { PrincipiaRunsTeam } from '../components/orchestrator/PrincipiaTeam'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
+import { checkForUpdates, restartForUpdate, useUpdates } from '../state/updates'
+import { updateLine } from '@shared/updates'
 import { CompanyAvatar } from '../shell/CompanyRail'
 import { PassportView } from './PassportView'
 import { KeysView } from './KeysView'
@@ -1154,6 +1156,8 @@ function Storage(): React.JSX.Element {
 
 function About(): React.JSX.Element {
   const info = useStore((s) => s.info)
+  const upd = useUpdates()
+  const [checking, setChecking] = useState(false)
   return (
     <>
     <div className="s5">
@@ -1170,6 +1174,26 @@ function About(): React.JSX.Element {
       )}
       <p className="text-secondary">No network listeners unless you turn on Phone. No telemetry. Everything stays on this Mac.</p>
     </div>
+    {upd && (
+      <div className="sgroup">
+        <SRow label="Updates" desc={<span aria-live="polite">{updateLine(upd)}</span>}>
+          {upd.phase === 'ready' ? (
+            <Button size="sm" variant="primary" onClick={() => void restartForUpdate()}>Restart to install</Button>
+          ) : upd.phase !== 'off' ? (
+            <Button
+              size="sm"
+              disabled={checking || upd.phase === 'checking' || upd.phase === 'downloading'}
+              onClick={() => {
+                setChecking(true)
+                void checkForUpdates().finally(() => setChecking(false))
+              }}
+            >
+              Check for updates
+            </Button>
+          ) : null}
+        </SRow>
+      </div>
+    )}
     </>
   )
 }

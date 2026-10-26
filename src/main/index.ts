@@ -46,6 +46,8 @@ import { wireLinearSync } from './company/sync/wire'
 import { startOrchestrator } from './orchestrator/wire'
 import { SlackService } from './connectors/slack/service'
 import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
+import { UpdateService, type Updater } from './updates'
+import { updatesOffReason } from '../shared/updates'
 
 applyUserDataOverride()
 // BROWSER.md §2: agents drive the company browser while Principia sits behind other windows. An occluded window must
@@ -522,6 +524,25 @@ if (!app.requestSingleInstanceLock()) {
     })
     // WORKTREE.md: a code task's own worktree, branch and PR (failure = no Start, Principia runs)
     h.taskWork = h.safe(() => wireTaskWork(h), null)
+    // RELEASING.md §4: app updates, packaged builds only (electron-updater is not even loaded otherwise)
+    h.updates = new UpdateService({
+      current: app.getVersion(),
+      offReason: updatesOffReason({ packaged: app.isPackaged, platform: process.platform, env: process.env }),
+      work: () => {
+        const s = h.status()
+        return { runningSessions: s.runningSessions, runningRuns: s.runningRuns, queuedRuns: s.queuedRuns }
+      },
+      emit: (s) => emit('updates:changed', s),
+      log,
+      load: async () => {
+        // the getter-defined `autoUpdater` export is only on the CommonJS default when the bundle keeps import()
+        const m = (await import('electron-updater')) as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }
+        const u = m.autoUpdater ?? m.default?.autoUpdater
+        if (!u) throw new Error('electron-updater has no autoUpdater')
+        return u
+      }
+    })
+    app.on('will-quit', () => h.updates?.stop())
     registerAllHandlers(h)
     // DEPARTMENTS.md §3: the board dispatcher starts after registerCompanyHandlers ran CompanyStore.reconcile()
     try {
@@ -614,6 +635,7 @@ if (!app.requestSingleInstanceLock()) {
     h.statusChanged()
     // CONTRACT §13: list (never kill) processes an earlier Hive run left behind
     setTimeout(() => void h.scanLeftovers(), 1500)
+    h.updates.start()
   })
 }
 
