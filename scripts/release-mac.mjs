@@ -6,6 +6,9 @@
  *   npm run release:mac -- 0.2.0 --notes notes.md   ... with these release notes (default: generated from commits)
  *   npm run release:mac -- --dry-run             everything except Developer ID signing, notarizing and publishing
  *                                                (ad-hoc signed, hardened runtime): tests the build on any Mac
+ *   node scripts/release-mac.mjs 0.2.0 --ci      GitHub Actions only (.github/workflows/release.yml): the version
+ *                                                must be the pushed tag, and the identity comes from the job's
+ *                                                temporary keychain (CSC_KEYCHAIN) instead of the login keychain
  *
  * It builds into THIS checkout (out/, release/<version>/). Never run it in the checkout a Principia is running
  * from: the build replaces out/, which that Principia loads its MCP servers and pages from. It refuses when it sees
@@ -20,6 +23,10 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const dryRun = args.includes('--dry-run')
+const ci = args.includes('--ci')
+// --ci: the workflow imported the certificate into a temporary keychain that lives for the whole job, and passes
+// its path as CSC_KEYCHAIN; every identity lookup and signature uses that keychain only
+const ciKeychain = ci ? process.env.CSC_KEYCHAIN?.trim() || null : null
 const notesIdx = args.indexOf('--notes')
 const notesFile = notesIdx >= 0 ? args[notesIdx + 1] : null
 const positional = args.filter((a, i) => !a.startsWith('--') && !(notesIdx >= 0 && i === notesIdx + 1))
@@ -37,6 +44,12 @@ const version = positional[0] ?? (dryRun ? pkg.version : null)
 if (!version) fail('Give the version to release, for example: npm run release:mac -- 0.2.0 (or --dry-run)')
 if (!SEMVER.test(version)) fail(`"${version}" is not a version like 1.2.3`)
 const tag = `v${version}`
+if (ci && dryRun) fail('--ci and --dry-run do not go together')
+if (ci) {
+  if (process.env.GITHUB_ACTIONS !== 'true') fail('--ci runs only in GitHub Actions (locally: npm run release:mac -- <version>)')
+  if (process.env.GITHUB_REF_TYPE !== 'tag' || process.env.GITHUB_REF_NAME !== tag) fail(`--ci releases only the pushed tag: this run is for ${process.env.GITHUB_REF_NAME ?? 'no ref'}, not ${tag}`)
+  if (!ciKeychain || !fs.existsSync(ciKeychain)) fail('--ci needs CSC_KEYCHAIN: the path of the temporary keychain holding the Developer ID certificate')
+}
 const outDir = path.join(root, 'release', version)
 const appPath = path.join(outDir, 'mac-arm64', 'Principia.app')
 const dmg = path.join(outDir, 'Principia-arm64.dmg')
@@ -53,8 +66,10 @@ function run(cmd, argv, o = {}) {
   const r = spawnSync(cmd, argv, { cwd: root, encoding: 'utf8', ...o })
   return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), status: r.status }
 }
+// notary key ID, issuer and profile name are credentials: shown as *** in the printed command
+const SECRET_FLAGS = new Set(['--key-id', '--issuer', '--keychain-profile'])
 function step(cmd, argv, o = {}) {
-  console.log(`\n$ ${[cmd, ...argv].join(' ')}`)
+  console.log(`\n$ ${[cmd, ...argv.map((a, i) => (SECRET_FLAGS.has(argv[i - 1]) ? '***' : a))].join(' ')}`)
   const r = spawnSync(cmd, argv, { cwd: root, stdio: 'inherit', ...o })
   if (r.status !== 0) fail(`${cmd} ${argv[0] ?? ''} failed (exit ${r.status})`)
 }
@@ -71,7 +86,7 @@ const check = (ok, good, bad, { blocking = true } = {}) => {
   return ok
 }
 
-console.log(`Principia ${version} for macOS (Apple Silicon)${dryRun ? ' · DRY RUN: ad-hoc signed, not notarized, not published' : ''}`)
+console.log(`Principia ${version} for macOS (Apple Silicon)${dryRun ? ' · DRY RUN: ad-hoc signed, not notarized, not published' : ''}${ci ? ' · GitHub Actions' : ''}`)
 console.log(`Release repository: ${repo}`)
 
 // ---------- 0. never in a checkout a Principia runs from ----------
@@ -105,13 +120,14 @@ if (!dryRun) {
 }
 check(pkg.dependencies?.['electron-updater'] != null, 'electron-updater is a dependency', 'electron-updater is missing from dependencies')
 
-// signing identity: Developer ID Application, from CSC_NAME / CSC_LINK or the login keychain
-const ids = run('security', ['find-identity', '-v', '-p', 'codesigning']).out.split('\n').filter((l) => l.includes('"Developer ID Application:'))
+// signing identity: Developer ID Application, from CSC_NAME / CSC_LINK or the login keychain (--ci: CSC_KEYCHAIN)
+const ids = run('security', ['find-identity', '-v', '-p', 'codesigning', ...(ciKeychain ? [ciKeychain] : [])]).out.split('\n').filter((l) => l.includes('"Developer ID Application:'))
 const cscName = process.env.CSC_NAME?.trim()
 let signHash = null
 if (process.env.CSC_LINK) {
   // electron-builder would import the .p12 into a temporary keychain that is gone before the dmg is signed
-  check(false, '', 'CSC_LINK is not used by release:mac: import the certificate into the login keychain (RELEASING.md §3.1)', { blocking: !dryRun })
+  // (CI imports it itself, into a keychain that outlives this script: CSC_KEYCHAIN)
+  check(false, '', `CSC_LINK is not used by release:mac: ${ci ? 'the workflow imports the certificate and sets CSC_KEYCHAIN' : 'import the certificate into the login keychain (RELEASING.md §3.1)'}`, { blocking: !dryRun })
 } else if (cscName) {
   const hit = ids.find((l) => l.includes(`"Developer ID Application: ${cscName}"`))
   signHash = hit ? /\b([0-9A-F]{40})\b/.exec(hit)?.[1] ?? null : null
@@ -120,6 +136,7 @@ if (process.env.CSC_LINK) {
   if (ids.length === 1) signHash = /\b([0-9A-F]{40})\b/.exec(ids[0])?.[1] ?? null
   check(ids.length === 1, 'one Developer ID Application certificate in the keychain', ids.length ? `${ids.length} Developer ID Application certificates: set CSC_NAME to the one to use` : 'no Developer ID Application certificate in the keychain (RELEASING.md §3.1)', { blocking: !dryRun })
 }
+const keychainArgs = ciKeychain ? ['--keychain', ciKeychain] : []
 
 // notary credentials: an App Store Connect API key, or a notarytool keychain profile
 const apiVars = ['APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']
@@ -166,6 +183,8 @@ if (dryRun) {
 } else {
   // a release is never unsigned: fail instead of skipping when the identity is not found
   builderArgs.push('-c.forceCodeSigning=true')
+  // CI: electron-builder looks only in CSC_KEYCHAIN (inherited) and signs with the exact identity checked above
+  if (ci && signHash) env.CSC_NAME = signHash
 }
 step('npx', builderArgs, { env })
 
@@ -174,7 +193,7 @@ for (const f of [appPath, dmg, zip, latestYml]) if (!fs.existsSync(f)) fail(`mis
 if (dryRun) {
   step('codesign', ['--force', '--sign', '-', dmg])
 } else {
-  step('codesign', ['--force', '--timestamp', '--sign', signHash ?? `Developer ID Application: ${cscName}`, dmg])
+  step('codesign', ['--force', '--timestamp', ...keychainArgs, '--sign', signHash ?? `Developer ID Application: ${cscName}`, dmg])
   step('xcrun', ['notarytool', 'submit', dmg, '--wait', ...notaryArgs])
   step('xcrun', ['stapler', 'staple', dmg])
 }

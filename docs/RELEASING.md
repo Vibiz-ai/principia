@@ -3,7 +3,8 @@
 How a Mac download gets from this repository to people's Macs: signed with our Developer ID, notarized by Apple
 (so it opens with no Gatekeeper warning), published as a GitHub release, and picked up by the app's updater.
 
-Once the one-time setup (§3) is done, a release is one command (§5).
+Once the one-time setup (§3) is done, a release is one command on your Mac (§5.1) or one tag pushed to GitHub
+(§5.2).
 
 ## 1. What a release is
 
@@ -123,6 +124,10 @@ the first signed release on. Updates are off in development builds and in test i
 
 ## 5. Releasing
 
+There are two ways to run the same release script, `scripts/release-mac.mjs`. Both publish exactly the same files.
+
+### 5.1 From your Mac
+
 Run it in a **separate checkout**, never the folder your own Principia runs from: the build replaces `out/`, which
 a running Principia loads its pages and MCP servers from. The script refuses when it sees a Principia running from
 the folder. Use a clean clone of the public repository, so the release matches the published source:
@@ -158,6 +163,54 @@ What it does, stopping at the first problem (nothing is published unless every s
 
 Notarization usually takes a few minutes per file.
 
+### 5.2 From GitHub (push a tag)
+
+`.github/workflows/release.yml` runs the script on a GitHub-hosted Apple Silicon Mac when a `v*` tag is pushed. The
+job uses the `release` environment: it waits until the release approver approves it, and that environment's secrets
+exist only for this job. The certificate is imported into a temporary keychain made for the job (random password), the
+API key is written to the runner's temp folder with `chmod 600`, and both are deleted at the end even if a step fails.
+In this mode (`--ci`) the script releases only the pushed tag and signs only with the identity in that temporary
+keychain.
+
+**Once: add the secrets** to Settings › Environments › `release` › Environment secrets (never as repository secrets):
+
+| Secret | Value |
+| --- | --- |
+| `MAC_CERT_P12_BASE64` | the Developer ID Application certificate with its private key, as a .p12, base64-encoded |
+| `MAC_CERT_PASSWORD` | the password you gave the .p12 when exporting it |
+| `APPLE_API_KEY_P8` | the whole text of `AuthKey_<KEY ID>.p8` (§3.2), including the BEGIN/END lines |
+| `APPLE_API_KEY_ID` | the key's Key ID |
+| `APPLE_API_ISSUER` | the Issuer ID |
+
+To make the .p12 (on the Mac that holds the certificate, §3.1):
+
+1. Keychain Access › login › **My Certificates**. Expand `Developer ID Application: <Team name> (<TEAM ID>)` and check
+   it shows its private key.
+2. Select the certificate (not the key alone), right-click › **Export…**, format **Personal Information Exchange
+   (.p12)**, and give it a long random password. That password is `MAC_CERT_PASSWORD`.
+3. Store it as a secret straight from the file, without it ever touching the clipboard or a repository, then delete the
+   file:
+
+   ```sh
+   base64 -i ~/Desktop/principia-developer-id.p12 | gh secret set MAC_CERT_P12_BASE64 --env release --repo example-org/principia
+   gh secret set MAC_CERT_PASSWORD --env release --repo example-org/principia          # paste the password when asked
+   gh secret set APPLE_API_KEY_P8 --env release --repo example-org/principia < ~/.appstoreconnect/private_keys/AuthKey_<KEY ID>.p8
+   gh secret set APPLE_API_KEY_ID --env release --repo example-org/principia
+   gh secret set APPLE_API_ISSUER --env release --repo example-org/principia
+   rm -P ~/Desktop/principia-developer-id.p12
+   ```
+
+**Each release:** from an up-to-date `main` of the public repository, tag the commit and push the tag:
+
+```sh
+git checkout main && git pull
+git tag v0.2.1 && git push origin v0.2.1
+```
+
+Then open Actions › **release**, check the run is for the tag you meant, and **Approve and deploy**. The log shows the
+same preflight, build, verification and publish steps as §5.1. Tags `v*` cannot be moved or deleted, so a failed run
+is fixed with a new version, not by re-tagging. The `cloud-images` workflow publishes the cloud image for the same tag.
+
 ## 6. Dry run (no certificate needed)
 
 ```sh
@@ -187,6 +240,9 @@ deploy it. Later releases need nothing on the site: the button always points at
 `releases/latest/download/Principia-arm64.dmg`.
 
 ## 8. If something fails
+
+- **The release run fails at preflight with "no Developer ID Application certificate"**: the .p12 holds the
+  certificate without its private key, or it is a different certificate type. Export again (§5.2).
 
 - **"no Developer ID Application certificate"**: §3.1. The certificate needs its private key on this Mac; a
   certificate downloaded from the developer website without the key does not sign.
