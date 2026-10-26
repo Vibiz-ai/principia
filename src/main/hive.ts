@@ -864,8 +864,11 @@ export class Hive {
   }
 
   // ---------- quit (Cmd+Q, tray Quit, app:quit) ----------
-  /** before-quit: confirm if anything is running, then stop sessions + engine, then really quit. */
-  async requestQuit(): Promise<void> {
+  /**
+   * before-quit: confirm if anything is running, then stop sessions + engine, then really quit. `finish` replaces the
+   * final app.quit() (Restart to update: the updater's quitAndInstall, once windows may close).
+   */
+  async requestQuit(finish?: () => void): Promise<void> {
     if (this.shuttingDown || this.shutdownDone) return
     const nS = this.sessions.runningCount()
     const nR = this.store.listRuns({ status: ['queued', 'running'], limit: 1000 }).length
@@ -922,7 +925,7 @@ export class Hive {
     // Deferred: when requestQuit ran synchronously inside the first before-quit (nothing running, e.g. SIGTERM or
     // tray Quit), a nested app.quit() is overwritten by the outer, prevented quit and the app just hides instead of
     // exiting. A fresh task makes this a clean second quit. Hard exit if something still blocks it.
-    setImmediate(() => app.quit())
+    setImmediate(() => (finish ?? (() => app.quit()))())
     setTimeout(() => {
       log.warn('quit did not complete; forcing exit')
       app.exit(0)

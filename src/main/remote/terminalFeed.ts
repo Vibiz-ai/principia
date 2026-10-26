@@ -66,12 +66,16 @@ interface Feed {
   reducer: ChatReducer | null
   codex: CodexTranscript | null
   tailer: JsonlTailer | null
+  /** the transcript the tailer reads */
+  file: string | null
   pending: ChatOp[]
   timer: NodeJS.Timeout | null
   screen: string | null
   turn: ChatTurn
   activity: string | null
   idleSince: number
+  /** host.held() when the phones last took a view: the composer (held, canType) is part of that view only */
+  held: string | null
 }
 
 export interface TerminalFeedsDeps {
@@ -106,13 +110,15 @@ export class TerminalFeeds {
   open(s: Session, turn: ChatTurn, activity: string | null): { chat: ChatSnapshot; source: 'transcript' | 'screen' | null; screen: string | null } {
     let f = this.feeds.get(s.id)
     if (!f) {
-      f = { session: s, seq: 0, reducer: null, codex: null, tailer: null, pending: [], timer: null, screen: null, turn, activity, idleSince: this.now() }
+      f = { session: s, seq: 0, reducer: null, codex: null, tailer: null, file: null, pending: [], timer: null, screen: null, turn, activity, idleSince: this.now(), held: null }
       this.feeds.set(s.id, f)
     }
     f.session = s
     f.turn = turn
     f.activity = activity
     f.idleSince = this.now()
+    f.held = this.heldOf(s.id)
+    if (f.reducer) this.retarget(f)
     if (!f.reducer) this.attach(f)
     this.flush(f)
     if (!f.reducer) f.screen = this.screenOf(s.id)
@@ -156,13 +162,34 @@ export class TerminalFeeds {
     this.d.push(f.session.id, { t: 'chat', sessionId: f.session.id, seq: f.seq, ops: [] })
   }
 
-  private attach(f: Feed): void {
-    let ref: TranscriptRef | null = null
+  private lookup(f: Feed): TranscriptRef | null {
     try {
-      ref = this.d.host.transcript(f.session)
+      return this.d.host.transcript(f.session)
     } catch (e) {
       this.d.log?.warn('phone: transcript lookup failed', { error: String(e) })
+      return null
     }
+  }
+
+  /**
+   * The session now writes another transcript (Claude's /clear starts a new conversation file): the old tailer stops
+   * and the new one is read from its start. True when it moved; the caller has the phones take a fresh view.
+   */
+  private retarget(f: Feed): boolean {
+    const ref = this.lookup(f)
+    if (!ref || ref.file === f.file) return false
+    this.flush(f)
+    f.tailer?.close()
+    f.tailer = null
+    f.reducer = null
+    f.codex = null
+    f.file = null
+    this.attach(f, ref)
+    return true
+  }
+
+  private attach(f: Feed, known?: TranscriptRef): void {
+    const ref = known ?? this.lookup(f)
     if (!ref) return
     const reducer = new ChatReducer({ idPrefix: 'm' })
     const codex = ref.format === 'codex' ? new CodexTranscript() : null
@@ -180,6 +207,7 @@ export class TerminalFeeds {
     f.reducer = reducer
     f.codex = codex
     f.tailer = tailer
+    f.file = ref.file
     tailer.start()
     loading = false
   }
@@ -202,6 +230,14 @@ export class TerminalFeeds {
     this.d.push(f.session.id, { t: 'chat', sessionId: f.session.id, seq: f.seq, ops: redactDeep(coalesce(ops), (x) => this.d.host.redact(x)) })
   }
 
+  private heldOf(sessionId: Id): string | null {
+    try {
+      return this.d.host.held?.(sessionId) ?? null
+    } catch {
+      return null
+    }
+  }
+
   private screenOf(sessionId: Id): string | null {
     let t: string | null = null
     try {
@@ -214,7 +250,11 @@ export class TerminalFeeds {
     return this.d.host.redact(clipped)
   }
 
-  /** Once a second: feeds nobody looks at stop; a screen-only feed picks up its transcript or sends new lines. */
+  /**
+   * Once a second: feeds nobody looks at stop; a screen-only feed picks up its transcript or sends new lines; a
+   * change in why a message cannot go in (a Codex trust or approval menu answered on the Mac has no ask to say so)
+   * makes the phones take a fresh view, so Send follows.
+   */
   check(): void {
     const wanted = this.d.wanted()
     const now = this.now()
@@ -224,8 +264,15 @@ export class TerminalFeeds {
         this.close(f)
         continue
       }
+      const held = this.heldOf(f.session.id)
+      if (held !== f.held) {
+        f.held = held
+        this.flush(f)
+        this.refetch(f)
+      }
       if (f.reducer) {
-        f.tailer?.read()
+        if (this.retarget(f)) this.refetch(f)
+        else f.tailer?.read()
         continue
       }
       this.attach(f)
@@ -245,6 +292,7 @@ export class TerminalFeeds {
     // the tailer's last read may still queue ops: stop it first, then drop them
     f.tailer?.close()
     f.tailer = null
+    f.file = null
     if (f.timer) clearTimeout(f.timer)
     f.timer = null
     f.pending = []

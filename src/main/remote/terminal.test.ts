@@ -13,7 +13,7 @@ import type { PhoneServerMsg } from '@shared/remote'
 import type { Session } from '@shared/types'
 import { CodexTranscript, codexOutput, patchFiles } from './transcript'
 import { TerminalFeeds, terminalTurn, transcriptItems, type PhoneTerminalHost } from './terminalFeed'
-import { findCodexRollout } from './terminalHost'
+import { findCodexRollout, terminalHost } from './terminalHost'
 import { renderScreen } from '../live/screen'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -120,13 +120,14 @@ describe('TerminalFeeds (a terminal session shown live on the phone)', () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
   const sess = (x: Partial<Session> = {}): Session => ({ id: 'se_t', companyId: 'co_a', title: 'shop · Claude', adapter: 'claude', status: 'running', startedAt: '2026-10-26T10:00:00.000Z', endedAt: null, repoId: null, cwd: dir, agentSessionId: 'conv-1', ...x }) as unknown as Session
-  const host = (o: { file?: () => string | null; screen?: () => string | null } = {}): PhoneTerminalHost => ({
+  const host = (o: { file?: () => string | null; screen?: () => string | null; held?: () => string | null } = {}): PhoneTerminalHost => ({
     transcript: () => {
       const f = o.file?.() ?? null
       return f ? { file: f, format: 'claude' } : null
     },
     screen: () => o.screen?.() ?? null,
     type: () => undefined,
+    ...(o.held ? { held: o.held } : {}),
     redact
   })
   const feeds = (h: PhoneTerminalHost) => new TerminalFeeds({ host: h, push: (sid, m) => pushed.push({ sid, m }), wanted: () => wanted, now: () => now, tickMs: null, pollMs: 20 })
@@ -179,6 +180,51 @@ describe('TerminalFeeds (a terminal session shown live on the phone)', () => {
     f.dispose()
   })
 
+  it('/clear moves Claude to a new transcript: the feed follows it and every phone takes a fresh view', async () => {
+    let file = path.join(dir, 'conv-1.jsonl')
+    write(file, [claude.user('Fix the footer'), claude.say('msg_1', 'Looking at it.')])
+    const f = feeds(host({ file: () => file }))
+    expect(f.open(sess(), 'idle', null).chat.items.map((i) => i.kind)).toEqual(['user', 'text'])
+    wanted.add('se_t')
+    const old = file
+    file = path.join(dir, 'conv-2.jsonl')
+    write(file, [claude.user('Now the header')])
+    f.check()
+    expect(pushed.at(-1)!.m).toEqual({ t: 'chat', sessionId: 'se_t', seq: 2, ops: [] })
+    expect(f.open(sess(), 'idle', null)).toMatchObject({ source: 'transcript', chat: { seq: 2, items: [{ kind: 'user', text: 'Now the header' }] } })
+    // the old file is no longer read; the new one is, live
+    write(old, [claude.say('msg_old', 'stale')])
+    write(file, [claude.say('msg_2', 'On it.')])
+    f.check()
+    await sleep(200)
+    const last = JSON.stringify(pushed.filter((p) => p.m.t === 'chat').at(-1)!.m)
+    expect(last).toContain('On it.')
+    expect(JSON.stringify(pushed)).not.toContain('stale')
+    f.dispose()
+  })
+
+  it('a menu answered on the Mac (no ask says so) frees Send: a change in why it is held refetches the view', () => {
+    const file = path.join(dir, 'conv-1.jsonl')
+    write(file, [claude.user('hi')])
+    let held: string | null = 'It is showing a choice in the terminal. Answer it on your Mac first.'
+    const f = feeds(host({ file: () => file, held: () => held }))
+    f.open(sess({ adapter: 'codex' }), 'idle', null)
+    wanted.add('se_t')
+    f.check()
+    expect(pushed).toEqual([])
+    held = null
+    f.check()
+    expect(pushed.at(-1)!.m).toEqual({ t: 'chat', sessionId: 'se_t', seq: 2, ops: [] })
+    // the phone took the fresh view: nothing more until it changes again
+    f.open(sess({ adapter: 'codex' }), 'idle', null)
+    f.check()
+    expect(pushed.length).toBe(1)
+    held = 'It is showing a choice in the terminal. Answer it on your Mac first.'
+    f.check()
+    expect(pushed.at(-1)!.m).toMatchObject({ t: 'chat', seq: 4, ops: [] })
+    f.dispose()
+  })
+
   it('runs only while a phone looks (plus a grace), and an ended session sends a fresh view and stops', () => {
     const file = path.join(dir, 'conv-1.jsonl')
     write(file, [claude.user('hi')])
@@ -217,26 +263,59 @@ describe('the rollout of a Codex terminal', () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-codex-'))
   })
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
-  const rollout = (name: string, cwd: string, at: string) => {
+  const rollout = (name: string, cwd: string, at: string, id = `th_${name}`) => {
     const d = new Date(at)
     const day = path.join(home, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'))
     fs.mkdirSync(day, { recursive: true })
     const f = path.join(day, `rollout-${name}.jsonl`)
-    fs.writeFileSync(f, JSON.stringify(codex.meta(cwd, at)) + '\n')
+    const meta = codex.meta(cwd, at)
+    fs.writeFileSync(f, JSON.stringify({ ...meta, payload: { ...meta.payload, id } }) + '\n')
     return f
   }
+  const iso = (ms: number) => new Date(ms).toISOString()
   it('the earliest one begun in its folder at its start, not one taken by another session or begun before', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-cwd-'))
     const start = Date.now() - 60_000
-    const iso = (ms: number) => new Date(ms).toISOString()
     rollout('old', cwd, iso(start - 3_600_000))
     rollout('elsewhere', os.tmpdir(), iso(start + 1_000))
     const mine = rollout('mine', cwd, iso(start + 2_000))
     const later = rollout('later', cwd, iso(start + 30_000))
-    const s = { cwd, startedAt: iso(start), endedAt: null }
+    const s = { id: 's', cwd, startedAt: iso(start), endedAt: null }
     expect(findCodexRollout(home, s)).toBe(mine)
-    expect(findCodexRollout(home, s, new Set([mine]))).toBe(later)
+    expect(findCodexRollout(home, s, { sessions: [s, { ...s, id: 'other' }], claimed: new Map([[mine, 'other']]) })).toBe(later)
     expect(findCodexRollout(home, { ...s, cwd: path.join(cwd, 'nope') })).toBeNull()
+    fs.rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('two sessions started in one folder seconds apart each get their own, whichever the phone opens first', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-cwd-'))
+    const start = Date.now() - 60_000
+    const a = { id: 'a', adapter: 'codex', cwd, startedAt: iso(start), endedAt: null, agentSessionId: null } as unknown as Session
+    const b = { ...a, id: 'b', startedAt: iso(start + 5_000) } as Session
+    const ra = rollout('a', cwd, iso(start + 1_000))
+    const rb = rollout('b', cwd, iso(start + 6_000))
+    const all = [a, b]
+    expect(findCodexRollout(home, b, { sessions: all })).toBe(rb)
+    expect(findCodexRollout(home, a, { sessions: all })).toBe(ra)
+    for (const first of [b, a]) {
+      const host = terminalHost({ live: () => null, claudeFile: () => null, claudeRoots: () => [], codexHome: () => home, codexSessions: () => all, redact: (t) => t })
+      const second = first === a ? b : a
+      const want = (x: Session) => (x === a ? ra : rb)
+      expect(host.transcript(first)?.file).toBe(want(first))
+      expect(host.transcript(second)?.file).toBe(want(second))
+    }
+    fs.rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('a Codex chat keeps the rollout that carries its thread id, even when an earlier start would take it', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-cwd-'))
+    const start = Date.now() - 60_000
+    const chat = { id: 'chat', cwd, startedAt: iso(start - 2_000), endedAt: null, agentSessionId: 'th_chat' }
+    const term = { id: 'term', cwd, startedAt: iso(start), endedAt: null, agentSessionId: null }
+    const mine = rollout('term', cwd, iso(start + 1_000))
+    const chats = rollout('chat', cwd, iso(start + 4_000))
+    expect(findCodexRollout(home, term, { sessions: [chat, term] })).toBe(mine)
+    expect(findCodexRollout(home, chat, { sessions: [chat, term] })).toBe(chats)
     fs.rmSync(cwd, { recursive: true, force: true })
   })
 })

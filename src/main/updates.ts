@@ -42,6 +42,12 @@ export interface UpdateServiceOptions {
   work: () => WorkCounts
   emit: (s: UpdateState) => void
   log: EngineLogger
+  /**
+   * The app's normal quit (Hive.requestQuit: confirm if anything works, stop sessions and the engine, let windows
+   * close), which calls `install` instead of app.quit() once everything is down. Without it the native updater's
+   * window close is refused by the hide-to-menu-bar handler and Restart only hides Principia.
+   */
+  quit?: (install: () => void) => Promise<void>
   /** electron-updater, loaded only when updates are on */
   load?: () => Promise<Updater>
   now?: () => Date
@@ -97,7 +103,9 @@ export class UpdateService {
     if (blocked) return { restarting: false, reason: blocked }
     this.o.log.info('restarting to install update', { from: this.s.current, to: this.s.next })
     // isSilent false, forceRunAfter true: Squirrel.Mac relaunches Principia once the new version is in place
-    setImmediate(() => this.updater?.quitAndInstall(false, true))
+    const install = (): void => this.updater?.quitAndInstall(false, true)
+    if (this.o.quit) void this.o.quit(install).catch((e: unknown) => this.o.log.error('restart to update failed', { e: String(e) }))
+    else setImmediate(install)
     return { restarting: true }
   }
 
@@ -149,12 +157,17 @@ export class UpdateService {
   }
 
   private failed(e: unknown): void {
-    // a failure after the download finished does not take the ready update away; the error event and the rejected
-    // check report the same failure once
-    if (this.s.phase === 'ready' || this.s.phase === 'error') return
+    // the error event and the rejected check report the same failure once
+    if (this.s.phase === 'error') return
     const raw = e instanceof Error ? e.message : String(e)
-    this.o.log.warn('update check failed', { e: raw.split('\n')[0].slice(0, 300) })
-    this.set({ phase: 'error', error: plainUpdateError(raw), percent: null, checkedAt: this.now() })
+    // No check runs while an update is ready, so an error then is Squirrel.Mac failing to stage or validate the
+    // download (electron-updater reports update-downloaded before Squirrel takes it). Restart could not install
+    // it: leave 'ready' so the next check fetches it again.
+    const staging = this.s.phase === 'ready'
+    this.o.log.warn(staging ? 'update could not be staged' : 'update check failed', { e: raw.split('\n')[0].slice(0, 300) })
+    const plain = plainUpdateError(raw)
+    const error = staging && plain === plainUpdateError('') ? 'The update could not be prepared to install. Principia tries again later.' : plain
+    this.set({ phase: 'error', error, next: staging ? null : this.s.next, percent: null, checkedAt: this.now() })
   }
 
   private now(): string {
