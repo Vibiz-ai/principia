@@ -52,7 +52,7 @@ export const PRIMARY: readonly Door[] = [
 export const MORE_GROUPS: readonly MoreGroup[] = ['Automate', 'Work', 'Insight']
 
 export const MORE: readonly MoreItem[] = [
-  { key: 'automations', label: 'Automations', icon: 'refresh', group: 'Automate', desc: 'Autopilots, schedules, workflows and Slack triggers', defaultVisibility: 'hidden', aliases: ['schedules', 'workflows', 'autopilots', 'cron', 'triggers'], exact: ['automation', 'triggers'] },
+  { key: 'automations', label: 'Automations', icon: 'refresh', group: 'Automate', desc: 'Routines, autopilots, schedules, workflows and Slack triggers', defaultVisibility: 'hidden', aliases: ['schedules', 'workflows', 'autopilots', 'routines', 'cron', 'triggers'], exact: ['automation', 'triggers'] },
   { key: 'addons', label: 'Add-ons', icon: 'addons', group: 'Automate', desc: 'Workflows and skills to install', defaultVisibility: 'hidden', aliases: ['marketplace', 'skills', 'catalog'] },
   { key: 'files', label: 'Files', icon: 'file', group: 'Work', desc: 'Everything your agents saved', defaultVisibility: 'hidden', aliases: ['artifacts', 'outputs', 'documents'] },
   // pm-review C8: Forum is never pinned by default; it shows in PINNED while a thread has something for you
@@ -110,7 +110,7 @@ export function viewFor(key: DoorKey | MoreKey, nonce = Date.now()): ViewState {
     case 'knowledge':
       return { name: 'passport', nonce }
     case 'automations':
-      return { name: 'schedules', tab: 'autopilots', nonce }
+      return { name: 'schedules', tab: 'routines', nonce }
     case 'addons':
       return { name: 'marketplace' }
     case 'files':
@@ -362,6 +362,7 @@ export interface GoToEntry {
  * tab); the tab the deep links open too.
  */
 const AUTOMATION_TABS: readonly GoToEntry[] = [
+  { id: 'v:routines', label: 'Automations › Routines', hint: 'ready-made daily and weekly routines, one click to turn on', icon: 'refresh', keywords: 'routine routines daily weekly morning brief review triage digest', exact: ['routine', 'routines'], target: { view: { name: 'schedules', tab: 'routines' } } },
   { id: 'v:autopilots', label: 'Automations › Autopilots', hint: 'the company Autopilot switch and the autopilot recipes', icon: 'refresh', keywords: 'autopilot autopilots recurring automatic', exact: ['autopilot', 'autopilots'], target: { view: { name: 'schedules', tab: 'autopilots' } } },
   { id: 'v:schedules', label: 'Automations › Schedules', hint: 'what runs on a timer', icon: 'clock', keywords: 'schedule schedules cron timer recurring', exact: ['schedule', 'schedules', 'cron'], target: { view: { name: 'schedules', tab: 'schedules' } } },
   { id: 'v:workflows', label: 'Automations › Workflows', hint: 'multi-step agent workflows and scripts', icon: 'workflows', keywords: 'workflow workflows editor scripts', exact: ['workflow', 'workflows'], target: { view: { name: 'workflows' } } }

@@ -3,7 +3,9 @@
  * escapes every string). No vault actions here: wikilinks and tags show as plain chips, links open in the browser.
  */
 import { renderMarkdown, type Block, type Inline } from '../../lib/markdown'
-import { hive } from '../../lib/hive'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { DeepLinkButton } from '../DeepLinkButton'
+import { followLink } from '../../lib/inAppLink'
 
 export function MarkdownLite({ text }: { text: string }): React.JSX.Element {
   return (
@@ -89,6 +91,12 @@ function BlockLite({ b }: { b: Block }): React.JSX.Element {
   }
 }
 
+/** A principia:// link an agent handed out: plain words when the agent wrote the bare URL, else its own label. */
+function InAppLink({ href, c }: { href: string; c: Inline[] }): React.JSX.Element {
+  const bare = c.length === 1 && c[0]!.t === 'text' && c[0]!.v === href
+  return <DeepLinkButton href={href}>{bare ? undefined : <Inlines c={c} />}</DeepLinkButton>
+}
+
 function Inlines({ c }: { c: Inline[] }): React.JSX.Element {
   return (
     <>
@@ -131,13 +139,14 @@ function Inlines({ c }: { c: Inline[] }): React.JSX.Element {
               </span>
             )
           case 'url':
+            if (isDeepLinkUrl(n.href)) return <InAppLink key={i} href={n.href} c={n.c} />
             return (
               <a
                 key={i}
                 href={n.href}
                 onClick={(e) => {
                   e.preventDefault()
-                  if (/^https?:|^mailto:/i.test(n.href)) void hive.app.openExternal({ url: n.href })
+                  followLink(n.href)
                 }}
               >
                 <Inlines c={n.c} />

@@ -20,6 +20,12 @@ export function useForumBadge(companyId: string | null, enabled: boolean): numbe
   return useMemo(() => (channels ? unreadTotals(channels).mentions : 0), [channels])
 }
 
+/** New messages in the company's Forum rooms (agents talking among themselves counts): the sidebar shows Forum then. */
+export function useForumUnread(companyId: string | null): number {
+  const channels = useForum((s) => (companyId ? s.byCompany[companyId]?.state?.channels : undefined))
+  return useMemo(() => (channels ? unreadTotals(channels).unread : 0), [channels])
+}
+
 export function ForumSidebarSection({ companyId }: { companyId: string }): React.JSX.Element | null {
   const state = useForum((s) => s.byCompany[companyId]?.state ?? null)
   const view = useStore((s) => s.view)

@@ -66,6 +66,10 @@ export function deskThread(details: readonly TaskDetail[], o: { companyCreatedAt
         case 'paused':
           out.push({ ...base, kind: 'note', text: a.message })
           break
+        case 'handoff':
+          // the asker sees where their request went ("Handed off to Seneca · Operations: recurring reports are Ops'")
+          out.push({ ...base, kind: 'note', text: a.message })
+          break
         case 'parked':
           // waiting on dependencies heals by itself: not worth a line in a conversation
           if (!/dependenc/i.test(a.message)) out.push({ ...base, kind: 'note', text: a.message })
@@ -84,8 +88,10 @@ export function deskThread(details: readonly TaskDetail[], o: { companyCreatedAt
 
 /** The tasks a desk loads: the agent's, newest activity first, at most `limit`. */
 export function deskTasks(tasks: readonly CompanyTask[], agentId: string, companyId: string, limit = 15): CompanyTask[] {
+  // a request you made at this desk stays in its conversation after the agent hands it to a teammate
+  const askedHere = `${DESK_PREFIX}${agentId}:`
   return tasks
-    .filter((t) => t.agentId === agentId && t.companyId === companyId)
+    .filter((t) => t.companyId === companyId && (t.agentId === agentId || !!t.externalId?.startsWith(askedHere)))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     .slice(0, limit)
 }

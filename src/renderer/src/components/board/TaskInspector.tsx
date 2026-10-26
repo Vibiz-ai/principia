@@ -27,6 +27,7 @@ import { nativeMenu } from '../../lib/hive'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 import { LinearChip } from './LinearSheet'
 import { linearWorkLabel, startedInLinear } from '../../lib/linear'
+import { TextWithLinks } from '../DeepLinkButton'
 
 type TaskRun = Run & { taskId?: string | null }
 type TaskSession = Session & { taskId?: string | null }
@@ -146,7 +147,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
   const reviewFirst = task.status === 'in_review' && (actions.has('approve') || actions.has('sendBack'))
   const actionsPanel = (
       <section className="task-agent-panel board-actions"><div className="task-agent-heading"><Icon name="agents" size={16} /><h3>{agent ? agent.name : 'Agent'}</h3>{inFlight && <span className="task-live-dot" />}</div>
-        <p>{elsewhere ? `${linearWorkLabel(linear).replace(/^i/, 'I')} (${linear!.key}). Move it to Todo to run an agent here.` : inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? (prDecides ? 'The pull request decides: approved or merged on GitHub, this task moves to Done by itself. Or send it back with what to change.' : 'The agent finished. Approve it with a done note, or send it back with what to change.') : actions.has('run') ? (code ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : 'Start puts the agent on this task. Agents that act on their own start by themselves while Autopilot is on.') : runBlocked || 'Nothing to do here right now.'}</p>
+        <p>{elsewhere ? `${linearWorkLabel(linear).replace(/^i/, 'I')} (${linear!.key}). Move it to Todo to run an agent here.` : inFlight ? (liveSession ? 'Open in an interactive session. Submit or park it from the session.' : 'An agent is working on this task. Take over to continue it yourself in a session.') : task.status === 'in_review' ? (prDecides ? 'The pull request decides: approved or merged on GitHub, this task moves to Done by itself. Or send it back with what to change.' : 'The agent finished. Approve it with a done note, or send it back with what to change.') : actions.has('run') ? (task.status === 'todo' && company && !company.autopilot && !company.pausedAt ? `Autopilot is off in ${company.name}, so this waits for you: ${code ? 'Run now' : 'Start'} puts ${agent?.name ?? 'the agent'} on it. Turn Autopilot on in Automations and agents start their work by themselves.` : code ? 'Run now starts the agent on this task. With Autopilot on, auto agents start by themselves.' : 'Start puts the agent on this task. Agents that act on their own start by themselves while Autopilot is on.') : runBlocked || 'Nothing to do here right now.'}</p>
         {actions.has('run') && !branchLed && <Button icon="play" variant={task.status === 'in_review' || startOffered ? 'secondary' : 'primary'} disabled={busy || !!runBlocked} title={runBlocked} onClick={() => void mutate(() => hive.tasks.start({ id: task.id }), `Started ${code ? task.identifier : task.title}`)}>{code ? 'Run now' : 'Start'}</Button>}
         {code && actions.has('openSession') && !branchLed && <Button icon="terminal" disabled={busy || !!runBlocked} title={runBlocked} onClick={() => openSession(false)}>Open as session</Button>}
         {code && actions.has('takeover') && <Button icon="terminal" disabled={busy} onClick={() => openSession(true)}>Take over</Button>}
@@ -196,7 +197,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
       {!reviewFirst && actionsPanel}
 
       {task.report && <section className="board-section"><h3>Report <span className="board-muted">· {task.report.outcome === 'review' ? 'ready for review' : 'blocked'} · <RelativeTime iso={task.report.at} /></span></h3>
-        <TextWithDiagrams text={task.report.summary} renderText={(t) => <p className="selectable board-report">{t}</p>} />
+        <TextWithDiagrams text={task.report.summary} renderText={(t) => <p className="selectable board-report"><TextWithLinks text={t} /></p>} />
         {(task.report.evidence ?? []).length > 0 && <ul className="board-evidence">{(task.report.evidence ?? []).map((e, i) => <li key={i} className="selectable">{/^https?:\/\//.test(e) ? <button className="link-btn" onClick={() => void hive.app.openExternal({ url: e }).catch(() => undefined)}>{e}</button> : e}</li>)}</ul>}
       </section>}
 

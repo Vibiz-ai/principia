@@ -610,6 +610,8 @@ function VaultBanners({ status }: { status: VaultStatus }): React.JSX.Element | 
 const MIGRATION_SEEN_KEY = 'hive.passportMigrationSeen'
 const migrationHasWork = (r: VaultMigrationReport): boolean =>
   !r.alreadyMigrated && (r.totals.entityNotes + r.totals.observations + r.totals.historyLines + r.totals.proposals > 0 || r.companies.some((c) => c.hubNote || c.repoNotes > 0))
+/** Nothing from the old shared memory: only the company profiles (and repository notes) are left to write. */
+const profilesOnly = (r: VaultMigrationReport): boolean => r.totals.entityNotes + r.totals.observations + r.totals.historyLines + r.totals.proposals === 0
 const migrationSummary = (r: VaultMigrationReport): string =>
   `${r.totals.entityNotes} notes, ${r.totals.observations} facts, ${r.totals.historyLines} History lines and ${r.totals.proposals} items to review across ${r.companies.length} ${r.companies.length === 1 ? 'company' : 'companies'}`
 
@@ -671,9 +673,9 @@ function MigrationBanner(): React.JSX.Element | null {
   }
   return (
     <div className="pbanner pbanner--warn">
-      <span>Shared memory from before the Passport: {migrationSummary(plan)}. Move it into the company Passports? memory.db is backed up and never changed.</span>
+      <span>{profilesOnly(plan) ? `${plan.companies.length === 1 ? 'A company profile isn’t in its Passport' : `${plan.companies.length} company profiles aren’t in their Passports`} yet. Add ${plan.companies.length === 1 ? 'it' : 'them'} as notes your agents read? Nothing is deleted.` : `Shared memory from before the Passport: ${migrationSummary(plan)}. Move it into the company Passports? memory.db is backed up and never changed.`}</span>
       <Button size="sm" variant="primary" disabled={busy} onClick={() => void migrate()}>
-        {busy ? 'Moving…' : 'Move into Passports'}
+        {busy ? 'Adding…' : profilesOnly(plan) ? 'Add to Passports' : 'Move into Passports'}
       </Button>
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => setLater(true)}>
         Not now

@@ -56,6 +56,8 @@ export interface ForumAgentDeps {
   departmentOf?: (agentId: string) => string | null
   /** AGENT-COLLAB.md §3: team_activity, team_usage, team_board */
   team?: TeamTools | null
+  /** forum_reply `task`: files a person's message as a Board task for the replying agent (null when already filed) */
+  fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string } | null
   now?: () => Date
 }
 
@@ -270,7 +272,7 @@ export class ForumAgentApi {
     } catch {
       /* bookkeeping only */
     }
-    const woke = this.wakeMentions(c, me, m)
+    const woke = this.wakeMentions(c, me, m) + this.fileFromReply(c, me, t, seq!, a.task?.title)
     if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
       try {
         this.d.answerAsk(t.root.id, me.id, a.text, m.id)
@@ -280,6 +282,21 @@ export class ForumAgentApi {
       }
     }
     return `ok ${m.ref} ↳${t.root.ref}${woke}`
+  }
+
+  /** forum_reply `task`: only a person's message becomes a task, once, assigned to the agent who replied. */
+  private fileFromReply(c: ForumCaller, me: ForumMember, t: { root: ForumMessage; replies: ForumMessage[] }, seq: number, title: string | undefined): string {
+    if (!title) return ''
+    if (!this.d.fileTask) return ' · no Board here: the task was not filed'
+    const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
+    const author = from ? this.s.member(from.authorId) : null
+    if (!from || author?.kind !== 'human') return ' · only a person’s request becomes a task: not filed'
+    try {
+      const made = this.d.fileTask(c, me, from, title)
+      return made ? ` · filed ${made.identifier}` : ' · already on the Board'
+    } catch (e) {
+      return ` · task not filed: ${clip(e instanceof Error ? e.message : String(e), 160)}`
+    }
   }
 
   private async ask(c: ForumCaller, me: ForumMember, a: ForumArgs['forum_ask'], origin: string, opts: { signal?: AbortSignal; opKey?: string }): Promise<string> {

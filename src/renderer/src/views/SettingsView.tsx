@@ -27,7 +27,7 @@ import { UserPicker } from '../components/slack/bits'
 import { useScope } from '../components/CompanyChip'
 import { useIsCode } from '../components/desk/Desk'
 import { useDeskAgents } from '../state/desk'
-import { ConnectionsPage, type ConnectSheet } from '../components/connections/ConnectionsPage'
+import { ConnectionsPage } from '../components/connections/ConnectionsPage'
 import { DiskSection } from '../components/usage/DiskSection'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
 import { CompanyAvatar } from '../shell/CompanyRail'
@@ -45,7 +45,7 @@ import '../styles/settings5.css'
  */
 export { defaultSettingsSection } from '../lib/settingsModel'
 
-export function SettingsView({ section, nonce, connect }: { section?: SettingsSection; nonce?: number; connect?: ConnectSheet }): React.JSX.Element {
+export function SettingsView({ section, nonce, connect }: { section?: SettingsSection; nonce?: number; connect?: string }): React.JSX.Element {
   const { company, multi } = useScope()
   const companies = useStore((s) => s.companies)
   const inCompany = !!company

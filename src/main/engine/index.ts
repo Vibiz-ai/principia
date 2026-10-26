@@ -11,10 +11,10 @@ import { ADAPTER_IDS } from '../../shared/types'
 import { DEFAULT_ADAPTERS, type Adapter } from './adapters'
 import { Execution, ensureRunDirs } from './executor'
 import { StallMonitor, stallThresholdMs } from './live/stall'
-import { attachGateway } from '../gateway/attach'
-import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
-import { AUTHOR_TOOLS, authorAttachable } from './authoring'
-import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT } from '../../shared/chatCompany'
+import { attachGateway, GATEWAY_TOOLS } from '../gateway/attach'
+import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, codexSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
+import { AUTHOR_TOOLS, CODEX_AUTHOR_HINT, authorAttachable } from './authoring'
+import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT, CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { join } from 'node:path'
 import { LIVE_HOOKS } from './live/attach'
 import { listedHiveTools } from '../author/server/tools'
@@ -420,13 +420,33 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         const grant = opts.memory && opts.spawnTag ? { ...opts.memory, server: { ...opts.memory.server, env: { ...opts.memory.server.env, ...opts.spawnTag } } } : (opts.memory ?? null)
         let mcp: McpAttachment | null = null
         const memOk = !!grant && memoryTransport(profile.adapter) === 'mcp' && !!a.mcpAttach && grant.toolNames.length > 0
-        // AUTHORING.md §1.1 (PO1, PO7): the `hive` server, interactive claude only, in ONE per-spawn config with hivemem
+        // AUTHORING.md §1.1 (PO1, PO7): the `hive` server, interactive claude and codex panes, with hivemem (claude: ONE
+        // per-spawn config; codex: -c overrides)
         const author = opts.author && authorAttachable(profile.adapter, 'interactive') ? opts.author : null
         const authorSpec = author ? { ...author, env: { ...author.env, ...(opts.spawnTag ?? {}) } } : null
         const authorDir = opts.authorSpawnDir ?? opts.live?.dir ?? null
         let authored = false
         let memAttached = false
-        if (authorSpec && authorDir) {
+        // codex lists only the hive tools it may call without a prompt (claude prompts in the pane for the rest)
+        let codexHiveTools: string[] | null = null
+        if (authorSpec && profile.adapter === 'codex') {
+          try {
+            const allowed = new Set<string>(opts.authorTools?.length ? opts.authorTools : AUTHOR_TOOLS)
+            // "start a company from this chat" stays the codex button (CHAT_COMPANY_CODEX_HINT)
+            codexHiveTools = listedHiveTools(authorSpec.env ?? {}).filter((t) => allowed.has(t) && t !== CHAT_COMPANY_TOOL)
+            mcp = codexSessionMcpAttach([
+              ...(memOk ? [{ server: grant!.server, toolNames: grant!.toolNames }] : []),
+              // an authoring write waits for the founder's click on the card (up to 3300 s)
+              { server: authorSpec, toolNames: codexHiveTools, toolTimeoutSec: Math.ceil(Number(MCP_TOOL_TIMEOUT_MS) / 1000) }
+            ])
+            authored = codexHiveTools.length > 0
+            memAttached = memOk
+          } catch (e) {
+            ctx.log.warn('engine: codex session hive MCP attach failed; memory only', { error: String(e) })
+            mcp = null
+            codexHiveTools = null
+          }
+        } else if (authorSpec && authorDir) {
           try {
             const path = memOk ? join(grant!.spawnDir, `${grant!.grantId}.mcp.json`) : join(authorDir, 'hive.mcp.json')
             const tools = opts.authorTools?.length ? opts.authorTools : AUTHOR_TOOLS
@@ -452,14 +472,15 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
             mcp = null
           }
         }
+        let gatewayOn = false
         if (profile.adapter === 'claude' || profile.adapter === 'codex') {
           const gwCwd = opts.cwd ?? ctx.paths.scratchDir
           const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
-          if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) writeMcpFiles(mcp.files) }
+          if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) { writeMcpFiles(mcp.files); gatewayOn = true } }
         }
         // PROACTIVE.md §1: the "Use Principia" section, from the tools this pane really has (company panes only)
         const proactive = !!opts.companyId && ctx.getSettings().proactiveAgents !== false && (profile.adapter === 'claude' || profile.adapter === 'codex')
-        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? listedHiveTools(authorSpec.env ?? {}) : [])]
+        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? codexHiveTools ?? listedHiveTools(authorSpec.env ?? {}) : []), ...(gatewayOn ? GATEWAY_TOOLS : [])]
         // Settings → "Track work as tasks" (absent = when it helps)
         const track = ctx.getSettings().trackTasks ?? 'auto'
         const ops = proactive ? principiaOps({ tools: paneTools, kind: authorSpec?.env?.HIVE_TASK_ID ? 'task' : opts.chatBrief?.trim() ? 'chat' : 'session', track }) : ''
@@ -472,14 +493,16 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           // DEPARTMENTS.md §9: what this chat is told about the company's repos, departments, agents and tasks
           opts.chatBrief?.trim() ?? '',
           // shared/chatCompany.ts: "start a new company from this chat" (claude: the tool; codex: the button)
-          authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : '',
+          profile.adapter === 'codex' ? CHAT_COMPANY_CODEX_HINT : authored && (authorSpec?.env?.HIVE_TOOLSETS ?? '').split(',').includes('newco') ? CHAT_COMPANY_HINT : '',
+          // claude gets AUTHOR_HINT in --append-system-prompt; codex reads it here (developer_instructions)
+          profile.adapter === 'codex' && codexHiveTools?.some((t) => t.startsWith('hive_workflow')) ? CODEX_AUTHOR_HINT : '',
           ops
         ].filter(Boolean).join('\n\n'))
         // Live hooks (LIVE.md §3.2, §3.5): observational only for interactive panes (A1: no gate). No ask_user (A2).
         let hookArgs: string[] = []
         const env: Record<string, string> = { ...(mcp?.env ?? {}) }
-        // A5 for panes: an authoring write waits for the user's click (up to 3300 s); per spawn only
-        if (authored) env.MCP_TOOL_TIMEOUT = MCP_TOOL_TIMEOUT_MS
+        // A5 for panes: an authoring write waits for the user's click (up to 3300 s); per spawn only (codex: tool_timeout_sec)
+        if (authored && profile.adapter === 'claude') env.MCP_TOOL_TIMEOUT = MCP_TOOL_TIMEOUT_MS
         if (opts.live && a.hooksAttach && LIVE_HOOKS[profile.adapter]) {
           try {
             const gm = profile.adapter === 'gemini' && mcp && memOk && grant ? { server: grant.server, toolNames: grant.toolNames } : null
@@ -508,7 +531,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           ...(mcp ? { mcpArgs: mcp.args } : {}),
           ...(memoryBrief ? { memoryBrief } : {}),
           ...(hookArgs.length ? { hookArgs } : {}),
-          ...(authored ? { authorHint: true } : {}),
+          ...(authored && profile.adapter === 'claude' ? { authorHint: true } : {}),
           ...(opts.initialPrompt?.trim() ? { initialPrompt: opts.initialPrompt } : {}),
           ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {})
         })

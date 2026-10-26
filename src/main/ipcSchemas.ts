@@ -15,10 +15,12 @@ import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
 import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
 import { AGENT_STATUSES } from '../shared/live'
 import { USAGE_RANGES } from '../shared/usage'
+import { ROUTINE_IDS, type RoutineId } from '../shared/routines'
 import { PROPOSAL_KINDS, PROPOSAL_STATUSES } from '../shared/passport'
 import { BRIEF_MAX, GITHUB_FULL_NAME, LaunchInputSchema, MAX_ONBOARDING_PATHS, MAX_URL_LENGTH, ONBOARDING_KEY_NAMES, PlanInputSchema, SOFT_LAUNCH_STEPS } from '../shared/onboarding'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
+const routineRecord = z.object({ scheduleId: id, workflowId: id.nullable().optional(), onAt: z.string().max(40) }).strict()
 const none = z.unknown().transform(() => undefined)
 const adapter = z.enum(ADAPTER_IDS)
 const iso = z.string().min(1).max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'invalid date')
@@ -221,6 +223,14 @@ const settingsPatch = z
       .strict(),
     // AUTOPILOT.md §4: UI bookkeeping of what each autopilot created
     autopilots: z.record(id, z.object({ marketing: autopilotRecord, company: autopilotRecord }).partial().strict()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Automations › Routines: UI bookkeeping of what each routine's Turn on created
+    routines: z
+      .record(id, z.object(Object.fromEntries(ROUTINE_IDS.map((r) => [r, routineRecord])) as Record<RoutineId, typeof routineRecord>).partial().strict())
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
+    // Home suggestions dismissed for good, per company (UI state)
+    nudges: z
+      .record(id, z.record(z.string().regex(/^[a-z][a-z0-9:-]{0,80}$/), z.string().max(40)).refine((r) => Object.keys(r).length <= 100, 'Too many suggestions'))
+      .refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
     // PROACTIVE.md
     proactiveAgents: z.boolean(),
     trackTasks: z.enum(['off', 'auto', 'always']),

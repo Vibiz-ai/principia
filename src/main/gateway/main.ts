@@ -13,7 +13,8 @@ const request = async (body: unknown, signal?: AbortSignal): Promise<any> => {
 }
 serveStdio({
   serverInfo: { name: 'principia', version: '1.0.0' },
-  instructions: () => 'Company connections are managed by Principia. First discover tools with principia_list_tools, then invoke a discovered tool with principia_call_tool. Access is scoped to this working directory.',
+  instructions: () => 'Company connections are managed by Principia. First discover tools with principia_list_tools, then invoke a discovered tool with principia_call_tool. Access is scoped to this working directory. ' +
+    'A tool that is not listed is not connected for this company: say so plainly and give the founder its link, principia://connect/<tool> (for example principia://connect/stripe, or principia://connect/mcp for their own MCP server); it opens that card in Settings › Connections, where they sign in. Never ask for passwords or keys in the chat.',
   listTools: () => [
     { name: 'principia_list_tools', description: 'Discover the tools and input schemas from shared company connections granted to this project.', inputSchema: { type: 'object', properties: {} } },
     { name: 'principia_call_tool', description: 'Call a tool discovered using principia_list_tools. Use the exact connection id, tool name and argument schema returned.', inputSchema: { type: 'object', properties: { connection: { type: 'string' }, tool: { type: 'string' }, arguments: { type: 'object' } }, required: ['connection', 'tool', 'arguments'] } }

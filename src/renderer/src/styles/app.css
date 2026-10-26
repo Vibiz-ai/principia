@@ -786,3 +786,8 @@ button.pane__footer-item:hover { background: var(--row-hover); color: var(--text
   @keyframes ms-toast-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 }
 .pane__working { top: 27px; }
+
+/* principia:// links in agent text (chat, desk, Forum): an in-app button in white line art, never a web link */
+.dl-link, .dgm-md a.dl-link { display: inline-flex; align-items: center; gap: 5px; margin: 1px 2px; padding: 1px 8px; border: 1px solid rgba(255, 255, 255, 0.42); border-radius: 999px; color: var(--text-primary); background: rgba(255, 255, 255, 0.03); text-decoration: none; font-size: 0.95em; line-height: 1.5; cursor: pointer; white-space: nowrap; }
+.dl-link:hover, .dl-link:focus-visible { border-color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.07); }
+.dl-link__arrow { color: var(--text-tertiary); }

@@ -28,7 +28,8 @@ import { AuthorBroker } from './broker'
 import { ChatProposals } from '../company/chatProposals'
 import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
-import { SESSION_TASK_TOOLS } from '../company/taskToolDefs'
+import { CONNECTIONS_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
+import { connectionsReport } from '../company/connectionsReport'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
 import { NotifyNode } from '../notifyNode'
@@ -389,6 +390,14 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // shared/chatCompany.ts: the confirmation card behind principia_propose_company
     proposals: { propose: (sessionId, args, signal) => proposals.propose(sessionId, args, signal) },
+    // connections_list: the caller's own company (session, else its run), never the line's
+    connections: {
+      list: (owner, args, hints) => {
+        const companyId = 'sessionId' in owner ? sessionCompany(owner.sessionId) : h.store.getRun(owner.runId)?.companyId || PERSONAL_COMPANY_ID
+        if (hints.companyId && hints.companyId !== companyId) throw new Error('This tool server belongs to another company. Restart the session.')
+        return companyConnections(h, companyId, typeof args.tool === 'string' ? args.tool.slice(0, 60) : undefined) as unknown as Record<string, unknown>
+      }
+    },
     tasks: {
       resolve: (owner) => tasks.resolveCaller(owner),
       call: (caller, tool, args, hints) => tasks.call(caller as TaskCaller, tool, args, hints)
@@ -479,10 +488,33 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       // permission prompt (capped and deduplicated by the board); off, company_file_task waits for the pane's prompt.
       // company_create_department always does (a second yes).
       const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
-      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
+      // connections_list is read-only (what is connected, and where the founder connects the rest)
+      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
   }
+}
+
+/** What one company has connected, and the principia://connect link for the rest (connections_list, the gateway's errors). */
+export function companyConnections(h: Pick<Hive, 'company' | 'gateway' | 'slack' | 'linear'>, companyId: Id, tool?: string): ReturnType<typeof connectionsReport> {
+  const c = h.company.scope.get(companyId)
+  let slack: 'connected' | 'set-up' | 'none' | 'unavailable' = 'unavailable'
+  try {
+    const st = h.slack?.status().state
+    slack = !h.slack ? 'unavailable' : st === 'connected' ? 'connected' : st && st !== 'disabled' ? 'set-up' : 'none'
+  } catch {
+    /* Slack unknown: left out */
+  }
+  let linear = false
+  try {
+    linear = !!h.linear?.status(companyId).connected
+  } catch {
+    /* not connected */
+  }
+  return connectionsReport(
+    { companyId, companyName: c?.name ?? 'This company', personal: c?.system === 'personal', accounts: c?.accounts, gateway: h.gateway?.list() ?? [], slack, linear, code: (c?.repoIds?.length ?? 0) > 0 },
+    tool ? { tool } : {}
+  )
 }
 
 /** PROACTIVE.md §2: Settings → "Agents use Principia on their own". Absent = on. */

@@ -106,7 +106,7 @@ export function InstagramSheet({ company, writer, onClose }: { company: CompanyP
         <p className="s5-sheet__p text-tertiary">
           Have your own Meta app?{' '}
           <button type="button" className="link-btn" onClick={() => (onClose(), void navigate({ name: 'settings', section: 'keys', nonce: Date.now() }))}>
-            Add its INSTAGRAM_ACCESS_TOKEN in Keys &amp; secrets
+            Add its access token in Keys &amp; secrets (named INSTAGRAM_ACCESS_TOKEN)
           </button>{' '}
           and agents can post through it.
         </p>

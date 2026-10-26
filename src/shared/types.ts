@@ -596,6 +596,16 @@ export interface Settings {
    */
   autopilots?: Record<Id, import('./autopilot').CompanyAutopilots>
   /**
+   * Automations › Routines: per company, the schedule (and workflow) each routine's "Turn on" created, so Turn off
+   * removes exactly those. UI bookkeeping: main never reads it to decide anything. Absent = none.
+   */
+  routines?: Record<Id, import('./routines').CompanyRoutines>
+  /**
+   * Home suggestions (lib/nudges.ts): per company, the suggestions the person dismissed for good, by id, with when.
+   * UI state only. Absent = none.
+   */
+  nudges?: Record<Id, Record<string, string>>
+  /**
    * PROACTIVE.md: agents and chats use Principia on their own (track and file tasks, read and write memory, ask
    * teammates) without being asked. Off: the passive wording, and filing waits for a yes. Absent = true.
    */

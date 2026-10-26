@@ -29,7 +29,7 @@ import { HiveError } from '../../shared/errors'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
-import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, CONNECTIONS_TOOL, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
 import { CRITERION_STATES, EDITABLE_SECTIONS, PROOF_KINDS, briefOf, proofOf } from '../../shared/plans'
 import { BriefStore, briefReminder, checkProofRef, decide, editSection, setCriterion } from './brief'
 export { callTaskTool, isTaskTool, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS, type TaskTool } from './taskToolDefs'
@@ -201,15 +201,17 @@ export class TaskTools {
   // ---------- engine side (TaskRunBridge.toolset, onStepOutput) ----------
 
   /**
-   * §6: the toolset of one headless step of a task run (claude only: Codex, Gemini and Cursor get the prompt and the
-   * fenced report). The env only decides what hivemem lists; the broker resolves every call from the step's live dir.
+   * §6: the toolset of one headless step of a task run (claude, codex; gemini behind MCP_VERIFIED; Cursor has no
+   * per-run MCP flag and keeps the prompt and the fenced report). The env only decides what hivemem lists; the broker resolves every call from the step's live dir.
    */
   toolset(req: Parameters<NonNullable<TaskRunBridge['toolset']>>[0]): TaskToolset | null {
-    if (req.adapter !== 'claude' || !this.d.enabled()) return null
+    // claude and codex (MCP verified); gemini once its MCP attach is verified (the executor checks MCP_VERIFIED too)
+    if ((req.adapter !== 'claude' && req.adapter !== 'codex' && req.adapter !== 'gemini') || !this.d.enabled()) return null
     let t: BoardTask
     try { t = this.c.task(req.taskId) } catch { return null }
     if (req.companyId && req.companyId !== t.companyId) return null
-    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS] }
+    // connections_list rides on the same server: where the founder connects a tool this task needs
+    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS, CONNECTIONS_TOOL] }
   }
   /** EngineContext.onStepOutput (hive.stepOutputHooks): the fenced report of a passed step (§4.5). */
   harvest(e: HarvestStep): TaskReport | null {

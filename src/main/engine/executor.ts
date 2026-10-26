@@ -3,7 +3,7 @@
  * SPEC 7.3 + A3 (resume on retry), A4 (check loop body + gating), A5 (rooms), A7 (ARTIFACTS_DIR), A8 (headless).
  * AUTHORING.md §5 (stop-if), §6 (worktree per run + PO5 push guard), §7 (wait, notify).
  */
-import { attachGateway } from '../gateway/attach'
+import { attachGateway, GATEWAY_TOOLS } from '../gateway/attach'
 import { attachForum } from '../forum/attach'
 import { principiaOps } from '../company/principiaOps'
 import { isHarnessAuthFailure } from './harnessFailure'
@@ -542,8 +542,12 @@ export class Execution {
    * §6: the hivetask toolset rides on the step's hivemem server (env + allowed tool names), for claude steps of a task
    * run. Main's factory decides the tools; null or a failure = the step runs without them (fenced report fallback).
    */
-  private withTaskTools(grant: MemoryGrant, s: StepSpec, stepId: string): MemoryGrant {
-    if (!this.task || s.adapterId !== 'claude') return grant
+  /**
+   * DEPARTMENTS.md §6: the hivetask toolset on the step's hivemem server, for every CLI whose MCP attach is verified
+   * (claude, codex 0.163: MCP_VERIFIED). The live dir rides along: it is the broker's mailbox and the caller's identity.
+   */
+  private withTaskTools(grant: MemoryGrant, s: StepSpec, stepId: string, channel: StepLive['channel'] = null): MemoryGrant {
+    if (!this.task || !MCP_VERIFIED[s.adapterId] || !this.d.adapters[s.adapterId]?.mcpAttach) return grant
     let tools: TaskToolset | null = null
     try {
       tools = this.ctx.company?.tasks?.toolset?.({ runId: this.run.id, taskId: this.task.taskId, agentId: this.task.agentId, stepId, adapter: s.adapterId, companyId: this.run.companyId ?? null }) ?? null
@@ -551,7 +555,8 @@ export class Execution {
       this.ctx.log.warn('engine: task toolset failed; step runs without it', { runId: this.run.id, stepId, error: String(e) })
     }
     if (!tools?.toolNames.length) return grant
-    return { ...grant, server: { ...grant.server, env: { ...grant.server.env, ...tools.env } }, toolNames: [...new Set([...grant.toolNames, ...tools.toolNames])] }
+    // the live dir is the mailbox (hivemem lists the task tools only with one; the fenced report stays the fallback)
+    return { ...grant, server: { ...grant.server, env: { ...grant.server.env, ...(channel?.mcpEnv ?? {}), ...tools.env } }, toolNames: [...new Set([...grant.toolNames, ...tools.toolNames])] }
   }
 
   /** FORUM.md §3: Forum access for a step of a run with an agent seat; none, or a failure, = no Forum. */
@@ -806,7 +811,8 @@ export class Execution {
       const adapter = this.d.adapters[s.adapterId]
       const info = this.d.provider(s.adapterId)
       const stepId = newId('step')
-      const hasLive = s.adapterId === 'claude' || s.adapterId === 'gemini' || s.adapterId === 'cursor' || (s.adapterId === 'codex' && this.slackToolsWanted())
+      // codex: a live dir when it gets Hive tools through it (Slack, or a board task's task tools: the broker's mailbox)
+      const hasLive = s.adapterId === 'claude' || s.adapterId === 'gemini' || s.adapterId === 'cursor' || (s.adapterId === 'codex' && (this.slackToolsWanted() || (!!this.task && MCP_VERIFIED.codex)))
       const runnable = info.available && !!info.binPath
       // F1: the step's root agent (and, for agent CLIs, its live channel for hooks / ask_user)
       live = new StepLive({
@@ -843,16 +849,14 @@ export class Execution {
       forum = runnable && s.adapterId !== 'shell' ? this.openForum(s, stepId) : null
       const forumPrompt = forum?.prompt && !s.resumeId ? `${forum.prompt}\n\n${companyPrompt}` : companyPrompt
       const briefed = mem && !s.resumeId ? withBrief(agentBrief(mem.grant, !!mem.attachment), forumPrompt) : forumPrompt
-      // PROACTIVE.md §1: a board task turn ends with the "Use Principia" section, from the tools this step really has;
-      // a resumed turn (its conversation already holds the section) gets a one-line reminder
-      const prompt = this.withOps(s, briefed, [...(mem?.attachment ? (mem.servers ?? []).flatMap((x) => x.toolNames) : []), ...(forum?.server ? forum.toolNames : [])])
       // SLACK.md §9.4 / SA2: the `hive` server with only the slack toolset, in ONE --mcp-config next to hivemem
       if (runnable && (s.adapterId === 'claude' || s.adapterId === 'codex') && this.slackToolsWanted()) {
         slackMcp = this.attachSlackTools(s.adapterId, stepId, mem, live)
       }
+      let gatewayOn = false
       if (runnable && (!this.slackAccess() || this.slackAccess()?.fullPermissions) && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
         const gateway = this.run.companyId ? this.ctx.gateway?.attachment(s.cwd, this.run.companyId) : this.ctx.gateway?.attachment(s.cwd)
-        if (gateway) { slackMcp = attachGateway(s.adapterId, gateway, slackMcp ?? mem?.attachment ?? null, gateway.env.PRINCIPIA_GATEWAY_DIR); if (slackMcp) writeMcpFiles(slackMcp.files) }
+        if (gateway) { slackMcp = attachGateway(s.adapterId, gateway, slackMcp ?? mem?.attachment ?? null, gateway.env.PRINCIPIA_GATEWAY_DIR); if (slackMcp) { writeMcpFiles(slackMcp.files); gatewayOn = true } }
       }
       if (forum?.server && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
         try {
@@ -866,6 +870,13 @@ export class Execution {
           this.ctx.log.warn('engine: forum MCP attach failed; the step keeps the CLI and the fenced block', { stepId, error: String(e) })
         }
       }
+      // PROACTIVE.md §1: a board task turn ends with the "Use Principia" section, from the tools this step really has;
+      // a resumed turn (its conversation already holds the section) gets a one-line reminder
+      const prompt = this.withOps(s, briefed, [
+        ...(mem?.attachment ? (mem.servers ?? []).flatMap((x) => x.toolNames) : []),
+        ...(forum?.server ? forum.toolNames : []),
+        ...(gatewayOn ? GATEWAY_TOOLS : [])
+      ])
       const logDir = join(this.ctx.paths.runLogsDir, this.run.id)
       mkdirSync(logDir, { recursive: true })
       const logPath = join(logDir, `${stepId}.log`)
@@ -1200,7 +1211,9 @@ export class Execution {
     const channel = live?.channel ?? null
     const askUser = s.adapterId === 'claude' && !!channel && MCP_VERIFIED.claude && !!adapter.mcpAttach
     if (!bridge) return null
-    if (mode === 'off') return askUser ? this.openAskOnly(s, stepId, adapter, channel!) : null
+    // a task step of a CLI without ask_user (codex) still gets its task tools on an empty-memory hivemem
+    const taskOnly = !askUser && !!channel && !!this.task && MCP_VERIFIED[s.adapterId] && !!adapter.mcpAttach
+    if (mode === 'off') return askUser || taskOnly ? this.openAskOnly(s, stepId, adapter, channel!, { askUser }) : null
     const transport = memoryTransport(s.adapterId)
     if (!transport) return null
     const useMcp = transport === 'mcp' && !!adapter.mcpAttach
@@ -1229,10 +1242,10 @@ export class Execution {
       this.ctx.log.warn('engine: memory grant failed', { runId: this.run.id, nodeId: s.nodeId, error: String(e) })
       return null
     }
-    if (!grant) return askUser ? this.openAskOnly(s, stepId, adapter, channel!) : null
+    if (!grant) return askUser || taskOnly ? this.openAskOnly(s, stepId, adapter, channel!, { askUser }) : null
     // CONTRACT §13: the hivemem child the CLI starts carries the step's spawn tag too
     grant = { ...grant, server: { ...grant.server, env: { ...grant.server.env, ...(this.ctx.reaper?.tag(stepId) ?? {}) } } }
-    grant = this.withTaskTools(grant, s, stepId)
+    grant = this.withTaskTools(grant, s, stepId, channel)
     let attachment: McpAttachment | null = null
     let servers: OpenMemory['servers'] = []
     const withAsk = askUser && useMcp
@@ -1251,8 +1264,11 @@ export class Execution {
     return { grant, attachment, askUser: withAsk && !!attachment, askOnly: false, servers: attachment ? servers : [] }
   }
 
-  /** Memory off: hivemem with an empty grant, listing only ask_user (LIVE.md §4.2). No mem_grant row. */
-  private openAskOnly(s: StepSpec, stepId: string, adapter: Adapter, channel: NonNullable<StepLive['channel']>): OpenMemory | null {
+  /**
+   * Memory off: hivemem with an empty grant, listing only ask_user (LIVE.md §4.2) and, on a task step, the task tools.
+   * `askUser: false` (codex): the task tools only; nothing to attach without them. No mem_grant row.
+   */
+  private openAskOnly(s: StepSpec, stepId: string, adapter: Adapter, channel: NonNullable<StepLive['channel']>, o: { askUser: boolean } = { askUser: true }): OpenMemory | null {
     const server = (() => {
       try {
         return this.ctx.memory?.askOnlyServer?.() ?? null
@@ -1269,11 +1285,12 @@ export class Execution {
       toolNames: [],
       spawnDir: channel.dir,
       brief: ''
-    }, s, stepId)
+    }, s, stepId, channel)
+    if (!o.askUser && !grant.toolNames.length) return null
     try {
-      const attachment = adapter.mcpAttach!(grant, { askUser: true })
+      const attachment = adapter.mcpAttach!(grant, { askUser: o.askUser })
       writeMcpFiles(attachment.files)
-      return { grant, attachment, askUser: true, askOnly: true, servers: [{ server: grant.server, toolNames: [...grant.toolNames, 'ask_user'] }] }
+      return { grant, attachment, askUser: o.askUser, askOnly: true, servers: [{ server: grant.server, toolNames: o.askUser ? [...grant.toolNames, 'ask_user'] : [...grant.toolNames] }] }
     } catch (e) {
       this.ctx.log.warn('engine: ask_user attach failed', { stepId, error: String(e) })
       return null

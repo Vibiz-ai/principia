@@ -9,6 +9,9 @@ import type { Provenance } from '@shared/vault/grammar'
 import { Icon } from '../Icon'
 import { ProviderDot } from '../ui'
 import type { AdapterId } from '@shared/types'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { followLink } from '../../lib/inAppLink'
+import { DeepLinkButton } from '../DeepLinkButton'
 import { renderMarkdown, type Block, type Inline, type LinkResolver, type ListItem } from '../../lib/markdown'
 import { blockLink } from '../../lib/passport'
 import { hive } from '../../lib/hive'
@@ -278,6 +281,10 @@ function InlineView({ n, ctx }: { n: Inline; ctx: Ctx }): React.JSX.Element {
         </button>
       )
     case 'url':
+      if (isDeepLinkUrl(n.href)) {
+        const bare = n.c.length === 1 && n.c[0]!.t === 'text' && n.c[0]!.v === n.href
+        return <DeepLinkButton href={n.href}>{bare ? undefined : <Inlines c={n.c} ctx={ctx} />}</DeepLinkButton>
+      }
       return (
         <a
           className="preader__url"
@@ -285,7 +292,8 @@ function InlineView({ n, ctx }: { n: Inline; ctx: Ctx }): React.JSX.Element {
           onClick={(e) => {
             // web links open in the browser; never navigate the app window
             e.preventDefault()
-            if (/^https?:/i.test(n.href)) void hive.app.openExternal({ url: n.href }).catch(() => toast('Couldn’t open the link', 'error'))
+            if (isDeepLinkUrl(n.href)) followLink(n.href)
+            else if (/^https?:/i.test(n.href)) void hive.app.openExternal({ url: n.href }).catch(() => toast('Couldn’t open the link', 'error'))
           }}
         >
           <Inlines c={n.c} ctx={ctx} />

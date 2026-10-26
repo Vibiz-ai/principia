@@ -10,6 +10,8 @@ import { MemberAvatar } from './Avatar'
 import { useForumCtx } from './context'
 import { QUICK_REACTIONS, timeLabel, tokenize } from '../../lib/forum'
 import { hive } from '../../lib/hive'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { DeepLinkButton } from '../DeepLinkButton'
 import { useStore } from '../../state/store'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 
@@ -34,6 +36,7 @@ function RichTextPlain({ text, from }: { text: string; from?: ForumMessage }): R
           case 'bold':
             return <strong key={i}>{t.v}</strong>
           case 'url':
+            if (isDeepLinkUrl(t.v)) return <DeepLinkButton key={i} href={t.v} />
             return (
               <a key={i} className="fm-link" href={t.v} onClick={(e) => (e.preventDefault(), void hive.app.openExternal({ url: t.v }))}>
                 {t.v.replace(/^https?:\/\//, '')}

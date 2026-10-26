@@ -222,6 +222,26 @@ export type BoardTool = TaskTool | SessionTaskTool | CompanyTool
 export const isBoardTool = (name: string): name is BoardTool => isTaskTool(name) || isSessionTaskTool(name) || isCompanyTool(name)
 export const COMPANY_LIMITS = { reason: 500 } as const
 
+// ---------- where to connect a tool (principia://connect links) ----------
+
+/**
+ * `connections_list`: what this company has connected, and the principia://connect/<tool> link for each tool it has not
+ * (the link opens that card in Settings › Connections). Read-only; listed on the `hive` server of company sessions and
+ * on a task run's hivemem server. Served by the broker from the caller's own company (the live dir's owner).
+ */
+export const CONNECTIONS_TOOL = 'connections_list' as const
+export type ConnectionsTool = typeof CONNECTIONS_TOOL
+export const isConnectionsTool = (name: string): name is ConnectionsTool => name === CONNECTIONS_TOOL
+export const CONNECTIONS_TOOL_DEF: ToolDef = {
+  name: CONNECTIONS_TOOL,
+  description:
+    "Which tools this company has connected (Instagram, GitHub, Linear, Slack, Stripe, Notion, the founder's own MCP servers, …) and, for each one that is not, the principia://connect/<tool> link that opens its card in Settings › Connections. Pass `tool` to ask about one.",
+  inputSchema: { type: 'object', properties: { tool: { type: 'string', maxLength: 60, description: "One tool's id or name (stripe, Notion, instagram, mcp)" } }, additionalProperties: false },
+  annotations: { readOnlyHint: true }
+}
+export const CONNECTIONS_SERVER_INSTRUCTIONS =
+  'Connections: when a tool or service you need is missing or not connected, say so plainly and give the founder its exact link, principia://connect/<tool> (it opens that card in Settings › Connections; principia://connect/mcp adds their own MCP server). connections_list shows what is connected and the link for each tool that is not. Never ask for passwords or keys in the chat.'
+
 /** The passive wording (Settings → "Agents use Principia on their own" off): file only after a yes. */
 export const COMPANY_SERVER_INSTRUCTIONS =
   "Principia company tools: company_departments lists this company's departments (charter, agents, open work). company_file_task files a task into one department. company_create_department adds a department (only when the user asks for it or agrees). " +
@@ -311,7 +331,7 @@ export interface TaskCallScope {
 /** One hivetask tools/call through the live-dir mailbox. */
 export async function callTaskTool(
   liveDir: string,
-  tool: BoardTool,
+  tool: BoardTool | ConnectionsTool,
   rawArgs: unknown,
   ctx: Partial<CallContext> = {},
   scope: TaskCallScope = {},

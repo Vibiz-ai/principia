@@ -72,6 +72,10 @@ describe('Connections catalog: one state per card, a connected tool once', () =>
     expect(connectionState(conn({ authStatus: 'connecting' }))).toEqual({ state: 'waiting', chip: 'Waiting for sign-in' })
     expect(connectionState(conn({ authStatus: 'error' }))).toEqual({ state: 'attention', chip: 'Needs attention' })
     expect(connectionState(conn({ enabled: false }))).toEqual({ state: 'off', chip: 'Turned off' })
+    // the Vibiz card seeded at install, never signed in: a plain Sign in among the tools, not a problem at the top
+    const vibiz = buildCatalog(base({ connections: [conn({ id: 'vibiz', name: 'Vibiz', url: 'https://www.vibiz.ai/api/mcp', authentication: 'oauth', authStatus: 'disconnected' })] })).find((c) => c.id === 'vibiz')!
+    expect(vibiz).toMatchObject({ state: 'notConnected', chip: 'Not signed in', actionLabel: 'Sign in' })
+    expect(vibiz.group).not.toBe('attention')
   })
   it('Linear is one card for sync and the agent tool', () => {
     const synced = buildCatalog(base({ linear: { connected: true, teamKey: 'LED', problem: null }, connections: [conn({ id: 'lin', name: 'Linear', url: 'https://mcp.linear.app/mcp' })] }))

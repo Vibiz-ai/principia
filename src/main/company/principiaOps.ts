@@ -80,7 +80,7 @@ const RULES: readonly Rule[] = [
   {
     needs: [['task_create']],
     kinds: ['task'],
-    text: 'Work with separate parts: split it with task_create (subtasks; blocksCurrent when you need the result first).'
+    text: 'Work with separate parts: split it with task_create (subtasks; blocksCurrent when you need the result first). Follow-up work you notice but should not do now: task_create it rather than only naming it in your report.'
   },
   {
     needs: [['task_handoff', 'forum_ask_agent']],
@@ -101,12 +101,23 @@ const RULES: readonly Rule[] = [
   {
     needs: [['hive_workflow_create']],
     kinds: CHATS,
-    text: 'Recurring needs ("every Monday", "keep an eye on"): propose a scheduled workflow with hive_workflow_create (schedule); the founder approves the card.'
+    text: 'Recurring needs ("every Monday"): if a ready-made routine fits (morning-brief, weekly-review, inbox-triage, social-drafts), give its link (principia://automations/routines?add=morning-brief, plus &at=6:30&days=tue-sun for another time: they press Turn on or Save); else propose one with hive_workflow_create (schedule).'
+  },
+  // connections (principia://connect links): what is missing, said plainly, with the link that fixes it
+  {
+    needs: [['connections_list']],
+    kinds: ALL,
+    text: 'When a tool or service would help but is not connected (Instagram, Stripe, a CRM, their own MCP server), say so in plain words and give the founder its link from connections_list, like principia://connect/stripe: it opens that card in Settings › Connections, where they sign in. Never ask for passwords or keys in the chat.'
+  },
+  {
+    needs: [['principia_list_tools']],
+    kinds: ALL,
+    text: "The company's connected tools (Notion, Stripe, …) are behind principia_list_tools / principia_call_tool: list them when one could help."
   },
   {
     needs: [['task_report']],
     kinds: ['task'],
-    text: 'A recurring need you notice: say so in task_report so the founder can schedule it.'
+    text: 'A recurring need you notice: say so in task_report so the founder can schedule it, with the routine link when one fits (principia://automations/routines?add=weekly-review).'
   }
 ]
 
@@ -117,6 +128,7 @@ const HEAD: Record<OpsKind, string> = {
 }
 const TAIL = [
   'Metrics questions: use the "Department dashboards" numbers above with their date; never invent numbers.',
+  'To point the founder at a page, write its principia:// link (principia://board?task=NC-12, principia://settings/keys); it opens there in Principia.',
   'Ask the founder first before anything that costs money, publishes or sends outside the company, deletes data, or creates a company or department.'
 ]
 const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier (like NC-12) in your answer. The founder\'s explicit wishes override these defaults.'
@@ -127,7 +139,7 @@ export function principiaOps(input: OpsInput): string {
   const track = input.track ?? 'auto'
   const rules = RULES.filter((r) => r.kinds.includes(input.kind) && (!r.track || r.track.includes(track)) && r.needs.every((g) => g.some((t) => have.has(t))))
   if (!rules.length) return ''
-  const tail = input.kind === 'task' ? [TAIL[0]!, TAIL[1]!.replace('Ask the founder first', 'task_ask the founder first')] : TAIL
+  const tail = input.kind === 'task' ? [TAIL[0]!, TAIL[1]!, TAIL[2]!.replace('Ask the founder first', 'task_ask the founder first')] : TAIL
   return [OPS_TITLE, `${HEAD[input.kind]} ${input.kind === 'task' ? '' : VOICE}`.trim(), ...[...rules.map((r) => r.text), ...tail].map((t) => `- ${t}`)].join('\n')
 }
 

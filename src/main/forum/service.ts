@@ -149,7 +149,8 @@ export class ForumService implements ForumBridge {
       seatLabel: (memberId) => {
         const m = this.store.member(memberId)
         return m?.agentId ? (d.company?.seatLabel(m.agentId) ?? null) : null
-      }
+      },
+      fileTask: d.tasks ? (c, me, from, title) => this.fileFromReply(c.companyId, me, from, title) : undefined
     })
     this.http = new ForumHttpServer({ call: (token, tool, args, signal) => this.httpCall(token, tool, args, signal) })
   }
@@ -514,6 +515,29 @@ export class ForumService implements ForumBridge {
       agentId: agentId ?? mentionedSeat
     })
     this.store.systemPost(msg.channelId, `${by.name} made ${t.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
+    return t
+  }
+
+  /** messages an agent already filed as a task (forum_reply `task`): one task per message */
+  private readonly filed = new Map<string, string>()
+  /** forum_reply `task`: the person's message as a Board task for the agent who replied (like Make task). */
+  private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string } | null {
+    if (msg.companyId !== companyId || me.companyId !== companyId) fail('That message is not in your company')
+    if (this.filed.has(msg.id)) return null
+    const tasks = this.d.tasks ?? fail('The board is not available')
+    const ch = this.store.channel(msg.channelId)
+    const where = ch.name ? `#${ch.name}` : 'a direct message'
+    const author = this.store.member(msg.authorId)
+    const t = tasks!.create({
+      companyId,
+      title: clip(title.trim(), 120),
+      description: `${msg.text}\n\nFrom the Forum: ${where}, ${author?.name ?? 'someone'} (${msg.ref}). ${me.name} filed it when asked.`,
+      departmentId: ch.departmentId,
+      agentId: me.agentId ?? null
+    })
+    this.filed.set(msg.id, t.id)
+    if (this.filed.size > 2000) for (const k of [...this.filed.keys()].slice(0, 1000)) this.filed.delete(k)
+    this.store.systemPost(msg.channelId, `${me.name} made ${t.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
     return t
   }
 

@@ -27,6 +27,13 @@ describe('deskThread: the conversation from the agent’s tasks', () => {
     expect(items[4]).toMatchObject({ kind: 'agent', text: 'Here is the decaf post, in full.', card: 'review' })
     expect(lastLine(items, () => '')).toBe('Here is the decaf post, in full.')
   })
+  it('a request you made here and the agent handed to a teammate stays in this conversation, with where it went', () => {
+    const handed = task({ id: 'h', title: 'Set up a morning brief', externalId: 'desk:a:9', agentId: 'b', status: 'in_progress' })
+    expect(deskTasks([handed, task({ id: 'x', agentId: 'b' })], 'a', 'co').map((t) => t.id)).toEqual(['h'])
+    const d: TaskDetail = { task: handed, activity: [act('h', 'created', 'c', 'human', '2026-10-26T10:00:00.000Z'), act('h', 'handoff', 'Handed off to Seneca · Operations: recurring reports are Ops', 'agent', '2026-10-26T10:03:00.000Z')] }
+    const items = deskThread([d], { agentName: 'Marcus' })
+    expect(items.at(-1)).toMatchObject({ kind: 'note', text: 'Handed off to Seneca · Operations: recurring reports are Ops' })
+  })
   it('a task back in review without a written report still gets its draft card, before later comments', () => {
     const d: TaskDetail = {
       task: task({ id: 'd', externalId: 'desk:a:1', description: 'x', status: 'in_review', createdAt: '2026-10-26T10:00:00.000Z', updatedAt: '2026-10-26T11:00:00.000Z' }),

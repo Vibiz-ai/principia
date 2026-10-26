@@ -22,6 +22,7 @@ import { AgentBust, agentLabel, agentNameNow, useAgentName } from '../shell/Depa
 import { LatinLine, MosaicEmpty } from '../components/roman'
 import { latinLine, useCopy, useTone } from '../lib/voice'
 import '../styles/board.css'
+import { TextWithLinks } from '../components/DeepLinkButton'
 
 /**
  * DEPARTMENTS.md §9: the company Board (TasksView re-exports it). With experimental.departments off it renders
@@ -381,7 +382,7 @@ function LegacyTaskInspector({ id, tasks, companies, onClose, onSaved }: { id: s
     {error && <div className="company-error" role="alert">{error}</div>}
     {!task ? <Loading label="Loading task…" /> : <div className="task-inspector-scroll">
       <div className="task-detail-company"><Icon name="passport" size={12} />{companies.find((c) => c.id === task.companyId)?.name}</div>
-      <h2>{task.title}</h2><p className="task-description selectable">{task.description || 'No description yet. Add the outcome and acceptance criteria in Edit task.'}</p>
+      <h2>{task.title}</h2><p className="task-description selectable">{task.description ? <TextWithLinks text={task.description} /> : 'No description yet. Add the outcome and acceptance criteria in Edit task.'}</p>
       <div className="task-properties">
         <label><span>Status</span><div><TaskStatusIcon status={task.status} /><select aria-label="Task status" disabled={busy || task.status === 'in_progress'} value={task.status} onChange={(e) => void mutate(() => hive.tasks.update({ id, patch: { status: e.target.value as TaskStatus } }))}>{TASK_STATUSES.filter((s) => s !== 'in_progress' || task.status === 'in_progress').map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select></div></label>
         <label><span>Priority</span><div><TaskPriority priority={task.priority} /><select aria-label="Task priority" value={task.priority} disabled={busy || task.status === 'in_progress'} onChange={(e) => void mutate(() => hive.tasks.update({ id, patch: { priority: Number(e.target.value) as CompanyTaskInput['priority'] } }))}>{PRIORITIES.map((p, i) => <option key={p} value={i}>{p}</option>)}</select></div></label>
@@ -396,7 +397,7 @@ function LegacyTaskInspector({ id, tasks, companies, onClose, onSaved }: { id: s
         {task.status !== 'in_progress' && <><select aria-label="Agent for task" value={profileId || task.assigneeProfileId || ''} disabled={busy} onChange={(e) => setProfileId(e.target.value)}><option value="">Default available agent</option>{activeProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><Button icon="play" variant="primary" disabled={busy || !!runDisabledReason} title={runDisabledReason} onClick={() => void mutate(() => hive.tasks.start({ id, profileId: profileId || task.assigneeProfileId || activeProfiles[0]?.id }))}>{busy ? 'Starting…' : task.runId ? 'Run again' : 'Run agent'}</Button>{runDisabledReason && <small>{runDisabledReason}</small>}</>}
         {task.runId && <Button icon="external" onClick={() => void navigate({ name: 'run', runId: task.runId! })}>Open agent run</Button>}
       </section>
-      <section className="task-detail-section task-activity"><h3>Activity</h3>{detail.activity.map((a) => <div key={a.id} className="task-activity-item"><span className="task-activity-dot" /><div><p className="selectable">{a.message}</p><time dateTime={a.createdAt}>{relative(a.createdAt)}</time></div></div>)}
+      <section className="task-detail-section task-activity"><h3>Activity</h3>{detail.activity.map((a) => <div key={a.id} className="task-activity-item"><span className="task-activity-dot" /><div><p className="selectable"><TextWithLinks text={a.message} /></p><time dateTime={a.createdAt}>{relative(a.createdAt)}</time></div></div>)}
         <form onSubmit={(e) => { e.preventDefault(); if (comment.trim()) void mutate(async () => { await hive.tasks.comment({ id, message: comment.trim() }); setComment('') }) }}><textarea aria-label="Add task comment" placeholder="Add a note or decision…" value={comment} onChange={(e) => setComment(e.target.value)} rows={3} maxLength={8000} /><Button type="submit" disabled={busy || !comment.trim()}>Add comment</Button></form>
       </section>
     </div>}

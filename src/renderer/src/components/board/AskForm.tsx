@@ -6,6 +6,7 @@ import { errorMessage, hive } from '../../lib/hive'
 import { toast, useStore } from '../../state/store'
 import { reposOf } from '../../lib/companyModel'
 import '../../styles/board.css'
+import { TextWithLinks } from '../DeepLinkButton'
 
 /**
  * DEPARTMENTS.md §5 board ask: the answer form of a blocked(needs_input) task, in the inspector and inline in Needs
@@ -39,7 +40,7 @@ export function AskForm({ task, compact = false, onAnswered, mixedCompany }: { t
   const options = ask.kind === 'confirm' ? ['Yes', 'No'] : ask.kind === 'choice' ? (ask.options ?? []) : []
   return <form className={`ask-form ${compact ? 'ask-form--compact' : ''}`} onSubmit={(e) => { e.preventDefault(); void send(text) }} onClick={(e) => e.stopPropagation()} aria-label={`Answer ${task.identifier}`}>
     {!compact && <div className="ask-form__label">The agent asks</div>}
-    <p className="ask-form__prompt selectable">{ask.prompt}</p>
+    <p className="ask-form__prompt selectable"><TextWithLinks text={ask.prompt} /></p>
     {options.length > 0 && <div className="ask-form__options" role="group" aria-label="Answers">{options.map((o) => <Button key={o} size="sm" disabled={busy} onClick={() => void send(o)}>{mixedCompany !== undefined ? mixedListLabel(o, mixedCompany, { prompt: ask.prompt, others }) : o}</Button>)}</div>}
     {ask.kind !== 'confirm' && <div className="ask-form__row">
       <textarea aria-label={`Your answer to ${task.identifier}`} rows={compact ? 1 : 2} maxLength={8000} placeholder={ask.kind === 'choice' ? 'Or write another answer…' : 'Your answer…'} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(text) } }} />

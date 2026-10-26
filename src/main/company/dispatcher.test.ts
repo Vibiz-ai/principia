@@ -219,6 +219,22 @@ describe('DEPARTMENTS.md §3.5-3.6: coalesced wakes, follow-ups, guards', () => 
     expect(prompt).toContain('Use the new logo')
     expect(prompt).toContain('Answer: The second one')
   })
+  it('autopilot off and a manual seat: the founder answering a question is their go-ahead, so the same agent resumes', async () => {
+    const { task } = board({ autopilot: false, autonomy: 'manual' })
+    const t = task()
+    d.runNow(t.id)
+    c.patchInFlight(t.id, { ask: { kind: 'question', prompt: 'Which headline?' } })
+    end(started[0].run.id, 'passed')
+    await settle()
+    expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'needs_input' })
+    // a plain todo task of the same seat still waits for a Start
+    const other = task({ title: 'Other' })
+    c.answer(t.id, 'The second one')
+    await settle()
+    expect(c.task(t.id).status).toBe('in_progress')
+    expect(runsOf(t.id)).toHaveLength(2)
+    expect(c.task(other.id).status).toBe('todo')
+  })
   it('an unclosed stop parks and is not re-woken after 10 ticks', async () => {
     const { task } = board()
     const passed = task({ title: 'Passed silently' })

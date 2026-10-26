@@ -7,6 +7,8 @@
  *    Assign, all in place), cloud asks and leftover processes. It absorbs the old Agents hub and NeedsYouTasks.
  * 3. Working now: one row per working agent (useWorking), Open opens that exact chat, Pause this task (C9).
  * 4. The Setup chip, with only the steps that fit this company ("Setup 4 of 6").
+ * Under the Ask box, at most one suggestion (NudgeCard, lib/nudges.ts): a routine to turn on, a tool an agent needed,
+ * what the team finished this week. Each can be dismissed for good.
  * 5. This week: three tiles (C10): tasks done, drafts approved (pull requests in a code company), plan use, which
  *    Claude doesn't report yet, so it says so (never a fake number).
  * All companies mode shows the Portfolio (App.tsx). The provider switcher left Home (design §5 #36): it lives in New
@@ -47,8 +49,10 @@ import { claudeSignedOut, useClaudeAuth } from '../state/claudeAuth'
 import { Icon } from '../components/Icon'
 import { FirstWeekCard, ThingsMovedCard } from '../components/home/FirstRunCards'
 import { useThingsMoved } from '../components/home/useThingsMoved'
+import { NudgeCard } from '../components/home/NudgeCard'
 import '../styles/board.css'
 import '../styles/desk.css'
+import { plainLinks } from '../components/DeepLinkButton'
 
 export function HomeView(): React.JSX.Element {
   useTick()
@@ -103,6 +107,8 @@ export function HomeView(): React.JSX.Element {
           {moved && <ThingsMovedCard />}
 
           {!firstWeek && <AskBox companyId={scope} />}
+
+          {!firstWeek && !personal && agentCount > 0 && <NudgeCard companyId={scope} />}
 
           {pausedAt && (
             <div className="banner banner--bar home__paused" role="status">
@@ -285,10 +291,10 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
   const desc =
     group === 'review'
       ? task.report?.summary
-        ? firstLine(task.report.summary, 160)
+        ? firstLine(plainLinks(task.report.summary), 160)
         : finishedLine(task.title)
       : reason === 'needs_input' && task.ask
-        ? task.ask.prompt
+        ? firstLine(plainLinks(task.ask.prompt), 200)
         : group === 'unassigned'
           ? `${task.title} has no agent yet`
           : `${task.title}: ${task.status === 'blocked' && task.blockReason ? BLOCK_REASON_TEXT[task.blockReason] : REASON_LABEL[reason]}`
@@ -304,7 +310,7 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
           {group === 'review' && <span className="home5-row__what"> · {code ? `${task.identifier} ` : ''}{task.title}</span>}
           {group !== 'review' && code && <span className="home5-row__what"> · {task.identifier}</span>}
         </div>
-        <div className="home5-row__desc selectable">{desc}</div>
+        {!(open && answerable) && <div className="home5-row__desc selectable">{desc}</div>}
         {open && group === 'review' && <DraftCard task={task} code={code} onHome />}
         {open && answerable && (
           <div className="home5-row__inline">

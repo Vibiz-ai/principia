@@ -667,11 +667,43 @@ describe('hive server attach: interactive claude only (PO1, PO7)', () => {
     expect(readFileSync(join(liveDir, 'claude-settings.json'), 'utf8')).not.toContain('--nudge')
   })
 
-  it('other adapters never get it, and neither do panes without a spawn dir', async () => {
+  it('codex panes get the same hive tools through -c overrides (pre-allowed ones only, with the Use Principia rules)', async () => {
     const ctx = setup()
     const engine = await engineFor(ctx)
-    const codex = engine.providers.interactiveSpawn(profile('p_codex', 'codex'), { artifactsDir: '/a/', author, live: { dir: ctx.root, hookCommand: 'h', mcpEnv: {} } })
-    expect(codex.args.join(' ')).not.toContain('hive')
+    const liveDir = join(ctx.root, 'live', 's_3')
+    mkdirSync(liveDir, { recursive: true })
+    const chatAuthor: McpServerSpec = { ...author, env: { ...author.env, HIVE_LIVE_DIR: liveDir, HIVE_TOOLSETS: 'author,task,company,newco', HIVE_COMPANY_ID: 'co_1' } }
+    const grant: MemoryGrant = { grantId: 'mgr_9', server: { name: 'hivemem', command: '/x/electron', args: ['/x/mcp-memory.js'], env: { HIVE_MEM_GRANT: 'mgr_9' } }, toolNames: ['memory_search', 'memory_write'], spawnDir: join(ctx.root, 'spawn'), brief: '' }
+    // the pre-allowed list a proactive chat gets (author/wire.ts tools): company_create_department is not in it
+    const allowed = [...AUTHOR_TOOLS, 'principia_propose_company', 'connections_list', 'task_get', 'task_list', 'task_create', 'task_update', 'task_comment', 'company_departments', 'company_file_task']
+    const spec = engine.providers.interactiveSpawn(profile('p_codex', 'codex'), { artifactsDir: '/a/', memory: grant, author: chatAuthor, authorTools: allowed, live: { dir: liveDir, hookCommand: 'h', mcpEnv: {} }, companyId: 'co_1', chatBrief: '## This chat: Acme' })
+    const args = spec.args.join(' ')
+    expect(args).toContain('mcp_servers.hive.command="/x/electron"')
+    expect(args).toContain(`mcp_servers.hive.env.HIVE_LIVE_DIR="${liveDir}"`)
+    expect(args).toContain('mcp_servers.hive.default_tools_approval_mode="approve"')
+    expect(args).toContain('mcp_servers.hive.tool_timeout_sec=3700')
+    expect(args).toContain('mcp_servers.hivemem.enabled_tools=["memory_search","memory_write"]')
+    const enabled = JSON.parse(/mcp_servers\.hive\.enabled_tools=(\[[^\]]*\])/.exec(args)![1]!) as string[]
+    for (const t of ['hive_workflow_create', 'task_create', 'task_update', 'company_file_task', 'connections_list']) expect(enabled).toContain(t)
+    // needs a yes (claude prompts in the pane): codex does not list it; the new-company card stays the codex button
+    expect(enabled).not.toContain('company_create_department')
+    expect(enabled).not.toContain('principia_propose_company')
+    const dev = spec.args[spec.args.indexOf('-c') + 1]!
+    expect(dev.startsWith('developer_instructions=')).toBe(true)
+    expect(dev).toContain(OPS_TITLE)
+    expect(dev).toContain('company_file_task')
+    expect(dev).toContain("hive server's tools")
+    expect(dev).toContain('principia://connect/stripe')
+    expect(spec.env?.MCP_TOOL_TIMEOUT).toBeUndefined()
+  })
+
+  it('gemini and cursor never get it, and neither do panes without a spawn dir', async () => {
+    const ctx = setup()
+    const engine = await engineFor(ctx)
+    for (const a of ['gemini', 'cursor'] as const) {
+      const spec = engine.providers.interactiveSpawn(profile(`p_${a}`, a), { artifactsDir: '/a/', author, live: { dir: ctx.root, hookCommand: 'h', mcpEnv: {} } })
+      expect(spec.args.join(' ')).not.toContain('mcp-hive')
+    }
     const noDir = engine.providers.interactiveSpawn(profile('p_claude', 'claude'), { artifactsDir: '/a/', author })
     expect(noDir.args).not.toContain('--mcp-config')
   })

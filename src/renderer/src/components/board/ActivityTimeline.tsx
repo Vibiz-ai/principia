@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { TaskActivity } from '@shared/company'
 import { ACTIVITY_LABEL, coalesceActivity } from '../../lib/board'
 import { relative } from '../../lib/time'
+import { TextWithLinks } from '../DeepLinkButton'
 
 const BY_LABEL = { human: 'You', agent: 'Agent', system: 'Principia' } as const
 
@@ -18,7 +19,7 @@ export function ActivityTimeline({ activity, plain = false }: { activity: TaskAc
       <span className="task-activity-dot" />
       <div>
         <div className="activity-timeline__head"><span className="activity-timeline__kind">{ACTIVITY_LABEL[a.kind] ?? a.kind}{a.count > 1 && <span className="activity-timeline__count"> ×{a.count}</span>}</span><span className="activity-timeline__by">{BY_LABEL[a.by] ?? a.by}</span></div>
-        <p className="selectable">{plain ? plainActivityLine(a.message) : a.message}</p>
+        <p className="selectable"><TextWithLinks text={plain ? plainActivityLine(a.message) : a.message} /></p>
         <time dateTime={a.createdAt}>{relative(a.createdAt)}</time>
       </div>
     </li>)}

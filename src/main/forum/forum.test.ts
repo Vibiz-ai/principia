@@ -484,6 +484,22 @@ describe('agent API (§4)', () => {
     expect(s.toTask(m.id, owner.id)).toEqual({ id: 'task_1', identifier: 'PRN-1' })
     expect(created.tasks).toEqual(['write the launch email'])
   })
+
+  it('forum_reply task: a person asked, so the agent files it once, for itself; an agent message never becomes a task', async () => {
+    const s = service()
+    s.store.sync(CO)
+    const owner = s.store.owner(CO)
+    const ch = s.store.channelByName(CO, 'marketing')!.id
+    const m = s.store.post(owner.id, { channelId: ch, text: '@marcus put a short changelog post on the board' })
+    const c = callerFor(s, 'agt_marcus')
+    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'On the Board now.', task: { title: 'Short changelog post' } })).toMatch(/ · filed PRN-1$/)
+    expect(created.tasks).toEqual(['Short changelog post'])
+    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'Again', task: { title: 'Short changelog post' } })).toMatch(/ · already on the Board$/)
+    expect(created.tasks).toHaveLength(1)
+    const mine = s.store.thread(m.id).replies.find((x) => x.text === 'On the Board now.')!
+    expect(await s.api.call(c, 'forum_reply', { to: mine.ref, text: 'x', task: { title: 'Self made' } })).toMatch(/only a person’s request becomes a task/)
+    expect(created.tasks).toHaveLength(1)
+  })
 })
 
 describe('engine bridge, HTTP, CLI and MCP (§3, §4.1)', () => {

@@ -18,6 +18,8 @@ import { ForumMosaic } from '../components/forum/ForumMosaic'
 import { groupMessages, parseSlash, presenceLine, sortChannels } from '../lib/forum'
 import { forumVisualizeAsk } from '@shared/diagram'
 import { confirmNative, hive, nativeMenu } from '../lib/hive'
+import { isDeepLinkUrl } from '@shared/deepLink'
+import { followLink } from '../lib/inAppLink'
 import { initForumEvents, loadChannel, loadForum, loadThread, markRead, post, setViewing, useForum } from '../state/forum'
 import { activeCompany, attempt, departmentsOn, enterCompany, navigate, openBoard, toast, useStore } from '../state/store'
 import '../styles/forum.css'
@@ -135,7 +137,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
         case 'run':
           return void navigate({ name: 'run', runId: ref.id })
         case 'url':
-          return void hive.app.openExternal({ url: ref.id })
+          return isDeepLinkUrl(ref.id) ? followLink(ref.id) : void hive.app.openExternal({ url: ref.id })
         case 'message': {
           const pool = [...Object.values(cf?.pages ?? {}).flatMap((p) => p.list), ...Object.values(cf?.threads ?? {}).flatMap((t) => [t.root, ...t.replies])]
           const m = pool.find((x) => x.ref === ref.id)

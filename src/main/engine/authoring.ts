@@ -104,12 +104,17 @@ export const AUTHOR_TOOLS = [
 ] as const
 
 /**
- * PO1 + PO7: interactive claude sessions only. Headless steps never get the `hive` server (a hostile PR diff fed to a
+ * PO1 + PO7: interactive claude and codex sessions only (codex 0.163 verified: -c mcp_servers overrides). Headless steps never get the `hive` server (a hostile PR diff fed to a
  * headless reviewer must not be one prompt injection away from proposing or running workflows), and the other CLIs get
  * no renderer until a spike proves their transport.
  */
 export const authorAttachable = (adapter: AdapterId, mode: 'interactive' | 'headless'): boolean =>
-  adapter === 'claude' && mode === 'interactive'
+  (adapter === 'claude' || adapter === 'codex') && mode === 'interactive'
+
+/** codex panes: AUTHOR_HINT in its own tool naming (`hive` server tools, no mcp__ prefix), inside developer_instructions. */
+export const CODEX_AUTHOR_HINT =
+  "You are running inside Principia. When the user asks for a workflow, automation, routine or schedule, build it with the hive server's tools (hive_workflow_schema, then hive_workflow_create) instead of describing steps for them to click; they approve the card in Principia."
+
 
 /** Appended to the interactive claude system prompt (new conversations only) when `hive` is attached. */
 export const AUTHOR_HINT =

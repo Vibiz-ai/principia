@@ -11,6 +11,10 @@ files:
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
+# principia:// links (src/main/deepLinks.ts): the packaged app registers itself; they only ever open a page
+protocols:
+  - name: Principia link
+    schemes: [principia]
 npmRebuild: false # @electron/rebuild already ran in postinstall
 extraResources:
   - from: resources

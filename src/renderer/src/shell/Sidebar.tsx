@@ -65,7 +65,7 @@ import {
 import { DepartmentIcon, agentNameNow } from './DepartmentGroup'
 import { CompanyHeader } from './CompanyHeader'
 import { CUSTOMIZE_EVENT, CustomizeSidebarSheet, openCustomizeSidebar } from './CustomizeSidebar'
-import { useForumBadge } from '../components/forum/SidebarSection'
+import { useForumBadge, useForumUnread } from '../components/forum/SidebarSection'
 import { useCloudBadge } from '../state/cloud'
 import { plansEnabled } from '@shared/plans'
 import { nativeMenu } from '../lib/hive'
@@ -120,6 +120,8 @@ export function Sidebar(): React.JSX.Element {
   const slackError = useSlack((s) => (s.available === false ? false : s.status?.state === 'error'))
   // FORUM.md §8: mentions and unread DMs of the focused company's Forum (its "Show when active" signal)
   const forumBadge = useForumBadge(mode === 'focused' ? active : null, departments)
+  // agents talking among themselves brings the Forum out of More (the count stays for what needs you)
+  const forumUnread = useForumUnread(mode === 'focused' ? active : null)
   // CLOUD.md §13.1: open cloud asks plus new passport facts; Cloud sync now lives in Settings
   const cloudBadge = useCloudBadge()
   const allNeedsOwners = useNeedsOwners()
@@ -215,7 +217,7 @@ export function Sidebar(): React.JSX.Element {
   const prefs = prefsFor(navPrefs, active, multi)
   const available = (k: MoreKey): boolean => (k === 'plans' ? plansOn && departments : true)
   const moreBadge = (k: MoreKey): number => (k === 'forum' ? forumBadge : k === 'slack' ? slackDrafts : 0)
-  const activeMore = useMemo(() => new Set<string>(MORE.filter((m) => moreBadge(m.key) > 0 || (m.key === 'slack' && slackError)).map((m) => m.key)), [forumBadge, slackDrafts, slackError])
+  const activeMore = useMemo(() => new Set<string>(MORE.filter((m) => moreBadge(m.key) > 0 || (m.key === 'slack' && slackError) || (m.key === 'forum' && forumUnread > 0)).map((m) => m.key)), [forumBadge, forumUnread, slackDrafts, slackError])
   const pins = pinnedRefs(prefs, { active: activeMore, available, department: (id) => allDepartments.some((d) => d.id === id && !d.archivedAt && (mode !== 'focused' || d.companyId === active)) })
   // the More row carries a dot when something in it wants you and is not already shown in PINNED
   const moreWants = [...activeMore].some((k) => !pins.includes(k))
@@ -750,7 +752,7 @@ function MorePopover({
           {g.items.map((m) => {
             const on = pinned(m.key)
             const n = badge(m.key)
-            const desc = m.key === 'slack' && slackHint ? 'Connect it in Settings › Connections' : m.key === 'forum' && !on ? 'Shows up when a thread needs you' : m.desc
+            const desc = m.key === 'slack' && slackHint ? 'Connect it in Settings › Connections' : m.key === 'forum' && !on ? 'Where your agents talk to each other; it shows in the sidebar when they do' : m.desc
             return (
               <div key={m.key} className={`more-pop__row ${current === m.key ? 'is-current' : ''}`}>
                 <button type="button" className="more-pop__open" onClick={() => onOpen(m.key)}>

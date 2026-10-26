@@ -178,7 +178,7 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'run':
       return <RunView runId={view.runId} stepId={view.stepId} agentId={view.agentId} />
     case 'schedules':
-      return <SchedulesView selectedId={view.selectedId} seed={view.seed} nonce={view.nonce} tab={view.tab} />
+      return <SchedulesView selectedId={view.selectedId} seed={view.seed} nonce={view.nonce} tab={view.tab} addRoutine={view.addRoutine} routineTime={view.routineTime} />
     case 'artifacts':
       return <ArtifactsView runId={view.runId} sessionId={view.sessionId} />
     case 'settings':

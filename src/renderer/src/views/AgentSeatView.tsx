@@ -22,7 +22,7 @@ import { personasOf } from '../lib/personaView'
 import { editedPersona, personaNameError, personasToFreeze } from '../lib/personaRename'
 import { useCopy, usePersonasOn } from '../lib/voice'
 import { PERSONA_LIMITS, type AgentPersona } from '@shared/personas'
-import { archiveCompanyAgent, attempt, companyAgentById, departmentById, getState, navigate, openBoard, openDepartment, refreshDepartments, setAgentPaused, setCompanyPaused, toast, useStore } from '../state/store'
+import { activeCompany, archiveCompanyAgent, attempt, companyAgentById, departmentById, getState, multiCompany, navigate, openAgentSeat, openBoard, openDepartment, refreshDepartments, setAgentPaused, setCompanyPaused, toast, useStore } from '../state/store'
 import { useCompanyShortName } from '../lib/company'
 import '../styles/departments.css'
 import '../styles/desk.css'
@@ -66,7 +66,22 @@ export function AgentSeatView({ id, focus = false, nonce }: { id: Id; focus?: bo
         <EmptyState icon="agents" text="This agent is gone or still loading." />
       </div>
     )
-  return <Desk key={agent.id} agent={agent} dep={dep} tab={tab} setTab={setTab} focus={focus} nonce={nonce} />
+  return <SeatInCompany agent={agent}>{<Desk key={agent.id} agent={agent} dep={dep} tab={tab} setTab={setTab} focus={focus} nonce={nonce} />}</SeatInCompany>
+}
+
+/** A seat opens only inside its own company: another company's agent (a stale link, a pasted id) shows where it works. */
+function SeatInCompany({ agent, children }: { agent: CompanyAgent; children: React.ReactNode }): React.JSX.Element {
+  const active = useStore((s) => (multiCompany(s) ? activeCompany(s) : null))
+  const owner = useStore((s) => s.companies.find((c) => c.id === agent.companyId)?.name ?? 'another company')
+  if (!active || active === 'all' || active === agent.companyId) return <>{children}</>
+  return (
+    <div className="view">
+      <Toolbar title="Agent" />
+      <EmptyState icon="agents" text={`This agent works for ${owner}, not this company.`}>
+        <Button size="sm" onClick={() => openAgentSeat(agent)}>Open in {owner}</Button>
+      </EmptyState>
+    </div>
+  )
 }
 
 function Desk({ agent, dep, tab, setTab, focus, nonce }: { agent: CompanyAgent; dep: ReturnType<typeof departmentById>; tab: DeskTab; setTab: (t: DeskTab) => void; focus: boolean; nonce?: number }): React.JSX.Element {
@@ -227,13 +242,47 @@ function Desk({ agent, dep, tab, setTab, focus, nonce }: { agent: CompanyAgent; 
   )
 }
 
+/**
+ * Which AI tool this agent works with (Claude, Codex, …): switching keeps its role, instructions, persona and history;
+ * only the next turn runs on the new tool. Tools that are not installed are listed but cannot be picked.
+ */
+function RunsOnPicker({ agent }: { agent: CompanyAgent }): React.JSX.Element {
+  const profiles = useStore((s) => s.profiles)
+  const providers = useStore((s) => s.providers)
+  const [busy, setBusy] = useState(false)
+  const choices = profiles.filter((p) => p.adapter !== 'shell')
+  const current = choices.find((p) => p.id === agent.refId)
+  const installed = (adapter: string): boolean => providers.find((x) => x.id === adapter)?.available !== false
+  const pick = async (refId: string): Promise<void> => {
+    const next = choices.find((p) => p.id === refId)
+    if (!next || refId === agent.refId) return
+    setBusy(true)
+    const ok = await attempt(() => hive.companyAgents.save({ id: agent.id, companyId: agent.companyId, departmentId: agent.departmentId, kind: agent.kind, refId, name: agent.name, data: {} }), 'Change AI tool')
+    setBusy(false)
+    if (ok) {
+      await refreshDepartments()
+      toast(`${agent.name} now works with ${next.name}. Its role, instructions and history stay.`)
+    }
+  }
+  return (
+    <select className="input input--sm" aria-label="AI tool this agent works with" value={current?.id ?? ''} disabled={busy} onChange={(e) => void pick(e.target.value)}>
+      {!current && <option value="">Pick an AI tool</option>}
+      {choices.map((p) => (
+        <option key={p.id} value={p.id} disabled={!installed(p.adapter)}>
+          {p.name}
+          {p.model ? ` · ${p.model}` : ''}
+          {installed(p.adapter) ? '' : ' (not installed)'}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 const LANE_WORDS: Record<string, string> = { inbox: 'To do', queued: 'To do', working: 'Working', needs_you: 'Needs you', done: 'Done' }
 
 /** Instructions tab: who it is (persona, About), what it is told, how it runs (Advanced), where it runs, Archive. */
 function Instructions({ agent, dep }: { agent: CompanyAgent; dep: ReturnType<typeof departmentById> }): React.JSX.Element {
   const who = useAgentName(agent)
-  const profiles = useStore((s) => s.profiles)
-  const profile = agent.kind === 'profile' ? profiles.find((p) => p.id === agent.refId) : undefined
   return (
     <div className="desk-instructions">
       {who.persona && <PersonaHeader key={`${agent.id}:${who.persona.name}:${who.persona.bio}`} agent={agent} persona={who.persona} color={dep?.color ?? null} />}
@@ -245,7 +294,7 @@ function Instructions({ agent, dep }: { agent: CompanyAgent; dep: ReturnType<typ
         </header>
         <div className="dep-passport">
           <Icon name={agent.kind === 'profile' ? 'agents' : 'workflows'} size={14} />
-          <span>{agent.kind === 'profile' ? (profile ? `${profile.name}${profile.model ? ` · ${profile.model}` : ''}` : 'Profile removed: pick another in a new seat') : 'Workflow'}</span>
+          {agent.kind === 'profile' ? <RunsOnPicker agent={agent} /> : <span>Workflow</span>}
           <span className="flex1" />
           {agent.kind === 'profile' ? (
             <Button size="sm" icon="external" onClick={() => void navigate({ name: 'settings', section: 'agents' })}>

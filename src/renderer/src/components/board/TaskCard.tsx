@@ -10,6 +10,7 @@ import { cardWorkLine, shortBranch } from '../../lib/boardFlow'
 import { workStarted } from '@shared/taskWork'
 import { LinearChip } from './LinearSheet'
 import { linearWorkLabel, startedInLinear } from '../../lib/linear'
+import { useStore } from '../../state/store'
 
 /**
  * DEPARTMENTS.md §9 kanban card: id, title, department colour bar, agent avatar, a lock for a dependency block and the
@@ -26,6 +27,9 @@ export function TaskCard({ task, department, agent, reason, chips = false, selec
   const who = useAgentName(agent)
   // pm-review C7: a company with no code never sees task codes, only titles
   const code = useIsCode(task.companyId)
+  // pm-review: an assigned task in To do with Autopilot off never starts by itself; the card says so
+  const company = useStore((s) => s.companies.find((c) => c.id === task.companyId))
+  const waits = task.status === 'todo' && !!task.agentId && !!company && !company.autopilot && !company.pausedAt && !agent?.pausedAt
   return <button
     type="button"
     className={`board-card ${selected ? 'is-selected' : ''} ${reason ? 'is-needs' : ''}`}
@@ -45,8 +49,9 @@ export function TaskCard({ task, department, agent, reason, chips = false, selec
       <span className={`board-card__agent ${agent?.pausedAt ? 'is-paused' : ''}`} title={agent ? `${agentLabel(who)}${agent.pausedAt ? ' (paused)' : ''}` : 'Unassigned'}>{agent ? <AgentBust agent={agent} color={department?.color ?? null} size={18} /> : <span className="task-unassigned">○</span>}</span>
     </span>
     <span className="board-card__title">{task.title}</span>
-    {(reason || department || task.status === 'in_progress') && <span className="board-card__meta">
+    {(reason || department || task.status === 'in_progress' || waits) && <span className="board-card__meta">
       {department && <span className="board-card__dep">{department.name}</span>}
+      {waits && <span className="board-muted" title={`Autopilot is off in ${company!.name}: open the task and press ${code ? 'Run now' : 'Start'}, or turn Autopilot on in Automations`}>Waits for {code ? 'Run now' : 'Start'}</span>}
       {task.status === 'in_progress' && !reason && (elsewhere ? <span className="board-muted">{linearWorkLabel(linear)}</span> : <span className="board-card__working"><span className="task-live-dot" /> working</span>)}
       {reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{noReport && reason === 'review' ? ' · no report' : ''}</span>}
     </span>}

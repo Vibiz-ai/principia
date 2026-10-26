@@ -72,8 +72,9 @@ function board(o: { name?: string; adapter?: 'claude' | 'codex' } = {}) {
   const task = (over: Partial<CompanyTaskInput> = {}) => c.createTask({ title: 'Launch post', description: 'Write the launch post', companyId: co.id, repoId: null, status: 'todo', priority: 3, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: marketing.id, agentId: writer.id, ...over })
   /** Run now on a task: its run and the live owner of its headless step. */
   const run = (taskId: string) => {
-    d.runNow(taskId)
-    const r = started[started.length - 1].run
+    // a handoff carries the work on by itself (startsWithoutAutopilot): then its run is already there
+    if (c.task(taskId).status !== 'in_progress') d.runNow(taskId)
+    const r = [...started].reverse().find(s => s.opts.taskId === taskId)!.run
     return { run: r, owner: { runId: r.id, stepId: `st_${r.id.replace(/_/g, '')}` } as LiveOwner }
   }
   return { co, marketing, dev, profile, writer, fixer, task, run }
@@ -118,8 +119,8 @@ describe('DEPARTMENTS.md §4.5 report harvest: the fenced principia-task-report 
     const b = board({ adapter: 'codex' })
     const t = b.task(), u = b.task({ title: 'Second' })
     const { run } = b.run(t.id)
-    // Codex gets no tools: the step's toolset is null, the footer asks for the fence
-    expect(tools.toolset({ runId: run.id, taskId: t.id, agentId: b.writer.id, stepId: 'st_1', adapter: 'codex', companyId: b.co.id })).toBeNull()
+    // Codex gets the task tools now; the fence stays the fallback (a turn that never called task_report)
+    expect(tools.toolset({ runId: run.id, taskId: t.id, agentId: b.writer.id, stepId: 'st_1', adapter: 'codex', companyId: b.co.id })?.toolNames).toContain('task_report')
     expect((started[0].target as { prompt: string }).prompt).toContain('principia-task-report')
     expect(tools.harvest({ runId: run.id, stepId: 'st_1', adapter: 'codex', status: 'passed', output: fence('{"outcome":"blocked","summary":"Need the brand guide sk-abcdefghij1234","evidence":[]}') })).toMatchObject({ outcome: 'blocked' })
     end(run.id, 'passed')
@@ -224,12 +225,16 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     expect(withTaskTools(base, { HIVE_TASK_ID: 'task_x' }).listTools().map(t => t.name)).not.toContain('task_get')
     expect(buildHandlers({ HIVE_TASK_ID: 'task_x', HIVE_LIVE_DIR: dir }).handlers.listTools().map(t => t.name)).toEqual(expect.arrayContaining(['ask_user', 'task_report']))
   })
-  it('the toolset is offered to claude steps of a task run only, and not with departments off', () => {
+  it('the toolset is offered to claude and codex steps of a task run (gemini once verified), never cursor, and not with departments off', () => {
     const b = board()
     const t = b.task()
     const req = { runId: 'r_1', taskId: t.id, agentId: b.writer.id, stepId: 's', adapter: 'claude' as const, companyId: b.co.id }
-    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS] })
-    expect(tools.toolset({ ...req, adapter: 'gemini' })).toBeNull()
+    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, 'connections_list'] })
+    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, 'connections_list'])
+    // gemini: offered here; the executor attaches it only once MCP_VERIFIED.gemini (untested: not installed)
+    expect(tools.toolset({ ...req, adapter: 'gemini' })).not.toBeNull()
+    expect(tools.toolset({ ...req, adapter: 'cursor' })).toBeNull()
+    expect(tools.toolset({ ...req, adapter: 'shell' })).toBeNull()
     expect(tools.toolset({ ...req, companyId: 'co_other' })).toBeNull()
     enabled = false
     expect(tools.toolset(req)).toBeNull()
@@ -365,8 +370,11 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
     expect(c.task(t.id).status).toBe('in_progress')
     end(run.id, 'passed')
     await settle()
-    expect(c.task(t.id)).toMatchObject({ status: 'todo', agentId: b.fixer.id, departmentId: b.dev.id, handoffs: 1, agentSessionId: null, report: null })
-    expect(c.task(t.id).pendingWake?.reasons.at(-1)).toContain('This is a code bug')
+    // the next seat carries the work on (a manual seat, autopilot off): the handoff is the same work, already under way
+    expect(c.task(t.id)).toMatchObject({ status: 'in_progress', agentId: b.fixer.id, departmentId: b.dev.id, handoffs: 1, agentSessionId: null, report: null })
+    expect(started.at(-1)!.opts).toMatchObject({ taskId: t.id, agentId: b.fixer.id, resumeSessionId: null })
+    const prompt = started.at(-1)!.target.kind === 'prompt' ? (started.at(-1)!.target as { prompt: string }).prompt : ''
+    expect(prompt).toContain('This is a code bug')
     expect(c.detail(t.id).activity.find(a => a.kind === 'handoff')).toMatchObject({ by: 'agent' })
     // to an agent of another company: refused
     const z = board({ name: 'Zeta' })
@@ -388,7 +396,7 @@ describe('DEPARTMENTS.md §6 hivetask: tools', () => {
       call(r.owner, 'task_handoff', { departmentKey: i % 2 ? 'marketing' : 'development', reason: `round ${i}` })
       end(r.run.id, 'passed')
       await settle()
-      expect(c.task(t.id)).toMatchObject({ status: 'todo', handoffs: i + 1 })
+      expect(c.task(t.id)).toMatchObject({ status: 'in_progress', handoffs: i + 1 })
     }
     r = b.run(t.id)
     const fifth = call(r.owner, 'task_handoff', { departmentKey: 'development', reason: 'again' })

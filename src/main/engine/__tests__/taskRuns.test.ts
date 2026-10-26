@@ -6,6 +6,7 @@ import { TASK_WRAP_UP_TEXT, type CompanyBridge, type MemoryGrant, type RunTaskLi
 import type { Run, WorkflowDraft } from '../../../shared/types'
 import { createEngineWith } from '../index'
 import { fakeAdapter, fakeCtx, fakeProviders, profile, waitRun, type FakeCall, type FakeCtx } from './fakes'
+import { fakeBridge } from './liveFakes'
 
 interface Seen { links: (RunTaskLink | null | undefined)[]; sessions: string[]; limits: { taskId: string; minutes: number }[] }
 function setup(o: { taskCompany?: string | null; runMinutes?: number | null; toolset?: TaskRunBridge['toolset'] } = {}) {
@@ -115,7 +116,7 @@ describe('engine: board task runs', () => {
     expect((await waitRun(ctx, plain.id)).status).toBe('passed')
     expect(seen.limits).toEqual([])
   })
-  it('the task toolset rides on the step hivemem server (env + allowed tools), claude task runs only', async () => {
+  it('the task toolset rides on the step hivemem server (env + allowed tools), task runs only', async () => {
     const { ctx } = setup({ toolset: req => ({ env: { HIVE_TASK_ID: req.taskId, HIVE_TASK_RUN: req.runId }, toolNames: ['task_get', 'task_report'] }) })
     let n = 0
     ctx.memory = {
@@ -136,6 +137,41 @@ describe('engine: board task runs', () => {
     const plain = engine.runs.start(prompt(), { trigger: 'manual' })
     await waitRun(ctx, plain.id)
     expect(calls[1].mcpArgs![3]).toBe('mcp__hivemem__memory_search')
+  })
+  it('codex task runs get the same task tools (and memory, and the Use Principia rules) through -c overrides', async () => {
+    const { ctx } = setup({ toolset: req => ({ env: { HIVE_TASK_ID: req.taskId }, toolNames: ['task_get', 'task_create', 'task_report', 'connections_list'] }) })
+    ctx.live = fakeBridge(ctx.root)
+    let n = 0
+    ctx.memory = {
+      grant: () => ({ grantId: `mgr_${++n}`, server: { name: 'hivemem', command: '/bin/hive', args: ['/x/mcp-memory.js'], env: { HIVE_MEM_GRANT: `mgr_${n}` } }, toolNames: ['memory_search', 'memory_write'], spawnDir: join(ctx.root, 'memory', 'spawn'), brief: '' }) as MemoryGrant,
+      release: () => {},
+      askOnlyServer: () => ({ name: 'hivemem', command: '/bin/hive', args: ['/x/mcp-memory.js'], env: {} })
+    }
+    const calls: FakeCall[] = []
+    const engine = await engineFor(ctx, calls, () => ({ output: 'ok' }))
+    const run = engine.runs.start({ ...prompt('p_codex'), memory: 'read-write' }, { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' })
+    await waitRun(ctx, run.id)
+    const args = calls[0]!.mcpArgs!.join(' ')
+    expect(args).toContain('mcp_servers.hivemem.enabled_tools=["memory_search","memory_write","task_get","task_create","task_report","connections_list"]')
+    expect(args).toContain('mcp_servers.hivemem.default_tools_approval_mode="approve"')
+    expect(args).toContain('mcp_servers.hivemem.env.HIVE_TASK_ID="task_1"')
+    // the live dir is the broker's mailbox and the caller's identity
+    expect(args).toMatch(/mcp_servers\.hivemem\.env\.HIVE_LIVE_DIR="[^"]+"/)
+    expect(args).not.toContain('ask_user')
+    expect(calls[0]!.prompt).toContain('## Use Principia')
+    expect(calls[0]!.prompt).toContain('task_create')
+    expect(calls[0]!.prompt).toContain('principia://connect/stripe')
+    // memory off: an empty-memory hivemem with only the task tools
+    const off = engine.runs.start({ ...prompt('p_codex'), memory: 'off' }, { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' })
+    await waitRun(ctx, off.id)
+    const offArgs = calls[1]!.mcpArgs!.join(' ')
+    expect(offArgs).toContain('mcp_servers.hivemem.enabled_tools=["task_get","task_create","task_report","connections_list"]')
+    expect(offArgs).not.toContain('HIVE_MEM_GRANT')
+    // not a task run: memory only, no task tools, no mailbox
+    const plain = engine.runs.start({ ...prompt('p_codex'), memory: 'read' }, { trigger: 'manual' })
+    await waitRun(ctx, plain.id)
+    expect(calls[2]!.mcpArgs!.join(' ')).not.toContain('task_get')
+    expect(calls[2]!.mcpArgs!.join(' ')).not.toContain('HIVE_LIVE_DIR')
   })
   it('task-mode schedules go to the company bridge board (§8): a fire wakes the card and starts no run', async () => {
     const { ctx } = setup()

@@ -680,6 +680,7 @@ export type UiCommand =
   | { kind: 'openApproval'; draftId: Id } // approval notification click (AUTHORING.md §2.2)
   | { kind: 'openSlack'; channelId?: string; threadTs?: string } // SLACK.md §12.2
   | { kind: 'openSlackDraft'; draftId: Id } // Slack draft notification click (SLACK.md §8.3)
+  | { kind: 'openLink'; url: string } // a principia:// link from the OS (shared/deepLink.ts; checked by main, navigates only)
 /** The app menu's View items. team, board, chats and knowledge are the five doors (⌘2-⌘5); the rest stay as aliases. */
 export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
 

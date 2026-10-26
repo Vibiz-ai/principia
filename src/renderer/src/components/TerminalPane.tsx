@@ -13,6 +13,8 @@ import { PASTED_IMAGE_TYPES, type PastedImageType } from '@shared/ipc'
 import { errorMessage, hive } from '../lib/hive'
 import { setTermSize } from '../state/store'
 import { isWebLink } from '@shared/externalLinks'
+import { isDeepLinkUrl, parseDeepLink } from '@shared/deepLink'
+import { followLink } from '../lib/inAppLink'
 
 export interface TerminalHandle {
   focus: () => void
@@ -100,6 +102,8 @@ export const TerminalPane = forwardRef<TerminalHandle, { sessionId: Id; readOnly
         linkHandler: {
           activate: (event, url) => {
             event.preventDefault()
+            // principia:// (an agent's connect link): opens the page in the app
+            if (isDeepLinkUrl(url)) return followLink(url)
             if (!isWebLink(url)) return
             void hive.app.openExternal({ url }).catch((e) => setError(errorMessage(e)))
           }
@@ -115,6 +119,20 @@ export const TerminalPane = forwardRef<TerminalHandle, { sessionId: Id; readOnly
       const search = new SearchAddon()
       term.loadAddon(fit)
       term.loadAddon(search)
+      // plain-text principia:// links in agent output are clickable too (the page opens in the app)
+      term.registerLinkProvider({
+        provideLinks: (y, done) => {
+          const line = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? ''
+          const out: Parameters<typeof done>[0] = []
+          for (const m of line.matchAll(/principia:\/\/[^\s<>()"'`]+[^\s<>()"'`.,;:!?]/gi)) {
+            const url = m[0]
+            if (!parseDeepLink(url)) continue
+            const x = (m.index ?? 0) + 1
+            out.push({ text: url, range: { start: { x, y }, end: { x: x + url.length - 1, y } }, activate: (e) => (e.preventDefault(), followLink(url)) })
+          }
+          done(out.length ? out : undefined)
+        }
+      })
       termRef.current = term
       fitRef.current = fit
       searchRef.current = search

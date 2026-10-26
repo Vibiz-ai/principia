@@ -13,6 +13,7 @@ import { Bust } from '../roman'
 import { CompanyChip } from '../CompanyChip'
 import { AskForm } from './AskForm'
 import '../../styles/board.css'
+import { plainLinks } from '../DeepLinkButton'
 
 /**
  * An agent's face: the persona bust with personas on; the department-colour initials (SeatAvatar look) with them off
@@ -54,7 +55,7 @@ export function needsLine(item: NeedsYouItem, persona: string, tone: Tone): stri
   return t('ny.parked', { persona, reason: parkedWhy(task, reason) }, tone)
 }
 function parkedWhy(task: CompanyTask, reason: NeedsYouItem['reason']): string {
-  const said = task.report?.outcome === 'blocked' ? firstLine(task.report.summary ?? '', 60).trim() : ''
+  const said = task.report?.outcome === 'blocked' ? firstLine(plainLinks(task.report.summary ?? ''), 60).trim() : ''
   if (said) return said.charAt(0).toLowerCase() + said.slice(1)
   return REASON_LABEL[reason].toLowerCase()
 }

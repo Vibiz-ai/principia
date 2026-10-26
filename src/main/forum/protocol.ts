@@ -75,10 +75,15 @@ export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
   },
   forum_reply: {
     name: 'forum_reply',
-    description: 'Reply in the thread of a message (m3fk).',
+    description: 'Reply in the thread of a message (m3fk). task: when the person asked for work to be done or tracked, also files their request as a Board task for you (one per message).',
     inputSchema: {
       type: 'object',
-      properties: { to: ref, text: { type: 'string', minLength: 1, maxLength: FORUM_LIMITS.agentText }, refs: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 8 } },
+      properties: {
+        to: ref,
+        text: { type: 'string', minLength: 1, maxLength: FORUM_LIMITS.agentText },
+        refs: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 8 },
+        task: { type: 'object', properties: { title: { type: 'string', minLength: 3, maxLength: 120, description: 'plain words, what the person asked for' } }, required: ['title'], additionalProperties: false }
+      },
       required: ['to', 'text'],
       additionalProperties: false
     }
@@ -217,7 +222,7 @@ export const FORUM_ARGS = {
     refs: z.array(z.string().max(300)).max(8).optional(),
     proposal: proposalArgZ.optional()
   }),
-  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional() }),
+  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional(), task: z.strictObject({ title: z.string().trim().min(3).max(120) }).optional() }),
   forum_ask: z.strictObject({
     question: z.string().trim().min(3).max(1000),
     to: handleList.max(5).optional(),

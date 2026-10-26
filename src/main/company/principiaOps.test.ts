@@ -65,6 +65,22 @@ describe('principiaOps (PROACTIVE.md §1)', () => {
     expect(approxTokens(always)).toBeLessThan(600)
   })
 
+  it('connections: missing tools come with their principia://connect link, never a password request', () => {
+    const chat = principiaOps({ kind: 'chat', tools: [...CHAT_TOOLS, 'mcp__hive__connections_list', 'mcp__principia__principia_list_tools', 'mcp__principia__principia_call_tool'] })
+    expect(chat).toContain('principia://connect/stripe')
+    expect(chat).toContain('Settings › Connections')
+    expect(chat).toContain('Never ask for passwords')
+    expect(chat).toContain('principia_list_tools')
+    expect(approxTokens(chat)).toBeLessThan(700)
+    const task = principiaOps({ kind: 'task', tools: [...TASK_TOOLS, 'connections_list'] })
+    expect(task).toContain('connections_list')
+    expect(task).toContain('task_ask the founder first')
+    expect(approxTokens(task)).toBeLessThan(600)
+    // without the tool, no connect rule (the generic principia:// line stays)
+    expect(principiaOps({ kind: 'chat', tools: CHAT_TOOLS })).not.toContain('connections_list')
+    expect(principiaOps({ kind: 'chat', tools: CHAT_TOOLS })).toContain('principia://board?task=NC-12')
+  })
+
   it('the reminder repeats the rules', () => {
     const ops = principiaOps({ kind: 'chat', tools: CHAT_TOOLS })
     expect(principiaOpsReminder(ops)).toContain(ops)

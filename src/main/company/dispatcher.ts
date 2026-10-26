@@ -5,6 +5,10 @@
  *
  * - eligible = not paused or archived, `autonomy:'auto'`, headless, in a company with autopilot on and fewer than
  *   maxInFlight tasks in flight, and with no task in flight of its own;
+ * - the exception (startsWithoutAutopilot): a schedule's standing card with a queued fire (the founder turned the
+ *   schedule on) and a task whose question the founder just answered start on any active headless seat with autopilot
+ *   off too (still never on a paused company, past
+ *   maxInFlight, on a busy seat or past the wake guard);
  * - its next task = its highest-priority `todo` task, oldest first (priority 1 urgent … 4 low, 0 none last);
  * - the claim is a compare-and-set on the status mirror inside one transaction with CompanyStore.startTask, so two
  *   pumps, or a pump and a human Run, can never both start the agent: the loser skips or gets "<Agent> is busy on <ID>".
@@ -18,7 +22,7 @@
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, agentActive, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, agentActive, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -26,6 +30,7 @@ import { CompanyStore, type TaskRunLink } from './index'
 import { needsSuggestion, queueCountsFrom, route, routedActivity, routingInUse, shouldReroute, suggestRoute, type ModelCall, type RouteContext } from './router'
 
 export const DISPATCH_TICK_MS = 60_000
+
 const HOUR_MS = 3_600_000
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 const fail = (message: string): never => { throw new HiveError('bad_request', message) }
@@ -157,14 +162,18 @@ export class Dispatcher {
     let changed = false
     try { changed = this.c.heal(companyId).length > 0 } catch (err) { this.warn('heal failed', { companyId, error: String(err) }) }
     const started: string[] = []
-    if (this.autopilotRoom(companyId) > 0) {
+    if (this.roomFor(companyId, false) > 0) {
       for (const agent of this.c.departments.listAgents({ companyId })) {
-        if (this.autopilotRoom(companyId) <= 0) break
-        if (!this.seatEligible(agent) || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
+        if (this.roomFor(companyId, false) <= 0) break
+        if (!agentActive(agent) || agent.data.mode === 'session' || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
+        // autopilot picks any todo task of an auto seat; without it, work the founder already said go to still starts:
+        // a schedule's queued fire (they turned the schedule on) and the answer they just gave to a question
+        const auto = this.seatEligible(agent) && this.autopilotRoom(companyId) > 0
         for (const t of this.queueOf(agent)) {
+          if (!auto && !startsWithoutAutopilot(t)) continue
           // five doors C9: a task the founder paused waits for their Start (a comment from them wakes it again)
           if (this.heldByYou(t.id)) continue
-          const r = this.claim(t.id, agent)
+          const r = this.claim(t.id, agent, !auto)
           if (r !== 'skipped') changed = true
           if (r === 'started') started.push(t.id)
           // one start (or one failed start) per agent per pump; a parked task lets the next one through
@@ -176,13 +185,15 @@ export class Dispatcher {
     return started
   }
   /** Room left under maxInFlight, 0 when autopilot is off or the company is archived. */
-  private autopilotRoom(companyId: string): number {
+  private autopilotRoom(companyId: string): number { return this.roomFor(companyId, true) }
+  /** Room left under maxInFlight (0 when archived or paused, and with `autopilot` also when autopilot is off). */
+  private roomFor(companyId: string, autopilot: boolean): number {
     const company = this.c.scope.get(companyId)
     if (!company || company.archivedAt) return 0
     // five doors A4: autopilot reads "Off while paused" and starts nothing until the company resumes
     if (this.c.isPaused(companyId)) return 0
     const s = this.c.boardSettings(companyId)
-    if (!s.autopilot) return 0
+    if (autopilot && !s.autopilot) return 0
     return s.maxInFlight - this.inFlight(companyId)
   }
   private inFlight(companyId: string): number {
@@ -217,7 +228,7 @@ export class Dispatcher {
    * §3.3 claim + §3.4 start, in one transaction: the wake guard, the compare-and-set, a `woke` activity, startTask as
    * the system (autopilot gate re-checked there) and the guard count. A lost race changes nothing ('skipped').
    */
-  private claim(taskId: string, agent: CompanyAgent): 'started' | 'parked' | 'skipped' | 'failed' {
+  private claim(taskId: string, agent: CompanyAgent, scheduled = false): 'started' | 'parked' | 'skipped' | 'failed' {
     let runId: string | null = null
     try {
       return this.db.transaction(() => {
@@ -230,7 +241,7 @@ export class Dispatcher {
         if (!this.cas(t.id, agent.id)) return 'skipped'
         const reasons = t.pendingWake?.reasons.length ? t.pendingWake.reasons : ['Assigned: this task is yours.']
         this.c.activity(t.id, 'woke', `Woke ${agent.name}: ${clip(reasons.join(' · '))}`)
-        this.c.startTask(t.id, undefined, this.starter(agent, id => { runId = id }), { actor: 'system' })
+        this.c.startTask(t.id, undefined, this.starter(agent, id => { runId = id }), { actor: 'system', consented: scheduled })
         this.c.patchInFlight(t.id, { autoWakes: guard })
         return 'started' as const
       })()
@@ -312,6 +323,14 @@ export class Dispatcher {
   }
 
   // ---------- wakes ----------
+
+  /**
+   * A schedule fire on its standing card while the last fire's result waits in review or was accepted: back to todo for
+   * this fire's turn (like a follow-up turn, §3.5). The report stays in the activity; the founder turned the schedule on.
+   */
+  reopenForFire(taskId: string, scheduleName: string): boolean {
+    return this.moveRaw(taskId, ['in_review', 'done'], { status: 'todo', blockReason: null }, 'woke', `Schedule "${clip(scheduleName, 80)}" fired again: the next turn starts (the last report stays above)`)
+  }
 
   /**
    * A wake for a task (human comment, Slack follow-up, schedule fire on a standing card). Agent wakes are dropped

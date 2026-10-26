@@ -4,8 +4,9 @@
  * Pure: the page passes in what it loaded (this company's gateway connections, its own accounts, gh, Slack, Linear).
  */
 import type { CompanyAccounts } from '@shared/company'
-import type { GatewayConnection } from '@shared/gateway'
+import { VIBIZ_CONNECTION_ID, type GatewayConnection } from '@shared/gateway'
 import { CONNECTION_CATALOG, presetForUrl, type ConnectionPreset } from './connectionCatalog'
+import { CUSTOM_CONNECT_TOOL, connectLink } from '@shared/deepLink'
 
 /** One state per card (round 2): never "Not connected" and "Drafts only" on the same card. */
 export type CardState = 'connected' | 'attention' | 'waiting' | 'off' | 'notConnected' | 'soon' | 'setup'
@@ -83,6 +84,8 @@ export function connectionState(c: GatewayConnection): { state: CardState; chip:
   if (!c.enabled) return { state: 'off', chip: 'Turned off' }
   if (c.authStatus === 'error') return { state: 'attention', chip: 'Needs attention' }
   if (c.authStatus === 'connecting') return { state: 'waiting', chip: 'Waiting for sign-in' }
+  // the Vibiz card is there from install: never signed in is "Not signed in", not a problem to fix
+  if (c.id === VIBIZ_CONNECTION_ID && c.authentication === 'oauth' && (c.authStatus ?? 'disconnected') === 'disconnected') return { state: 'notConnected', chip: 'Not signed in' }
   if (c.authentication === 'oauth' && c.authStatus !== 'connected') return { state: 'attention', chip: 'Sign-in needed' }
   return usable(c) ? { state: 'connected', chip: 'Connected' } : { state: 'attention', chip: 'Needs a key' }
 }
@@ -97,8 +100,9 @@ function presetCard(p: ConnectionPreset, conns: readonly GatewayConnection[]): C
   const base = { id: p.id, name: p.name, blurb: p.description, account: null, keywords: `${p.keywords} ${p.category}`, group: 'more' as CardGroup }
   if (conn) {
     const st = connectionState(conn)
-    const action: CardAction = st.state === 'attention' && conn.authentication === 'oauth' ? { kind: 'signIn', connectionId: conn.id } : { kind: 'manage', connectionId: conn.id }
-    return { ...base, ...st, note: sharedNote(conn), action, actionLabel: action.kind === 'signIn' ? 'Sign in again' : 'Manage', group: st.state === 'off' ? 'more' : 'connected' }
+    const fresh = st.state === 'notConnected'
+    const action: CardAction = (st.state === 'attention' || fresh) && conn.authentication === 'oauth' ? { kind: 'signIn', connectionId: conn.id } : { kind: 'manage', connectionId: conn.id }
+    return { ...base, ...st, note: fresh ? null : sharedNote(conn), action, actionLabel: action.kind === 'signIn' ? (fresh ? 'Sign in' : 'Sign in again') : 'Manage', group: st.state === 'off' || fresh ? 'more' : 'connected' }
   }
   if (p.setupRequired) return { ...base, state: 'setup', chip: 'Needs setup', note: null, action: { kind: 'guide', presetId: p.id }, actionLabel: 'How to set up' }
   return { ...base, state: 'notConnected', chip: 'Not connected', note: null, action: { kind: 'preset', presetId: p.id }, actionLabel: 'Connect' }
@@ -226,4 +230,14 @@ export function instagramAccount(raw: string): string | null {
   const url = /^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([A-Za-z0-9._]{1,30})\/?(?:[?#].*)?$/i.exec(s)
   const name = url ? url[1]! : s.replace(/^@/, '')
   return /^[A-Za-z0-9._]{1,30}$/.test(name) && !/^\.|\.$|\.\./.test(name) ? `@${name.toLowerCase()}` : null
+}
+
+/**
+ * The link a card's Copy link puts on the clipboard: principia://connect/<tool>?company=<id>, which opens this card (or
+ * its sheet) in this company, whichever company is open later. A one-off connection (`conn:<id>`) and a Coming soon
+ * card (nothing to connect yet) have none.
+ */
+export function cardLink(c: Pick<ConnCard, 'id'> & { state?: ConnCard['state'] }, companyId?: string | null): string | null {
+  if (c.id.startsWith('conn:') || c.state === 'soon') return null
+  return connectLink(c.id === 'custom' ? CUSTOM_CONNECT_TOOL : c.id, companyId)
 }

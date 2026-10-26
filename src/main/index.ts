@@ -42,6 +42,7 @@ import { wireDashboards } from './dashboards/wire'
 import { wireTaskWork } from './company/taskWorkWire'
 import { wireLinearSync } from './company/sync/wire'
 import { SlackService } from './connectors/slack/service'
+import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
 
 applyUserDataOverride()
 app.setName('Hive')
@@ -53,10 +54,19 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   let hive: Hive | null = null
   let pendingShow = false
+  // principia:// links (deepLinks.ts): checked here, navigated by the renderer
+  const links = new DeepLinkInbox()
 
-  app.on('second-instance', () => {
+  app.on('second-instance', (_e, argv) => {
+    const url = deepLinkFromArgv(argv)
+    if (url) links.receive(url)
     if (hive) hive.windows.show()
     else pendingShow = true
+  })
+  // macOS: also on a cold launch from a link, before ready
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    if (links.receive(url) && !hive) pendingShow = true
   })
   app.on('activate', () => hive?.windows.show())
 
@@ -533,8 +543,19 @@ if (!app.requestSingleInstanceLock()) {
 
     // window: hidden when launched at login (SPEC A13)
     const hidden = h.launchedAtLogin() && process.env.HIVE_SMOKE !== '1'
+    // a cold launch from a link (Windows / Linux argv, or HIVE_DEEP_LINK in dev) shows the window like a click would
+    const launchLink = deepLinkFromArgv(process.argv) ?? process.env.HIVE_DEEP_LINK ?? null
+    if (launchLink && links.receive(launchLink)) pendingShow = true
     h.windows.create(!hidden || pendingShow)
     if (hidden) log.info('launched at login: starting hidden in the menu bar')
+    links.attach({ deliver: (url) => h.windows.command({ kind: 'openLink', url }), log })
+    if (shouldRegisterProtocol({ packaged: app.isPackaged, env: process.env })) {
+      try {
+        if (!app.isDefaultProtocolClient(PROTOCOL)) app.setAsDefaultProtocolClient(PROTOCOL)
+      } catch (e) {
+        log.warn('could not register principia:// links', { e: String(e) })
+      }
+    }
 
     if (process.env.HIVE_NO_SCHEDULER !== '1') {
       h.safe(() => h.engine.scheduler.start(), undefined)

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
+import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -910,7 +910,7 @@ export class CompanyStore {
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
    * autopilot gate. One in-flight task per agent.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
@@ -927,7 +927,7 @@ export class CompanyStore {
       assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true,...(opts.work ? {work:opts.work} : {})})
       this.validate(task,task.id,task)
       const agent=task.agentId ? this.departments.agent(task.agentId) : null
-      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent)
+      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent,opts.consented===true&&startsWithoutAutopilot(task))
       if(agent) {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
@@ -971,14 +971,16 @@ export class CompanyStore {
    * on for the company, an `auto` seat, and the company under maxInFlight. Checked inside startTask's transaction, so
    * the gate and the claim cannot interleave with another start. A human click skips it.
    */
-  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null): void {
+  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null, consented=false): void {
     if(!this.boardOn()) fail('Departments are off; only a human can start a task')
     if(!agent) fail('Only a human can start a task without an agent')
-    if(agent!.data.autonomy!=='auto') fail(`${agent!.name} is manual; only a human can start its tasks`)
+    // work the founder already said go to (a schedule's fire, their answer: startsWithoutAutopilot) is not gated by
+    // autonomy or autopilot; the in-flight cap below still is
+    if(!consented&&agent!.data.autonomy!=='auto') fail(`${agent!.name} is manual; only a human can start its tasks`)
     const company=this.passport(task.companyId)
     if(company.archivedAt) fail(`${company.name} is archived`)
     const settings=this.boardSettings(task.companyId)
-    if(!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
+    if(!consented&&!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
     // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot; LINEAR.md: nor does a task started in a tracker (no run of ours)
     const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
     if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)

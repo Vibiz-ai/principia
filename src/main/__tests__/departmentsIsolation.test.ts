@@ -431,11 +431,11 @@ d_('DEPARTMENTS.md §10 isolation: IPC (departments:*, companyAgents:*, tasks:*,
     await settle()
     expect(acme()).toBe(before)
     expect(w.c.task(tA.id)).toMatchObject({ status: 'in_progress', runId: runA.id })
-    // B's Autopilot is off: the answer queues B's next turn and starts nothing (and nothing of A)
-    expect(w.c.task(tB.id)).toMatchObject({ status: 'todo', pendingWake: { reasons: expect.arrayContaining(['Answer: The blue one']) } })
-    expect(w.started).toHaveLength(2)
-    // the human runs it again; stopping B's task cancels B's run only
-    w.d.runNow(tB.id)
+    // B's Autopilot is off, but the answer is the human's go-ahead: B's agent resumes (and nothing of A starts)
+    expect(w.c.task(tB.id)).toMatchObject({ status: 'in_progress' })
+    expect(w.started).toHaveLength(3)
+    expect(w.started[2].opts.taskId).toBe(tB.id)
+    // stopping B's task cancels B's run only
     const runB2 = w.started.at(-1)!.run
     expect(w.c.task(tB.id).runId).toBe(runB2.id)
     await invoke('tasks:stop', { id: tB.id })

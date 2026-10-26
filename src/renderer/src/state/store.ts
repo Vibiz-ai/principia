@@ -45,6 +45,9 @@ import {
   type PlanInputContext
 } from './onboarding'
 import { isPinned, prefsFor, prefsKey, resolveView, togglePin, viewFor, type NavTarget } from '../lib/nav'
+import { parseDeepLink } from '@shared/deepLink'
+import { deepLinkView, resolveTaskRef } from '../lib/deepLinkNav'
+import { DEEP_LINK_EVENT } from '../lib/inAppLink'
 import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, pauseToastText, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, listedRows, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
 
 export interface ScheduleSeed {
@@ -83,12 +86,13 @@ export type ViewState =
   | { name: 'marketplace' }
   | { name: 'editor'; workflowId: Id | null; nonce: number; approvalDraftId?: Id; script?: boolean }
   | { name: 'run'; runId: Id; stepId?: Id; agentId?: Id }
-  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'autopilots' | 'schedules' | 'slack' }
+  /** `addRoutine`: a principia://automations?add=<template> link suggested this routine (the view only points at it) */
+  | { name: 'schedules'; selectedId?: Id; seed?: ScheduleSeed; nonce?: number; tab?: 'routines' | 'autopilots' | 'schedules' | 'slack'; addRoutine?: string; routineTime?: { at?: string; days?: string } }
   | { name: 'artifacts'; runId?: Id; sessionId?: Id }
   /** Alias: Settings → Keys & secrets */
   | { name: 'keys' }
   /** `companyId`/`create`/`nonce`: the Company section (was the `company` route) */
-  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number; connect?: 'instagram' | 'github' | 'linear' | 'slack' }
+  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number; connect?: string }
   | { name: 'slack'; channelId?: string; threadTs?: string; search?: boolean; nonce?: number }
   /** FORUM.md §8: the company Forum (companyId absent = the active company) */
   | { name: 'forum'; companyId?: Id; channelId?: Id; threadId?: Id; nonce?: number }
@@ -302,7 +306,7 @@ function subscribe(l: () => void): () => void {
   return () => listeners.delete(l)
 }
 export function useStore<T>(sel: (s: State) => T): T {
-  return useSyncExternalStore(subscribe, () => sel(state))
+  return useSyncExternalStore(subscribe, () => sel(state), () => sel(state))
 }
 
 // ---------- toasts ----------
@@ -528,6 +532,24 @@ function wireEvents(): void {
     if (a.kind !== 'subagent') scheduleCompanyOverview()
   })
   hive.on('ui:command', runCommand)
+  // principia:// links clicked in agent text (lib/inAppLink.ts)
+  window.addEventListener(DEEP_LINK_EVENT, (e) => {
+    const url = (e as CustomEvent<unknown>).detail
+    if (typeof url === 'string') void openDeepLink(url)
+  })
+  // any other principia:// anchor in the window (a pasted link, a page without its own handler): navigate in place,
+  // never let Chromium hand it to the OS or reload the window
+  document.addEventListener(
+    'click',
+    (e) => {
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+      const href = a?.getAttribute('href') ?? ''
+      if (!/^principia:/i.test(href) || e.defaultPrevented) return
+      e.preventDefault()
+      void openDeepLink(href)
+    },
+    true
+  )
   hive.on('chatCompany:updated', upsertChatProposal)
   // the page refetches its own data; the shell only keeps the overview (Review badge) fresh
   hive.on('memory:changed', () => scheduleMemoryOverview())
@@ -589,7 +611,45 @@ export function runCommand(cmd: UiCommand): void {
     case 'openApproval':
       void openApproval(cmd.draftId)
       return
+    case 'openLink':
+      void openDeepLink(cmd.url)
+      return
   }
+}
+
+/**
+ * A principia:// link (an agent's message, a copied card link, the OS): opens the page it names, in the company it
+ * names. Never approves, files, connects or sends: the page it opens still waits for the person's click. A link naming
+ * a company this Principia does not have, or an unknown link, opens nothing and says so.
+ */
+export async function openDeepLink(url: string): Promise<boolean> {
+  const link = parseDeepLink(url)
+  if (!link) {
+    toast('Principia doesn’t know that link, so nothing was opened.', 'error')
+    return false
+  }
+  const companyId = link.companyId ?? null
+  if (companyId && !state.companies.some((c) => c.id === companyId)) {
+    toast('That link is for a company that isn’t in this Principia, so nothing was opened.', 'error')
+    return false
+  }
+  // an agent's desk opens in the agent's own company (never another company's desk inside this one)
+  if (link.kind === 'agent') {
+    const seat = state.companyAgents.find((a) => a.id === link.agentId)
+    if (!seat || (companyId && seat.companyId !== companyId)) {
+      toast('That agent isn’t in this Principia, so nothing was opened.', 'error')
+      return false
+    }
+    const view = deepLinkView(link, { nonce: Date.now() })
+    if (multiCompany() && activeCompany() !== seat.companyId) return enterCompany(seat.companyId, { view })
+    return navigate(view)
+  }
+  const scope = companyId ?? scopeCompanyId() ?? null
+  const taskId = link.kind === 'board' && link.task ? resolveTaskRef(link.task, state.tasks, scope) : null
+  if (link.kind === 'board' && link.task && !taskId) toast(`${link.task} isn’t on this company’s board; opening the Board.`)
+  const view = deepLinkView(link, { nonce: Date.now(), taskId })
+  if (companyId && multiCompany() && activeCompany() !== companyId) return enterCompany(companyId, { view })
+  return navigate(view)
 }
 
 export function openPalette(mode: PaletteMode, companyId?: Id): void {

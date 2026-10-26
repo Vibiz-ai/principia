@@ -331,9 +331,9 @@ export class SessionManager {
     } catch {
       channel = null // live wiring never blocks a session
     }
-    // AUTHORING.md §1.1: claude panes with a live channel get the `hive` server (its mailbox is this live dir)
+    // AUTHORING.md §1.1: claude and codex panes with a live channel get the `hive` server (its mailbox is this live dir)
     let author: McpServerSpec | null = null
-    if (profile.adapter === 'claude' && channel && this.d.author) {
+    if ((profile.adapter === 'claude' || profile.adapter === 'codex') && channel && this.d.author) {
       try {
         author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId) })
       } catch {

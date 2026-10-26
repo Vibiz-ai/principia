@@ -30,3 +30,16 @@ describe('settings:update notices and firstWeek (five doors step 5)', () => {
     expect(ok({ firstWeek: { 'not an id': { journalId: 'j1', scheduleRefs: [] } } })).toBe(false)
   })
 })
+
+describe('settings:update routines and nudges (Automations › Routines, Home suggestions)', () => {
+  it('accepts what a routine created and a dismissed suggestion per company', () => {
+    expect(ok({ routines: { co_abc123: { 'morning-brief': { scheduleId: 'sch_1', onAt: '2026-10-26T09:00:00.000Z' }, 'code-brief': { scheduleId: 'sch_2', workflowId: 'wf_1', onAt: 'x' } } } })).toBe(true)
+    expect(ok({ nudges: { co_abc123: { 'morning-brief': '2026-10-26T09:00:00.000Z', 'connect:instagram': 'x' } } })).toBe(true)
+  })
+  it('rejects unknown routines, bad ids and extra fields', () => {
+    expect(ok({ routines: { co_abc123: { 'mine-bitcoin': { scheduleId: 'sch_1', onAt: 'x' } } } })).toBe(false)
+    expect(ok({ routines: { co_abc123: { 'morning-brief': { scheduleId: '../x', onAt: 'x' } } } })).toBe(false)
+    expect(ok({ routines: { co_abc123: { 'morning-brief': { scheduleId: 'sch_1', onAt: 'x', extra: 1 } } } })).toBe(false)
+    expect(ok({ nudges: { co_abc123: { 'Bad Id': 'x' } } })).toBe(false)
+  })
+})

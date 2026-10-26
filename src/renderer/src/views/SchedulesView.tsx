@@ -15,6 +15,7 @@ import { companyOf, reposOf } from '../lib/companyModel'
 import { inScope } from '../lib/scope'
 import { AutomationTabs } from '../components/AutomationTabs'
 import { AutopilotsTab } from '../components/AutopilotsTab'
+import { RoutinesTab } from '../components/RoutinesTab'
 import { CloudPlacedMark } from '../components/cloud/bits'
 import { useCloudPlacement } from '../state/cloud'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
@@ -22,10 +23,21 @@ import type { Id } from '@shared/types'
 
 const ADAPTER_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', shell: 'A script' }
 
-export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: 'autopilots' | 'schedules' | 'slack' }): React.JSX.Element {
+type SchedTab = 'routines' | 'autopilots' | 'schedules' | 'slack'
+
+export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, routineTime }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab; addRoutine?: string; routineTime?: { at?: string; days?: string } }): React.JSX.Element {
   // a deep link to a schedule (or a seed) opens Schedules; Automations itself opens on Autopilots
-  const [cur, setCur] = useState<'autopilots' | 'schedules' | 'slack'>(tab ?? 'schedules')
+  const [cur, setCur] = useState<SchedTab>(tab ?? 'schedules')
   useEffect(() => setCur(tab ?? 'schedules'), [tab, nonce])
+  if (cur === 'routines')
+    return (
+      <div className="view">
+        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <div className="scroll view__body">
+          <RoutinesTab suggest={tab === 'routines' ? addRoutine : undefined} suggestTime={tab === 'routines' ? routineTime : undefined} nonce={nonce} />
+        </div>
+      </div>
+    )
   if (cur === 'autopilots')
     return (
       <div className="view">
@@ -69,7 +81,7 @@ function ScopedSlackTriggers({ seedWorkflowId, nonce }: { seedWorkflowId?: strin
 }
 
 /** SLACK.md §12.5 + five doors: Automations → Schedules | Workflows | Slack triggers. */
-function ScheduleTabs({ value, onChange }: { value: 'autopilots' | 'schedules' | 'slack'; onChange: (v: 'autopilots' | 'schedules' | 'slack') => void }): React.JSX.Element {
+function ScheduleTabs({ value, onChange }: { value: SchedTab; onChange: (v: SchedTab) => void }): React.JSX.Element {
   return <AutomationTabs value={value} onChange={(v) => v !== 'workflows' && onChange(v)} />
 }
 

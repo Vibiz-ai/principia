@@ -93,6 +93,9 @@ export const DEFAULT_SETTINGS: Settings = {
   agentCollab: {},
   // AUTOPILOT.md §4 (UI bookkeeping)
   autopilots: {},
+  // Automations › Routines and Home suggestions (UI bookkeeping)
+  routines: {},
+  nudges: {},
   // PROACTIVE.md
   proactiveAgents: true,
   trackTasks: 'auto',
@@ -197,6 +200,8 @@ export class Store {
     // never hand out the shared default object (a caller mutating it would change every later read)
     s.expandedCompanies = s.expandedCompanies && typeof s.expandedCompanies === 'object' && !Array.isArray(s.expandedCompanies) ? { ...s.expandedCompanies } : {}
     s.autopilots = s.autopilots && typeof s.autopilots === 'object' && !Array.isArray(s.autopilots) ? { ...s.autopilots } : {}
+    s.routines = s.routines && typeof s.routines === 'object' && !Array.isArray(s.routines) ? { ...s.routines } : {}
+    s.nudges = s.nudges && typeof s.nudges === 'object' && !Array.isArray(s.nudges) ? { ...s.nudges } : {}
     s.sidebarNav = s.sidebarNav && typeof s.sidebarNav === 'object' && !Array.isArray(s.sidebarNav) ? { ...s.sidebarNav } : {}
     s.notices = s.notices && typeof s.notices === 'object' && !Array.isArray(s.notices) ? { ...s.notices } : {}
     s.firstWeek = s.firstWeek && typeof s.firstWeek === 'object' && !Array.isArray(s.firstWeek) ? { ...s.firstWeek } : {}

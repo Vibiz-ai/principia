@@ -44,7 +44,7 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
-import { isBoardTool, isCompanyTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
+import { isBoardTool, isCompanyTool, isConnectionsTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
 import { isChatCompanyTool } from '../../shared/chatCompany'
@@ -110,6 +110,12 @@ export interface BrokerDeps {
     resolve(owner: LiveOwner): TaskCallerRef
     call(caller: TaskCallerRef, tool: BoardTool, args: Record<string, unknown>, hints: { companyId: string | null; taskId: string | null; callId: string | null }): Record<string, unknown> | Promise<Record<string, unknown>>
   }
+  /**
+   * `connections_list` (read-only): what the caller's company has connected and the principia://connect link for each
+   * tool it has not. The company comes from the owner (session or run), never from the line; a line naming another
+   * company is refused. Absent = the tool is unknown.
+   */
+  connections?: { list(owner: LiveOwner, args: Record<string, unknown>, hints: { companyId: string | null }): Record<string, unknown> }
   /** SLACK.md §9.5: `slack_trigger` on create/update/validate. Absent = the argument is refused. */
   slackTriggers?: {
     /** Resolves #name / @handle from the local mirror and validates (PO-S3c included). */
@@ -191,6 +197,16 @@ export class AuthorBroker {
       }
     }
     const tool = typeof line.tool === 'string' ? line.tool : ''
+    // where to connect a tool: any owner (steps and sessions), always its own company
+    if (isConnectionsTool(tool)) {
+      if (!this.d.connections) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      try {
+        return answer({ ok: true, result: this.d.connections.list(owner, isObj(line.args) ? line.args : {}, { companyId: str(line.company_id, 64) }) })
+      } catch (e) {
+        return answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+      }
+    }
     // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike), §9 company tools (chat sessions); identity is
     // the owner, checked in taskCall
     if (isBoardTool(tool)) {

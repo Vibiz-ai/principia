@@ -7,6 +7,11 @@ import type { McpServerSpec } from '../../shared/engine'
 import { OAuthConnection, type OAuthSaved } from './oauth'
 import { Upstream } from './client'
 import { readPrivateJson, writePrivateJson } from './files'
+import { presetForUrl } from '../../shared/connectionCatalog'
+import { connectLink, connectToolId } from '../../shared/deepLink'
+
+/** A call on a connection this spawn was not granted: its message (with the connect link) goes back to the agent. */
+class NotGranted extends Error {}
 
 type Saved = { config: GatewayConnection; cipher: string; oauthCipher?: string }
 /**
@@ -132,9 +137,21 @@ export class GatewayService {
       let files: string[]; try { files = fs.readdirSync(grant.dir) } catch { continue }
       for (const file of files) if (/^[a-f0-9]{32}\.request$/.test(file) && !grant.busy.has(file)) {
         grant.busy.add(file)
-        void (async () => { let result: unknown; try { const p = path.join(grant.dir, file); const req = readPrivateJson(p, 262144) as Record<string, unknown>; const allowed = this.allowed(grant.cwd, grant.companyId); if (req.method === 'list') { result = []; for (const s of allowed) { try { const tools = await this.tools(s); (result as unknown[]).push({ id: s.config.id, name: s.config.name, ...tools }) } catch { this.reset(s.config.id); (result as unknown[]).push({ id: s.config.id, error: 'Connection unavailable; check Principia settings' }) } } } else if (req.method === 'call') { const s = allowed.find(s => s.config.id === req.connection); if (!s || typeof req.tool !== 'string') throw new Error('Connection not granted'); result = await this.client(s).request('tools/call', { name: req.tool, arguments: req.arguments ?? {} }) } else throw new Error('Unknown method'); result = { ok: true, result } } catch { result = { ok: false, error: 'MCP request failed; check connection authentication and project access in Principia settings' } } try { const answer = path.join(grant.dir, file.replace('.request', '.answer')); writePrivateJson(answer, result, this.opts.fileOwner); fs.unlinkSync(path.join(grant.dir, file)) } catch {} finally { grant.busy.delete(file) } })()
+        void (async () => { let result: unknown; try { const p = path.join(grant.dir, file); const req = readPrivateJson(p, 262144) as Record<string, unknown>; const allowed = this.allowed(grant.cwd, grant.companyId); if (req.method === 'list') { result = []; for (const s of allowed) { try { const tools = await this.tools(s); (result as unknown[]).push({ id: s.config.id, name: s.config.name, ...tools }) } catch { this.reset(s.config.id); (result as unknown[]).push({ id: s.config.id, error: `Connection unavailable. The founder can check it in Settings › Connections: ${connectLink(this.toolOf(s.config), grant.companyId)}` }) } } } else if (req.method === 'call') { const s = allowed.find(s => s.config.id === req.connection); if (!s || typeof req.tool !== 'string') throw new NotGranted(this.notGrantedMessage(req.connection, grant.companyId)); result = await this.client(s).request('tools/call', { name: req.tool, arguments: req.arguments ?? {} }) } else throw new Error('Unknown method'); result = { ok: true, result } } catch (e) { result = { ok: false, error: e instanceof NotGranted ? e.message : `MCP request failed; check the connection's sign-in and access in Principia: Settings › Connections (${connectLink('mcp', grant.companyId)})` } } try { const answer = path.join(grant.dir, file.replace('.request', '.answer')); writePrivateJson(answer, result, this.opts.fileOwner); fs.unlinkSync(path.join(grant.dir, file)) } catch {} finally { grant.busy.delete(file) } })()
       }
     }
+  }
+  /** The Connections card of a saved connection: its catalog tool (stripe, notion, …), else "your own MCP server". */
+  private toolOf(c: Pick<GatewayConnection, 'url'>): string { return (c.url && presetForUrl(c.url)?.id) || 'mcp' }
+  /**
+   * principia_call_tool on a connection this spawn does not have: say plainly that it is not connected for this company
+   * and give the exact principia://connect link (Settings › Connections). Never names another company's connection.
+   */
+  private notGrantedMessage(connection: unknown, companyId: string | null): string {
+    const id = typeof connection === 'string' ? connection.slice(0, 80) : ''
+    const saved = this.saved.find(s => s.config.id === id)
+    const tool = saved && (!companyId || !saved.config.companyIds?.length || saved.config.companyIds.includes(companyId)) ? this.toolOf(saved.config) : (connectToolId(id) ?? 'mcp')
+    return `${id ? `"${id}"` : 'That connection'} is not connected for this company. Tell the founder in plain words; they can connect it in Settings › Connections: ${connectLink(tool, companyId)} (principia_list_tools lists what is connected now).`
   }
   close(): void { clearInterval(this.timer); for (const oauth of this.oauth.values()) oauth.close(); this.oauth.clear(); for (const c of this.clients.values()) c.close(); for (const g of this.grants.values()) fs.rmSync(g.dir, { recursive: true, force: true }); this.grants.clear() }
 }

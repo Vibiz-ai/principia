@@ -254,7 +254,7 @@ const INLINE_RE = new RegExp(
     '(`+)([^`]|[^`][\\s\\S]*?[^`])\\1(?!`)', // 1,2 code
     '(!?)\\[\\[([^[\\]\\n]+?)\\]\\]', // 3,4 wikilink
     '!?\\[([^\\]\\n]*)\\]\\(\\s*<?([^)\\s>]+)>?(?:\\s+"[^"]*")?\\s*\\)', // 5,6 md link
-    '(https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?\'"])', // 7 url
+    '((?:https?|principia):\\/\\/[^\\s<>()]+[^\\s<>().,;:!?\'"])', // 7 url (principia:// opens a page in the app)
     '\\*\\*(?=\\S)([^*\\n]*?\\S)\\*\\*', // 8 strong
     '(?<![A-Za-z0-9_])__(?=\\S)([^_\\n]*?\\S)__(?![A-Za-z0-9_])', // 9 strong
     '~~(?=\\S)([^~\\n]*?\\S)~~', // 10 del
@@ -294,7 +294,7 @@ export function parseInline(s: string, opts: RenderOptions = {}): Inline[] {
         const [path, hash] = target.split('#')
         const l = wikilink(`${path!.replace(/\.md$/i, '')}${hash ? `#${hash}` : ''}`, false, opts)
         out.push({ ...l, label: m[5] || l.label })
-      } else if (/^(https?|mailto|obsidian):/i.test(href)) out.push({ t: 'url', href, c: parseInline(m[5] || href, opts) })
+      } else if (/^(https?|mailto|obsidian|principia):/i.test(href)) out.push({ t: 'url', href, c: parseInline(m[5] || href, opts) })
       else text(m[0])
     } else if (m[7] !== undefined) out.push({ t: 'url', href: m[7], c: [{ t: 'text', v: m[7] }] })
     else if (m[8] !== undefined || m[9] !== undefined) out.push({ t: 'strong', c: parseInline((m[8] ?? m[9])!, opts) })

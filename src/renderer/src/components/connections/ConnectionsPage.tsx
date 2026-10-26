@@ -12,8 +12,9 @@ import { Button, Sheet } from '../ui'
 import { Icon } from '../Icon'
 import { GatewayConnections } from '../GatewayConnections'
 import { SlackConnectionCard } from '../slack/SetupGuide'
-import { buildCatalog, GROUP_TITLE, searchCards, type CardGroup, type ConnCard } from '../../lib/connections'
+import { buildCatalog, cardLink, GROUP_TITLE, searchCards, type CardGroup, type ConnCard } from '../../lib/connections'
 import { CONNECTION_CATALOG } from '../../lib/connectionCatalog'
+import { CUSTOM_CONNECT_TOOL } from '@shared/deepLink'
 import { routeAsk } from '../../lib/desk'
 import { syncedAgo, useLinear } from '../../lib/linear'
 import { confirmNative, errorMessage, hive, useHiveEvent } from '../../lib/hive'
@@ -27,16 +28,24 @@ import { LinearConnectSheet } from './LinearConnectSheet'
 import '../../styles/settings5.css'
 
 export type ConnectSheet = 'instagram' | 'github' | 'linear' | 'slack'
+const SHEETS: readonly string[] = ['instagram', 'github', 'linear', 'slack']
+const sheetOf = (tool: string | null | undefined): ConnectSheet | null => (tool && SHEETS.includes(tool) ? (tool as ConnectSheet) : null)
 
-export function ConnectionsPage({ company, open: openFirst }: { company: CompanyPassport; open?: ConnectSheet | null }): React.JSX.Element {
+/**
+ * `open`: a tool a principia://connect/<tool> link (or another page) asked for. Instagram, GitHub, Linear and Slack open
+ * their sheet; `mcp` opens "add your own MCP server"; any other tool scrolls to its card and marks it. Nothing connects
+ * until the person presses the card's button.
+ */
+export function ConnectionsPage({ company, open: openFirst }: { company: CompanyPassport; open?: string | null }): React.JSX.Element {
   const code = useIsCode(company.id)
   const agents = useDeskAgents(company.id)
   const writer = useMemo(() => (agents.length ? (routeAsk('write this week’s instagram posts', agents)?.agent.name ?? null) : null), [agents])
   const [connections, setConnections] = useState<GatewayConnection[] | null>(null)
   const [keyNames, setKeyNames] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState('')
-  const [sheet, setSheet] = useState<ConnectSheet | null>(openFirst ?? null)
-  const [editor, setEditor] = useState<{ connectionId: string | null } | null>(null)
+  const [sheet, setSheet] = useState<ConnectSheet | null>(sheetOf(openFirst))
+  const [editor, setEditor] = useState<{ connectionId: string | null } | null>(openFirst === CUSTOM_CONNECT_TOOL ? { connectionId: null } : null)
+  const [focus, setFocus] = useState<string | null>(openFirst && !sheetOf(openFirst) && openFirst !== CUSTOM_CONNECT_TOOL ? openFirst : null)
   const [manage, setManage] = useState<GatewayConnection | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const gh = useGhLogin()
@@ -51,7 +60,11 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [company.id])
-  useEffect(() => setSheet(openFirst ?? null), [openFirst])
+  useEffect(() => {
+    setSheet(sheetOf(openFirst))
+    if (openFirst === CUSTOM_CONNECT_TOOL) setEditor({ connectionId: null })
+    setFocus(openFirst && !sheetOf(openFirst) && openFirst !== CUSTOM_CONNECT_TOOL ? openFirst : null)
+  }, [openFirst])
   useEffect(() => {
     if (slackAvailable === null) void loadSlack()
   }, [slackAvailable])
@@ -84,6 +97,20 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
     [company, code, writer, connections, gh, slack, linear, keyNames]
   )
   const shown = useMemo(() => searchCards(cards, query), [cards, query])
+  // a link named this card: bring it into view once the catalog is there, and mark it for a moment
+  useEffect(() => {
+    if (!focus || connections === null) return
+    const el = document.querySelector(`[data-conn="${CSS.escape(focus)}"]`)
+    if (!el) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    const t = setTimeout(() => setFocus(null), 2600)
+    return () => clearTimeout(t)
+  }, [focus, connections])
+  const copyLink = (c: ConnCard): void => {
+    const url = cardLink(c, company.id)
+    if (!url) return
+    void hive.clipboard.writeText({ text: url }).then(() => toast(`Link copied. It opens the ${c.name} card for ${company.name}.`), (e) => toast(errorMessage(e), 'error'))
+  }
   const groups = useMemo(() => {
     const m = new Map<CardGroup, ConnCard[]>()
     for (const c of shown) m.set(c.group, [...(m.get(c.group) ?? []), c])
@@ -143,14 +170,14 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
             <div className="s5-group__title">{GROUP_TITLE[g](company.name, code)}</div>
             <div className="s5-cards">
               {list.map((c) => (
-                <Card key={c.id} card={c} busy={busy === c.id} onAct={() => act(c)} />
+                <Card key={c.id} card={c} busy={busy === c.id} focused={focus === c.id} onAct={() => act(c)} onCopy={cardLink(c, company.id) ? () => copyLink(c) : null} />
               ))}
             </div>
           </section>
         ))
       )}
       <p className="s5__foot text-tertiary">
-        Need to give agents a secret that isn’t a connection, like STRIPE_SECRET_KEY?{' '}
+        Need to give agents a secret that isn’t a connection, like an API key?{' '}
         <button type="button" className="link-btn" onClick={() => void navigate({ name: 'settings', section: 'keys', nonce: Date.now() })}>
           Keys &amp; secrets →
         </button>
@@ -177,12 +204,12 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
   )
 }
 
-function Card({ card: c, busy, onAct }: { card: ConnCard; busy: boolean; onAct: () => void }): React.JSX.Element {
+function Card({ card: c, busy, focused, onAct, onCopy }: { card: ConnCard; busy: boolean; focused: boolean; onAct: () => void; onCopy: (() => void) | null }): React.JSX.Element {
   const tone = c.state === 'connected' ? 'ok' : c.state === 'attention' ? 'needs' : c.state === 'waiting' ? 'run' : 'grey'
   // one primary per card at most, and only where something needs you (the prototype's Reconnect)
   const primary = c.state === 'attention'
   return (
-    <article className={`s5-card ${c.state === 'soon' ? 'is-soon' : ''}`} data-conn={c.id}>
+    <article className={`s5-card ${c.state === 'soon' ? 'is-soon' : ''} ${focused ? 'is-focus' : ''}`} data-conn={c.id}>
       <div className="s5-card__head">
         <span className="s5-card__logo" aria-hidden>
           {c.id === 'github' ? <Icon name="branch" size={15} /> : c.id === 'custom' ? '+' : logoText(c.name)}
@@ -193,6 +220,11 @@ function Card({ card: c, busy, onAct }: { card: ConnCard; busy: boolean; onAct: 
       <p className="s5-card__blurb">{c.blurb}</p>
       {c.note && <p className="s5-card__note">{c.note}</p>}
       <div className="s5-card__foot">
+        {onCopy && (
+          <button type="button" className="s5-card__copy" title="Copy a principia:// link that opens this card" aria-label={`Copy link to ${c.name}`} onClick={onCopy}>
+            <Icon name="link" size={12} /> Copy link
+          </button>
+        )}
         {c.action.kind !== 'none' && (
           <Button size="sm" variant={primary ? 'primary' : 'secondary'} disabled={busy} onClick={onAct}>
             {busy ? 'Opening sign-in…' : c.actionLabel}
