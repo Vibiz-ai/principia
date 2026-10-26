@@ -2,10 +2,10 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import { EMPTY_CHAT_META } from '../../shared/chat'
-import type { PhoneNeeds, PhoneNow, PhoneRoomMember } from '../../shared/remote'
+import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
 import { ago, placeMessage, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
-import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, type Actions, type View } from './render'
+import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
 
 const T = '2026-10-25T10:00:00.000Z'
 const snap = (items: ChatItem[] = [], seq = 1): ChatSnapshot => ({ sessionId: 'se_1', mode: 'chat', available: true, turn: 'idle', activity: null, turnStartedAt: null, items, queue: [], meta: { ...EMPTY_CHAT_META }, seq, note: null })
@@ -105,9 +105,29 @@ describe('@mentions', () => {
 // ---------- screens ----------
 const noop = new Proxy({}, { get: () => () => undefined }) as Actions
 function baseView(): View {
-  return { companies: [{ id: 'co_a', name: 'Northwind', personal: false, paused: false, working: 1, needs: 1 }], companyId: 'co_a', tab: 'now', online: true, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null, openKind: null }
+  return { companies: [{ id: 'co_a', name: 'Northwind', personal: false, paused: false, working: 1, needs: 1 }], companyId: 'co_a', tab: 'now', online: true, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null, tasks: null, task: null, taskId: null, openKind: null }
 }
 const btns = (t: VNode): string[] => findAll(t, (n) => n.tag === 'button').map((b) => textOf(b))
+
+describe('the board (read only)', () => {
+  it('routes: the list and one task', () => {
+    expect(parseRoute('#/c/co_a/tasks')).toEqual({ companyId: 'co_a', tab: 'tasks', open: null })
+    expect(parseRoute('#/c/co_a/tasks/ta_1')).toEqual({ companyId: 'co_a', tab: 'tasks', open: null, task: 'ta_1' })
+    expect(routeHash({ companyId: 'co_a', tab: 'tasks', open: null, task: 'ta 1' })).toBe('#/c/co_a/tasks/ta%201')
+    expect(routeHash({ companyId: 'co_a', tab: 'now', open: null, task: 'ta_1' })).toBe('#/c/co_a/now')
+  })
+  it('lists Needs you, Working, Planned and Done; a task shows its facts and the actions of its Needs you entry', () => {
+    const row = (id: string, column: PhoneTaskRow['column'], x: Partial<PhoneTaskRow> = {}): PhoneTaskRow => ({ id, identifier: id.toUpperCase(), title: `Task ${id}`, status: 'todo', column, who: null, agentId: null, line: null, priority: 0, at: T, ...x })
+    const tasks: PhoneTasks = { companyId: 'co_a', planned: [row('p1', 'planned')], working: [row('w1', 'working', { status: 'in_progress', who: { name: 'Livia', role: '', bust: null }, line: 'Editing the menu' })], needs: [row('n1', 'needs', { status: 'in_review', line: 'Ready for your OK' })], done: [row('d1', 'done', { status: 'done' })], more: 2 }
+    const s = textOf(renderTasks({ ...baseView(), tab: 'tasks', tasks }, noop, Date.parse(T)))
+    for (const w of ['Needs you · 1', 'Working · 1', 'Planned · 1', 'Done this week · 1', 'Editing the menu', 'And 2 more on your Mac', 'Read only']) expect(s).toContain(w)
+    const task: PhoneTaskDetail = { ...row('n1', 'needs', { status: 'in_review' }), description: 'Seven posts for spring.', summary: 'All seven are drafted.', doneNote: null, createdAt: T, updatedAt: T, need: { taskId: 'n1', kind: 'review', title: 'Task n1', text: 'All seven are drafted.', who: null, agentId: null, at: T, options: [] } }
+    const one = renderTasks({ ...baseView(), tab: 'tasks', task, taskId: 'n1' }, noop, Date.parse(T))
+    expect(textOf(one)).toContain('Seven posts for spring.')
+    expect(textOf(one)).toContain('Waiting for your OK')
+    expect(btns(one)).toEqual(expect.arrayContaining(['Approve', 'Send back', 'Not needed']))
+  })
+})
 
 describe('screens', () => {
   it('Now: who works, with the live sentence, and what finished', () => {

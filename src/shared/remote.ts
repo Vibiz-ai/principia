@@ -212,6 +212,10 @@ export const REMOTE_ROUTES = {
   approveTask: 'POST /api/c/:companyId/tasks/:taskId/approve',
   sendBackTask: 'POST /api/c/:companyId/tasks/:taskId/send-back',
   answerTask: 'POST /api/c/:companyId/tasks/:taskId/answer',
+  /** RA3: the company's board, read only (Planned, Working, Needs you, Done in the last 7 days) */
+  tasks: 'GET /api/c/:companyId/tasks',
+  /** RA3: one task of the board, read only, with what the phone may do about it now (its Needs you entry) */
+  task: 'GET /api/c/:companyId/tasks/:taskId',
   /** Not needed: the task is canceled and leaves Needs you (reopen it from the Board on the Mac) */
   cancelTask: 'POST /api/c/:companyId/tasks/:taskId/cancel',
   chats: 'GET /api/c/:companyId/chats',
@@ -347,6 +351,47 @@ export interface PhoneNeeds {
   count: number
   asks: PhoneAsk[]
   tasks: PhoneTaskNeed[]
+}
+
+/** The board on the phone (RA3, read only): which list a task is in. */
+export type PhoneTaskColumn = 'planned' | 'working' | 'needs' | 'done'
+export interface PhoneTaskRow {
+  id: Id
+  /** the board's short id ("ACME-12") */
+  identifier: string
+  title: string
+  /** the board status (triage, backlog, todo, in_progress, in_review, blocked, done) */
+  status: string
+  column: PhoneTaskColumn
+  who: PhoneWho | null
+  agentId: Id | null
+  /** working: what its agent does right now; needs: why it waits on you; planned: blocked by what */
+  line: string | null
+  /** 0 none … 1 urgent … 4 low (the board's priority) */
+  priority: number
+  at: string
+}
+export interface PhoneTasks {
+  companyId: Id
+  planned: PhoneTaskRow[]
+  working: PhoneTaskRow[]
+  needs: PhoneTaskRow[]
+  /** done in the last 7 days, newest first (at most PHONE_TASKS_DONE) */
+  done: PhoneTaskRow[]
+  /** planned tasks left out of the list (beyond PHONE_TASKS_PLANNED) */
+  more: number
+}
+export const PHONE_TASKS_PLANNED = 60
+export const PHONE_TASKS_DONE = 30
+export interface PhoneTaskDetail extends PhoneTaskRow {
+  description: string
+  /** the agent's report, when it sent one */
+  summary: string | null
+  doneNote: string | null
+  createdAt: string
+  updatedAt: string
+  /** what the phone may do now: its Needs you entry (approve, send back, answer, not needed), else null */
+  need: PhoneTaskNeed | null
 }
 
 export interface PhoneChatRow {

@@ -6,12 +6,14 @@
  */
 import { h, type VNode } from '../console/dom'
 import { bust } from '../console/render'
-import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskNeed, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
+import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
 import { md } from './markdown'
 import { ago, chatLines, headline, type ChatLine, type ChatReplica, type Tab } from './model'
 
 export interface Actions {
   tab(t: Tab): void
+  /** the board: open one task, or back to the list (null) */
+  openTask(id: string | null): void
   company(id: string): void
   togglePause(): void
   open(ref: { kind: 'session' | 'agent'; id: string }): void
@@ -57,6 +59,10 @@ export interface View {
   session: PhoneSession | null
   replica: ChatReplica | null
   agent: PhoneAgent | null
+  /** the board (read only) and the task open on it */
+  tasks: PhoneTasks | null
+  task: PhoneTaskDetail | null
+  taskId: string | null
   openKind: 'session' | 'agent' | null
 }
 
@@ -121,6 +127,7 @@ export function renderNow(v: View, a: Actions, now = Date.now()): VNode {
     h('p', { class: 'lede' }, headline({ working: n.working.length, needs: n.needs, paused: n.paused }), n.autopilot && n.autopilot !== 'held' ? h('span', { class: `ap is-${n.autopilot}` }, n.autopilotLabel ?? (n.autopilot === 'on' ? 'Autopilot on' : 'Autopilot off')) : null),
     n.paused ? h('div', { class: 'banner' }, h('span', { class: 'glyph' }, '‖'), `${n.name} is paused. Agents start nothing new and schedules wait.`) : null,
     n.needs ? h('button', { type: 'button', class: 'callout', on: { click: () => a.tab('needs') } }, tile('needs'), `${n.needs} thing${n.needs === 1 ? '' : 's'} need${n.needs === 1 ? 's' : ''} you`, h('span', { class: 'go' }, '›')) : null,
+    h('button', { type: 'button', class: 'card row boardlink', on: { click: () => a.tab('tasks') } }, h('span', { class: 'row__t' }, h('b', null, 'The board'), h('span', { class: 'row__s' }, 'What the team plans, works on and finished')), h('span', { class: 'go', 'aria-hidden': 'true' }, '›')),
     h('h2', { class: 'sec' }, 'Working now'),
     n.working.length ? h('div', { class: 'list' }, ...n.working.map((w) => workingRow(w, a, now))) : h('div', { class: 'card quiet' }, n.paused ? 'Resume to let agents pick up their work.' : 'No one is working right now.'),
     h('h2', { class: 'sec' }, 'Finished lately'),
@@ -206,6 +213,59 @@ function reviewButtons(taskId: string, v: View, a: Actions, small = false): VNod
       h('div', { class: 'opts' }, btn('Send back', () => a.sendBack(taskId), { kind: 'primary', disabled: busy || !(v.drafts[back] ?? '').trim(), small }), btn('Cancel', () => a.draft(`${back}:open`, ''), { kind: 'ghost', small }))
     )
   return h('div', { class: 'opts' }, btn('Approve', () => a.approve(taskId), { kind: 'primary', disabled: busy, small }), btn('Send back', () => a.draft(`${back}:open`, '1'), { kind: 'ghost', disabled: busy, small }))
+}
+
+// ---------- the board (read only) ----------
+
+const STATUS: Record<string, string> = { triage: 'New', backlog: 'Backlog', todo: 'To do', in_progress: 'Working', in_review: 'Waiting for your OK', blocked: 'Blocked', done: 'Done', canceled: 'Canceled' }
+const COLUMN_TILE: Record<PhoneTaskRow['column'], 'ok' | 'needs' | 'run' | 'q'> = { planned: 'q', working: 'run', needs: 'needs', done: 'ok' }
+
+export function renderTasks(v: View, a: Actions, now = Date.now()): VNode {
+  if (v.taskId) return renderTask(v, a, now)
+  const b = v.tasks
+  if (!b) return loading()
+  const all = b.planned.length + b.working.length + b.needs.length + b.done.length
+  const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.tab('now') } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, 'The board'), h('span', { class: 'row__s' }, 'Read only: change tasks on your Mac')))
+  if (!all) return h('section', { class: 'page' }, head, empty('Nothing on the board', 'When your team plans work, it shows here.', 'scribe'))
+  const group = (title: string, rows: PhoneTaskRow[], none: string): VNode[] => [h('h2', { class: 'sec' }, `${title}${rows.length ? ` · ${rows.length}` : ''}`), rows.length ? h('div', { class: 'list rows' }, ...rows.map((r) => taskRow(r, a, now))) : h('div', { class: 'card quiet' }, none)]
+  return h(
+    'section',
+    { class: 'page' },
+    head,
+    ...group('Needs you', b.needs, 'Nothing waits on you.'),
+    ...group('Working', b.working, 'No one is working on a task right now.'),
+    ...group('Planned', b.planned, 'Nothing planned yet.'),
+    b.more ? h('p', { class: 'sub' }, `And ${b.more} more on your Mac.`) : null,
+    ...group('Done this week', b.done, 'Nothing finished this week.')
+  )
+}
+function taskRow(r: PhoneTaskRow, a: Actions, now: number): VNode {
+  return h(
+    'button',
+    { type: 'button', class: 'drow tlink', on: { click: () => a.openTask(r.id) } },
+    tile(COLUMN_TILE[r.column]),
+    h('span', { class: 'row__t' }, h('b', null, r.title), h('span', { class: 'row__s' }, [r.who?.name, r.column === 'planned' || r.column === 'done' ? STATUS[r.status] : null].filter(Boolean).join(' · ') || r.identifier), r.line ? h('span', { class: r.column === 'working' ? 'activity' : 'sum' }, r.column === 'working' ? h('i', { class: 'dot', 'aria-hidden': 'true' }) : null, r.line) : null),
+    h('span', { class: 'tm' }, ago(r.at, now))
+  )
+}
+export function renderTask(v: View, a: Actions, now = Date.now()): VNode {
+  const t = v.task
+  const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back to the board', on: { click: () => a.openTask(null) } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, t?.identifier ?? 'Task'), h('span', { class: 'row__s' }, t ? STATUS[t.status] ?? t.status : '')))
+  if (!t || t.id !== v.taskId) return h('section', { class: 'page' }, head, loading())
+  const fact = (k: string, val: string | null): VNode | null => (val ? h('div', { class: 'fact' }, h('span', { class: 'row__s' }, k), h('span', null, val)) : null)
+  return h(
+    'section',
+    { class: 'page' },
+    head,
+    h('h1', { class: 'title' }, t.title),
+    h('div', { class: 'card col' }, fact('Status', STATUS[t.status] ?? t.status), fact('Assigned to', t.who?.name ?? 'No one yet'), t.line ? fact(t.column === 'working' ? 'Now' : 'Why', t.line) : null, fact('Created', new Date(t.createdAt).toLocaleString()), fact('Updated', `${new Date(t.updatedAt).toLocaleString()} (${ago(t.updatedAt, now)})`)),
+    t.need ? taskCard(t.need, v, a, now) : null,
+    t.summary ? h('h2', { class: 'sec' }, 'Report') : null,
+    t.summary ? h('div', { class: 'card md' }, md(t.summary)) : null,
+    t.doneNote && t.doneNote !== t.summary ? h('div', { class: 'card quiet' }, t.doneNote) : null,
+    h('h2', { class: 'sec' }, 'Description'),
+    t.description.trim() ? h('div', { class: 'card md' }, md(t.description)) : h('div', { class: 'card quiet' }, 'No description.')
+  )
 }
 
 // ---------- Chats ----------

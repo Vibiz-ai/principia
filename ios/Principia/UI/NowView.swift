@@ -30,6 +30,19 @@ struct NowView: View {
                         .tint(Theme.ink.opacity(0.92))
                         .foregroundStyle(Theme.page)
                     }
+                    NavigationLink { TasksView() } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "list.bullet.rectangle").foregroundStyle(Theme.soft)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("The board").fontWeight(.semibold).foregroundStyle(Theme.ink)
+                                Text("What the team plans, works on and finished").font(.subheadline).foregroundStyle(Theme.muted)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Theme.faint)
+                        }
+                        .glassCard(radius: 22, interactive: true)
+                    }
+                    .buttonStyle(.plain)
                     SectionLabel("Working now")
                     if n.working.isEmpty {
                         Text(n.paused ? "Resume to let agents pick up their work." : "No one is working right now.")

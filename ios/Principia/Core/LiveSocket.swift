@@ -7,6 +7,12 @@ protocol LiveConnection: AnyObject {
     func close()
     /// once closed: the close code (4401 = the Mac does not know this token) and its reason
     var closeCode: Int? { get }
+    /// the HTTP status of a refused upgrade (a dead quick tunnel: 530 from Cloudflare), if any
+    var handshakeStatus: Int? { get }
+}
+
+extension LiveConnection {
+    var handshakeStatus: Int? { nil }
 }
 
 protocol LiveConnector {
@@ -23,6 +29,9 @@ final class LiveSocket {
         var onState: (Bool) -> Void
         var onReconnect: () -> Void
         var onUnauthorized: () -> Void
+        /// the Mac's address looks gone (Cloudflare refused the upgrade, no such name, refused, timed out) twice in a row:
+        /// the app checks with a call and shows "Waiting for your Mac" if so (RA8)
+        var onGone: () -> Void = {}
     }
 
     private let connector: LiveConnector
@@ -35,6 +44,7 @@ final class LiveSocket {
     private var closed = false
     private var tries = 0
     private var byeSeen = false
+    private var goneStreak = 0
     private var lastSub: String?
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
@@ -126,6 +136,7 @@ final class LiveSocket {
                 if case .hello = m {
                     let again = tries > 0
                     tries = 0
+                    goneStreak = 0
                     setUp(true)
                     if again { h.onReconnect() }
                 }
@@ -142,9 +153,19 @@ final class LiveSocket {
                 h.onUnauthorized()
                 return
             }
+            if Self.looksGone(error, status: c.handshakeStatus) {
+                goneStreak += 1
+                if goneStreak >= 2 { goneStreak = 0; h.onGone() }
+            }
             // revoked / turned off said bye first: keep trying slowly in case it comes back
             retry(min: c.closeCode == 4401 ? 30 : nil)
         }
+    }
+
+    /// A failed socket that says the address is gone, not just a dropped connection.
+    nonisolated static func looksGone(_ error: Error, status: Int?) -> Bool {
+        if let status { return status == 530 || (500...599).contains(status) }
+        return MacReach.isUnreachable(error)
     }
 
     private func retry(min: Double? = nil) {
@@ -209,6 +230,11 @@ final class URLSessionLiveConnection: NSObject, LiveConnection, URLSessionWebSoc
     func close() {
         task.cancel(with: .goingAway, reason: nil)
         session.invalidateAndCancel()
+    }
+
+    var handshakeStatus: Int? {
+        guard let s = (task.response as? HTTPURLResponse)?.statusCode, s != 101 else { return nil }
+        return s
     }
 
     var closeCode: Int? {

@@ -14,7 +14,7 @@ import type { Session } from '@shared/types'
 import type { ForumChannel, ForumMember, ForumMessage } from '@shared/forum'
 import type { ChatSnapshot } from '@shared/chat'
 import { EMPTY_CHAT_META } from '@shared/chat'
-import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg, type PhoneSession } from '@shared/remote'
+import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg, type PhoneSession, type PhoneTaskDetail, type PhoneTasks } from '@shared/remote'
 import { HiveError } from '@shared/errors'
 import { PairError, RemoteAuth } from './auth'
 import { RemoteServer, bundleFiles, parseCookies } from './server'
@@ -372,6 +372,56 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(chats.rows.map((r) => r.key).sort()).toEqual(['agent:ag_a', 'session:se_a'])
     const text = JSON.stringify([needs, chats, await api.handle('now', { companyId: 'co_a' }, {}, dev), await api.handle('room', { companyId: 'co_a' }, {}, dev)])
     for (const leak of ['co_b', 'se_b', 'ag_b', 'ask_b', 'tb_rev', 'Harbor', 'Recall letters', 'marcus', 'ch_b']) expect(text).not.toContain(leak)
+  })
+  it('the board (tasks, task): one company, read only, redacted, Done only for 7 days', async () => {
+    const { host, d } = world()
+    const now = Date.now()
+    const ago = (days: number): string => new Date(now - days * 86_400_000).toISOString()
+    d.tasks.push(
+      task('ta_todo', 'co_a', { status: 'todo', priority: 1, title: 'Price list with key sk-live-SECRET', description: 'Use sk-live-SECRET for the shop' }),
+      task('ta_blk', 'co_a', { status: 'blocked', blockReason: 'deps', title: 'Launch post' }),
+      task('ta_done', 'co_a', { status: 'done', agentId: 'ag_a', updatedAt: ago(2), title: 'Logo', report: { outcome: 'review', summary: 'Three logos.', evidence: [], at: T } }),
+      task('ta_old', 'co_a', { status: 'done', updatedAt: ago(9), title: 'Old thing' }),
+      task('ta_cxl', 'co_a', { status: 'canceled', title: 'Dropped' }),
+      task('tb_todo', 'co_b', { status: 'todo', title: 'Harbor plan' })
+    )
+    const api = new PhoneApi({ ...host, redact: (s) => s.replace(/sk-live-\w+/g, '••••SHOP_KEY') })
+    const writes = d.calls.length
+    const b = (await api.handle('tasks', { companyId: 'co_a' }, {}, dev)) as PhoneTasks
+    expect(b.planned.map((t) => t.id)).toEqual(['ta_todo', 'ta_blk'])
+    expect(b.planned[1]!.line).toBe('Waits for another task')
+    expect(b.working.map((t) => t.id)).toEqual(['ta_run'])
+    expect(b.working[0]!.who?.name).toBeTruthy()
+    expect(b.needs.map((t) => t.id)).toEqual(['ta_rev'])
+    expect(b.needs[0]!.line).toBe('Ready for your OK')
+    expect(b.done.map((t) => t.id)).toEqual(['ta_done'])
+    const text = JSON.stringify(b)
+    for (const leak of ['co_b', 'tb_', 'Harbor', 'Recall letters', 'ta_old', 'Dropped', 'sk-live']) expect(text).not.toContain(leak)
+    expect(text).toContain('••••SHOP_KEY')
+
+    const one = (await api.handle('task', { companyId: 'co_a', taskId: 'ta_todo' }, {}, dev)) as PhoneTaskDetail
+    expect(one.description).toBe('Use ••••SHOP_KEY for the shop')
+    expect(one.need).toBeNull()
+    const rev = (await api.handle('task', { companyId: 'co_a', taskId: 'ta_rev' }, {}, dev)) as PhoneTaskDetail
+    expect(rev).toMatchObject({ column: 'needs', summary: 'Seven posts are ready.', need: { kind: 'review', taskId: 'ta_rev' } })
+    // another company's task, a canceled one, an unknown id: 404
+    await expect(api.handle('task', { companyId: 'co_a', taskId: 'tb_rev' }, {}, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('task', { companyId: 'co_a', taskId: 'ta_cxl' }, {}, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('task', { companyId: 'co_a', taskId: 'nope' }, {}, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('tasks', { companyId: 'co_zzz' }, {}, dev)).rejects.toMatchObject({ status: 404 })
+    // read only: nothing but reads went to the desktop
+    expect(d.calls.slice(writes).filter((c) => !/:(list|get|state|summary|suggestions)$/.test(c.channel))).toEqual([])
+    expect(matchRemoteRoute('GET', '/api/c/co_a/tasks')).toEqual({ name: 'tasks', params: { companyId: 'co_a' } })
+    expect(matchRemoteRoute('GET', '/api/c/co_a/tasks/ta_1')).toEqual({ name: 'task', params: { companyId: 'co_a', taskId: 'ta_1' } })
+    expect(matchRemoteRoute('POST', '/api/c/co_a/tasks')).toBeNull()
+  })
+  it('the board redacts before it clips: a secret at the cut never leaks its first characters', async () => {
+    const { host, d } = world()
+    const key = 'sk-live-' + 'A1b2C3d4'.repeat(4)
+    d.tasks.push(task('ta_long', 'co_a', { status: 'todo', title: 'x'.repeat(190) + ' ' + key, description: 'y'.repeat(3970) + key }))
+    const api = new PhoneApi({ ...host, redact: (s) => s.split(key).join('••••SHOP_KEY') })
+    const text = JSON.stringify([await api.handle('tasks', { companyId: 'co_a' }, {}, dev), await api.handle('task', { companyId: 'co_a', taskId: 'ta_long' }, {}, dev)])
+    expect(text).not.toContain('sk-live-A1b2')
   })
   it('Principia\'s open suggestions count in Needs you and show for their company only (decided on the Mac)', async () => {
     const { host, d } = world()

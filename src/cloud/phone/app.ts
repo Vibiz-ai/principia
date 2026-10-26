@@ -9,13 +9,13 @@
  * carries it. The site itself holds no data: everything comes from the Mac, which is the authority.
  */
 import type { ChatOp, ChatSnapshot } from '../../shared/chat'
-import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef } from '../../shared/remote'
+import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
 import { checkMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
 import { ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
-import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, type Actions, type View } from './render'
+import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type View } from './render'
 
 declare const __PHONE_HOSTED__: boolean
 /** the build for its own site (vite.phone-site.config.ts); the Mac's own bundle is same-origin */
@@ -71,8 +71,11 @@ interface State {
   session: PhoneSession | null
   replica: ChatReplica | null
   agent: PhoneAgent | null
+  /** the board (read only) and the task open on it */
+  tasks: PhoneTasks | null
+  task: PhoneTaskDetail | null
 }
-const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, pasteError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null }
+const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, pasteError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null, tasks: null, task: null }
 let live: Live | null = null
 try {
   // the app scrolls itself (a chat opens at its newest message); the browser never restores an old position
@@ -253,6 +256,17 @@ async function loadChats(): Promise<void> {
 async function loadRoom(channelId?: string | null): Promise<void> {
   st.room = await api.call<PhoneRoom>('room', { params: cid(), query: { channelId: channelId ?? st.room?.channelId ?? undefined } })
 }
+async function loadTasks(): Promise<void> {
+  st.tasks = await api.call<PhoneTasks>('tasks', { params: cid() })
+}
+async function loadTask(taskId: string): Promise<void> {
+  st.task = await api.call<PhoneTaskDetail>('task', { params: { ...cid(), taskId } })
+}
+/** after an action on the board's task: the task and the list again */
+async function reloadBoard(): Promise<void> {
+  if (st.route.tab !== 'tasks') return
+  await Promise.all([loadTasks(), st.route.task ? loadTask(st.route.task) : Promise.resolve()])
+}
 async function loadSession(id: string): Promise<void> {
   const s = await api.call<PhoneSession>('session', { params: { ...cid(), sessionId: id } })
   st.session = s
@@ -280,6 +294,7 @@ async function loadScreen(): Promise<void> {
   else if (r.tab === 'now') jobs.push(loadNow())
   else if (r.tab === 'chats') jobs.push(loadChats())
   else if (r.tab === 'room') jobs.push(loadRoom())
+  else if (r.tab === 'tasks') jobs.push(r.task ? loadTask(r.task) : loadTasks())
   await Promise.all(jobs)
 }
 function subscribe(): void {
@@ -301,6 +316,7 @@ async function onRoute(): Promise<void> {
   if (changedCo) {
     st.now = st.needs = st.chats = null
     st.room = null
+    st.tasks = st.task = null
   }
   if (st.route.open?.id !== prev.open?.id || st.route.open?.kind !== prev.open?.kind) {
     st.session = null
@@ -377,6 +393,7 @@ async function flushLive(): Promise<void> {
   else if (!r.open && r.tab === 'now' && what.has('now')) jobs.push(loadNow())
   else if (!r.open && r.tab === 'chats' && what.has('chats')) jobs.push(loadChats())
   else if (!r.open && r.tab === 'room' && what.has('room')) jobs.push(loadRoom())
+  else if (!r.open && r.tab === 'tasks' && (what.has('now') || what.has('needs'))) jobs.push(r.task ? loadTask(r.task) : loadTasks())
   try {
     await Promise.all(jobs)
     render({ live: true })
@@ -389,10 +406,15 @@ async function flushLive(): Promise<void> {
 
 const actions: Actions = {
   tab(t: Tab) {
-    go({ tab: t, open: null })
+    go({ tab: t, open: null, task: undefined })
+  },
+  openTask(id) {
+    if (!id) st.task = null
+    go({ tab: 'tasks', open: null, task: id ?? undefined })
   },
   company(id) {
-    go({ companyId: id, open: null })
+    // an open task belongs to the old company: back to the new company's board
+    go({ companyId: id, open: null, task: undefined })
   },
   togglePause() {
     const co = companies().find((c) => c.id === companyId())
@@ -429,16 +451,18 @@ const actions: Actions = {
     void busy(`task:${taskId}`, async () => {
       setNeeds(await api.call<PhoneNeeds>('approveTask', { params: { ...cid(), taskId }, body: {} }))
       say('Approved')
+      await reloadBoard()
       if (st.route.open?.kind === 'agent') await loadAgent(st.route.open.id)
     })
   },
   notNeeded(taskId) {
     if (settling()) return
-    const t = st.needs?.tasks.find((x) => x.taskId === taskId)
+    const t = st.needs?.tasks.find((x) => x.taskId === taskId) ?? (st.task?.need?.taskId === taskId ? st.task.need : undefined)
     if (!window.confirm(`Cancel “${t?.title ?? 'this task'}”? It leaves Needs you. You can reopen it from the Board on your Mac.`)) return
     void busy(`task:${taskId}`, async () => {
       setNeeds(await api.call<PhoneNeeds>('cancelTask', { params: { ...cid(), taskId }, body: {} }))
       say('Canceled')
+      await reloadBoard()
     })
   },
   sendBack(taskId) {
@@ -450,6 +474,7 @@ const actions: Actions = {
       delete st.drafts[key]
       delete st.drafts[`${key}:open`]
       say('Sent back')
+      await reloadBoard()
     })
   },
   answerTask(taskId, option) {
@@ -460,6 +485,7 @@ const actions: Actions = {
       setNeeds(await api.call<PhoneNeeds>('answerTask', { params: { ...cid(), taskId }, body: { text } }))
       delete st.drafts[key]
       say('Answered')
+      await reloadBoard()
       if (st.route.open?.kind === 'agent') await loadAgent(st.route.open.id)
     })
   },
@@ -612,7 +638,7 @@ function updateDisabled(): void {
 let stick = true
 let deferred = false
 function view(): View {
-  return { companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, openKind: st.route.open?.kind ?? null }
+  return { companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, tasks: st.tasks, task: st.task, taskId: st.route.tab === 'tasks' ? (st.route.task ?? null) : null, openKind: st.route.open?.kind ?? null }
 }
 function screen(v: View): VNode {
   const r = st.route
@@ -621,6 +647,7 @@ function screen(v: View): VNode {
   if (r.tab === 'needs') return renderNeeds(v, actions)
   if (r.tab === 'chats') return renderChats(v, actions)
   if (r.tab === 'room') return renderRoom(v, actions)
+  if (r.tab === 'tasks') return renderTasks(v, actions)
   return renderNow(v, actions)
 }
 function swap(el: HTMLElement, node: VNode | null): void {

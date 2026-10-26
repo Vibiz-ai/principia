@@ -29,11 +29,23 @@ final class AppModel {
     var session: PhoneSession?
     var replica: ChatReplica?
     var agent: PhoneAgent?
+    /// the board (read only, from Now) and the task open on it
+    var board: PhoneTasks?
+    var boardTask: PhoneTaskDetail?
+    /// board screens on the stack (the list, a task): while any shows, live changes refresh it
+    var boardViews = 0
+    var boardOpen: Bool { boardViews > 0 }
     var busy: Set<String> = []
     var toast: String?
     var pairBusy = false
     var pairError: String?
     var outError: String?
+    /// "Waiting for your Mac" (RA8): checking a new address, what came of it, a retry of the last one in flight
+    var moveBusy = false
+    var moveError: String?
+    var retrying = false
+    /// the last try failed because this phone has no internet
+    var phoneOffline = false
     var deviceName: String = UIDevice.current.model
     /// Face ID before the app shows anything (Settings, off by default)
     var lockEnabled: Bool {
@@ -121,10 +133,65 @@ final class AppModel {
         if paired != nil { Task { await loadMe() } }
     }
 
+    /// Try again (the button, the foreground, and every 20 s while waiting): the Mac's last address, in case it restarted
+    /// with the same one or Phone is on again.
     func retry() async {
         outError = nil
         if paired == nil { phase = .out(.unpaired); return }
+        guard !retrying, !moveBusy else { return }
+        retrying = true
+        defer { retrying = false }
         await loadMe()
+    }
+
+    // ---------- RA8: the Mac's new address ----------
+
+    /// What was typed, pasted, scanned or opened on "Waiting for your Mac": the tunnel's words, the Mac's move link
+    /// (`<site>/#move=…`), its address, or a fresh pairing link (which pairs as usual).
+    func move(_ text: String) async {
+        moveError = nil
+        guard let p = paired else {
+            if let link = PairLink.parse(text) { open(link: link) } else { outError = "Pair this phone first: scan the code on your Mac." }
+            return
+        }
+        if let mac = MacMove.macFromTyped(text, site: p.site) {
+            await moveTo(mac)
+        } else if let link = PairLink.parse(text) {
+            open(link: link)
+        } else {
+            moveError = "Type the words your Mac shows under Paired phones, or paste its link."
+        }
+    }
+
+    /// The new address must prove it is this phone's Mac (a fresh nonce signed with the token's hash, bound to that
+    /// address) before the token goes there. Only then is it kept and the app reconnects.
+    func moveTo(_ mac: String) async {
+        guard let p = paired, !moveBusy else { return }
+        if mac == p.mac { await retry(); return }
+        moveBusy = true
+        moveError = nil
+        defer { moveBusy = false }
+        let r = await MacMove.check(transport: api.transport, mac: mac, site: p.site, deviceId: p.deviceId, token: p.token)
+        switch r {
+        case .ok:
+            var n = p
+            n.mac = mac
+            store.save(n)
+            paired = n
+            live?.stop()
+            live = nil
+            api.target = APITarget(mac: n.mac, site: n.site, token: n.token)
+            PushManager.shared.mac = n.mac
+            await loadMe()
+            if phase == .main { say("Connected to your Mac at its new address") }
+        case .unknown:
+            forget()
+            outError = "That Mac does not know this phone any more. Scan a new code on your Mac."
+        case .gone:
+            moveError = "Nothing answers at that address. On your Mac, check that Phone is on and shared, then try again."
+        case .wrong:
+            moveError = "That address is not your Mac. Check the words in Settings › App › Phone on your Mac."
+        }
     }
 
     /// Forget this Mac: its address and token leave this phone.
@@ -159,6 +226,7 @@ final class AppModel {
 
     private func clearViews() {
         me = nil; now = nil; needs = nil; chats = nil; room = nil; session = nil; replica = nil; agent = nil; chatPath = []
+        board = nil; boardTask = nil
         online = false
     }
 
@@ -171,6 +239,8 @@ final class AppModel {
                 companyId = m.companies.first(where: { $0.id == last })?.id ?? m.companies.first(where: { !$0.personal })?.id ?? m.companies.first?.id
             }
             phase = .main
+            phoneOffline = false
+            moveError = nil
             startLive()
             await refresh([.now, .needs, .chats, .room])
         } catch {
@@ -180,11 +250,17 @@ final class AppModel {
 
     /// What a failed call means for the app.
     func fail(_ error: Error) {
+        if error is CancellationError { return }
         switch error as? APIError {
         case .notPaired?: signedOut(.revoked)
         case .macGone?:
+            phoneOffline = false
             if phase == .main { online = false; say("Your Mac is not answering") }
             signedOut(.gone)
+        case .noInternet?:
+            phoneOffline = true
+            online = false
+            if phase == .main { say("This phone is offline") } else { signedOut(.gone) }
         case .server(_, let m)?: say(m)
         default: say((error as? LocalizedError)?.errorDescription ?? "Something went wrong")
         }
@@ -209,11 +285,18 @@ final class AppModel {
             onMessage: { [weak self] m in self?.onLive(m) },
             onState: { [weak self] up in self?.online = up },
             onReconnect: { [weak self] in Task { await self?.refresh([.now, .needs, .chats, .room]); await self?.reloadOpen() } },
-            onUnauthorized: { [weak self] in self?.signedOut(.revoked) }
+            onUnauthorized: { [weak self] in self?.signedOut(.revoked) },
+            onGone: { [weak self] in Task { await self?.probe() } }
         ))
         live = ls
         ls.start()
         subscribe()
+    }
+
+    /// The socket says the address looks gone: one call decides (a gone Mac shows "Waiting for your Mac").
+    private func probe() async {
+        guard phase == .main else { return }
+        do { _ = try await api.me() } catch { fail(error) }
     }
 
     func subscribe() {
@@ -238,6 +321,7 @@ final class AppModel {
                 }
             }
             Task { await refresh(views) }
+            if boardOpen && (views.contains(.now) || views.contains(.needs)) { Task { await reloadBoard() } }
             if openRef?.kind == .agent { Task { await reloadOpen() } }
         case .chat(let sid, let seq, let ops):
             if Self.reloadsOnChat(sid, replica: replica, session: session) { Task { await reloadOpen() }; return }
@@ -298,8 +382,9 @@ final class AppModel {
         companyId = id
         UserDefaults.standard.set(id, forKey: Self.lastCompanyKey)
         now = nil; needs = nil; chats = nil; room = nil; chatPath = []; session = nil; replica = nil; agent = nil
+        board = nil; boardTask = nil
         subscribe()
-        Task { await refresh([.now, .needs, .chats, .room]) }
+        Task { await refresh([.now, .needs, .chats, .room]); await reloadBoard() }
     }
 
     func selectTab(_ t: AppTab) {
@@ -321,6 +406,27 @@ final class AppModel {
         }
     }
 
+    // ---------- the board (read only) ----------
+
+    func loadBoard() async {
+        guard let co = companyId, phase == .main else { return }
+        do { board = try await api.tasks(co) } catch { fail(error) }
+    }
+    func loadBoardTask(_ id: String) async {
+        guard let co = companyId, phase == .main else { return }
+        if boardTask?.id != id { boardTask = nil }
+        do { boardTask = try await api.task(co, id) } catch APIError.server(404, _) {
+            boardTask = nil
+            say("That task is not on the board any more")
+        } catch { fail(error) }
+    }
+    /// after an action or a live change: the list, and the task open on it
+    func reloadBoard() async {
+        guard boardOpen else { return }
+        await loadBoard()
+        if let id = boardTask?.id { await loadBoardTask(id) }
+    }
+
     // ---------- Needs you ----------
 
     func answerAsk(_ ask: PhoneAsk, optionId: String?, text: String?) async {
@@ -335,19 +441,19 @@ final class AppModel {
     }
     func approve(_ taskId: String) async {
         guard let co = companyId else { return }
-        await run("task:\(taskId)") { self.needs = try await self.api.approve(co, taskId: taskId); self.say("Approved"); await self.reloadAgentIfOpen() }
+        await run("task:\(taskId)") { self.needs = try await self.api.approve(co, taskId: taskId); self.say("Approved"); await self.reloadAgentIfOpen(); await self.reloadBoard() }
     }
     func sendBack(_ taskId: String, text: String) async {
         guard let co = companyId else { return }
-        await run("task:\(taskId)") { self.needs = try await self.api.sendBack(co, taskId: taskId, text: text); self.say("Sent back"); await self.reloadAgentIfOpen() }
+        await run("task:\(taskId)") { self.needs = try await self.api.sendBack(co, taskId: taskId, text: text); self.say("Sent back"); await self.reloadAgentIfOpen(); await self.reloadBoard() }
     }
     func answerTask(_ taskId: String, text: String) async {
         guard let co = companyId else { return }
-        await run("task:\(taskId)") { self.needs = try await self.api.answerTask(co, taskId: taskId, text: text); self.say("Answered"); await self.reloadAgentIfOpen() }
+        await run("task:\(taskId)") { self.needs = try await self.api.answerTask(co, taskId: taskId, text: text); self.say("Answered"); await self.reloadAgentIfOpen(); await self.reloadBoard() }
     }
     func notNeeded(_ taskId: String) async {
         guard let co = companyId else { return }
-        await run("task:\(taskId)") { self.needs = try await self.api.notNeeded(co, taskId: taskId); self.say("Canceled. Reopen it from the Board on your Mac.") }
+        await run("task:\(taskId)") { self.needs = try await self.api.notNeeded(co, taskId: taskId); self.say("Canceled. Reopen it from the Board on your Mac."); await self.reloadBoard() }
     }
 
     // ---------- Chats ----------
@@ -478,7 +584,9 @@ final class AppModel {
     /// screen (what a notification will open once the push relay exists).
     func handle(url: URL) {
         guard url.scheme?.lowercased() == "principia" else { return }
-        if url.host == "pair" {
+        if url.host == "pair" || url.host == "move" {
+            // principia://pair?site=<site>#move=<the Mac's new address> (RA8): check it, then go there
+            if url.fragment?.contains("move=") == true { Task { await move(url.absoluteString) }; return }
             if let link = PairLink.parse(url.absoluteString) { open(link: link) } else { say("That is not a pairing link.") }
             return
         }

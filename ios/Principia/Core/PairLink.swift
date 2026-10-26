@@ -37,6 +37,14 @@ struct PairLink: Equatable, Sendable {
 
     /// `mac=…&code=…` (a leading `#` or `/` is fine) -> the Mac's origin and the code.
     static func parseFragment(_ fragment: String) -> (mac: String, code: String)? {
+        let q = fragmentParams(fragment)
+        guard let code = q["code"], code.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return nil }
+        guard let macRaw = q["mac"], let mac = siteOrigin(macRaw) else { return nil }
+        return (mac, code)
+    }
+
+    /// `#a=1&b=2` (a leading `#` or `/` is fine) -> its values, decoded as URLSearchParams does; the first of a name wins.
+    static func fragmentParams(_ fragment: String) -> [String: String] {
         var f = fragment
         while f.hasPrefix("#") || f.hasPrefix("/") { f.removeFirst() }
         var q: [String: String] = [:]
@@ -45,9 +53,7 @@ struct PairLink: Equatable, Sendable {
             guard kv.count == 2, q[kv[0]] == nil else { continue }
             q[kv[0]] = kv[1].replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? kv[1]
         }
-        guard let code = q["code"], code.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return nil }
-        guard let macRaw = q["mac"], let mac = siteOrigin(macRaw) else { return nil }
-        return (mac, code)
+        return q
     }
 
     /// `https://x.example/any/path` -> `https://x.example`, or nil. https only, except loopback http (testing). No
