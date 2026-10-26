@@ -12,7 +12,8 @@ import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
 import type { ChatSnapshot } from '../../shared/chat'
-import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, RemoteRouteName } from '../../shared/remote'
+import type { AgentNode } from '../../shared/live'
+import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
 import { firstLine } from '../../renderer/src/lib/format'
 import { isIdleWaiting } from '../../renderer/src/lib/live'
@@ -20,12 +21,14 @@ import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { reposOf } from '../../renderer/src/lib/companyModel'
 import { HttpError, type RemoteApi } from './server'
 import type { StoredDevice } from './auth'
+import { TerminalFeeds, terminalSnapshot, terminalTurn, transcriptItems, type PhoneTerminalHost } from './terminalFeed'
 import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, providerName, whoResolver, type PhoneData } from './views'
 
 /**
  * RA3: every desktop channel the Phone may reach. Nothing else is callable from here: no settings writes, keys,
  * terminals (pty), repos, workflows, deletes, spending. settings:get is read in main for the personas and Departments
- * flags and never returned to the phone.
+ * flags and never returned to the phone. A message typed into a running terminal goes through PhoneHost.terminal
+ * (guarded: never into a dialog), not a pty channel.
  */
 export const PHONE_CHANNELS = [
   'company:list', 'agents:list', 'asks:list', 'sessions:list', 'tasks:list', 'tasks:get', 'companyAgents:list',
@@ -37,7 +40,9 @@ export const PHONE_CHANNELS = [
   // read only: Principia's open suggestions count in Needs you (deciding one stays on the Mac)
   'orchestrator:suggestions',
   // read only: the autopilots on per company (the Now header names them; changing one stays on the Mac)
-  'playbooks:summary'
+  'playbooks:summary',
+  // Continue: an ended terminal session opens again on the Mac in the same conversation (the Mac's Restart)
+  'sessions:restart'
 ] as const
 export type PhoneChannel = (typeof PHONE_CHANNELS)[number]
 
@@ -45,6 +50,8 @@ export interface PhoneHost {
   invoke<C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>>
   /** every desktop event (ipc onEmit); returns unsubscribe */
   onEvent(fn: <E extends EventName>(event: E, payload: EventMap[E]) => void): () => void
+  /** a terminal session as a chat: its transcript or screen, and messages typed into it (absent: the old card) */
+  terminal?: PhoneTerminalHost
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
 }
 
@@ -96,13 +103,25 @@ export class PhoneApi implements RemoteApi {
   private subs = new Map<WebSocket, Sub>()
   private off: (() => void) | null = null
   private sending = false
+  /** live terminal sessions shown as chats (only while a phone looks at one) */
+  readonly feeds: TerminalFeeds | null
 
-  constructor(private readonly h: PhoneHost) {
+  constructor(private readonly h: PhoneHost, o: { feedTickMs?: number | null } = {}) {
     this.off = h.onEvent((e, p) => this.onEvent(e, p))
+    this.feeds = h.terminal
+      ? new TerminalFeeds({
+          host: h.terminal,
+          push: (sid, m) => this.push((s) => s.sessionId === sid, m),
+          wanted: () => new Set([...this.subs.values()].map((s) => s.sessionId).filter((x): x is Id => !!x)),
+          ...(o.feedTickMs !== undefined ? { tickMs: o.feedTickMs } : {}),
+          log: h.log
+        })
+      : null
   }
   dispose(): void {
     this.off?.()
     this.off = null
+    this.feeds?.dispose()
     for (const s of this.subs.values()) if (s.timer) clearTimeout(s.timer)
     this.subs.clear()
   }
@@ -217,9 +236,21 @@ export class PhoneApi implements RemoteApi {
           return { ok: true, sessionId: r.sessionId }
         }
         const snap = await this.chatOf(s)
-        if (!snap?.available) throw new HttpError(409, 'This one runs in a terminal. Reply from its card, or on your Mac.')
+        if (!snap?.available) {
+          await this.typeInto(d, s, words)
+          return { ok: true }
+        }
         await this.h.invoke('chat:send', { id: s.id, text: words })
         return { ok: true }
+      }
+      case 'sessionContinue': {
+        const s = this.session(d, companyId, params.sessionId)
+        if (!this.canContinue(s)) throw new HttpError(409, s.status === 'running' ? 'It is still running' : 'This one cannot be continued from the phone. Open it on your Mac.')
+        // tapped twice, or continued on the Mac already: the one running in this conversation
+        const running = d.sessions.find((x) => x.status === 'running' && x.agentSessionId === s.agentSessionId && x.adapter === s.adapter)
+        if (running) return { ok: true, sessionId: running.id }
+        const next = await this.h.invoke('sessions:restart', { id: s.id })
+        return { ok: true, sessionId: next.id }
       }
       case 'sessionStop': {
         const s = this.session(d, companyId, params.sessionId)
@@ -314,12 +345,68 @@ export class PhoneApi implements RemoteApi {
     const code = reposOf(d.repos, companyId).length > 0
     // an agent's chat speaks in the agent's name and face, not the AI tool's
     const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId) : undefined
-    return {
-      ref: { kind: 'session', id: s.id },
-      title: s.title,
-      who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null },
-      chat,
-      terminal: chat ? null : { activity: root ? plainActivity(root.activity, { code }) : null, canReply: !!root && isIdleWaiting(root), ended: s.status === 'exited' }
+    const view = { ref: { kind: 'session' as const, id: s.id }, title: s.title, who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null } }
+    if (chat) return { ...view, chat, terminal: null }
+    const activity = root ? plainActivity(root.activity, { code }) : null
+    const ended = s.status === 'exited'
+    const terminal: PhoneTerminal = { activity, canReply: !ended && s.adapter !== 'shell' && !!root && isIdleWaiting(root), ended }
+    if (!this.h.terminal || !this.feeds) return { ...view, chat: null, terminal }
+    if (ended) {
+      // its history, read once; Continue opens it again on the Mac
+      const host = this.h.terminal
+      const items = this.safeItems(() => {
+        const ref = host.transcript(s)
+        return ref ? transcriptItems(ref, (x) => host.redact(x)) : []
+      })
+      return { ...view, chat: items.length ? terminalSnapshot(s.id, { items, seq: 0, turn: 'ended', activity: null }) : null, terminal: { ...terminal, source: items.length ? 'transcript' : null, canType: false, canContinue: this.canContinue(s) } }
+    }
+    const asks = phoneNeeds(d, companyId).asks.filter((a) => a.open?.kind === 'session' && a.open.id === s.id)
+    const feed = this.feeds.open(s, terminalTurn(root, false), activity)
+    // a shell is no agent: no composer (canType false, nothing held)
+    if (s.adapter === 'shell') return { ...view, chat: feed.chat, terminal: { ...terminal, canType: false, held: null, source: feed.source, screen: feed.screen, asks, canContinue: false } }
+    let held: string | null = asks.length ? 'It is asking you something. Answer it here first, then send your message.' : null
+    if (!held && !pastes(s)) held = terminal.canReply ? null : 'It takes a message when it waits at its prompt.'
+    try {
+      held ??= this.h.terminal.held?.(s.id) ?? null
+    } catch {
+      /* the composer stays; sending re-checks */
+    }
+    return { ...view, chat: feed.chat, terminal: { ...terminal, canType: pastes(s) && !held, held, source: feed.source, screen: feed.screen, asks, canContinue: false } }
+  }
+
+  private safeItems<T>(f: () => T[]): T[] {
+    try {
+      return f()
+    } catch (e) {
+      this.h.log?.warn('phone: transcript read failed', { error: String(e) })
+      return []
+    }
+  }
+
+  /** Continue (the Mac's Restart): a Claude terminal session that ended, resumed in the same conversation. */
+  private canContinue(s: Session): boolean {
+    return s.status === 'exited' && !s.companyAgentId && s.adapter === 'claude' && !!s.agentSessionId
+  }
+
+  /**
+   * A message into a terminal session. It waits at its prompt: the guarded reply (agents:reply, re-checked there).
+   * It works: typed in as a paste, which the CLI queues (PhoneHost.terminal refuses while it asks something).
+   */
+  private async typeInto(d: PhoneData, s: Session, words: string): Promise<void> {
+    if (s.status !== 'running') throw new HttpError(409, this.canContinue(s) ? 'This one ended. Continue it first.' : 'This one ended')
+    if (s.adapter === 'shell') throw new HttpError(409, 'This is a shell. Type in it on your Mac.')
+    const root = d.agents.find((a) => a.kind === 'session' && a.sessionId === s.id && a.parentId === null)
+    if (root && isIdleWaiting(root)) {
+      await this.h.invoke('agents:reply', { agentId: root.id, text: terminalReply(words) })
+      return
+    }
+    if (!pastes(s)) throw new HttpError(409, 'It takes a message when it waits at its prompt.')
+    if (!this.h.terminal) throw new HttpError(409, 'It is not waiting for a reply right now')
+    try {
+      this.h.terminal.type(s.id, terminalMessage(words))
+    } catch (e) {
+      if (e instanceof HttpError) throw e
+      throw new HttpError(409, e instanceof Error ? e.message : 'It cannot take a message right now')
     }
   }
 
@@ -479,6 +566,11 @@ export class PhoneApi implements RemoteApi {
     switch (event) {
       case 'chat:ops': {
         const p = payload as EventMap['chat:ops']
+        // a terminal shown from its transcript numbers its own ops; the Mac taking it back as a chat ends that view
+        if (this.feeds?.has(p.sessionId)) {
+          if (p.ops.some((o) => o.op === 'mode' && o.mode === 'chat')) this.feeds.ended(p.sessionId)
+          return
+        }
         this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops: p.ops })
         return
       }
@@ -493,13 +585,20 @@ export class PhoneApi implements RemoteApi {
       case 'agent:updated':
       case 'ask:updated': {
         const co = (payload as { companyId?: Id | null }).companyId ?? null
+        if (event === 'agent:updated') this.rootChanged(payload as AgentNode)
+        // an ask opened or closed on a terminal shown as a chat: its card and the composer follow
+        if (event === 'ask:updated') this.terminalAsk((payload as { sessionId?: Id | null }).sessionId ?? null)
         return this.changed(co, ['now', 'needs', 'chats', 'companies'])
       }
-      case 'session:updated':
-        return this.changed((payload as Session).companyId || PERSONAL_COMPANY_ID, ['now', 'needs', 'chats', 'companies'])
+      case 'session:updated': {
+        const s = payload as Session
+        if (s.status === 'exited') this.feeds?.ended(s.id)
+        return this.changed(s.companyId || PERSONAL_COMPANY_ID, ['now', 'needs', 'chats', 'companies'])
+      }
       case 'run:updated':
         return this.changed((payload as { companyId?: Id | null }).companyId || null, ['now', 'needs', 'chats', 'companies', 'room'])
       case 'pty:exit':
+        this.feeds?.ended((payload as EventMap['pty:exit']).sessionId)
         return this.changed(null, ['now', 'needs', 'chats', 'companies'])
       case 'data:changed': {
         const dom = (payload as EventMap['data:changed']).domain
@@ -511,11 +610,29 @@ export class PhoneApi implements RemoteApi {
     }
   }
 
+  /** A terminal session's root changed: its chat header follows (working, your turn, waiting on you). */
+  private rootChanged(a: AgentNode): void {
+    if (!this.feeds || a.kind !== 'session' || a.parentId !== null || !a.sessionId || !this.feeds.has(a.sessionId)) return
+    this.feeds.state(a.sessionId, terminalTurn(a, false), plainActivity(a.activity, { code: !!a.repoId }))
+  }
+  /** an ask on a terminal shown as a chat: the phones on it take a fresh view (the card, the composer) */
+  private terminalAsk(sessionId: Id | null): void {
+    if (sessionId && this.feeds?.has(sessionId)) this.feeds.refresh(sessionId)
+  }
+
   /** Turn off / revoke: tell the phones, then the server closes the sockets. */
   bye(reason: 'off' | 'revoked', device?: string): void {
     const text = JSON.stringify({ t: 'bye', reason } satisfies PhoneServerMsg)
     for (const [ws, s] of this.subs) if ((!device || s.device === device) && ws.readyState === ws.OPEN) ws.send(text)
   }
+}
+
+/**
+ * A message typed while it works goes in as a bracketed paste, which only Claude Code and Codex are known to take (and
+ * queue). Any other CLI may not have turned paste mode on, and then the paste's leading ESC would interrupt it.
+ */
+function pastes(s: Session): boolean {
+  return s.adapter === 'claude' || s.adapter === 'codex'
 }
 
 /**
@@ -529,6 +646,24 @@ export function terminalReply(raw: string): string {
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[\s\S]?|\u009b[0-?]*[ -/]*[@-~]/g, ' ')
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
     .replace(/ {2,}/g, ' ')
+    .trim()
+  if (!text) throw new HttpError(400, 'Write something first')
+  if (/^[!/#]/.test(text)) throw new HttpError(400, 'Plain words only from the phone: commands starting with !, / or # stay on your Mac.')
+  return text
+}
+
+/**
+ * A message typed into a working terminal (a bracketed paste). Line breaks stay (the paste keeps them in one message);
+ * escape sequences and other control characters are dropped, so the text can never end the paste early or press keys.
+ * Like a reply, commands (`!`, `/`, `#`) stay on the Mac.
+ */
+export function terminalMessage(raw: string): string {
+  const text = raw
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[\s\S]?|\u009b[0-?]*[ -/]*[@-~]/g, ' ')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
   if (!text) throw new HttpError(400, 'Write something first')
   if (/^[!/#]/.test(text)) throw new HttpError(400, 'Plain words only from the phone: commands starting with !, / or # stay on your Mac.')

@@ -127,6 +127,7 @@ final class LiveSocketTests: XCTestCase {
     func testServerMessagesDecode() {
         XCTAssertEqual(PhoneServerMsg.decode(#"{"t":"changed","companyId":null,"what":["now","needs"]}"#), .changed(companyId: nil, what: ["now", "needs"]))
         XCTAssertEqual(PhoneServerMsg.decode(#"{"t":"bye","reason":"off"}"#), .bye(reason: "off"))
+        XCTAssertEqual(PhoneServerMsg.decode(#"{"t":"screen","sessionId":"se_1","text":"Reading footer.html"}"#), .screen(sessionId: "se_1", text: "Reading footer.html"))
         XCTAssertNil(PhoneServerMsg.decode("not json"))
         if case .chat(let sid, let seq, let ops)? = PhoneServerMsg.decode(#"{"t":"chat","sessionId":"se_1","seq":4,"ops":[{"op":"state","turn":"working"}]}"#) {
             XCTAssertEqual(sid, "se_1"); XCTAssertEqual(seq, 4); XCTAssertEqual(ops.count, 1)

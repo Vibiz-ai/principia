@@ -94,7 +94,8 @@ struct ConversationView: View {
         .toolbarBackground(Theme.page, for: .navigationBar)
         .toolbarBackgroundVisibility(.visible, for: .navigationBar)
         .toolbar {
-            if ref.kind == .session, let r = app.replica, r.busy, app.session?.ref.id == ref.id {
+            // a terminal on the Mac is stopped there (Esc in its pane), never from the phone
+            if ref.kind == .session, let r = app.replica, r.busy, app.session?.ref.id == ref.id, app.session?.terminal == nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await app.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
                         .disabled(app.busy.contains("stop"))
@@ -103,7 +104,7 @@ struct ConversationView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if canWrite {
-                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send")) {
+                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send"), held: held) {
                     let t = draft
                     draft = ""
                     Task { if !(await app.send(t)) { draft = t } }
@@ -133,12 +134,20 @@ struct ConversationView: View {
         switch ref.kind {
         case .session:
             guard let s = app.session, s.ref.id == ref.id else { return false }
+            // a terminal on the Mac takes a message any time it runs; while it asks something the box stays, held
+            if let t = s.terminal, t.canType != nil { return t.composer(name: s.who?.name ?? "Claude") != nil }
             return app.replica != nil || s.terminal?.canReply == true
         case .agent: return app.agent?.ref.id == ref.id
         }
     }
+    private var held: Bool {
+        guard ref.kind == .session, let s = app.session, s.ref.id == ref.id, let t = s.terminal, t.canType != nil else { return false }
+        return t.composer(name: s.who?.name ?? "Claude")?.held ?? false
+    }
     private var placeholder: String {
         if ref.kind == .agent { return "Ask \(app.agent?.who.name ?? "them") for something" }
+        if let s = app.session, let t = s.terminal, t.canType != nil, let c = t.composer(name: s.who?.name ?? "Claude") { return c.placeholder }
+        if app.session?.terminal != nil { return "Message \(app.session?.who?.name ?? "Claude")" }
         if let r = app.replica, r.busy { return "Queue a message" }
         return "Message"
     }
@@ -150,15 +159,20 @@ struct SessionBody: View {
 
     var body: some View {
         if let s = app.session, s.ref.id == ref.id {
-            if let r = app.replica {
+            if let t = s.terminal, t.canType != nil || app.replica != nil {
+                // a terminal on the Mac, read as its chat: what it said and did, live; its screen until it writes a
+                // transcript; what it asks; and Continue once it ended
+                ChatScroll(lines: ChatLines.build(app.replica?.items ?? []), queue: [], busy: false, footer: AnyView(TerminalFooter(t: t, empty: (app.replica?.items ?? []).isEmpty)))
+            } else if let r = app.replica {
                 ChatScroll(lines: ChatLines.build(r.items), queue: r.queue, busy: r.busy)
             } else {
+                // an older Mac: only the live line, and a reply when it waits at its prompt
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         if let a = s.terminal?.activity {
                             HStack(spacing: 7) { Tile(kind: .run); Text(a).foregroundStyle(Theme.soft) }
                         }
-                        Text(s.terminal?.canReply == true ? "It finished and waits for you. Reply below and it carries on." : "This one runs in a terminal on your Mac. You can reply here when it waits for you.")
+                        Text(s.terminal?.ended == true ? "This session ended." : s.terminal?.canReply == true ? "It finished and waits for you. Reply below and it carries on." : "It is working in a terminal on your Mac. You can reply here when it waits for you.")
                             .foregroundStyle(Theme.muted)
                     }
                     .glassCard()
@@ -171,11 +185,53 @@ struct SessionBody: View {
     }
 }
 
+/// Below a terminal's conversation: its screen (no transcript yet), its open asks, and how it ended.
+struct TerminalFooter: View {
+    @Environment(AppModel.self) private var app
+    let t: PhoneSession.Terminal
+    let empty: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if t.source == "screen", let screen = t.screen, !screen.isEmpty {
+                Text(screen).font(.system(.footnote, design: .monospaced)).foregroundStyle(Theme.soft)
+                    .textSelection(.enabled)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.page.opacity(0.6), in: .rect(cornerRadius: 12))
+                    .accessibilityLabel("What the terminal shows")
+            } else if empty && !t.ended {
+                Text(t.activity.map { "\($0). Its words show here as it works." } ?? "It runs in a terminal on your Mac. Its words show here as it works; send a message below.")
+                    .font(.subheadline).foregroundStyle(Theme.muted).frame(maxWidth: .infinity)
+            }
+            ForEach(t.asks ?? []) { a in AskCard(ask: a) }
+            if let held = t.held, (t.asks ?? []).isEmpty {
+                Text(held).font(.footnote).foregroundStyle(Theme.muted)
+            }
+            if t.ended {
+                if t.canContinue == true {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(empty ? "This session ended. Continue it and it picks up where it stopped, on your Mac." : "This session ended. Continue it and it picks up right here, on your Mac.")
+                            .foregroundStyle(Theme.muted)
+                        Button("Continue") { Task { await app.continueSession() } }
+                            .buttonStyle(.glassProminent).tint(Theme.ink.opacity(0.9)).foregroundStyle(Theme.page)
+                            .disabled(app.busy.contains("continue"))
+                    }
+                    .glassCard(radius: 18)
+                } else {
+                    Text(empty ? "This session ended, and it left nothing to read here. Open it on your Mac." : "This session ended. Open it on your Mac to start it again.")
+                        .font(.caption).foregroundStyle(Theme.faint).frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+}
+
 struct ChatScroll: View {
     @Environment(AppModel.self) private var app
     let lines: [ChatLine]
     let queue: [ChatQueued]
     let busy: Bool
+    var footer: AnyView? = nil
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -197,6 +253,7 @@ struct ChatScroll: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    if let footer { footer }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 14).padding(.top, 8)
@@ -408,6 +465,8 @@ struct Composer: View {
     @Binding var text: String
     let placeholder: String
     let busy: Bool
+    /// it cannot take a message now (the placeholder says why): Send is off
+    var held: Bool = false
     var onSend: () -> Void
     var accessory: AnyView? = nil
 
@@ -427,7 +486,7 @@ struct Composer: View {
                     .tint(Theme.ink.opacity(0.92))
                     .foregroundStyle(Theme.page)
                     .buttonBorderShape(.circle)
-                    .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(busy || held || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("Send")
                 }
             }

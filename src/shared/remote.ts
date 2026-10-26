@@ -220,6 +220,8 @@ export const REMOTE_ROUTES = {
   sessionStop: 'POST /api/c/:companyId/sessions/:sessionId/stop',
   sessionAnswer: 'POST /api/c/:companyId/sessions/:sessionId/answer',
   sessionReply: 'POST /api/c/:companyId/sessions/:sessionId/reply',
+  /** an ended terminal session opens again on the Mac, same conversation; answers { sessionId } of the new one */
+  sessionContinue: 'POST /api/c/:companyId/sessions/:sessionId/continue',
   agent: 'GET /api/c/:companyId/agents/:agentId',
   agentSend: 'POST /api/c/:companyId/agents/:agentId/send',
   room: 'GET /api/c/:companyId/room',
@@ -366,10 +368,31 @@ export interface PhoneSession {
   ref: PhoneChatRef & { kind: 'session' }
   title: string
   who: PhoneWho | null
-  /** the chat view (stream-json): null when this session runs in a terminal */
+  /**
+   * the chat view: a chat session's own (stream-json), or a terminal session's transcript read as a chat (mode
+   * 'terminal', live through the same numbered ops). null: nothing to show as a chat (a terminal with no transcript yet)
+   */
   chat: ChatSnapshot | null
-  /** a terminal session: its live line, and whether it waits for a reply */
-  terminal: { activity: string | null; canReply: boolean; ended: boolean } | null
+  /** a terminal session: its live line, and what the phone may do with it */
+  terminal: PhoneTerminal | null
+}
+export interface PhoneTerminal {
+  activity: string | null
+  /** it finished and waits at its prompt */
+  canReply: boolean
+  ended: boolean
+  /** a message can be typed into it now (running, nothing asked): it takes it at once or right after this step */
+  canType?: boolean
+  /** why it cannot take a message now, in plain words ("It is asking you something: answer it above") */
+  held?: string | null
+  /** where the conversation shown comes from: its transcript (chat), its screen (screen), or nothing yet */
+  source?: 'transcript' | 'screen' | null
+  /** the terminal's last lines, ANSI-stripped (source 'screen'; then live through { t: 'screen' }) */
+  screen?: string | null
+  /** what it asks right now (answered like Needs you) */
+  asks?: PhoneAsk[]
+  /** ended: Continue opens it again on the Mac, in the same conversation (sessionContinue) */
+  canContinue?: boolean
 }
 
 export type PhoneThreadItem =
@@ -475,6 +498,8 @@ export type PhoneServerMsg =
   | { t: 'changed'; companyId: Id | null; what: PhoneLiveView[] }
   /** chat ops of the subscribed session (the desktop's own chat:ops) */
   | { t: 'chat'; sessionId: Id; seq: number; ops: ChatOp[] }
+  /** the subscribed terminal session's last lines (a terminal with no transcript to show as a chat) */
+  | { t: 'screen'; sessionId: Id; text: string }
   /** a new message in the subscribed room channel */
   | { t: 'room'; message: PhoneRoomMessage }
   /** this device was revoked (or every phone signed out). 'off' is no longer sent: turning Phone off keeps phones paired */

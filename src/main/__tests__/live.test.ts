@@ -574,6 +574,60 @@ d('SessionLive with recorded claude hooks (A1, A3, A4, A9)', () => {
     expect(() => s.reply('again')).toThrow(/not waiting/)
   })
 
+  it('REMOTE: a phone message while it works goes in as one paste, then Enter; the hook names its transcript', async () => {
+    const s = new SessionLive(deps(), session, null)
+    const [start, prompt] = fixture('claude-hooks-pty-idle.jsonl')
+    s.onLine(wrap(start))
+    s.onLine(wrap(prompt))
+    expect(live.getAgent(s.root.id)!.status).toBe('working')
+    expect(s.transcriptPath).toMatch(/\/\.claude\/projects\/-tmp-hive-fx-pty\/cf55e463-2d7f-40b6-8914-7a293e693b05\.jsonl$/)
+    s.type('also check the footer\nthanks')
+    await sleep(60)
+    expect(writes).toEqual(['\x1b[200~also check the footer\nthanks\x1b[201~', '\r'])
+  })
+
+  it('REMOTE: a choice that opens between the paste and its Enter keeps the Enter back, and says so', async () => {
+    const warned: string[] = []
+    const timers: (() => void)[] = []
+    const d = { ...deps(), setTimer: (fn: () => void) => (timers.push(fn), timers.length), clearTimer: () => {}, log: { warn: (m: string) => warned.push(m) } }
+    const c = new SessionLive(d, { ...session, adapter: 'codex' }, null)
+    c.onPtyData('\x1b[5;1H› Ask Codex to do anything')
+    c.type('carry on')
+    // a Codex approval (no hook) draws its menu before the Enter goes
+    c.onPtyData('\x1b[1;3HAllow command?\x1b[3;1H› 1. Yes\x1b[4;3H2. No')
+    for (const t of timers) t()
+    expect(writes).toEqual(['\x1b[200~carry on\x1b[201~'])
+    expect(warned.join('\n')).toMatch(/not sent/)
+    // the session ended in that window: no Enter either
+    const e = new SessionLive(d, { ...session, id: 's_eeeeeeeeee' }, null)
+    timers.length = 0
+    e.type('one more')
+    e.exit(0, false)
+    for (const t of timers) t()
+    expect(writes).toEqual(['\x1b[200~carry on\x1b[201~', '\x1b[200~one more\x1b[201~'])
+  })
+
+  it('REMOTE: a phone message never goes into a dialog: an open ask or a prompt on screen refuses it', async () => {
+    const s = new SessionLive(deps(), session, null)
+    for (const l of fixture('claude-hooks-pty-permission.jsonl')) s.onLine(wrap(l))
+    expect(live.listOpenAsks({ sessionId: session.id }).length).toBe(1)
+    expect(() => s.type('carry on')).toThrow(/asking you something/)
+    const t = new SessionLive(deps(), { ...session, id: 's_bbbbbbbbbb' }, null)
+    t.onPtyData(PROMPT_SCREEN)
+    expect(() => t.type('carry on')).toThrow(/asking you something in the terminal/)
+    // any CLI's numbered menu (Codex's trust question has no card): Enter would pick its first option
+    const c = new SessionLive(deps(), { ...session, id: 's_cccccccccc', adapter: 'codex' }, null)
+    c.onPtyData('\x1b[1;3HTrust this folder?\x1b[3;1H› 1. Trust and continue\x1b[4;3H2. Quit')
+    expect(c.typeHeld()).toMatch(/showing a choice/)
+    expect(() => c.type('carry on')).toThrow(/showing a choice/)
+    // its composer is not a menu
+    const ok = new SessionLive(deps(), { ...session, id: 's_dddddddddd', adapter: 'codex' }, null)
+    ok.onPtyData('\x1b[5;1H› Ask Codex to do anything')
+    expect(ok.typeHeld()).toBeNull()
+    await sleep(60)
+    expect(writes).toEqual([])
+  })
+
   it('A3: a turn that ends while the pane is visible is never counted', async () => {
     visible = true
     const s = new SessionLive(deps(), session, null)

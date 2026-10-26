@@ -4,7 +4,7 @@ import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import { EMPTY_CHAT_META } from '../../shared/chat'
 import type { PhoneNeeds, PhoneNow, PhoneRoomMember } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
-import { ago, placeMessage, ChatReplica, chatLines, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
+import { ago, placeMessage, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
 import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, type Actions, type View } from './render'
 
 const T = '2026-10-25T10:00:00.000Z'
@@ -176,6 +176,44 @@ describe('screens', () => {
     const r = new ChatReplica({ ...snap(), turn: 'working', queue: [{ id: 'q1', text: 'Change of plan', images: 0 }] } as ChatSnapshot)
     const v = { ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 'Chat', who: null, chat: r.snap, terminal: null }, replica: r } as View
     expect(btns(renderSession(v, noop))).toContain('Stop and send now')
+  })
+  it('a terminal on the Mac reads as its chat: no dead end, its ask in place, its screen when it has no transcript', () => {
+    const items: ChatItem[] = [{ id: 'u1', parent: null, kind: 'user', text: 'Fix the footer', images: 0, state: 'sent' }, tool('b1', 'Bash', { command: 'npm test' }, 'running')]
+    const r = new ChatReplica({ ...snap(items), mode: 'terminal', available: false, turn: 'working', activity: 'Running npm test' } as ChatSnapshot)
+    const askOne = { id: 'ask_1', title: 'Bash', question: 'Run git push?', detail: 'git push', who: null, options: [{ id: 'allow', label: 'Allow', kind: 'allow' as const }, { id: 'deny', label: 'Deny', kind: 'deny' as const }], text: false, at: T, open: null }
+    const term = { activity: 'Running npm test', canReply: false, ended: false, canType: true, held: null, source: 'transcript' as const, screen: null, asks: [askOne], canContinue: false }
+    const tree = renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 'shop · Claude', who: null, chat: r.snap, terminal: term }, replica: r } as View, noop)
+    const words = textOf(tree)
+    expect(words).toContain('Fix the footer')
+    expect(words).toContain('Run git push?')
+    expect(words).not.toMatch(/You can reply here when it waits/)
+    expect(btns(tree)).toEqual(expect.arrayContaining(['Allow', 'Deny']))
+    const screenOnly = renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 't', who: null, chat: snap([], 0), terminal: { ...term, source: 'screen' as const, screen: 'Reading footer.html', asks: [] } }, replica: new ChatReplica(snap([], 0)) } as View, noop)
+    expect(findAll(screenOnly, (n) => n.tag === 'pre').map((p) => textOf(p))).toEqual(['Reading footer.html'])
+  })
+  it('a terminal opened before its transcript reloads on the Mac’s empty chat ops; a chat applies them', () => {
+    const term = { activity: null, canReply: false, ended: false, canType: true, held: null, source: 'screen' as const, screen: 'Reading', asks: [], canContinue: false }
+    const session = { ref: { kind: 'session' as const, id: 'se_1' }, title: 't', who: null, chat: null, terminal: term }
+    expect(chatMessageAction({ openId: 'se_1', session, hasReplica: false }, 'se_1')).toBe('reload')
+    expect(chatMessageAction({ openId: 'se_1', session, hasReplica: true }, 'se_1')).toBe('apply')
+    expect(chatMessageAction({ openId: 'se_2', session, hasReplica: false }, 'se_1')).toBe('ignore')
+    expect(chatMessageAction({ openId: 'se_1', session: { ...session, terminal: null }, hasReplica: false }, 'se_1')).toBe('ignore')
+  })
+  it('the terminal composer: held shows the reason with Send off; ended and a shell have none', () => {
+    const t = { activity: null, canReply: false, ended: false, canType: true, held: null }
+    expect(terminalComposer(t, 'Claude')).toEqual({ placeholder: 'Message Claude', held: false })
+    expect(terminalComposer({ ...t, canType: false, held: 'It is asking you something.' }, 'Claude')).toEqual({ placeholder: 'It is asking you something.', held: true })
+    expect(terminalComposer({ ...t, canType: false, canReply: true, held: null }, 'Gemini')).toEqual({ placeholder: 'Message Gemini', held: false })
+    expect(terminalComposer({ ...t, canType: false, held: null }, 'Shell')).toBeNull()
+    expect(terminalComposer({ ...t, ended: true }, 'Claude')).toBeNull()
+  })
+  it('an ended terminal shows its history and offers Continue', () => {
+    const r = new ChatReplica({ ...snap([{ id: 'u1', parent: null, kind: 'user', text: 'Fix the footer', images: 0, state: 'sent' }]), mode: 'terminal', available: false, turn: 'ended' } as ChatSnapshot)
+    const term = { activity: null, canReply: false, ended: true, canType: false, source: 'transcript' as const, canContinue: true }
+    const tree = renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 't', who: null, chat: r.snap, terminal: term }, replica: r } as View, noop)
+    expect(textOf(tree)).toContain('Fix the footer')
+    expect(btns(tree)).toContain('Continue')
+    expect(btns(renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 't', who: null, chat: null, terminal: { ...term, canContinue: false, source: null } }, replica: null } as View, noop))).not.toContain('Continue')
   })
   it('Needs you, empty: says so plainly', () => {
     expect(textOf(renderNeeds({ ...baseView(), needs: { companyId: 'co_a', count: 0, asks: [], tasks: [] } }, noop))).toContain('Nothing needs you')

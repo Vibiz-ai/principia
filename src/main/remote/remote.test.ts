@@ -14,7 +14,8 @@ import type { Session } from '@shared/types'
 import type { ForumChannel, ForumMember, ForumMessage } from '@shared/forum'
 import type { ChatSnapshot } from '@shared/chat'
 import { EMPTY_CHAT_META } from '@shared/chat'
-import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg } from '@shared/remote'
+import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg, type PhoneSession } from '@shared/remote'
+import { HiveError } from '@shared/errors'
 import { PairError, RemoteAuth } from './auth'
 import { RemoteServer, bundleFiles, parseCookies } from './server'
 import type { OrchSuggestion } from '../../shared/orchestrator'
@@ -83,6 +84,7 @@ function world() {
         case 'forum:messages': return { messages: [msg('fm_1', req.companyId, req.channelId, 'hello')], hasMore: false }
         case 'forum:post': return msg('fm_2', req.companyId, req.channelId, req.text)
         case 'chat:sendAgent': return { id: 'se_agent', companyId: 'co_a', companyAgentId: req.agentId }
+        case 'sessions:restart': return { ...sess('se_next', 'co_a'), agentSessionId: d.sessions.find((x) => x.id === req.id)?.agentSessionId ?? null }
         default: return { ok: true }
       }
     }) as PhoneHost['invoke'],
@@ -584,5 +586,146 @@ describe('Phone views (the desktop’s one live source)', () => {
   it('Chats: live first; the agent thread covers its task run', () => {
     const rows = phoneChats(data(), 'co_a').rows
     expect(rows[0]).toMatchObject({ key: 'agent:ag_a', live: true })
+  })
+})
+
+// ---------- a terminal session on the phone (RA3: read it live, type into it, continue it) ----------
+describe('a terminal session on the phone', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-api-term-'))
+  })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  function termWorld() {
+    const w = world()
+    const file = path.join(dir, 'conv-t.jsonl')
+    fs.writeFileSync(file, [{ type: 'user', message: { role: 'user', content: 'Fix the footer' } }, { type: 'assistant', message: { id: 'm1', role: 'assistant', model: 'x', content: [{ type: 'text', text: 'On it.' }] } }].map((r) => JSON.stringify(r)).join('\n') + '\n')
+    const typed: { sessionId: string; text: string }[] = []
+    let refuse: string | null = null
+    const inner = w.host.invoke
+    // a Claude pane in terminal mode: its chat snapshot is the terminal's (no chat to show)
+    w.host.invoke = (async (c: string, req: { id: string }) => (c === 'chat:snapshot' ? { ...snap(req.id), mode: 'terminal', available: false } : (inner as (c: string, r: unknown) => Promise<unknown>)(c, req))) as PhoneHost['invoke']
+    w.host.terminal = {
+      transcript: (s) => (s.agentSessionId === 'conv-t' ? { file, format: 'claude' } : null),
+      screen: () => 'Reading footer.html',
+      type: (sessionId, text) => {
+        if (refuse) throw new HiveError('conflict', refuse)
+        typed.push({ sessionId, text })
+      },
+      redact: (t) => t
+    }
+    w.d.sessions = [...w.d.sessions, sess('se_t', 'co_a', { agentSessionId: 'conv-t' }), sess('se_x', 'co_a', { status: 'exited', agentSessionId: 'conv-t' }), sess('se_cx', 'co_a', { status: 'exited', adapter: 'codex' })]
+    w.d.agents = [...w.d.agents, node('n_t', { kind: 'session', sessionId: 'se_t', status: 'working', activity: 'Bash npm test', companyId: 'co_a' })]
+    return { ...w, typed, refuse: (m: string | null) => (refuse = m) }
+  }
+
+  it('reads as a live chat from its transcript, with a composer while it works', async () => {
+    const { host } = termWorld()
+    const api = new PhoneApi(host, { feedTickMs: null })
+    const v = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_t' }, {}, dev)) as PhoneSession
+    expect(v.chat?.mode).toBe('terminal')
+    expect(v.chat?.items.map((i) => i.kind)).toEqual(['user', 'text'])
+    expect(v.chat?.turn).toBe('working')
+    expect(v.terminal).toMatchObject({ ended: false, canType: true, source: 'transcript', canContinue: false, asks: [] })
+    expect(api.feeds?.size()).toBe(1)
+    api.dispose()
+  })
+  it('a message while it works is typed in (line breaks kept, commands refused); waiting at its prompt it is the guarded reply', async () => {
+    const { host, d, typed } = termWorld()
+    const api = new PhoneApi(host, { feedTickMs: null })
+    await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_t' }, { text: 'also the header\r\nthanks\u001b[201~' }, dev)
+    expect(typed).toEqual([{ sessionId: 'se_t', text: 'also the header\nthanks' }])
+    await expect(api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_t' }, { text: '!rm -rf .' }, dev)).rejects.toMatchObject({ status: 400 })
+    expect(d.calls.some((c) => c.channel === 'chat:send')).toBe(false)
+    d.agents = d.agents.map((a) => (a.id === 'n_t' ? { ...a, status: 'needs_you', needs: 'idle' } : a))
+    await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_t' }, { text: 'go on' }, dev)
+    expect(d.calls.find((c) => c.channel === 'agents:reply')?.req).toEqual({ agentId: 'n_t', text: 'go on' })
+    expect(typed.length).toBe(1)
+    api.dispose()
+  })
+  it('while it asks something the message is refused in plain words, and the ask shows in the conversation', async () => {
+    const { host, d, refuse } = termWorld()
+    d.asks = [...d.asks, ask('ask_t', { agentId: 'n_t', rootId: 'n_t', sessionId: 'se_t', companyId: 'co_a', options: [{ id: 'allow', label: 'Allow', kind: 'allow' }, { id: 'deny', label: 'Deny', kind: 'deny' }] })]
+    d.agents = d.agents.map((a) => (a.id === 'n_t' ? { ...a, status: 'needs_you', needs: 'permission' } : a))
+    const api = new PhoneApi(host, { feedTickMs: null })
+    const v = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_t' }, {}, dev)) as PhoneSession
+    expect(v.terminal?.asks?.map((a) => a.id)).toEqual(['ask_t'])
+    expect(v.terminal?.canType).toBe(false)
+    refuse('It is asking you something. Answer that first, then send your message.')
+    await expect(api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_t' }, { text: 'hello' }, dev)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/asking you something/) })
+    api.dispose()
+  })
+  it('a choice on its screen (no card) holds the composer with the reason', async () => {
+    const { host } = termWorld()
+    host.terminal!.held = () => 'It is showing a choice in the terminal. Answer it on your Mac first.'
+    const api = new PhoneApi(host, { feedTickMs: null })
+    const v = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_t' }, {}, dev)) as PhoneSession
+    expect(v.terminal).toMatchObject({ canType: false, held: 'It is showing a choice in the terminal. Answer it on your Mac first.' })
+    api.dispose()
+  })
+  it('a Gemini pane takes a message only at its prompt (no paste); a shell has no composer', async () => {
+    const { host, d, typed } = termWorld()
+    d.sessions = [...d.sessions, sess('se_g', 'co_a', { adapter: 'gemini' }), sess('se_sh', 'co_a', { adapter: 'shell' })]
+    d.agents = [...d.agents, node('n_g', { kind: 'session', sessionId: 'se_g', status: 'working', companyId: 'co_a' }), node('n_sh', { kind: 'session', sessionId: 'se_sh', status: 'needs_you', needs: 'idle', companyId: 'co_a' })]
+    const api = new PhoneApi(host, { feedTickMs: null })
+    const g = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_g' }, {}, dev)) as PhoneSession
+    expect(g.terminal).toMatchObject({ canType: false, canReply: false, held: 'It takes a message when it waits at its prompt.' })
+    await expect(api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_g' }, { text: 'carry on' }, dev)).rejects.toMatchObject({ status: 409, message: 'It takes a message when it waits at its prompt.' })
+    expect(typed).toEqual([])
+    d.agents = d.agents.map((a) => (a.id === 'n_g' ? { ...a, status: 'needs_you', needs: 'idle' } : a))
+    const gi = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_g' }, {}, dev)) as PhoneSession
+    expect(gi.terminal).toMatchObject({ canType: false, canReply: true, held: null })
+    await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_g' }, { text: 'go on' }, dev)
+    expect(d.calls.find((c) => c.channel === 'agents:reply')?.req).toEqual({ agentId: 'n_g', text: 'go on' })
+    // a shell: nothing to type into from the phone, never "This session has ended"
+    const sh = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_sh' }, {}, dev)) as PhoneSession
+    expect(sh.terminal).toMatchObject({ canType: false, canReply: false, held: null })
+    await expect(api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_sh' }, { text: 'ls' }, dev)).rejects.toMatchObject({ status: 409, message: 'This is a shell. Type in it on your Mac.' })
+    expect(typed).toEqual([])
+    api.dispose()
+  })
+  it('ended: its history reads, and Continue resumes it on the Mac (once); a Codex pane cannot', async () => {
+    const { host, d } = termWorld()
+    const api = new PhoneApi(host, { feedTickMs: null })
+    const v = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_x' }, {}, dev)) as PhoneSession
+    expect(v.chat?.items.map((i) => i.kind)).toEqual(['user', 'text'])
+    expect(v.chat?.turn).toBe('ended')
+    expect(v.terminal).toMatchObject({ ended: true, canType: false, canContinue: true })
+    await expect(api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_x' }, { text: 'hi' }, dev)).rejects.toMatchObject({ status: 409, message: 'This one ended. Continue it first.' })
+    // se_t still runs in that conversation: Continue follows it, no second session
+    expect(await api.handle('sessionContinue', { companyId: 'co_a', sessionId: 'se_x' }, {}, dev)).toEqual({ ok: true, sessionId: 'se_t' })
+    d.sessions = d.sessions.filter((x) => x.id !== 'se_t')
+    expect(await api.handle('sessionContinue', { companyId: 'co_a', sessionId: 'se_x' }, {}, dev)).toEqual({ ok: true, sessionId: 'se_next' })
+    expect(d.calls.filter((c) => c.channel === 'sessions:restart').map((c) => c.req)).toEqual([{ id: 'se_x' }])
+    await expect(api.handle('sessionContinue', { companyId: 'co_a', sessionId: 'se_cx' }, {}, dev)).rejects.toMatchObject({ status: 409 })
+    // another company's session is not found
+    await expect(api.handle('sessionContinue', { companyId: 'co_b', sessionId: 'se_x' }, {}, dev)).rejects.toMatchObject({ status: 404 })
+    api.dispose()
+  })
+  it('the live socket: the feed’s ops go only to phones on that session; the Mac’s own terminal-mode ops never mix in', async () => {
+    const { host, fire } = termWorld()
+    const api = new PhoneApi(host, { feedTickMs: null })
+    await api.handle('session', { companyId: 'co_a', sessionId: 'se_t' }, {}, dev)
+    const sent: { on: string; m: PhoneServerMsg }[] = []
+    const fake = (on: string) => ({ readyState: 1, OPEN: 1, send: (t: string) => sent.push({ on, m: JSON.parse(t) }), on: () => undefined }) as unknown as import('ws').WebSocket
+    const a = fake('a')
+    const b = fake('b')
+    api.socket(a, dev)
+    api.socket(b, dev)
+    const [sa, sb] = api.subscriptions()
+    await api.subscribe(sa!, { t: 'sub', companyId: 'co_a', sessionId: 'se_t' })
+    await api.subscribe(sb!, { t: 'sub', companyId: 'co_a', sessionId: 'se_a' })
+    sent.length = 0
+    fire('chat:ops', { sessionId: 'se_t', seq: 7, ops: [{ op: 'state', turn: 'terminal' }] })
+    fire('agent:updated', { ...node('n_t', { kind: 'session', sessionId: 'se_t', status: 'needs_you', needs: 'idle', companyId: 'co_a' }) })
+    await new Promise((r) => setTimeout(r, 150))
+    const chats = sent.filter((x) => x.m.t === 'chat')
+    expect(chats).toEqual([{ on: 'a', m: { t: 'chat', sessionId: 'se_t', seq: 1, ops: [{ op: 'state', turn: 'idle', activity: null }] } }])
+    // it ends: a fresh view (a numbered gap), and the feed stops
+    fire('pty:exit', { sessionId: 'se_t', exitCode: 0, signal: null })
+    expect(sent.at(-1)).toEqual({ on: 'a', m: { t: 'chat', sessionId: 'se_t', seq: 3, ops: [] } })
+    expect(api.feeds?.size()).toBe(0)
+    api.dispose()
   })
 })

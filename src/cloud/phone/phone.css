@@ -201,6 +201,7 @@ h3.md-h { font: 500 18px/1.25 var(--font-display); letter-spacing: .01em; }
 .notice { font-size: 13px; color: var(--muted); padding: 6px 10px; border-left: 2px solid var(--line-strong); }
 .notice--error { border-left-color: var(--status-fail); }
 .notice--warn { border-left-color: var(--ink); color: var(--soft); text-align: left; }
+.screen { margin: 0; color: var(--soft); background: var(--page); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px; max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
 .end { text-align: center; font-size: 12px; color: var(--faint); padding: 4px 0; }
 
 /* engravings: white line art that melts into the page (the landing's .engraving-soft), only for empty states and pairing */

@@ -16,10 +16,15 @@ import { newId } from '../../shared/ids'
 import type { LiveStore } from '../db/liveStore'
 import { classifyLimitText, classifyStopFailure, createAgentTracker, detectPtyPrompt, normalizeHook, ptyReplyKeys, stripAnsi, type LimitHit, type StallMonitor } from '../engine'
 import { LiveApplier, type AgentTracker, type HookEvent, type LiveEmit } from './apply'
+import { renderScreen } from './screen'
 
 export const QUIET_MS = 300
 const RAW_TAIL = 16 * 1024
 const REPLY_SUBMIT_DELAY_MS = 40
+/** a selection menu on screen: "› 1. Trust and continue", "❯ 2. No" */
+const MENU = /^\s*[›❯>]\s*\d+[.)]\s+\S/m
+/** a CLI transcript a hook reports: an absolute .jsonl path (never followed anywhere else) */
+const TRANSCRIPT_FILE = /^\/[^\0]*\.jsonl$/
 
 /**
  * Sequences a terminal emulator sends on its own, never typed by the user: focus in/out, mouse reports, cursor-position
@@ -359,6 +364,9 @@ export class SessionLive {
     this.d.stall?.touch(this.session.id)
     // CONTRACT §13: claude's StopFailure hook carries error "rate_limit" and the CLI's limit line
     const payload = line && typeof line === 'object' ? (line as { payload?: unknown }).payload : null
+    // REMOTE.md: the transcript the CLI writes (the phone reads this session as a chat); /clear moves it, last one wins
+    const tp = ((payload && typeof payload === 'object' ? payload : line) as { transcript_path?: unknown } | null)?.transcript_path
+    if (typeof tp === 'string' && TRANSCRIPT_FILE.test(tp)) this.transcriptPath = tp
     if (payload) this.limited(classifyStopFailure(payload, this.d.now?.() ?? new Date()))
     let evs: HookEvent[] = []
     try {
@@ -460,6 +468,47 @@ export class SessionLive {
     this.applier.apply(this.tracker.answered(gateId, `${opt.label}${a.message ? `: ${a.message}` : ''}`))
     this.applier.flush()
     return answered ?? this.d.store.getAsk(ask.id)!
+  }
+
+  /** REMOTE.md: the transcript path the session's hooks last reported (Claude Code), or null. */
+  transcriptPath: string | null = null
+
+  /** REMOTE.md: what the terminal shows now, as plain lines (the phone's view of a CLI with no transcript yet). */
+  screen(): string | null {
+    return this.ended ? null : renderScreen(this.raw) || null
+  }
+
+  /**
+   * REMOTE.md: a message from the phone while the agent runs (or waits). Claude Code and Codex queue what is typed while
+   * they work, so it goes in as a bracketed paste (line breaks stay inside the message) and then Enter. Never into a
+   * dialog: an open ask, or a prompt on screen, refuses it (Enter there would pick whatever option is selected).
+   */
+  type(text: string): void {
+    const held = this.typeHeld()
+    if (held) throw new HiveError('conflict', held)
+    this.d.writePty(this.session.id, `\x1b[200~${text}\x1b[201~`)
+    this.raw = ''
+    const set = this.d.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
+    // separate write: a trailing \r in the same chunk can be read as part of a paste instead of "submit". Checked
+    // again: a menu that opened since the paste (a Codex approval has no hook) would take the Enter as "Yes"
+    set(() => {
+      const late = this.typeHeld()
+      if (!late) return this.d.writePty(this.session.id, '\r')
+      this.d.log?.warn('live: phone message pasted but not sent, the terminal opened a question first; it waits in the prompt', { sessionId: this.session.id, why: late })
+    }, REPLY_SUBMIT_DELAY_MS)
+    this.clearLimit()
+    this.feed({ kind: 'user_input' })
+    this.applier.flush()
+  }
+
+  /** Why a phone message cannot go in right now (plain words), or null: it can. */
+  typeHeld(): string | null {
+    if (this.ended) return 'This session has ended'
+    if (this.d.store.listOpenAsks({ rootId: this.root.id }).some((a) => a.kind !== 'approval' && a.kind !== 'slack_reply')) return 'It is asking you something. Answer that first, then send your message.'
+    if (detectPtyPrompt(this.session.adapter, this.raw)) return 'It is asking you something in the terminal. Answer it there, or wait for its card.'
+    // any CLI's numbered choice with its pointer (Codex's trust and approval menus have no card): Enter would pick it
+    if (MENU.test(renderScreen(this.raw, 15))) return 'It is showing a choice in the terminal. Answer it on your Mac first.'
+    return null
   }
 
   /** agents:reply: the root waits for the user (needs='idle'). Types the text, then submits. */
