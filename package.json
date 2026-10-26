@@ -68,7 +68,7 @@
     "electron-updater": "6.8.10",
     "geist": "1.7.2",
     "node-pty": "1.1.0",
-    "react": "19.2.0",
+    "react": "19.3.1",
     "react-dom": "19.2.0",
     "ws": "8.22.0",
     "zod": "4.6.7"
