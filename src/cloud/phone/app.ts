@@ -413,7 +413,8 @@ const actions: Actions = {
     go({ tab: 'tasks', open: null, task: id ?? undefined })
   },
   company(id) {
-    go({ companyId: id, open: null })
+    // an open task belongs to the old company: back to the new company's board
+    go({ companyId: id, open: null, task: undefined })
   },
   togglePause() {
     const co = companies().find((c) => c.id === companyId())

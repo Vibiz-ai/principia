@@ -415,6 +415,14 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(matchRemoteRoute('GET', '/api/c/co_a/tasks/ta_1')).toEqual({ name: 'task', params: { companyId: 'co_a', taskId: 'ta_1' } })
     expect(matchRemoteRoute('POST', '/api/c/co_a/tasks')).toBeNull()
   })
+  it('the board redacts before it clips: a secret at the cut never leaks its first characters', async () => {
+    const { host, d } = world()
+    const key = 'sk-live-' + 'A1b2C3d4'.repeat(4)
+    d.tasks.push(task('ta_long', 'co_a', { status: 'todo', title: 'x'.repeat(190) + ' ' + key, description: 'y'.repeat(3970) + key }))
+    const api = new PhoneApi({ ...host, redact: (s) => s.split(key).join('••••SHOP_KEY') })
+    const text = JSON.stringify([await api.handle('tasks', { companyId: 'co_a' }, {}, dev), await api.handle('task', { companyId: 'co_a', taskId: 'ta_long' }, {}, dev)])
+    expect(text).not.toContain('sk-live-A1b2')
+  })
   it('Principia\'s open suggestions count in Needs you and show for their company only (decided on the Mac)', async () => {
     const { host, d } = world()
     const sg = (id: string, companyId: string): OrchSuggestion => ({ id, companyId, kind: 'routine', title: `Idea ${id}`, detail: 'Every weekday.', status: 'open', createdAt: T, decidedAt: null })

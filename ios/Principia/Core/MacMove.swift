@@ -9,6 +9,8 @@ enum MacReach {
     /// An HTTP answer that came from Cloudflare instead of the Mac.
     static func isGone(status: Int, body: Data) -> Bool {
         if status == 530 { return true }
+        // a successful answer is the Mac's, whatever its text says (a task may quote "error code 1033")
+        guard status >= 400 else { return false }
         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
         if isTunnelError(body: body, json: json) { return true }
         guard status >= 500 else { return false }

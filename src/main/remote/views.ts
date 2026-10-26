@@ -318,25 +318,27 @@ function columnOf(task: CompanyTask, c: BoardCtx): PhoneTaskColumn | null {
 function taskRow(d: PhoneData, task: CompanyTask, column: PhoneTaskColumn, c: BoardCtx, redact: (s: string) => string): PhoneTaskRow {
   const agent = task.agentId ? d.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined
   const need = c.needs.get(task.id)
+  // redact before clipping: a secret cut at the limit would no longer match the vault's exact values
+  const live = column === 'working' ? liveLine(d, task) : null
   const line =
     column === 'working'
-      ? liveLine(d, task)
+      ? live && redact(live)
       : column === 'needs'
         ? (need ? NEED_LINE[need.kind] : 'Ready for your OK')
         : column === 'planned' && task.status === 'blocked'
           ? (BLOCKED[task.blockReason ?? ''] ?? 'Blocked')
           : column === 'done' && task.report?.summary
-            ? oneLine(task.report.summary, 160)
+            ? oneLine(redact(task.report.summary), 160)
             : null
   return {
     id: task.id,
     identifier: task.identifier,
-    title: redact(oneLine(task.title, 200)),
+    title: oneLine(redact(task.title), 200),
     status: task.status,
     column,
     who: c.who(agent),
     agentId: agent?.id ?? null,
-    line: line ? redact(line) : null,
+    line,
     priority: task.priority ?? 0,
     at: task.updatedAt
   }
@@ -374,13 +376,13 @@ export function phoneTaskDetail(d: PhoneData, companyId: Id, task: CompanyTask, 
   const col = columnOf(task, c)
   if (!col) return null
   const row = taskRow(d, task, col, c, redact)
-  const need = c.needs.get(task.id) ?? (task.status === 'in_review' ? { taskId: task.id, kind: 'review' as const, title: task.title, text: task.report?.summary ? oneLine(task.report.summary, 600) : finishedLine(task.title), who: row.who, agentId: row.agentId, at: task.updatedAt, options: [] } : null)
+  const need = c.needs.get(task.id) ?? (task.status === 'in_review' ? { taskId: task.id, kind: 'review' as const, title: task.title, text: task.report?.summary ? oneLine(redact(task.report.summary), 600) : finishedLine(redact(task.title)), who: row.who, agentId: row.agentId, at: task.updatedAt, options: [] } : null)
   const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s)
   return {
     ...row,
-    description: redact(clip(task.description ?? '', 4000)),
-    summary: task.report?.summary ? redact(clip(task.report.summary, 2000)) : null,
-    doneNote: task.doneNote ? redact(clip(task.doneNote, 1000)) : null,
+    description: clip(redact(task.description ?? ''), 4000),
+    summary: task.report?.summary ? clip(redact(task.report.summary), 2000) : null,
+    doneNote: task.doneNote ? clip(redact(task.doneNote), 1000) : null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     need: need ? { ...need, title: redact(need.title), text: redact(need.text) } : null

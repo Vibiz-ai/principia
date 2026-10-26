@@ -24,6 +24,9 @@ final class MacMoveTests: XCTestCase {
         XCTAssertFalse(MacReach.isGone(status: 500, body: Data(#"{"message":"Something broke on your Mac"}"#.utf8)))
         XCTAssertFalse(MacReach.isGone(status: 409, body: Data(#"{"message":"It is not waiting for your OK anymore"}"#.utf8)))
         XCTAssertFalse(MacReach.isGone(status: 200, body: Data(#"{"ok":true}"#.utf8)))
+        // a successful answer that only quotes Cloudflare's words (a task, a chat line) is still the Mac's
+        XCTAssertFalse(MacReach.isGone(status: 200, body: Data(#"{"title":"Fix the tunnel: Error code: 1033","error_code":1033}"#.utf8)))
+        XCTAssertFalse(MacReach.isGone(status: 204, body: Data(html1033.utf8)))
 
         for (status, body) in [(530, json1033), (530, html1033), (502, html1033)] {
             let api = APIClient(transport: FakeTransport { _ in (status, body) }, target: target)
