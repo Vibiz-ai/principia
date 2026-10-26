@@ -136,6 +136,8 @@ export class Hive {
   linear: import('./company/sync/service').LinearSyncService | null = null
   /** REMOTE.md: Phone (off at every launch; null until wired / on failure). */
   remote: import('./remote/service').RemoteService | null = null
+  /** RELEASING.md §4: app updates (state 'off' in development and test instances) */
+  updates: import('./updates').UpdateService | null = null
   /** BROWSER.md: the company browser (views + agent endpoint); null = unavailable */
   browser: import('./browser/wire').BrowserWiring | null = null
   private cloudWiring: CloudWiring | null = null
