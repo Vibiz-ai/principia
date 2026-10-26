@@ -4,7 +4,7 @@
  * images paste or drop in. Chips for the model and the permission mode; a quiet context and plan meter.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatImage, ChatMeta, ChatTurn } from '@shared/chat'
+import type { ChatImage, ChatMeta, ChatModeOption, ChatTurn } from '@shared/chat'
 import { TERMINAL_ONLY_COMMANDS } from '@shared/chat'
 import { Icon } from '../Icon'
 import { hive, nativeMenu } from '../../lib/hive'
@@ -18,7 +18,11 @@ const MODES: { value: string; label: string; hint: string }[] = [
   { value: 'auto', label: 'Auto', hint: 'Claude decides what is safe to run without asking' }
 ]
 
-export const modeLabel = (m: string | null, bypass: boolean): string => (bypass ? 'Runs without asking' : (MODES.find((x) => x.value === m)?.label ?? 'Ask before edits'))
+/** The chip's words for a mode; `modes`: the harness's own (Codex), else Claude's four. */
+export const modeLabel = (m: string | null, bypass: boolean, modes: ChatModeOption[] | null = null): string => {
+  const list = modes?.length ? modes : MODES
+  return bypass ? 'Runs without asking' : (list.find((x) => x.value === m)?.label ?? list[0]!.label)
+}
 
 interface Attached extends ChatImage {
   url: string
@@ -56,7 +60,8 @@ export function Composer({
   onStop,
   onTerminal,
   onSetMode,
-  onSetModel
+  onSetModel,
+  who = 'Claude'
 }: {
   sessionId: string
   turn: ChatTurn
@@ -69,6 +74,8 @@ export function Composer({
   onTerminal(command?: string): void
   onSetMode(mode: string): void
   onSetModel(model: string): void
+  /** AGENT CHAT: who answers in this chat ("Vitruvius", "Codex"); default Claude */
+  who?: string
 }): React.JSX.Element {
   const [text, setTextState] = useState(drafts.get(sessionId) ?? '')
   const [images, setImages] = useState<Attached[]>([])
@@ -109,9 +116,10 @@ export function Composer({
     const rank = (n: string): number => (n.toLowerCase().startsWith(q) ? 0 : 1)
     const here = meta.commands.filter((c) => c.name.toLowerCase().includes(q)).sort((a, b) => rank(a.name) - rank(b.name) || a.name.length - b.name.length).slice(0, 40).map((c) => ({ name: c.name, description: c.description, terminal: false }))
     const known = new Set(meta.commands.map((c) => c.name))
-    const term = TERMINAL_ONLY_COMMANDS.filter((c) => !known.has(c.name) && c.name.includes(q)).map((c) => ({ ...c, terminal: true }))
+    // Codex chats have no terminal view to hand a command to
+    const term = meta.harness === 'codex' ? [] : TERMINAL_ONLY_COMMANDS.filter((c) => !known.has(c.name) && c.name.includes(q)).map((c) => ({ ...c, terminal: true }))
     return [...here, ...term]
-  }, [menu, meta.commands])
+  }, [menu, meta.commands, meta.harness])
   const menuItems = menu?.kind === 'slash' ? slashItems.length : files.length
 
   const detectMenu = (value: string, caret: number): void => {
@@ -227,7 +235,7 @@ export function Composer({
   }
   const modeMenu = async (): Promise<void> => {
     if (meta.bypass) return
-    const id = await nativeMenu(MODES.map((m) => ({ id: m.value, label: `${m.label} — ${m.hint}`, type: 'checkbox' as const, checked: (meta.permissionMode ?? 'default') === m.value })))
+    const id = await nativeMenu((meta.modes?.length ? meta.modes : MODES).map((m) => ({ id: m.value, label: `${m.label} — ${m.hint}`, type: 'checkbox' as const, checked: (meta.permissionMode ?? (meta.modes?.[0]?.value ?? 'default')) === m.value })))
     if (id) onSetMode(id)
   }
 
@@ -237,10 +245,12 @@ export function Composer({
     : disabled
       ? 'This conversation is open in the terminal'
       : needs
-        ? 'Answer above, or type what Claude should do instead…'
+        ? `Answer above, or type what ${who} should do instead…`
         : working
-          ? 'Add to the queue — Claude reads it when it finishes…'
-          : 'Ask Claude anything. / for commands, @ for files'
+          ? `Add to the queue — ${who} reads it when it finishes…`
+          : who === 'Claude'
+            ? 'Ask Claude anything. / for commands, @ for files'
+            : `Message ${who}… ${meta.commands.length ? '/ for commands, ' : ''}@ for files`
 
   return (
     <div
@@ -297,7 +307,7 @@ export function Composer({
         value={text}
         disabled={disabled}
         placeholder={placeholder}
-        aria-label="Message Claude"
+        aria-label={`Message ${who}`}
         onChange={(e) => {
           setText(e.target.value)
           detectMenu(e.target.value, e.target.selectionStart)
@@ -335,8 +345,8 @@ export function Composer({
         <button type="button" className="chat-pill" onClick={() => void modelMenu()} disabled={disabled || !meta.models.length} title={`Model: ${modelName}`}>
           <span className="chat-pill__l">{modelName}</span> <Icon name="chevronDown" size={10} />
         </button>
-        <button type="button" className="chat-pill" onClick={() => void modeMenu()} disabled={disabled || meta.bypass} title={meta.bypass ? 'Settings › Agents: Claude sessions skip permission prompts' : `When Claude asks you first: ${modeLabel(meta.permissionMode, meta.bypass)}`}>
-          <Icon name="shield" size={11} /> <span className="chat-pill__l">{modeLabel(meta.permissionMode, meta.bypass)}</span> {!meta.bypass && <Icon name="chevronDown" size={10} />}
+        <button type="button" className="chat-pill" onClick={() => void modeMenu()} disabled={disabled || meta.bypass} title={meta.bypass ? 'Settings › Agents: sessions skip permission prompts' : `When ${who} asks you first: ${modeLabel(meta.permissionMode, meta.bypass, meta.modes)}`}>
+          <Icon name="shield" size={11} /> <span className="chat-pill__l">{modeLabel(meta.permissionMode, meta.bypass, meta.modes)}</span> {!meta.bypass && <Icon name="chevronDown" size={10} />}
         </button>
         <span className="flex1" />
         <Meter meta={meta} />
@@ -363,7 +373,7 @@ function Meter({ meta }: { meta: ChatMeta }): React.JSX.Element | null {
   const c = 2 * Math.PI * r
   const resets = meta.planResetsAt ? new Date(meta.planResetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null
   return (
-    <span className="chat-meter" title={[meta.contextPct != null ? `${meta.contextPct}% of the context window used` : '', meta.planPct != null ? `${meta.planPct}% of your 5-hour plan window${resets ? `, resets ${resets}` : ''}` : '', meta.plan ?? ''].filter(Boolean).join('\n')}>
+    <span className="chat-meter" title={[meta.contextPct != null ? `${meta.contextPct}% of the context window used` : '', meta.planPct != null ? `${meta.planPct}% of your plan window${resets ? `, resets ${resets}` : ''}` : '', meta.plan ?? ''].filter(Boolean).join('\n')}>
       {[meta.contextPct != null ? `${meta.contextPct}% context` : '', meta.planPct != null ? `${meta.planPct}% of plan` : ''].filter(Boolean).join(' · ')}
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
         <circle cx="8" cy="8" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="1.5" />

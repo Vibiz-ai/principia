@@ -416,7 +416,7 @@ export async function refreshProviders(refresh = false): Promise<void> {
   setState({ providers: await hive.providers.list({ refresh }) })
 }
 
-function upsertSession(sess: Session): void {
+export function upsertSession(sess: Session): void {
   setState((s) => {
     const i = s.sessions.findIndex((x) => x.id === sess.id)
     const sessions = i < 0 ? [sess, ...s.sessions] : s.sessions.map((x) => (x.id === sess.id ? sess : x))
@@ -819,7 +819,15 @@ export function newestRunning(repoId: Id | null, companyId?: Id, departmentId?: 
 }
 
 /** Show a session; `add` = ⌘-click: add to the grid (max 4). */
-export function focusSession(id: Id, opts: { add?: boolean } = {}): void {
+export function focusSession(id: Id, opts: { add?: boolean; asSession?: boolean } = {}): void {
+  // AGENT CHAT: an agent's chat always opens as that agent's conversation (Chats › agent: the agent's header, panel and
+  // name), never as a generic session, wherever it is opened from (Needs you, ⌘K, the sidebar, a notification)
+  const own = state.sessions.find((x) => x.id === id)
+  if (own?.companyAgentId && !opts.add && !opts.asSession) {
+    followCompany(companyOf(own))
+    void navigate({ name: 'chats', chat: `agent:${own.companyAgentId}` })
+    return
+  }
   setState((s) => {
     let grid: Id[]
     if (opts.add) {

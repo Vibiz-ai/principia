@@ -2,7 +2,7 @@
  * CHAT-UI.md §4.2: the pieces of a chat transcript. White line art on the dark surface, cool accent only; "working"
  * reuses the shimmer classes from tokens.css.
  */
-import { useEffect, useRef, useState } from 'react'
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from 'react'
 import type { ChatDecision, ChatNoticeItem, ChatPermissionItem, ChatPlanItem, ChatQuestionItem, ChatTextItem, ChatThinkingItem, ChatToolItem, ChatTurnEndItem, ChatUserItem } from '@shared/chat'
 import type { ChatBlock } from '@shared/chatView'
 import { duration } from '@shared/chatView'
@@ -11,6 +11,7 @@ import { tildify } from '../../lib/format'
 import { Icon } from '../Icon'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
+import { blockKey, stampLabel } from '../../lib/agentChatView'
 
 const ICON: Record<ToolIcon, string> = {
   file: 'file',
@@ -24,6 +25,13 @@ const ICON: Record<ToolIcon, string> = {
   memory: 'memory',
   tasks: 'tasks',
   code: 'code'
+}
+
+/** AGENT CHAT: who answers in this chat ("Vitruvius", "Codex"); the cards say it instead of "Claude". */
+export const ChatWho = createContext<string>('Claude')
+/** "Claude wants to run a command" in the chat's own name */
+function askTitle(tool: string, input: unknown, who: string): string {
+  return permissionTitle(tool, input).replace(/^Claude\b/, who)
 }
 
 export interface CardActions {
@@ -302,6 +310,7 @@ function useHotkeys(enabled: boolean, onEnter: (() => void) | null, onEsc: (() =
 }
 
 export function PermissionCard({ item, actions }: { item: ChatPermissionItem; actions: CardActions | null }): React.JSX.Element {
+  const who = useContext(ChatWho)
   const [instead, setInstead] = useState<string | null>(null)
   const open = item.state === 'open' && !!actions
   const allow = (): void => actions?.answer(item.requestId, { kind: 'allow' })
@@ -321,16 +330,16 @@ export function PermissionCard({ item, actions }: { item: ChatPermissionItem; ac
         <div className="chat-row chat-row--static">
           <span className="chat-chev-sp" />
           <Icon name="shield" size={13} />
-          <span>{permissionTitle(item.tool, item.input).replace('Claude wants to', 'Asked to')}</span>
+          <span>{askTitle(item.tool, item.input, who).replace(`${who} wants to`, 'Asked to')}</span>
           <span className="chat-meta">· {item.state === 'expired' ? 'no longer needed' : (item.outcome ?? item.state)}</span>
         </div>
       </div>
     )
   return (
-    <div className="chat-card chat-needs" role="group" aria-label={permissionTitle(item.tool, item.input)}>
+    <div className="chat-card chat-needs" role="group" aria-label={askTitle(item.tool, item.input, who)}>
       <div className="chat-card__h chat-card__h--static">
         <Icon name="shield" size={14} className="chat-accent" />
-        <span className="chat-card__verb">{permissionTitle(item.tool, item.input)}</span>
+        <span className="chat-card__verb">{askTitle(item.tool, item.input, who)}</span>
         <span className="flex1" />
         <span className="chat-meta">needs you</span>
       </div>
@@ -345,7 +354,7 @@ export function PermissionCard({ item, actions }: { item: ChatPermissionItem; ac
               Allow <kbd>↵</kbd>
             </button>
             {item.suggestions.map((s, i) => (
-              <button key={i} type="button" className="chat-btn" onClick={() => actions?.answer(item.requestId, { kind: 'allowAlways', suggestion: i })} title="Remembered by Claude Code for this folder or chat">
+              <button key={i} type="button" className="chat-btn" onClick={() => actions?.answer(item.requestId, { kind: 'allowAlways', suggestion: i })} title={`Remembered by ${who === 'Codex' || who === 'Claude' ? who : 'the agent’s CLI'} for this folder or chat`}>
                 <SuggestionLabel text={s.label} />
               </button>
             ))}
@@ -354,7 +363,7 @@ export function PermissionCard({ item, actions }: { item: ChatPermissionItem; ac
             </button>
             <span className="flex1" />
             <button type="button" className="chat-btn chat-btn--ghost" onClick={() => setInstead('')}>
-              Tell Claude what to do instead…
+              Tell {who} what to do instead…
             </button>
           </div>
         ) : (
@@ -472,6 +481,7 @@ export function QuestionCard({ item, actions }: { item: ChatQuestionItem; action
 }
 
 export function PlanCard({ item, actions }: { item: ChatPlanItem; actions: CardActions | null }): React.JSX.Element {
+  const who = useContext(ChatWho)
   const open = item.state === 'open' && !!actions
   const [why, setWhy] = useState<string | null>(null)
   const ref = useHotkeys(open && actions?.hotkeyFor === item.requestId && why === null, () => actions?.answer(item.requestId, { kind: 'approvePlan' }), null)
@@ -479,7 +489,7 @@ export function PlanCard({ item, actions }: { item: ChatPlanItem; actions: CardA
     <div className={`chat-card ${open ? 'chat-needs' : ''}`}>
       <div className="chat-card__h chat-card__h--static">
         <Icon name="plans" size={14} className={open ? 'chat-accent' : ''} />
-        <span className="chat-card__verb">{open ? 'Claude has a plan' : 'Plan'}</span>
+        <span className="chat-card__verb">{open ? `${who} has a plan` : 'Plan'}</span>
         <span className="flex1" />
         <span className="chat-meta">{open ? 'needs you' : item.state === 'approved' ? 'approved' : item.state === 'rejected' ? 'kept planning' : ''}</span>
       </div>
@@ -494,7 +504,7 @@ export function PlanCard({ item, actions }: { item: ChatPlanItem; actions: CardA
                 Approve <kbd>↵</kbd>
               </button>
               <button type="button" className="chat-btn" onClick={() => actions?.answer(item.requestId, { kind: 'approvePlan', acceptEdits: true })}>
-                Approve and let Claude edit
+                Approve and let {who} edit
               </button>
               <button type="button" className="chat-btn chat-btn--ghost" onClick={() => setWhy('')}>
                 Keep planning…
@@ -563,33 +573,48 @@ export function TurnEnd({ item }: { item: ChatTurnEndItem }): React.JSX.Element 
 }
 
 /** Draws blocks (top level and inside a subagent card). */
-export function Blocks({ blocks, live, actions, onNotice }: { blocks: ChatBlock[]; live: boolean; actions: CardActions | null; onNotice?: (a: 'retry' | 'openTerminal') => void }): React.JSX.Element {
+export function Blocks({ blocks, live, actions, onNotice, stamps }: { blocks: ChatBlock[]; live: boolean; actions: CardActions | null; onNotice?: (a: 'retry' | 'openTerminal') => void; stamps?: Map<string, number> }): React.JSX.Element {
+  const now = Date.now()
   return (
     <>
       {blocks.map((b) => {
-        if (b.t === 'group') return <ToolGroupRow key={b.id} tools={b.tools} live={live} />
-        if (b.t === 'todo') return <TodoCard key={b.item.id} item={b.item} latest={b.latest} live={live} />
-        if (b.t === 'tool') return <ToolCard key={b.item.id} item={b.item} live={live} children={b.children} />
-        const it = b.item
-        switch (it.kind) {
-          case 'user':
-            return <UserMessage key={it.id} item={it} />
-          case 'text':
-            return <AssistantText key={it.id} item={it} />
-          case 'thinking':
-            return <ThinkingRow key={it.id} item={it} />
-          case 'permission':
-            return <PermissionCard key={it.id} item={it} actions={actions} />
-          case 'question':
-            return <QuestionCard key={it.id} item={it} actions={actions} />
-          case 'plan':
-            return <PlanCard key={it.id} item={it} actions={actions} />
-          case 'notice':
-            return <NoticeRow key={it.id} item={it} onAction={onNotice} />
-          case 'turnEnd':
-            return <TurnEnd key={it.id} item={it} />
-        }
+        const el = block(b, live, actions, onNotice)
+        const at = stamps?.get(blockKey(b))
+        if (at === undefined) return el
+        return (
+          <Fragment key={`s:${blockKey(b)}`}>
+            <div className="chat-stamp" role="separator">
+              <time dateTime={new Date(at).toISOString()}>{stampLabel(at, now)}</time>
+            </div>
+            {el}
+          </Fragment>
+        )
       })}
     </>
   )
+}
+
+function block(b: ChatBlock, live: boolean, actions: CardActions | null, onNotice?: (a: 'retry' | 'openTerminal') => void): React.JSX.Element | undefined {
+  if (b.t === 'group') return <ToolGroupRow key={b.id} tools={b.tools} live={live} />
+  if (b.t === 'todo') return <TodoCard key={b.item.id} item={b.item} latest={b.latest} live={live} />
+  if (b.t === 'tool') return <ToolCard key={b.item.id} item={b.item} live={live} children={b.children} />
+  const it = b.item
+  switch (it.kind) {
+    case 'user':
+      return <UserMessage key={it.id} item={it} />
+    case 'text':
+      return <AssistantText key={it.id} item={it} />
+    case 'thinking':
+      return <ThinkingRow key={it.id} item={it} />
+    case 'permission':
+      return <PermissionCard key={it.id} item={it} actions={actions} />
+    case 'question':
+      return <QuestionCard key={it.id} item={it} actions={actions} />
+    case 'plan':
+      return <PlanCard key={it.id} item={it} actions={actions} />
+    case 'notice':
+      return <NoticeRow key={it.id} item={it} onAction={onNotice} />
+    case 'turnEnd':
+      return <TurnEnd key={it.id} item={it} />
+  }
 }

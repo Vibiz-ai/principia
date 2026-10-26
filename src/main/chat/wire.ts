@@ -7,7 +7,7 @@ import type { Ask, AskAnswer } from '../../shared/live'
 import type { ChatDecision } from '../../shared/chat'
 import type { Id } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
-import { handle } from '../ipc'
+import { emit, handle } from '../ipc'
 import { claudeDataDir } from '../claudeTrust'
 import { ChatHub, type ChatHubDeps } from './chatHub'
 import { chatTitle, isDefaultTitle } from '../../shared/chatTitle'
@@ -23,7 +23,30 @@ export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' 
         return null
       }
     },
+    codexVersion: () => {
+      try {
+        return h.engine.providers.cached().find((p) => p.id === 'codex')?.version ?? null
+      } catch {
+        return null
+      }
+    },
+    // AGENT CHAT: a new Codex thread is the session's conversation (Restart and a revived agent chat resume it)
+    onConversation: (sid, conv) => {
+      const s = h.store.getSession(sid)
+      if (!s || s.agentSessionId === conv) return
+      try {
+        const next = h.store.updateSession(sid, { agentSessionId: conv })
+        emit('session:updated', next)
+      } catch {
+        /* the row may be written a tick later; the chat index keeps the id too */
+      }
+    },
     registerPid: (sid, pid) => h.reaper?.register(sid, pid),
+    // an agent's chat is titled "Julia · Code Reviewer" (agentChat.ts): its asks and notices speak as Julia
+    speakerOf: (sid) => {
+      const s = h.store.getSession(sid)
+      return s?.companyAgentId ? (s.title.split(' · ')[0]?.trim() || null) : null
+    },
     asks: (sid) => {
       const sl = h.sessionLive?.get(sid)
       if (!sl) return null
@@ -68,7 +91,8 @@ function titleChat(h: Hive, sid: Id, text: string, tries = 0): void {
     return
   }
   const t = chatTitle(text)
-  if (!t || !isDefaultTitle(s.title, s.cwd) || s.title === t) return
+  // an agent's chat keeps the agent's name
+  if (!t || s.companyAgentId || !isDefaultTitle(s.title, s.cwd) || s.title === t) return
   try {
     h.sessions.rename(sid, t)
     h.sessionLive?.get(sid)?.retitle(t)
@@ -148,5 +172,25 @@ export function registerChatHandlers(h: Hive): void {
   handle('chat:toChat', async ({ id, force }) => {
     await hub().toChat(id, force)
     h.statusChanged()
+  })
+  // AGENT CHAT: an agent's standing chat (started or resumed), and a message straight into it
+  const agentChats = () => {
+    if (!h.agentChats) throw new HiveError('internal', 'Agent chats are not available')
+    return h.agentChats
+  }
+  // never (re)started while Principia quits: the chat comes back, resumed, on the next launch
+  const notQuitting = (): void => {
+    if (h.quitting) throw new HiveError('conflict', 'Principia is quitting')
+  }
+  handle('chat:openAgent', ({ agentId }) => {
+    notQuitting()
+    return agentChats().open(agentId)
+  })
+  handle('chat:sendAgent', async ({ agentId, text }) => {
+    notQuitting()
+    const s = agentChats().open(agentId)
+    await hub().send(s.id, text)
+    h.statusChanged()
+    return h.store.getSession(s.id) ?? s
   })
 }

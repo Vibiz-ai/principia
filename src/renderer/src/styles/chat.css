@@ -207,3 +207,14 @@
   .chat-seg button { padding: 0 6px; }
 }
 .pane__title-text { color: var(--text-primary); font-family: var(--font-sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+
+/* AGENT CHAT: the agent's face and name open an empty chat; its face leads the working line (white line art) */
+.chat-empty--agent { flex-direction: column; align-items: center; text-align: center; gap: 8px; padding-top: 56px; }
+.chat-empty__name { color: var(--text-primary); font-weight: var(--weight-semibold); font-size: var(--text-md, 15px); }
+.chat-working__face { display: inline-flex; width: 18px; height: 18px; overflow: hidden; border-radius: 50%; border: 1px solid var(--border-strong); }
+.chat-working__face > * { width: 18px !important; height: 18px !important; }
+
+/* AGENT CHAT part 2 (Grok-style reading): a quiet time line before a new stretch of the conversation */
+.chat-stamp { align-self: center; margin: 14px 0 2px; font-size: 11px; color: var(--text-tertiary); letter-spacing: 0.01em; }
+.chat-pane--agent .chat-col { line-height: 1.6; }
+.chat-text .dgm-md h1, .chat-text .dgm-md .dgm-md__h1 { font-size: 17px; }

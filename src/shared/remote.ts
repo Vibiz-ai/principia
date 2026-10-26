@@ -302,6 +302,8 @@ export interface PhoneAgent {
   /** "Working on Spring menu", "Paused", "Free" */
   status: string
   items: PhoneThreadItem[]
+  /** AGENT CHAT: the agent's own chat (newest, a running one first); the phone opens it like any chat, same chat model */
+  chatSessionId?: Id | null
 }
 
 export interface PhoneRoomMember {

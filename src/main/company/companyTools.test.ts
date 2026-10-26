@@ -205,3 +205,34 @@ describe('§2 step 4: a new triage task gets a model suggestion', () => {
     expect(c.task(moving.id).routing?.by).toBe('human')
   })
 })
+
+describe('AGENT CHAT: an agent’s own chat works its own board tasks', () => {
+  it('moves a task assigned to its agent (to in review through in progress), never another agent’s, never one a run holds', () => {
+    const b = board()
+    const owner = b.chat('session_agent')
+    db.prepare('UPDATE sessions SET company_agent_id=? WHERE id=?').run(b.writer.id, 'session_agent')
+    const mine = b.task({ title: 'Homepage headlines', status: 'todo', departmentId: b.marketing.id, agentId: b.writer.id })
+    const theirs = b.task({ title: 'Logo', status: 'todo', departmentId: b.marketing.id, agentId: b.designer.id })
+    const update = (args: Record<string, unknown>) => tools.call(tools.resolveCaller(owner), 'task_update' as BoardTool, args, { callId: null }) as { task: { status: string } }
+    // the chat is the agent's chat, not a task session, even once it holds the task
+    expect(tools.resolveCaller(owner).chatAgentId).toBe(b.writer.id)
+    const done = update({ id: mine.identifier, status: 'in_review', note: 'Drafted three headlines in the chat' })
+    expect(done.task.status).toBe('in_review')
+    const t = c.task(mine.id)
+    expect(t.report?.summary).toBe('Drafted three headlines in the chat')
+    expect(t.runId).toBeNull()
+    expect(() => update({ id: theirs.identifier, status: 'in_progress' })).toThrow('not tracked by this chat')
+    expect(() => update({ id: mine.identifier, status: 'done' })).toThrow()
+    // a task its agent's run is working on is not the chat's to move
+    const running = b.task({ title: 'Blog post', status: 'todo', departmentId: b.marketing.id, agentId: b.writer.id })
+    db.prepare("UPDATE company_tasks SET status='in_progress', run_id='run_x', data=json_set(data,'$.status','in_progress','$.runId','run_x') WHERE id=?").run(running.id)
+    expect(() => update({ id: running.identifier, status: 'in_review', note: 'x' })).toThrow('being worked on by a run')
+    // starting one holds it with the chat; the chat stays a chat (no task session)
+    const next = b.task({ title: 'Tagline', status: 'todo', departmentId: b.marketing.id, agentId: b.writer.id })
+    expect(update({ id: next.identifier, status: 'in_progress' }).task.status).toBe('in_progress')
+    expect(c.task(next.id).runId).toBe('session_agent')
+    expect(tools.resolveCaller(owner).taskId).toBeNull()
+    // a comment on its own task is fine
+    expect(() => tools.call(tools.resolveCaller(owner), 'task_comment' as BoardTool, { id: next.identifier, text: 'Going with option 2' }, { callId: null })).not.toThrow()
+  })
+})

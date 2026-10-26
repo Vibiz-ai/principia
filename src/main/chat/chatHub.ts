@@ -13,8 +13,15 @@ import { EMPTY_CHAT_META } from '../../shared/chat'
 import { HiveError } from '../../shared/errors'
 import type { PtyLike, PtySpawn } from '../sessions'
 import { ChatSession, replayItems, type ChatAskBridge } from './chatSession'
+import { CodexChatSession } from './codexSession'
 import { defaultChildSpawn, type ChildSpawn } from './streamProc'
 import { versionAtLeast } from './chatArgs'
+
+/** AGENT CHAT: codex app-server's thread protocol is verified on this version and newer. */
+export const CODEX_CHAT_MIN_VERSION = '0.163.0'
+
+/** What the hub needs of a chat, Claude's (ChatSession) or Codex's (CodexChatSession). */
+export type ChatLike = ChatSession | CodexChatSession
 
 const FLUSH_MS = 16
 
@@ -36,9 +43,15 @@ export interface ChatHubDeps {
   redact(text: string): string
   openChatsAs(): OpenChatsAs
   claudeVersion(): string | null
+  /** AGENT CHAT: the installed codex version (Codex agent chats need the app-server protocol) */
+  codexVersion?(): string | null
+  /** AGENT CHAT: the conversation id of a session is known (a new Codex thread): Restart resumes it */
+  onConversation?(sessionId: Id, conv: string): void
   killGroup(pid: number, signal: NodeJS.Signals): boolean
   registerPid?(sessionId: Id, pid: number): void
   asks?(sessionId: Id): ChatAskBridge | null
+  /** AGENT CHAT: the name a chat speaks in (an agent's chat: the agent's name); null = the AI tool's own */
+  speakerOf?(sessionId: Id): string | null
   terminalWorking?(sessionId: Id): boolean
   /** the chat's first user message: a default session title becomes it */
   onTitle?(sessionId: Id, text: string): void
@@ -74,7 +87,7 @@ export function redactDeep<T>(v: T, redact: (s: string) => string): T {
 }
 
 export class ChatHub {
-  private sessions = new Map<Id, ChatSession>()
+  private sessions = new Map<Id, ChatLike>()
   private seq = new Map<Id, number>()
   private pending = new Map<Id, ChatOp[]>()
   private timers = new Map<Id, NodeJS.Timeout>()
@@ -94,6 +107,10 @@ export class ChatHub {
   /** CHAT-UI.md §3.7: Claude chats need a verified CLI; anything else stays a terminal. */
   supported(): boolean {
     return versionAtLeast(this.d.claudeVersion())
+  }
+  /** AGENT CHAT: Codex chats (asked for explicitly: agent chats) need codex app-server. */
+  codexSupported(): boolean {
+    return versionAtLeast(this.d.codexVersion?.() ?? null, CODEX_CHAT_MIN_VERSION)
   }
 
   private saveIndex(): void {
@@ -124,6 +141,7 @@ export class ChatHub {
    * plain node-pty, untouched.
    */
   spawn(file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }, host: PtyHostInfo | undefined, spawnPty: PtySpawn): PtyLike {
+    if (host?.adapter === 'codex' && host.mode === 'chat' && this.codexSupported()) return this.spawnCodex(file, args, opts, host)
     if (!host || host.adapter !== 'claude' || !this.supported()) return spawnPty(file, args, opts)
     const id = host.sessionId
     const mode = host.mode ?? (host.resumeId ? this.modeOfConversation(host.resumeId) : null) ?? resolveChatMode(this.d.openChatsAs(), host)
@@ -149,9 +167,13 @@ export class ChatHub {
         turnEnded: (report) => this.d.asks?.(id)?.turnEnded?.(report)
       },
       terminalWorking: () => this.d.terminalWorking?.(id) ?? false,
+      speaker: () => this.d.speakerOf?.(id) ?? null,
       transcript: (conv) => this.transcript(conv),
       onModeChanged: (m) => this.remember(id, { mode: m }),
-      onConversation: (conv) => this.remember(id, { conv }),
+      onConversation: (conv) => {
+        this.remember(id, { conv })
+        this.d.onConversation?.(id, conv)
+      },
       // the session row is stored after its pane spawns: title it on the next tick
       onTitle: (text) => void setTimeout(() => this.d.onTitle?.(id, text), 0),
       log: this.d.log,
@@ -166,10 +188,49 @@ export class ChatHub {
     return s
   }
 
-  get(id: Id): ChatSession | null {
+  /** AGENT CHAT: a Codex chat (codex app-server), resuming its thread when the spawn resumes one. */
+  private spawnCodex(file: string, args: string[], opts: { cwd: string; env: Record<string, string> }, host: PtyHostInfo): PtyLike {
+    const id = host.sessionId
+    const s = new CodexChatSession({
+      sessionId: id,
+      file,
+      interactiveArgs: args,
+      cwd: opts.cwd,
+      env: opts.env,
+      resumeId: host.resumeId ?? null,
+      speaker: () => this.d.speakerOf?.(id) ?? null,
+      spawnChild: this.d.spawnChild ?? defaultChildSpawn,
+      killGroup: this.d.killGroup,
+      registerPid: (pid) => this.d.registerPid?.(id, pid),
+      emit: (ops) => this.queueOps(id, ops),
+      asks: {
+        open: (e) => this.d.asks?.(id)?.open(e),
+        close: (rid, summary) => this.d.asks?.(id)?.close(rid, summary),
+        stopped: () => this.d.asks?.(id)?.stopped?.(),
+        working: () => this.d.asks?.(id)?.working?.(),
+        turnEnded: (report) => this.d.asks?.(id)?.turnEnded?.(report)
+      },
+      onConversation: (conv) => {
+        this.remember(id, { conv })
+        this.d.onConversation?.(id, conv)
+      },
+      onTitle: (text) => void setTimeout(() => this.d.onTitle?.(id, text), 0),
+      log: this.d.log,
+      ...(this.d.idleMs ? { idleMs: this.d.idleMs } : {})
+    })
+    this.sessions.set(id, s)
+    this.remember(id, { mode: 'chat', conv: host.resumeId ?? null, cwd: opts.cwd })
+    s.onExit(() => {
+      this.flush(id)
+      this.sessions.delete(id)
+    })
+    return s
+  }
+
+  get(id: Id): ChatLike | null {
     return this.sessions.get(id) ?? null
   }
-  private need(id: Id): ChatSession {
+  private need(id: Id): ChatLike {
     const s = this.sessions.get(id)
     if (!s) throw new HiveError('conflict', 'This chat is not running. Restart it to continue.')
     return s
@@ -210,8 +271,9 @@ export class ChatHub {
     if (live) return redactDeep({ sessionId: id, ...live.snapshot(seq) }, (s) => this.d.redact(s))
     const row = this.index[id]
     const conv = session?.agentSessionId ?? row?.conv ?? null
-    const isChat = session?.adapter === 'claude' && row?.mode === 'chat'
-    const items = isChat && conv ? replayItems(this.transcript(conv)) : []
+    const isChat = (session?.adapter === 'claude' || session?.adapter === 'codex') && row?.mode === 'chat'
+    // an ended Codex chat reads nothing here: its history comes back when the chat is opened again (thread/resume)
+    const items = isChat && conv && session?.adapter === 'claude' ? replayItems(this.transcript(conv)) : []
     return redactDeep(
       {
         sessionId: id,

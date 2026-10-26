@@ -6,8 +6,8 @@
  *   card, the agent page toggle and onboarding (design §2.7).
  * - routeAsk: who gets a request typed in the Ask box ("→ Marcus · Content Writer"): an @name first, then the
  *   request's words against each agent's role and department, then the company's first agent.
- * - paraphrase / deskReply (PM D11): the agent restates the request in a full sentence, never a truncated quote; a
- *   request that matches work already queued is merged into it ("I'm already on … (from setup); I'll add …").
+ * - paraphrase / taskTitleFor: a request as a task title in full words. AGENT CHAT: a message to an agent goes into
+ *   the agent's own chat and the agent answers itself; Principia never writes a reply in its name.
  * - statusSentence: one plain sentence per agent (design §2.6 status vocabulary), glyph + word, never colour alone.
  * - weekTiles: Home's This week row, 3 tiles (PM C10): tasks done, drafts approved (pull requests in a code company),
  *   plan use, which Claude doesn't report yet, so it says so instead of a number (PM risk: never a fake 31%).
@@ -16,28 +16,8 @@ import type { CompanyTask } from '@shared/company'
 
 // ---------- autonomy ----------
 
-/** Words that decide what an agent asks before doing. First match wins, role before department. */
-const ASK_BEFORE: [RegExp, string][] = [
-  [/support|customer|reception|front desk|office|liaison|inbox|reply|responder|patient/i, 'replying'],
-  [/\bads?\b|advert|campaign|paid|media buy|finance|budget|spend|account/i, 'spending'],
-  [/content|writer|copy|social|instagram|brand|marketing|blog|seo|newsletter|editor|post/i, 'posting'],
-  [/develop|engineer|\bdev\b|\bcode\b|coder|\bqa\b|\btest|devops|frontend|backend|software/i, 'merging'],
-  [/report|analyst|research|insight|data/i, 'sending anything out'],
-  [/ops|operation|fulfil|logistic|supply|inventory|order/i, 'ordering']
-]
-
-/**
- * One phrase per agent, shared by Team, the agent page and onboarding. An agent with autonomy 'auto' "Acts on its
- * own"; every other agent "Asks before {what its role would do in the world}", or "Asks before acting".
- */
-export function autonomyPhrase(o: { auto: boolean; role?: string | null; department?: string | null }): string {
-  if (o.auto) return 'Acts on its own'
-  for (const src of [o.role, o.department]) {
-    if (!src) continue
-    for (const [re, verb] of ASK_BEFORE) if (re.test(src)) return `Asks before ${verb}`
-  }
-  return 'Asks before acting'
-}
+/** One phrase per agent, shared by Team, the agent page, onboarding and the agent's own chat brief (shared/agentChat.ts). */
+export { autonomyPhrase } from '@shared/agentChat'
 
 // ---------- routing ----------
 
@@ -325,7 +305,7 @@ export function taskTitleFor(text: string): string {
   return s ? upperFirst(s) : 'New request'
 }
 
-// ---------- duplicates (D11) ----------
+// ---------- words ----------
 
 const STOP = new Set(
   ('the a an and or for with about from into onto this that these those our your my their its of to in on at by be is are was were it as up out ' +
@@ -343,68 +323,10 @@ export function contentWords(text: string): Set<string> {
   }
   return out
 }
-/** Content words that name the topic (verbs left out: "update the guide" is about the guide). */
-function topicWords(text: string): Set<string> {
-  const out = new Set<string>()
-  for (const w of contentWords(text)) if (!VERBS.has(w) && !VERBS.has(w.replace(/e$/, ''))) out.add(w)
-  return out
-}
-/** The part of a request that names the work: "update the brand voice guide" of "… with emoji rules, and …". */
-function mainClause(text: string): string {
-  const s = stripOpeners(stripMention(text))
-  // "add X to the Y" / "mention X in the Y": the work it joins is Y
-  const into = s.match(/^(?:add|include|put|mention|work|fold|use)\b.*?\b(?:to|in|into|on)\s+(?:the|my|our|your|this|that)\s+(.+?)(?:[,;.!?]|$)/i)
-  if (into) return into[1]!
-  return s.split(/[,;.!?]|\s+(?:and|with|but|plus|also)\s+/i)[0] ?? s
-}
-
-type DupTask = Pick<CompanyTask, 'id' | 'title' | 'status'> & { description?: string }
-const OPEN = new Set(['todo', 'backlog', 'triage', 'in_progress', 'blocked', 'in_review'])
-/**
- * The agent's open task this request repeats: at least two shared content words covering half of the task's title,
- * and the part of the request that names the work brings at most one word the task does not have ("a blog post about
- * teeth whitening for the La Jolla clinic" is new work, not the monthly blog post). The best match wins.
- */
-export function findDuplicate<T extends DupTask>(text: string, tasks: readonly T[]): T | null {
-  const ask = contentWords(stripMention(text))
-  if (ask.size < 2) return null
-  const named = topicWords(mainClause(text))
-  let best: { t: T; score: number } | null = null
-  for (const t of tasks) {
-    if (!OPEN.has(t.status)) continue
-    const title = contentWords(t.title)
-    const both = new Set([...title, ...contentWords((t.description ?? '').slice(0, 400))])
-    let hitTitle = 0
-    let hit = 0
-    for (const w of ask) {
-      if (title.has(w)) hitTitle++
-      if (both.has(w)) hit++
-    }
-    if (hit < 2 || hitTitle < 1) continue
-    let fresh = 0
-    for (const w of named) if (!both.has(w)) fresh++
-    if (fresh > 1) continue
-    const score = hit / Math.min(ask.size, Math.max(title.size, 2))
-    if (score >= 0.5 && (!best || score > best.score)) best = { t, score }
-  }
-  return best?.t ?? null
-}
-/** What the request adds to the task it joins: its parts the task does not already say ("mention the launch on Thursday"). */
-export function additionTo(text: string, title: string): string {
-  const { clause } = requestClause(text)
-  const known = contentWords(title)
-  const parts = clause.split(/,\s*|;\s*|\s+and\s+(?=(?:also\s+)?(?:mention|add|include|make|use|put|keep|say|show|note|cover|highlight|feature)\b)/i).map((p) => p.trim().replace(/^and\s+/i, '')).filter(Boolean)
-  const kept = parts.filter((p) => {
-    const w = topicWords(p)
-    return [...w].some((x) => !known.has(x))
-  })
-  return (kept.length ? kept : parts).join(', ')
-}
 
 // ---------- the reply ----------
 
 export type TaskOrigin = 'setup' | 'you' | 'board' | 'linear' | 'github' | 'schedule' | 'agent'
-const ORIGIN_WORDS: Record<TaskOrigin, string> = { setup: 'from setup', you: 'you asked earlier', board: 'from the Board', linear: 'from Linear', github: 'from GitHub', schedule: 'from a schedule', agent: 'a teammate passed it to me' }
 export const DESK_PREFIX = 'desk:'
 /** Where a task came from, in the words the agent uses ("from setup"). */
 export function taskOrigin(t: Pick<CompanyTask, 'source' | 'externalId' | 'createdAt'>, companyCreatedAt?: string | null): TaskOrigin {
@@ -418,20 +340,6 @@ export function taskOrigin(t: Pick<CompanyTask, 'source' | 'externalId' | 'creat
   return 'board'
 }
 
-export interface ReplyInput {
-  request: string
-  /** the agent's autonomy phrase */
-  autonomy: string
-  /** the open task the request was merged into, and where it stands */
-  merged?: { title: string; origin: TaskOrigin; status?: CompanyTask['status']; waitingOnOther?: boolean } | null
-  /** the task the agent is busy with, when the new one waits behind it */
-  busyWith?: string | null
-  /** the agent starts its next task by itself (acts on its own, Autopilot on); else it waits for your Start */
-  startsNext?: boolean
-  /** the company is paused (its name), or the agent is */
-  pausedCompany?: string | null
-  agentPaused?: boolean
-}
 /** "Sentence case" a title for the middle of a sentence: "the week's posts", not "The Week's Posts". */
 function inSentence(title: string): string {
   const t = title.replace(/[.!?\s]+$/, '')
@@ -456,39 +364,6 @@ function workPhrase(title: string): string {
   if (first && VERBS.has(first.toLowerCase()) && rest.length) return `${gerund(first)} ${rest.join(' ')}`
   return inSentence(t)
 }
-/**
- * D11: the agent restates the request in a full sentence (never a truncated quote, never an echo with "?.") and says
- * truthfully what happens next: it starts now, it waits behind the current task (by itself, or until you press
- * Start), or it waits for the resume. A merged request names the work it joins, where that came from and where it
- * stands ("already drafting" only when it is being drafted), and says only what the request adds.
- */
-export function deskReply(o: ReplyInput): string {
-  const will = paraphrase(o.request)
-  // a question gets an answer here, not a draft for your OK
-  const question = requestClause(o.request).kind === 'question'
-  const after = question ? '' : o.autonomy === 'Acts on its own' ? "I'll tell you in Needs you when it's done." : `${o.autonomy.replace(/^Asks/, 'I ask')}, so it comes to Needs you for your OK first.`
-  const pausedTail = o.pausedCompany ? ` ${o.pausedCompany} is paused, so I pick it up when you resume.` : o.agentPaused ? " I'm paused, so I pick it up when you resume me." : ''
-  if (o.merged) {
-    const add = additionTo(o.request, o.merged.title)
-    const where = ORIGIN_WORDS[o.merged.origin]
-    const work = workPhrase(o.merged.title)
-    const st = o.merged.status ?? 'in_progress'
-    if (st === 'in_progress') return `Got it. I'm already ${/ing\b/.test(work.split(' ')[0] ?? '') ? work : `on ${work}`} (${where}); I'll add this: ${asSentence(add)}${pausedTail}`
-    if (st === 'in_review') return `Got it. ${upperFirst(work)} (${where}) is waiting for your OK; I've added this to it for the next round: ${asSentence(add)}${pausedTail}`
-    const state = o.merged.waitingOnOther ? 'waiting on another task first' : 'not started yet'
-    const start = pausedTail || o.merged.waitingOnOther ? '' : o.startsNext ? '' : ' Press Start when you want me on it.'
-    return `Got it. ${upperFirst(work)} is already in my queue (${where}), ${state}. I've added this to it: ${asSentence(add)}${pausedTail}${start}`
-  }
-  if (o.pausedCompany) return `Got it. ${asSentence(will)} ${o.pausedCompany} is paused, so it waits in my queue until you resume.`
-  if (o.agentPaused) return `Got it. ${asSentence(will)} I'm paused, so it waits in my queue until you resume me.`
-  if (o.busyWith) {
-    const next = o.startsNext ? "I start this right after, on my own." : 'This waits in my Queue: press Start when you want me on it.'
-    const busy = workPhrase(o.busyWith)
-    return `Got it. ${asSentence(will)} I'm still ${/ing$/.test(busy.split(' ')[0] ?? '') ? busy : `on ${busy}`}. ${next}${after ? ` ${after}` : ''}`
-  }
-  return `On it. ${asSentence(will)}${after ? ` ${after}` : ''}`
-}
-
 // ---------- status sentence ----------
 
 export type StatusKind = 'working' | 'needs' | 'ready' | 'idle' | 'paused' | 'failed'

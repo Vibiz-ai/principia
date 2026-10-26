@@ -54,6 +54,8 @@ export interface TaskCaller {
   agentId: string | null
   /** the caller's run or session still holds its task (in flight on it): writes are allowed */
   holdsTask: boolean
+  /** AGENT CHAT: the agent whose standing chat this session is (it moves the tasks assigned to that agent) */
+  chatAgentId?: string | null
 }
 /** Line fields the server adds (HIVE_TASK_COMPANY_ID / HIVE_COMPANY_ID, HIVE_TASK_ID), as cross-checks only. */
 export interface TaskLineHints { companyId?: string | null; taskId?: string | null; callId?: string | null }
@@ -251,14 +253,17 @@ export class TaskTools {
     }
     const row = this.db.prepare(`SELECT company_id${this.sessionTaskCol ? ', task_id' : ''} FROM sessions WHERE id=?`).get(owner.sessionId) as { company_id: string | null; task_id?: string | null } | undefined
     if (!row) fail('Unknown session')
+    let chatAgentId: string | null = null
+    try { chatAgentId = (this.db.prepare('SELECT company_agent_id AS a FROM sessions WHERE id=?').get(owner.sessionId) as { a: string | null } | undefined)?.a ?? null } catch { /* older db */ }
     let taskId = row!.task_id ?? null
-    // PROACTIVE.md §3: a chat's own tracked task (runId = the chat) never makes the chat a task session
-    taskId ??= (this.db.prepare("SELECT id FROM company_tasks WHERE run_id=? AND status='in_progress' AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%' LIMIT 1").get(owner.sessionId) as { id: string } | undefined)?.id ?? null
+    // PROACTIVE.md §3: a chat's own tracked task (runId = the chat) never makes the chat a task session; nor does a
+    // task an agent's chat moved to in progress (AGENT CHAT: the chat stays the agent's chat)
+    if (!chatAgentId) taskId ??= (this.db.prepare("SELECT id FROM company_tasks WHERE run_id=? AND status='in_progress' AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%' LIMIT 1").get(owner.sessionId) as { id: string } | undefined)?.id ?? null
     const t = taskId ? this.c.task(taskId) : null
     const companyId = t?.companyId ?? this.c.companyOf({ sessionId: owner.sessionId }).id
     // a session row of one company never holds another company's task
     if (t && row!.company_id && row!.company_id !== t.companyId) fail('This session belongs to another company')
-    return { kind: 'session', holderId: owner.sessionId, companyId, taskId: t?.id ?? null, agentId: t?.agentId ?? null, holdsTask: !!t && t.status === 'in_progress' && t.runId === owner.sessionId }
+    return { kind: 'session', holderId: owner.sessionId, companyId, taskId: t?.id ?? null, agentId: t?.agentId ?? null, holdsTask: !!t && t.status === 'in_progress' && t.runId === owner.sessionId, chatAgentId }
   }
   /**
    * The broker's checks (§6) on top of resolveCaller: the line's company and task must be the caller's, and a write
@@ -463,10 +468,14 @@ export class TaskTools {
   }
   // ---------- PROACTIVE.md §3: the tasks a chat tracks for its own work ----------
 
-  /** A task of the caller's company this chat tracks (task_create from the chat). */
+  /** AGENT CHAT: the task is assigned to the agent whose chat this is (its chat works on it like a run would). */
+  private agentOwns(caller: TaskCaller, t: BoardTask): boolean {
+    return !!caller.chatAgentId && t.agentId === caller.chatAgentId && t.companyId === caller.companyId
+  }
+  /** A task of the caller's company this chat tracks (task_create from the chat), or one assigned to its agent. */
   private tracked(caller: TaskCaller, ref: string): BoardTask {
     const t = this.find(caller.companyId, ref)
-    if (trackedBy(t) !== caller.holderId) fail(`${t.identifier} is not tracked by this chat. Comment on tasks you track or filed; file new work with task_create or company_file_task.`)
+    if (trackedBy(t) !== caller.holderId && !this.agentOwns(caller, t)) fail(`${t.identifier} is not tracked by this chat. Comment on tasks you track, filed or are assigned; file new work with task_create or company_file_task.`)
     return t
   }
   /**
@@ -512,10 +521,10 @@ export class TaskTools {
   private update(caller: TaskCaller, a: z.infer<typeof ARGS.task_update>): Record<string, unknown> {
     let t = this.tracked(caller, a.id)
     if (a.title !== undefined || a.description !== undefined) {
-      t = this.c.editTracked(t.id, caller.holderId, { ...(a.title !== undefined ? { title: this.redact(a.title) } : {}), ...(a.description !== undefined ? { description: this.redact(a.description) } : {}) })
+      t = this.c.editTracked(t.id, caller.holderId, { ...(a.title !== undefined ? { title: this.redact(a.title) } : {}), ...(a.description !== undefined ? { description: this.redact(a.description) } : {}) }, this.agentOwns(caller, t) ? caller.chatAgentId : null)
     }
     const note = a.note ? this.redact(a.note).trim() : null
-    if (a.status) t = this.c.moveTracked(t.id, caller.holderId, a.status, note)
+    if (a.status) t = this.c.moveTracked(t.id, caller.holderId, a.status, note, this.agentOwns(caller, t) ? caller.chatAgentId : null)
     else if (note) this.c.activity(t.id, 'comment', note, 'agent')
     this.changed(caller.companyId)
     return { ok: true, task: this.summary(t), ...(t.status === 'in_review' ? { detail: 'The founder reviews and approves it; you cannot mark it done.' } : {}) }
@@ -524,8 +533,8 @@ export class TaskTools {
   private chatComment(caller: TaskCaller, ref: string | undefined, text: string): Record<string, unknown> {
     if (!ref) fail('You are not working on a task: pass the id of a task you track or filed')
     const t = this.find(caller.companyId, ref!)
-    const mine = trackedBy(t) === caller.holderId || (t.source === 'agent' && !!t.externalId?.startsWith(`${caller.holderId}:`))
-    if (!mine) fail(`${t.identifier} was not opened by this chat; comment on tasks you track or filed`)
+    const mine = trackedBy(t) === caller.holderId || (t.source === 'agent' && !!t.externalId?.startsWith(`${caller.holderId}:`)) || this.agentOwns(caller, t)
+    if (!mine) fail(`${t.identifier} was not opened by this chat; comment on tasks you track, filed or are assigned`)
     const body = this.redact(text).trim()
     if (!body) fail('The comment is empty after redaction')
     this.c.activity(t.id, 'comment', body, 'agent')

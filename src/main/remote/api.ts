@@ -14,7 +14,6 @@ import type { ForumMessage } from '../../shared/forum'
 import type { ChatSnapshot } from '../../shared/chat'
 import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
-import { autonomyPhrase, deskReply, DESK_PREFIX, findDuplicate, taskOrigin, taskTitleFor, waitsOnOther } from '../../renderer/src/lib/desk'
 import { firstLine } from '../../renderer/src/lib/format'
 import { isIdleWaiting } from '../../renderer/src/lib/live'
 import { plainActivity } from '../../renderer/src/lib/plainActivity'
@@ -34,7 +33,7 @@ export const PHONE_CHANNELS = [
   'asks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:answer',
   // Not needed only: the handler sends { status: 'canceled' } and nothing else
   'tasks:update', 'company:pause', 'chat:send', 'chat:interrupt',
-  'chat:answer', 'agents:reply', 'tasks:comment', 'tasks:create', 'tasks:start', 'forum:post', 'forum:markRead',
+  'chat:answer', 'agents:reply', 'tasks:comment', 'chat:sendAgent', 'forum:post', 'forum:markRead',
   // read only: Principia's open suggestions count in Needs you (deciding one stays on the Mac)
   'orchestrator:suggestions'
 ] as const
@@ -206,15 +205,23 @@ export class PhoneApi implements RemoteApi {
         return this.sessionView(d, companyId, params.sessionId)
       case 'sessionSend': {
         const s = this.session(d, companyId, params.sessionId)
+        const words = body('text', raw).text
+        // AGENT CHAT: a message to an agent's chat goes through the agent (chat:sendAgent), which reopens its chat when
+        // it ended (an app restart) and resumes the same conversation; the phone follows the session it lands in
+        const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId && !a.archivedAt) : undefined
+        if (agent) {
+          const r = await this.sendToAgent(d, agent, words)
+          return { ok: true, sessionId: r.sessionId }
+        }
         const snap = await this.chatOf(s)
-        if (!snap) throw new HttpError(409, 'This one runs in a terminal. Reply from its card, or on your Mac.')
-        await this.h.invoke('chat:send', { id: s.id, text: body('text', raw).text })
+        if (!snap?.available) throw new HttpError(409, 'This one runs in a terminal. Reply from its card, or on your Mac.')
+        await this.h.invoke('chat:send', { id: s.id, text: words })
         return { ok: true }
       }
       case 'sessionStop': {
         const s = this.session(d, companyId, params.sessionId)
         const b = body('stop', raw)
-        if (!(await this.chatOf(s))) throw new HttpError(409, 'Stop it on your Mac')
+        if (!(await this.chatOf(s))?.available) throw new HttpError(409, 'Stop it on your Mac')
         // sendNow: the Mac's Send now (the turn stops and the queued messages go right after)
         await this.h.invoke('chat:interrupt', { id: s.id, ...(b.sendNow ? { sendNow: true } : {}) })
         return { ok: true }
@@ -284,10 +291,15 @@ export class PhoneApi implements RemoteApi {
     return phoneNeeds(await this.load(), companyId)
   }
 
+  /**
+   * The chat view of a session (Claude or Codex, stream-json). An ended chat reads too when it is an agent's chat
+   * (sending to it reopens it); any other ended or terminal session has none.
+   */
   private async chatOf(s: Session): Promise<ChatSnapshot | null> {
-    if (s.adapter !== 'claude') return null
+    if (s.adapter !== 'claude' && s.adapter !== 'codex') return null
     const snap = await this.safe(() => this.h.invoke('chat:snapshot', { id: s.id }), null)
-    return snap && snap.available && snap.mode === 'chat' ? snap : null
+    if (!snap || snap.mode !== 'chat') return null
+    return snap.available || s.companyAgentId ? snap : null
   }
 
   private async sessionView(d: PhoneData, companyId: Id, id: string | undefined): Promise<PhoneSession> {
@@ -297,10 +309,12 @@ export class PhoneApi implements RemoteApi {
     // looking at it from the phone is looking at it (A3): a finished turn leaves Needs you
     if (root && isIdleWaiting(root)) this.seen.add(root.id)
     const code = reposOf(d.repos, companyId).length > 0
+    // an agent's chat speaks in the agent's name and face, not the AI tool's
+    const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId) : undefined
     return {
       ref: { kind: 'session', id: s.id },
       title: s.title,
-      who: { name: providerName(s.adapter), role: '', bust: null },
+      who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null },
       chat,
       terminal: chat ? null : { activity: root ? plainActivity(root.activity, { code }) : null, canReply: !!root && isIdleWaiting(root), ended: s.status === 'exited' }
     }
@@ -314,61 +328,19 @@ export class PhoneApi implements RemoteApi {
   }
 
   /**
-   * The desk send path (renderer state/desk.ts sendToAgent), the same steps in main: words that repeat open work join
-   * that task as your comment (which wakes it), else a new task for this agent that starts at once when the agent is
-   * free and the company runs. The agent's reply sentence is stored on the task, so the thread reads the same on the Mac.
+   * AGENT CHAT: a message to an agent goes straight into the agent's own chat (chat:sendAgent), as on the Mac. The
+   * agent answers there and files board tasks itself when the work needs one. Returns the chat's session, which the
+   * phone opens like any chat.
    */
-  async sendToAgent(d: PhoneData, agent: CompanyAgent, text: string): Promise<{ taskId: Id; merged: boolean; started: boolean }> {
+  async sendToAgent(_d: PhoneData, agent: CompanyAgent, text: string): Promise<{ sessionId: Id; merged: false; started: true }> {
+    void _d
     const request = text.trim()
     if (!request) throw new HttpError(400, 'Write something first')
     if (this.sending) throw new HttpError(409, 'Still sending the last one')
     this.sending = true
     try {
-      const company = d.companies.find((c) => c.id === agent.companyId)
-      const pausedCompany = company?.pausedAt ? company.name : null
-      const dep = d.departments.find((x) => x.id === agent.departmentId)
-      const autonomy = autonomyPhrase({ auto: agent.data.autonomy === 'auto', role: agent.name, department: dep?.name })
-      const mine = d.tasks.filter((t) => t.agentId === agent.id && t.companyId === agent.companyId)
-      const busy = mine.find((t) => t.status === 'in_progress') ?? null
-      const startsNext = agent.data.autonomy === 'auto' && !!company?.autopilot
-      const dup = findDuplicate(request, mine)
-      if (dup) {
-        await this.h.invoke('tasks:comment', { id: dup.id, message: request })
-        const reply = deskReply({ request, autonomy, merged: { title: dup.title, origin: taskOrigin(dup, company?.createdAt), status: dup.status, waitingOnOther: waitsOnOther(dup, d.tasks) }, startsNext, pausedCompany, agentPaused: !!agent.pausedAt })
-        await this.h.invoke('tasks:comment', { id: dup.id, message: reply, by: 'agent' })
-        return { taskId: dup.id, merged: true, started: false }
-      }
-      const task = await this.h.invoke('tasks:create', {
-        task: {
-          title: taskTitleFor(request),
-          description: request,
-          companyId: agent.companyId,
-          repoId: agent.data.defaultRepoId ?? null,
-          status: 'todo',
-          priority: 0,
-          source: 'manual',
-          sourceUrl: null,
-          externalId: `${DESK_PREFIX}${agent.id}:${Date.now()}`,
-          assigneeProfileId: null,
-          parentId: null,
-          dependencyIds: [],
-          departmentId: agent.departmentId,
-          agentId: agent.id
-        }
-      })
-      const canStart = !pausedCompany && !agent.pausedAt && !busy
-      const reply = deskReply({ request, autonomy, busyWith: canStart ? null : (busy?.title ?? null), startsNext, pausedCompany, agentPaused: !!agent.pausedAt })
-      await this.h.invoke('tasks:comment', { id: task.id, message: reply, by: 'agent' })
-      let started = false
-      if (canStart) {
-        try {
-          await this.h.invoke('tasks:start', { id: task.id })
-          started = true
-        } catch {
-          /* it stays in the agent's queue with its Start button on the Mac */
-        }
-      }
-      return { taskId: task.id, merged: false, started }
+      const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request })
+      return { sessionId: s.id, merged: false, started: true }
     } finally {
       this.sending = false
     }

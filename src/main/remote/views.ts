@@ -14,7 +14,7 @@ import { reposOf, taskCounts, taskNeedsIn } from '../../renderer/src/lib/company
 import { suggestionCounts, type OrchSuggestion } from '../../shared/orchestrator'
 import { laneContext } from '../../renderer/src/lib/departments'
 import { needsYouTasks } from '../../renderer/src/lib/board'
-import { isLive, lastSaid } from '../../renderer/src/lib/live'
+import { isLive, saidPreview } from '../../renderer/src/lib/live'
 import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { deskTasks, deskThread } from '../../renderer/src/lib/deskThread'
 import { finishedLine, taskOrigin } from '../../renderer/src/lib/desk'
@@ -188,7 +188,9 @@ export function phoneNeeds(d: PhoneData, companyId: Id): PhoneNeeds {
     const root = node ? (agentsById.get(node.rootId) ?? node) : undefined
     const seat = seatForRun(d, [i.runId, i.sessionId, root?.runId ?? null, root?.sessionId ?? null])
     const session = (i.sessionId ?? root?.sessionId) ? d.sessions.find((s) => s.id === (i.sessionId ?? root?.sessionId)) : undefined
-    const w = who(seat) ?? (session ? chatWho(session) : null)
+    // an agent's own chat speaks as the agent (AGENT CHAT), never as "Your chat with Codex"
+    const chatAgent = session?.companyAgentId ? d.companyAgents.find((a) => a.id === session.companyAgentId) : undefined
+    const w = who(seat) ?? who(chatAgent) ?? (session ? chatWho(session) : null)
     const open = chatRefOf(d, companyId, i.sessionId ?? root?.sessionId ?? null, seat)
     if (ask) {
       const ok = phoneAnswerable(ask)
@@ -204,7 +206,7 @@ export function phoneNeeds(d: PhoneData, companyId: Id): PhoneNeeds {
         open
       })
     } else {
-      asks.push({ id: i.key, title: i.kind === 'idle' ? 'Finished, your turn' : i.title, question: null, detail: i.kind === 'idle' ? (root ? lastSaid(root, 300) : null) ?? i.title : (i.detail ?? 'Waiting for you on the Mac'), who: w, options: [], text: false, at: i.at, open })
+      asks.push({ id: i.key, title: i.kind === 'idle' ? 'Finished, your turn' : i.title, question: null, detail: i.kind === 'idle' ? (root ? saidPreview(root, 300) : null) ?? i.title : (i.detail ?? 'Waiting for you on the Mac'), who: w, options: [], text: false, at: i.at, open })
     }
   }
   const tasks: PhoneTaskNeed[] = []
@@ -250,13 +252,21 @@ export function phoneChats(d: PhoneData, companyId: Id): PhoneChats {
     for (const a of d.companyAgents) {
       if (a.archivedAt || a.companyId !== companyId) continue
       const mine = d.tasks.filter((x) => x.agentId === a.id && x.companyId === a.companyId)
-      if (!mine.length) continue
+      // AGENT CHAT: the agent's own chat is its row (its sessions are not listed again as chats of yours)
+      const chats = d.sessions.filter((x) => x.companyAgentId === a.id && (x.companyId || PERSONAL_COMPANY_ID) === companyId)
+      if (!mine.length && !chats.length) continue
+      for (const c of chats) covered.add(c.id)
+      const chat = [...chats].sort((x, y) => Number(liveSessions.has(y.id)) - Number(liveSessions.has(x.id)) || (x.startedAt < y.startedAt ? 1 : -1))[0]
+      const chatRoot = chat ? d.agents.find((x) => x.kind === 'session' && x.sessionId === chat.id && x.parentId === null) : undefined
       const cur = mine.find((x) => x.status === 'in_progress')
-      const live = !!cur?.runId && (liveRuns.has(cur.runId) || liveSessions.has(cur.runId))
+      const chatLive = !!chat && liveSessions.has(chat.id) && !!chatRoot && (chatRoot.status === 'working' || chatRoot.status === 'starting')
+      const live = (!!cur?.runId && (liveRuns.has(cur.runId) || liveSessions.has(cur.runId))) || chatLive
       if (cur?.runId) covered.add(cur.runId)
-      const latest = [...mine].sort((x, y) => (x.updatedAt < y.updatedAt ? 1 : -1))[0]!
-      const at = latest.updatedAt
-      const line = live && cur?.runId ? (activity.get(cur.runId) ?? `Working on ${cur.title}`) : latest.status === 'in_review' ? `Waiting for your OK: ${latest.title}` : latest.title
+      const latest = [...mine].sort((x, y) => (x.updatedAt < y.updatedAt ? 1 : -1))[0]
+      const chatAt = chatRoot?.updatedAt ?? chat?.startedAt ?? ''
+      const at = latest && latest.updatedAt > chatAt ? latest.updatedAt : chatAt
+      const said = chatRoot ? saidPreview(chatRoot, 140) : null
+      const line = chatLive && chat ? (activity.get(chat.id) ?? 'Working') : live && cur?.runId ? (activity.get(cur.runId) ?? `Working on ${cur.title}`) : said && (!latest || chatAt >= latest.updatedAt) ? said : latest ? (latest.status === 'in_review' ? `Waiting for your OK: ${latest.title}` : latest.title) : said
       rows.push({ key: `agent:${a.id}`, ref: { kind: 'agent', id: a.id }, title: who(a)?.name ?? a.name, who: who(a), live, at, line })
     }
   const agentsBySession = new Map<Id, AgentNode>()
@@ -265,7 +275,7 @@ export function phoneChats(d: PhoneData, companyId: Id): PhoneChats {
     if ((s.companyId || PERSONAL_COMPANY_ID) !== companyId || covered.has(s.id)) continue
     const root = agentsBySession.get(s.id)
     const live = liveSessions.has(s.id)
-    rows.push({ key: `session:${s.id}`, ref: { kind: 'session', id: s.id }, title: s.title, who: { name: providerName(s.adapter), role: '', bust: null }, live, at: s.endedAt ?? root?.updatedAt ?? s.startedAt, line: live ? (activity.get(s.id) ?? 'Working') : root ? lastSaid(root, 140) : s.status === 'exited' ? 'Ended' : null })
+    rows.push({ key: `session:${s.id}`, ref: { kind: 'session', id: s.id }, title: s.title, who: { name: providerName(s.adapter), role: '', bust: null }, live, at: s.endedAt ?? root?.updatedAt ?? s.startedAt, line: live ? (activity.get(s.id) ?? 'Working') : root ? saidPreview(root, 140) : s.status === 'exited' ? 'Ended' : null })
     covered.add(s.id)
   }
   rows.sort((a, b) => Number(b.live) - Number(a.live) || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
@@ -294,7 +304,8 @@ export function phoneAgent(d: PhoneData, a: CompanyAgent, details: TaskDetail[])
   const items: PhoneThreadItem[] = deskThread(details, { companyCreatedAt: co?.createdAt ?? null, agentName: who.name }).map((i) =>
     i.kind === 'task' ? { kind: 'task', id: i.id, at: i.at, taskId: i.taskId, text: `${details.find((x) => x.task.id === i.taskId)?.task.title ?? 'A task'} (${ORIGIN[i.origin] ?? 'a task'})` } : i
   )
-  return { ref: { kind: 'agent', id: a.id }, who, status: agentStatus(d, a), items }
+  const chat = d.sessions.filter((s) => s.companyAgentId === a.id).sort((x, y) => Number(y.status === 'running') - Number(x.status === 'running') || (x.startedAt < y.startedAt ? 1 : -1))[0]
+  return { ref: { kind: 'agent', id: a.id }, who, status: agentStatus(d, a), items, chatSessionId: chat?.id ?? null }
 }
 const ORIGIN: Record<string, string> = { setup: 'from setup', you: 'from you', board: 'from the Board', linear: 'from Linear', github: 'from GitHub', schedule: 'from a schedule', agent: 'from another agent' }
 

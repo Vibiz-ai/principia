@@ -120,7 +120,9 @@ beforeAll(async () => {
     ],
     ['Things moved', async () => el((await import('../components/home/FirstRunCards')).ThingsMovedCard, {})],
     // step 5 QA: the rail's hover label of this company (its asks, its working runs and its Board tasks that need you)
-    ['Rail hover label', async () => el((await import('./CompanyRail')).RailPopover, { company: store.getState().companies.find((c) => c.id === store.getState().activeCompanyId), top: 80, onEnter: () => {}, onLeave: () => {}, onClose: () => {} })]
+    ['Rail hover label', async () => el((await import('./CompanyRail')).RailPopover, { company: store.getState().companies.find((c) => c.id === store.getState().activeCompanyId), top: 80, onEnter: () => {}, onLeave: () => {}, onClose: () => {} })],
+    // AGENT CHAT part 2: Chats switches the sidebar into this company's conversations list
+    ['Sidebar in Chats', async () => (store.setState({ view: { name: 'chats', filter: 'all' } }), el((await import('./Sidebar')).Sidebar, {}))]
   ]
 })
 
@@ -157,6 +159,11 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect(home).toContain('Approve')
     expect((await surface('Chats › Agents')).toLowerCase()).toContain('ledgerline launch plan')
     expect((await surface('Agent desk')).toLowerCase()).toContain('ledgerline launch plan')
+    const chats = await surface('Sidebar in Chats')
+    expect(chats).toContain('aria-label="Back to the menu"')
+    expect(chats.toLowerCase()).toContain('ledgerline writer')
+    expect(chats.toLowerCase()).toContain('ledgerline chat')
+    store.setState({ view: { name: 'home' } })
     // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it
     expect((await surface('Home › first week')).toLowerCase()).toContain('ledgerline writer')
     expect(await surface('Automations › Autopilots')).toContain('Autopilot for Ledgerly App')

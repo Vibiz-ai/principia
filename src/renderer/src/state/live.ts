@@ -10,7 +10,8 @@ import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
 import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
-import { departmentsOn, focusSession, followCompany, getState, navigate, openBoard, scopeCompanyId, setState, toast, toastError, useStore, type State } from './store'
+import { departmentsOn, focusSession, followCompany, getState, loadJson, navigate, openBoard, scopeCompanyId, setState, toast, toastError, useStore, type State } from './store'
+import { lastChatKey } from '../lib/agentChatView'
 import { needsYouTasks } from '../lib/board'
 import { liveTruth, needsIn, workingIn, type LiveScope, type LiveTruth, type NeedsSlice, type WorkingSlice } from '../lib/liveTruth'
 import { reposOf, taskCounts, taskNeedsIn } from '../lib/companyModel'
@@ -210,18 +211,37 @@ export function reportVisibleOwner(): void {
   }
   if (s.window.focused) markVisibleSeen()
 }
+/**
+ * AGENT CHAT: the chat on screen outside a session pane: an agent's chat on its page or in Chats, or a chat open in
+ * Chats. Reading an agent's answer there is seeing it (never "your turn" in Needs you while it is on screen).
+ */
+function shownChatSession(s: ReturnType<typeof getState>): Id | null {
+  const agentChat = (agentId: Id): Id | null => s.sessions.find((x) => x.companyAgentId === agentId && x.status === 'running')?.id ?? null
+  if (s.view.name === 'agentSeat') return agentChat(s.view.id)
+  // Chats with nothing picked shows the last conversation open in this company (ChatsView)
+  const open = s.view.name === 'chats' ? (s.view.chat ?? loadJson<string | null>(lastChatKey(scopeCompanyId()), null)) : null
+  if (open) {
+    const [kind, id] = open.split(':')
+    if (kind === 'agent' && id) return agentChat(id)
+    if (kind === 'session' && id) return id
+  }
+  return null
+}
 function visibleOwner(): { sessionId: Id | null; runId: Id | null } {
   const s = getState()
   if (!s.window.focused) return { sessionId: null, runId: null }
   if (s.view.name === 'session') return { sessionId: s.focusedSession, runId: null }
+  const shown = shownChatSession(s)
+  if (shown) return { sessionId: shown, runId: null }
   if (s.view.name === 'run') return { sessionId: null, runId: s.view.runId }
   return { sessionId: null, runId: null }
 }
 /** The session the user is looking at (the same owner main is told about, so the badge and the tray agree). */
 function visibleSessions(): Set<Id> {
   const s = getState()
-  if (!s.window.focused || s.view.name !== 'session' || !s.focusedSession) return new Set()
-  return new Set([s.focusedSession])
+  if (!s.window.focused) return new Set()
+  const shown = s.view.name === 'session' ? s.focusedSession : shownChatSession(s)
+  return shown ? new Set([shown]) : new Set()
 }
 function withVisibleSeen(seen: Record<Id, true>, agents: Record<Id, AgentNode>): Record<Id, true> {
   const vis = visibleSessions()
@@ -242,9 +262,21 @@ function markVisibleSeen(): void {
 }
 
 // ---------- hooks ----------
+/**
+ * Finished turns that do not wait on you: the ones you saw, and (AGENT CHAT) every answer of an agent in its own chat
+ * (its Chats row carries the unread dot instead; what it asks you to allow still waits). Needs you reads this set.
+ */
+export function needsSeen(seenIdle: Record<Id, true>, agents: Record<Id, AgentNode>, sessions: readonly { id: Id; companyAgentId?: Id | null }[]): Set<Id> {
+  const out = new Set(Object.keys(seenIdle))
+  const agentChats = new Set(sessions.filter((x) => x.companyAgentId).map((x) => x.id))
+  if (agentChats.size) for (const a of Object.values(agents)) if (a.kind === 'session' && a.sessionId && agentChats.has(a.sessionId)) out.add(a.id)
+  return out
+}
 export function useSeenSet(): ReadonlySet<Id> {
   const seen = useStore((s) => s.seenIdle)
-  return useMemo(() => new Set(Object.keys(seen)), [seen])
+  const agents = useStore((s) => s.agents)
+  const sessions = useStore((s) => s.sessions)
+  return useMemo(() => needsSeen(seen, agents, sessions), [seen, agents, sessions])
 }
 export function useAgentIndex(): AgentIndex {
   const agents = useStore((s) => s.agents)
@@ -401,7 +433,7 @@ export function goNextNeedsYou(): void {
     if (task) return void openBoard(task.task.companyId, { taskId: task.task.id })
   }
   // outside any company scope (Personal sessions): the hub's own order
-  const next = scope ? null : nextNeedsYou(Object.values(s.agents), Object.values(s.asks), new Set(Object.keys(s.seenIdle)))
+  const next = scope ? null : nextNeedsYou(Object.values(s.agents), Object.values(s.asks), needsSeen(s.seenIdle, s.agents, s.sessions))
   if (!next) return void toast('Nothing needs you.')
   void focusAgent(next.agentId, next.askId)
 }

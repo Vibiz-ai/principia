@@ -382,3 +382,16 @@ describe('dashboard math', () => {
     expect(rootTitle(agent({ id: 'y', kind: 'session', title: 'acme-web · Claude' }))).toBe('acme-web · Claude')
   })
 })
+
+describe('saidPreview: a chat row reads the gist in plain words', () => {
+  it('no markdown, no principia links, the first real line (never the tail of a long list)', async () => {
+    const { saidPreview, plainText } = await import('./live')
+    expect(saidPreview({ report: 'The helper reported **1** `.md` file directly in the folder: `README.md`.' })).toBe('The helper reported 1 .md file directly in the folder: README.md.')
+    expect(saidPreview({ report: '## Headlines\n\n- Ship invoices in **one** click\n- Get paid faster' })).toBe('Headlines')
+    expect(saidPreview({ report: `Here they are:\n${Array.from({ length: 300 }, (_, i) => i + 1).join('\n')}` })).toBe('Here they are:')
+    expect(plainText('Done. [Open LA-2 →](principia://board?task=LA-2)')).toBe('Done. Open LA-2 →')
+    expect(plainText('see <principia://board?task=LA-2>')).toBe('see')
+    expect(plainText('LA-2 is now in review (principia://board?task=LA-2). Done.')).toBe('LA-2 is now in review. Done.')
+    expect(saidPreview({ report: '' })).toBeNull()
+  })
+})

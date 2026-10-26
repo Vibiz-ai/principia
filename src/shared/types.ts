@@ -148,6 +148,11 @@ export interface Session extends CompanyStamped {
    * the sidebar, and its context carries the department's charter, agents and open tasks. Absent / null = not one.
    */
   departmentId?: Id | null
+  /**
+   * AGENT CHAT: the company agent (seat) this is the standing chat of: one per agent, resumed across restarts, shown as
+   * the agent's conversation (Chats, the agent page). Absent / null = not one.
+   */
+  companyAgentId?: Id | null
 }
 
 // ---------- workflows ----------

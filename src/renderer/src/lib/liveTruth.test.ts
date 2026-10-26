@@ -13,6 +13,23 @@ const ask = (id: string, x: Partial<Ask & { companyId?: string }> = {}): Ask => 
 const sess = (id: string, companyId: string): Session => ({ id, companyId, status: 'running' }) as unknown as Session
 
 describe('liveTruth', () => {
+  it('AGENT CHAT: an agent’s answer in its own chat is not "Your turn" in Needs you; its allow requests are', () => {
+    const agentChat = { id: 'se_ag', companyId: 'co_a', status: 'running', companyAgentId: 'ag_1' } as unknown as Session
+    const mine = sess('se_me', 'co_a')
+    const input = {
+      agents: [
+        agent('r_ag', { kind: 'session', sessionId: 'se_ag', companyId: 'co_a', status: 'needs_you', needs: 'idle', report: 'Done: three headlines.' }),
+        agent('r_me', { kind: 'session', sessionId: 'se_me', companyId: 'co_a', status: 'needs_you', needs: 'idle', report: 'Done.' })
+      ],
+      asks: [] as Ask[],
+      seen: new Set<string>(),
+      sessions: [agentChat, mine]
+    }
+    expect(needsIn(liveTruth(input), 'all').items.map((i) => i.key)).toEqual(['idle:r_me'])
+    const withAsk = { ...input, asks: [ask('q', { agentId: 'r_ag', rootId: 'r_ag', sessionId: 'se_ag', companyId: 'co_a' })] }
+    expect(needsIn(liveTruth(withAsk), 'all').items.map((i) => i.key).sort()).toEqual(['ask:q', 'idle:r_me'])
+  })
+
   it('an archived company leaves every count: its asks, agents and board tasks drop out, so the badges add up', () => {
     const input = {
       agents: [agent('h', { companyId: 'co_hd', status: 'working' }), agent('n', { companyId: 'co_nw' })],

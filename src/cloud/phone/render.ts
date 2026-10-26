@@ -321,7 +321,7 @@ export function renderAgent(v: View, a: Actions, now = Date.now()): VNode {
     'section',
     { class: 'page chat' },
     h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), face(g.who, 'sm'), h('span', { class: 'chead__t' }, whoLine(g.who, 'Agent'), h('span', { class: 'row__s' }, g.status))),
-    h('div', { class: 'msgs', 'data-scroll': 'chat' }, ...(g.items.length ? g.items.map((i) => threadItem(i, v, a, now)) : [h('p', { class: 'sub center' }, `Ask ${g.who.name} for something. It becomes a task ${g.who.name} works on.`)]))
+    h('div', { class: 'msgs', 'data-scroll': 'chat' }, ...(g.items.length ? g.items.map((i) => threadItem(i, v, a, now)) : [h('p', { class: 'sub center' }, `Message ${g.who.name}. ${g.who.name} answers in its own chat and puts work on the board when it should be tracked.`)]))
   )
 }
 function threadItem(i: PhoneThreadItem, v: View, a: Actions, now: number): VNode {

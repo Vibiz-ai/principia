@@ -45,6 +45,8 @@ export interface Orchestrator {
   dispose(): void
   /** EngineContext.orchestrator.stepContext */
   stepContext(req: OrchestratorStepRequest): string | null
+  /** AGENT CHAT: the team block of an agent's standing chat (teammates, recent work; no report contract, no inbox) */
+  chatContext(companyId: string, agentId: string): string | null
   forRun(runId: string): RunOrchestration | null
 }
 
@@ -243,6 +245,10 @@ export function startOrchestrator(h: Hive): Orchestrator {
     stepContext: (req) => {
       if (!applier.active(req.companyId)) return null
       return buildRunContext(reader.input({ companyId: req.companyId, taskId: req.taskId, agentId: req.agentId, runId: req.runId, resumed: req.resumed, reportPath: req.reportPath }))
+    },
+    chatContext: (companyId, agentId) => {
+      if (!applier.active(companyId)) return null
+      return buildRunContext(reader.input({ companyId, taskId: null, agentId, runId: 'chat', resumed: false, reportPath: null, chat: true })) || null
     },
     forRun: (runId) => applier.forRun(runId)
   }

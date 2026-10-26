@@ -128,6 +128,9 @@ export function liveTruth(input: TruthInput): LiveTruth {
     if (a.sessionId) covered.add(a.sessionId)
   }
   for (const ask of input.asks) if (ask.status === 'open') for (const k of [ask.runId, ask.sessionId]) if (k) covered.add(k)
+  // AGENT CHAT: an agent's answer in its own chat is not something waiting on you (its row in Chats gets the unread
+  // dot); only what it asks you to allow does
+  const agentChat = new Set(input.sessions.filter((s) => (s as Session).companyAgentId).map((s) => s.id))
   for (const a of agents) {
     if (a.kind === 'subagent' || withAsk.has(a.id) || !isLive(a)) continue
     const task = (a.runId && taskOfRun.get(a.runId)) || (a.sessionId && taskOfRun.get(a.sessionId)) || undefined
@@ -135,7 +138,9 @@ export function liveTruth(input: TruthInput): LiveTruth {
     if (task && a.kind !== 'session' && task.status !== 'in_progress') continue
     const chat = a.kind === 'session' && !task?.agentId
     const base = { companyId: resolve(a), agentId: a.id, askId: null, title: a.title, sessionId: a.sessionId, runId: a.runId, at: a.updatedAt, startedAt: a.startedAt ?? a.updatedAt, ...(task?.id ? { taskId: task.id } : {}), ...(chat ? { chat: true } : {}) }
-    if (isUnseenIdle(a, input.seen)) needs.push({ ...base, key: `idle:${a.id}`, kind: 'idle', detail: 'Finished, your turn' })
+    if (isUnseenIdle(a, input.seen)) {
+      if (!(a.sessionId && agentChat.has(a.sessionId))) needs.push({ ...base, key: `idle:${a.id}`, kind: 'idle', detail: 'Finished, your turn' })
+    }
     // a permission prompt shown by the CLI with no ask row yet: it waits on you all the same
     else if (a.status === 'needs_you' && a.needs !== 'idle' && a.needs !== null) needs.push({ ...base, key: `wait:${a.id}`, kind: 'ask', detail: a.activity ?? 'Waiting for you' })
     else if (a.status === 'working' || a.status === 'starting' || (a.status === 'needs_you' && a.kind !== 'session'))

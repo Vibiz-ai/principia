@@ -707,11 +707,17 @@ export class CompanyStore {
    * in runId (like an "Open as session" lease, without sessions.task_id: the chat stays a chat). in_review keeps the
    * chat's summary as the task's report; blocked(agent) its reason. Never done: a human approves every task.
    */
-  moveTracked(id: string, holderId: string, to: 'in_progress'|'in_review'|'blocked', note: string|null): BoardTask {
+  moveTracked(id: string, holderId: string, to: 'in_progress'|'in_review'|'blocked', note: string|null, ownerAgentId: string|null = null): BoardTask {
     return this.store.db.transaction(()=> {
-      const t=this.task(id)
-      if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
-      if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      let t=this.task(id)
+      // AGENT CHAT: the agent's own chat moves a task assigned to that agent, as a run of it would
+      const owned=!!ownerAgentId&&t.agentId===ownerAgentId
+      if(!owned) {
+        if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+        if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      } else if(t.status==='in_progress'&&t.runId!==holderId) fail(`${t.identifier} is being worked on by a run right now; comment on it instead, or wait for that run to finish`)
+      // done in the chat already: in review (or blocked) goes through in progress, one move each
+      if(owned&&to!=='in_progress'&&t.status!=='in_progress') t=this.moveTracked(id,holderId,'in_progress',null,ownerAgentId)
       const next:BoardTask={...t,updatedAt:new Date().toISOString()}
       if(to==='in_progress') {
         if(t.status==='blocked'&&t.blockReason==='deps') fail(`${t.identifier} waits for its dependencies`)
@@ -732,11 +738,13 @@ export class CompanyStore {
     })()
   }
   /** PROACTIVE.md §3: the tracking chat rewrites its task's title or brief (decisions, criteria, handoff notes). */
-  editTracked(id: string, holderId: string, patch: { title?: string; description?: string }): BoardTask {
+  editTracked(id: string, holderId: string, patch: { title?: string; description?: string }, ownerAgentId: string|null = null): BoardTask {
     return this.store.db.transaction(()=> {
       const t=this.task(id)
-      if(trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
-      if(t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      const owned=!!ownerAgentId&&t.agentId===ownerAgentId
+      if(!owned&&trackedBy(t)!==holderId) fail(`${t.identifier} is not tracked by this chat`)
+      if(!owned&&t.agentId) fail(`${t.identifier} is now assigned to an agent; comment on it instead`)
+      if(owned&&t.status==='in_progress'&&t.runId!==holderId) fail(`${t.identifier} is being worked on by a run right now`)
       if(t.status==='done'||t.status==='canceled') fail(`${t.identifier} is closed`)
       const next:BoardTask={...t,...(patch.title!==undefined ? {title:patch.title.slice(0,240)} : {}),...(patch.description!==undefined ? {description:patch.description.slice(0,50_000)} : {}),updatedAt:new Date().toISOString()}
       this.writeTask(next);this.activity(id,'updated','Task details updated (chat)','agent')

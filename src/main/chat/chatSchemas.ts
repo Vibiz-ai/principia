@@ -25,5 +25,7 @@ export const CHAT_REQUEST_SCHEMAS = {
   'chat:setModel': z.object({ id, model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:[\]-]+$/, 'model') }).strict(),
   'chat:files': z.object({ id, query: z.string().max(200) }).strict(),
   'chat:toTerminal': z.object({ id, force: z.boolean().optional() }).strict(),
-  'chat:toChat': z.object({ id, force: z.boolean().optional() }).strict()
+  'chat:toChat': z.object({ id, force: z.boolean().optional() }).strict(),
+  'chat:openAgent': z.object({ agentId: id }).strict(),
+  'chat:sendAgent': z.object({ agentId: id, text: z.string().min(1).max(200_000) }).strict()
 }

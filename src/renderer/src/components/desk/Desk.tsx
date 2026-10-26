@@ -3,8 +3,9 @@
  * - AskBox: Home's "Ask your team…" (a real input). As you type it says who will get it ("→ Marcus · Content
  *   Writer"), from an @name or the request's words; the name is a menu to pick someone else. Enter sends it to that
  *   agent (state/desk.ts) and opens the agent's page.
- * - DeskThread + DeskComposer: the one conversation with an agent, rendered the same on the agent page and in Chats:
- *   your bubbles, the agent's bubbles, task cards, quiet lines, and the draft card (pictures, Approve, Send back).
+ * - AgentChat: the one conversation with an agent, the same on the agent page and in Chats: the agent's own live
+ *   chat (AGENT CHAT), drawn by the Claude chat's ChatPane in the agent's name (AgentConversation lays it out with
+ *   the agent's right panel). DraftCard: a draft waiting for your OK.
  * - useAgentStatus / AgentAction: the status sentence (design §2.6) and the one primary button of an agent.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -13,12 +14,10 @@ import type { Artifact, Id } from '@shared/types'
 import { Button } from '../ui'
 import { Icon } from '../Icon'
 import { ArtifactThumb } from '../ArtifactThumb'
-import { AskForm } from '../board/AskForm'
 import { AgentBust } from '../../shell/DepartmentGroup'
 import { errorMessage, hive, nativeMenu } from '../../lib/hive'
 import { routeAsk, statusSentence, taskName, waitsOnOther, type DeskAgent, type StatusSentence } from '../../lib/desk'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
-import type { ThreadItem } from '../../lib/deskThread'
 import { seatState } from '../../lib/departments'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
@@ -26,7 +25,11 @@ import { useCompanyShortName } from '../../lib/company'
 import { firstLine } from '../../lib/format'
 import { age } from '../../lib/time'
 import { useWorking } from '../../state/live'
-import { agentAutonomy, useDeskWho, sendToAgent, useDeskAgents } from '../../state/desk'
+import { agentAutonomy, type useAgentChat, useDeskWho, sendToAgent, useDeskAgents } from '../../state/desk'
+import { ChatSurface } from '../chat/ChatSurface'
+import { Composer } from '../chat/Composer'
+import { EMPTY_CHAT_META } from '@shared/chat'
+import '../../styles/chat.css'
 import { attempt, companyName, getState, navigate, openAgentSeat, openBoard, openChat, refreshTasks, setAgentPaused, setCompanyPaused, toast, useStore } from '../../state/store'
 import '../../styles/diagrams.css'
 import '../../styles/desk.css'
@@ -80,7 +83,7 @@ export function AskBox({ companyId, autoFocus = false }: { companyId: Id; autoFo
     if (res) {
       setText('')
       setPicked(null)
-      toast(res.merged ? `${target.name} added it to work already queued` : res.started ? `Sent to ${target.name} · ${target.role}` : `Queued for ${target.name}`)
+      toast(`Sent to ${target.name} · ${target.role}`)
     }
   }
   return (
@@ -215,101 +218,6 @@ export function AgentAction({ agent, status, size = 'sm', wide }: { agent: Compa
 }
 
 // ---------- the conversation ----------
-
-export function DeskThread({ agent, items, tasks, code }: { agent: CompanyAgent; items: ThreadItem[]; tasks: CompanyTask[]; code: boolean }): React.JSX.Element {
-  const who = useDeskWho(agent)
-  const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
-  const end = useRef<HTMLDivElement>(null)
-  // braces: newer Chromium returns a promise from scrollIntoView, and an effect may only return a cleanup
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: 'end' })
-  }, [items.length])
-  const working = tasks.find((t) => t.status === 'in_progress')
-  if (!items.length)
-    return (
-      <div className="desk-thread desk-thread--empty">
-        <p>No messages yet. Tell {who.name} what you need: it lands in {who.name}’s Queue, and the answer comes back here.</p>
-      </div>
-    )
-  return (
-    <div className="desk-thread" role="log" aria-label={`Conversation with ${who.name}`}>
-      {items.map((m) => {
-        const task = byId.get(m.taskId)
-        if (m.kind === 'me')
-          return (
-            <div key={m.id} className="desk-msg desk-msg--me">
-              <div className="desk-msg__who">You · {age(m.at)}</div>
-              <div className="desk-msg__bubble selectable">{m.text}</div>
-            </div>
-          )
-        if (m.kind === 'note')
-          return (
-            <div key={m.id} className="desk-note">
-              {m.text} · {age(m.at)}
-            </div>
-          )
-        if (m.kind === 'task')
-          return task ? (
-            <div key={m.id} className="desk-msg">
-              <AgentBust agent={agent} size={28} />
-              <div className="desk-msg__body">
-                <div className="desk-msg__who">
-                  {who.name} · {who.role} · {age(m.at)}
-                </div>
-                <button type="button" className="desk-taskcard" onClick={() => openBoard(task.companyId, { taskId: task.id })}>
-                  <span className="desk-taskcard__label">In my queue {m.origin === 'setup' ? 'from setup' : m.origin === 'you' ? '' : `· ${m.origin === 'board' ? 'from the Board' : `from ${m.origin}`}`}</span>
-                  <span className="desk-taskcard__title">{taskName(task, code)}</span>
-                  <span className="desk-taskcard__state">{laneWord(task)}</span>
-                </button>
-              </div>
-            </div>
-          ) : null
-        return (
-          <div key={m.id} className="desk-msg">
-            <AgentBust agent={agent} size={28} />
-            <div className="desk-msg__body">
-              <div className="desk-msg__who">
-                {who.name} · {who.role} · {age(m.at)}
-              </div>
-              <div className="desk-msg__bubble selectable">
-                <MarkdownLite text={m.text} />
-                {m.card === 'review' && task && <DraftCard task={task} code={code} />}
-                {m.card === 'ask' && task && (
-                  <div className="desk-msg__card">
-                    <AskForm task={task} compact />
-                  </div>
-                )}
-                {m.card === 'blocked' && task && (
-                  <div className="desk-msg__actions">
-                    <Button size="sm" variant="primary" onClick={() => void attempt(() => hive.tasks.unpark({ id: task.id }), 'Try again').then((r) => r && void refreshTasks())}>
-                      Try again
-                    </Button>
-                    <Button size="sm" onClick={() => openBoard(task.companyId, { taskId: task.id })}>
-                      Open the task
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })}
-      {working && (
-        <div className="desk-note desk-note--live">
-          <span className="desk-status__glyph desk-status--working" aria-hidden>
-            ●
-          </span>{' '}
-          {who.name} is working on {taskName(working, code)}
-        </div>
-      )}
-      <div ref={end} />
-    </div>
-  )
-}
-
-function laneWord(t: CompanyTask): string {
-  return t.status === 'done' ? '✓ Done' : t.status === 'in_progress' ? '● Working' : t.status === 'in_review' ? '◆ Needs your OK' : t.status === 'blocked' ? (t.blockReason === 'deps' ? '○ Waiting on another task' : '◆ Needs you') : t.status === 'canceled' ? 'Canceled' : '○ To do'
-}
 
 /** A draft waiting for your OK: what the agent made (pictures first), Approve and Send back, right here. */
 export function DraftCard({ task, code, onHome = false }: { task: CompanyTask; code: boolean; onHome?: boolean }): React.JSX.Element {
@@ -465,71 +373,76 @@ export function DraftCard({ task, code, onHome = false }: { task: CompanyTask; c
   )
 }
 
-export function DeskComposer({ agent, autoFocus = false }: { agent: CompanyAgent; autoFocus?: boolean }): React.JSX.Element {
+/**
+ * AGENT CHAT: the conversation with an agent is its own live chat (the same chat as Claude's: streaming, tool lines,
+ * Allow / Deny, helper subagents, the composer, Chat | Terminal), in the agent's name and face. `chat` is the agent's
+ * chat as useAgentChat opens (or resumes) it; the conversation layout holds it so its header and panel read the same one.
+ */
+export function AgentChat({ agent, chat, autoFocus = true }: { agent: CompanyAgent; chat: ReturnType<typeof useAgentChat>; autoFocus?: boolean }): React.JSX.Element {
   const who = useDeskWho(agent)
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    if (autoFocus) ref.current?.focus()
-  }, [autoFocus, agent.id])
-  const send = async (): Promise<void> => {
-    const t = text.trim()
-    if (!t || busy) return
-    setBusy(true)
-    const res = await sendToAgent(agent.id, t)
-    setBusy(false)
-    if (res) setText('')
-  }
+  const code = useIsCode(agent.companyId)
+  if (agent.archivedAt)
+    return (
+      <div className="desk-thread desk-thread--empty">
+        <p>{who.name} is archived. Restore {who.name} from Team to chat again.</p>
+      </div>
+    )
+  if (chat.error)
+    return (
+      <div className="desk-thread desk-thread--empty">
+        <p>{chat.error}</p>
+      </div>
+    )
+  const intro = `Message ${who.name}, your ${who.role}. ${who.name} answers here, works with ${code ? 'the code' : 'your files'} and company tools, can start helper agents for bigger jobs, and puts work on the board when it should be tracked.`
+  // no chat yet: nothing runs until the first message (looking at an agent never starts its CLI)
+  if (!chat.session) return <AgentChatStart agent={agent} name={who.name} intro={intro} autoFocus={autoFocus} />
   return (
-    <form
-      className="desk-composer"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void send()
-      }}
-    >
-      <Icon name="chat" size={14} />
-      <textarea
-        ref={ref}
-        rows={1}
-        className="desk-composer__input"
-        value={text}
-        disabled={busy || !!agent.archivedAt}
-        maxLength={8000}
-        aria-label={`Message ${who.name}`}
-        placeholder={agent.archivedAt ? `${who.name} is archived` : `Message ${who.name}…`}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation()
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            void send()
-          }
+    <div className="agent-chat">
+      <ChatSurface
+        session={chat.session}
+        focused={autoFocus}
+        who={{
+          name: who.name,
+          face: <AgentBust agent={agent} size={56} />,
+          intro,
+          sendEnded: async (text) => !!(await sendToAgent(agent.id, text))
         }}
       />
-      <span className="desk-composer__hint text-tertiary">↵ send</span>
-    </form>
+    </div>
   )
 }
 
-/** The agent's face and name as a row header ("Marcus · Content Writer"), with its page one click away. */
-export function AgentHeader({ agent, sub, children }: { agent: CompanyAgent; sub?: React.ReactNode; children?: React.ReactNode }): React.JSX.Element {
-  const who = useDeskWho(agent)
+/** An agent's chat before its first message: the same empty chat and composer; sending starts the chat. */
+function AgentChatStart({ agent, name, intro, autoFocus }: { agent: CompanyAgent; name: string; intro: string; autoFocus: boolean }): React.JSX.Element {
   return (
-    <div className="desk-head">
-      <AgentBust agent={agent} size={28} />
-      <div className="desk-head__id">
-        <div className="desk-head__name">
-          {who.name} <span className="desk-head__role">· {who.role}</span>
+    <div className="agent-chat">
+      <div className="chat-pane chat-pane--agent" data-turn="idle">
+        <div className="chat-scroll">
+          <div className="chat-col">
+            <div className="chat-empty chat-empty--agent">
+              <AgentBust agent={agent} size={56} />
+              <div className="chat-empty__name">{name}</div>
+              <div>{intro}</div>
+            </div>
+          </div>
         </div>
-        {sub && <div className="desk-head__sub">{sub}</div>}
+        <div className="chat-dock">
+          <Composer
+            sessionId={`agent-new:${agent.id}`}
+            turn="idle"
+            meta={EMPTY_CHAT_META}
+            disabled={false}
+            exited={false}
+            focused={autoFocus}
+            onSend={async (text) => !!(await sendToAgent(agent.id, text))}
+            onStop={() => undefined}
+            onTerminal={() => toast(`Send ${name} a first message; the terminal opens on its chat after that`)}
+            onSetMode={() => toast(`Send ${name} a first message, then choose how it asks`)}
+            onSetModel={() => toast(`Send ${name} a first message, then choose its model`)}
+            who={name}
+          />
+        </div>
       </div>
-      <span className="flex1" />
-      {children}
-      <Button size="sm" onClick={() => openAgentSeat(agent)}>
-        {who.name}’s page
-      </Button>
     </div>
   )
 }

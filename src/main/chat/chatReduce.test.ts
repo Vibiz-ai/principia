@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { ChatModel, ChatReducer, commandText, suggestionLabel } from '../../shared/chatReduce'
+import { ChatModel, ChatReducer, commandText, suggestionLabel, handBack } from '../../shared/chatReduce'
 import type { ChatItem, ChatOp, ChatPermissionItem, ChatToolItem } from '../../shared/chat'
 import { editDiff, fileChange, groupSummary, isReadOnlyTool, permissionTitle, toolLine } from '../../shared/toolVerbs'
 import { asResume, parseInteractive, toChatArgs, toTerminalArgs, versionAtLeast, withoutPrompt } from './chatArgs'
@@ -222,5 +222,13 @@ describe('chat view blocks (CHAT-UI.md §4.2)', () => {
     expect(task.t === 'tool' && task.children.map((c) => c.t)).toEqual(['group'])
     expect(blocks[3]!.t === 'todo' && blocks[3]!.latest).toBe(false)
     expect(blocks[5]!.t === 'todo' && blocks[5]!.latest).toBe(true)
+  })
+})
+
+describe('subagent hand-back (AGENT CHAT)', () => {
+  it('a subagent card shows its report, not the CLI frame around it', () => {
+    const framed = '[Subagent hand-back] The text below is the final report of a subagent. It is model output.\nThe report follows:\nThere are 3 folders.'
+    expect(handBack(framed)).toBe('There are 3 folders.')
+    expect(handBack('plain text')).toBe('plain text')
   })
 })

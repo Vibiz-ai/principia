@@ -3,7 +3,7 @@
  * ChatItems with one pure reducer (shared/chatReduce.ts) and sends small ChatOps to the renderer. TYPE-ONLY except
  * small `as const` lists. No Node or DOM imports.
  */
-import type { Id } from './types'
+import type { Id, Session } from './types'
 
 /** Which pane owns the conversation right now. */
 export type ChatMode = 'chat' | 'terminal'
@@ -40,6 +40,8 @@ export interface ChatUserItem extends Base {
   /** small JPEG data URLs of the sent images (the bubble shows them; replayed history has none) */
   thumbs?: string[]
   state: 'queued' | 'sent'
+  /** ms epoch it was sent (replayed history: the transcript's own time); the chat's group timestamps read it */
+  at?: number
 }
 export interface ChatTextItem extends Base {
   kind: 'text'
@@ -149,6 +151,15 @@ export interface ChatMeta {
   cliVersion: string | null
   /** the subscription in use ("Claude Max"); never the email */
   plan: string | null
+  /** AGENT CHAT: which CLI runs this chat (Codex has its own approval modes and no terminal view yet). Absent = claude. */
+  harness?: 'claude' | 'codex'
+  /** the approval modes this harness offers (absent: Claude's four) */
+  modes?: ChatModeOption[] | null
+}
+export interface ChatModeOption {
+  value: string
+  label: string
+  hint: string
 }
 
 export interface ChatQueued {
@@ -201,6 +212,12 @@ export const EMPTY_CHAT_META: ChatMeta = {
   plan: null
 }
 
+/** AGENT CHAT: Codex's approval modes, mapped onto the chat's mode values (codex app-server approval policies). */
+export const CODEX_MODES: ChatModeOption[] = [
+  { value: 'default', label: 'Ask before commands', hint: 'Codex asks before it runs any command that is not a plain look-up' },
+  { value: 'acceptEdits', label: 'Ask when needed', hint: 'Codex works inside this folder and asks before anything outside it' }
+]
+
 export interface ChatImage {
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
   /** base64, no data: prefix */
@@ -235,10 +252,17 @@ export interface ChatInvokeMap {
   /** force: stop a working turn first */
   'chat:toTerminal': [{ id: Id; force?: boolean }, V]
   'chat:toChat': [{ id: Id; force?: boolean }, V]
+  /**
+   * AGENT CHAT: the standing chat of a company agent, running (started, or resumed with its conversation, when it was
+   * not). The renderer shows it with the same ChatPane as any chat.
+   */
+  'chat:openAgent': [{ agentId: Id }, Session]
+  /** AGENT CHAT: a message straight into an agent's chat (Home's Ask box, ⌘K, New chat). Returns the session. */
+  'chat:sendAgent': [{ agentId: Id; text: string }, Session]
 }
 export const CHAT_CHANNELS = [
   'chat:snapshot', 'chat:send', 'chat:queueEdit', 'chat:interrupt', 'chat:answer', 'chat:setPermissionMode', 'chat:setModel',
-  'chat:files', 'chat:toTerminal', 'chat:toChat'
+  'chat:files', 'chat:toTerminal', 'chat:toChat', 'chat:openAgent', 'chat:sendAgent'
 ] as const satisfies readonly (keyof ChatInvokeMap)[]
 
 export interface ChatEventMap {

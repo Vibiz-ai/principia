@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autonomyPhrase, finishedLine, gerund, deskReply, findDuplicate, greeting, homeHeadline, paraphrase, routeAsk, statusSentence, taskOrigin, taskTitleFor, waitsOnOther, weekTiles, type DeskAgent } from './desk'
+import { autonomyPhrase, finishedLine, gerund, greeting, homeHeadline, paraphrase, routeAsk, statusSentence, taskOrigin, taskTitleFor, waitsOnOther, weekTiles, type DeskAgent } from './desk'
 
 const NW: DeskAgent[] = [
   { id: 'marcus', name: 'Marcus', role: 'Brand Voice Writer', department: 'Marketing' },
@@ -78,37 +78,7 @@ describe('taskTitleFor', () => {
   })
 })
 
-describe('findDuplicate + deskReply: a repeat is merged and said so', () => {
-  const tasks = [
-    { id: 't1', title: 'Instagram week plan (Oct 27 – Nov 2)', status: 'todo' as const, description: 'Three Instagram posts for next week' },
-    { id: 't2', title: 'Draft Northwind brand voice guide', status: 'in_progress' as const },
-    { id: 't3', title: 'Holiday gift-box landing copy', status: 'done' as const }
-  ]
-  it('matches open work on shared words, never done work or a vague overlap', () => {
-    expect(findDuplicate('add Thursday’s launch to the Instagram week posts', tasks)?.id).toBe('t1')
-    expect(findDuplicate('update the brand voice guide with emoji rules', tasks)?.id).toBe('t2')
-    expect(findDuplicate('rewrite the holiday gift-box landing copy', tasks)).toBeNull()
-    expect(findDuplicate('write a post about our new decaf', tasks)).toBeNull()
-    expect(findDuplicate('instagram', tasks)).toBeNull()
-  })
-  it('the merged reply names the work and where it came from', () => {
-    expect(deskReply({ request: 'Also mention the holiday gift box in the decaf post', autonomy: 'Asks before posting', merged: { title: 'Write a post about our new decaf', origin: 'you', status: 'in_progress' } })).toBe(
-      "Got it. I'm already writing a post about your new decaf (you asked earlier); I'll add this: mention the holiday gift box in the decaf post."
-    )
-    const r = deskReply({ request: 'add Thursday’s launch to the Instagram week posts', autonomy: 'Asks before posting', merged: { title: 'The Instagram week plan', origin: 'setup', status: 'in_progress' } })
-    expect(r).toBe("Got it. I'm already on the Instagram week plan (from setup); I'll add this: add Thursday’s launch to the Instagram week posts.")
-  })
-  it('a fresh request: On it, the paraphrase, and what happens next in the agent’s autonomy words', () => {
-    expect(deskReply({ request: 'write a post about our new decaf', autonomy: 'Asks before posting' })).toBe(
-      "On it. I'll write a post about your new decaf. I ask before posting, so it comes to Needs you for your OK first."
-    )
-    expect(deskReply({ request: 'write a post about our new decaf', autonomy: 'Acts on its own' })).toContain("I'll tell you in Needs you when it's done.")
-    // behind the current task: it says truthfully whether it starts by itself or waits for your Start
-    expect(deskReply({ request: 'write a post', autonomy: 'Acts on its own', busyWith: 'Draft brand voice guide', startsNext: true })).toContain("I'm still drafting brand voice guide. I start this right after, on my own.")
-    expect(deskReply({ request: 'write a post', autonomy: 'Asks before posting', busyWith: 'Draft brand voice guide' })).toContain('This waits in my Queue: press Start when you want me on it.')
-    expect(deskReply({ request: 'write a post', autonomy: 'Asks before posting', busyWith: 'Draft brand voice guide' })).not.toContain('next in my queue')
-    expect(deskReply({ request: 'write a post', autonomy: 'Acts on its own', pausedCompany: 'Harbor Dental Group' })).toBe("Got it. I'll write a post. Harbor Dental Group is paused, so it waits in my queue until you resume.")
-  })
+describe('task origins', () => {
   it('origin words', () => {
     const co = '2026-10-25T01:30:00.000Z'
     expect(taskOrigin({ source: 'manual', externalId: null, createdAt: '2026-10-25T01:30:30.229Z' }, co)).toBe('setup')
@@ -162,19 +132,14 @@ describe('Home words', () => {
   })
 })
 
-describe('D11 QA corpus: common phrasings read as a sentence that listened (step 3 QA)', () => {
-  const reply = (request: string) => deskReply({ request, autonomy: 'Asks before posting' })
+describe('request words: paraphrase and task titles read as a sentence that listened (step 3 QA)', () => {
   it('persons swap by role: subject "you" is "I", object "you" is "me"; my/our become your', () => {
     expect(paraphrase('look into why our orders dropped and tell me what you think')).toBe("I'll look into why your orders dropped and tell you what I think")
     expect(paraphrase("make sure you don't post anything without asking me first")).toBe("I'll make sure I don't post anything without asking you first")
     expect(paraphrase('tell me what you think about the new logo')).toBe("I'll tell you what I think about the new logo")
     expect(paraphrase('Can you send me the October numbers?')).toBe("I'll send you the October numbers")
   })
-  it('"Can someone…" and "can you also…" are requests, not questions; no "?." anywhere', () => {
-    expect(reply('Can someone write instagram posts for our cold brew launch on Thursday')).toBe("On it. I'll write instagram posts for your cold brew launch on Thursday. I ask before posting, so it comes to Needs you for your OK first.")
-    expect(reply('Can someone do a competitor ad review?')).toBe("On it. I'll do a competitor ad review. I ask before posting, so it comes to Needs you for your OK first.")
-    expect(reply('can you also do the homepage copy, mention the holiday blend launch on Thursday')).toBe("On it. I'll do the homepage copy, and mention the holiday blend launch on Thursday. I ask before posting, so it comes to Needs you for your OK first.")
-    for (const q of ['how did last week’s ads do?', 'Can someone do a competitor ad review?', 'is the shop ready?', 'what?', 'Thanks!']) expect(reply(q)).not.toMatch(/\?\.|\.\./)
+  it('"Can someone…" is a request: its title is the ask', () => {
     expect(taskTitleFor('Can someone write instagram posts for our cold brew launch on Thursday')).toBe('Write instagram posts for our cold brew launch on Thursday')
     expect(taskTitleFor('Can you get posts ready?')).toBe('Get posts ready')
   })
@@ -182,30 +147,13 @@ describe('D11 QA corpus: common phrasings read as a sentence that listened (step
     expect(paraphrase('Thursday we launch the holiday blend. Can you get posts ready?')).toBe("I'll get posts ready. Noted: Thursday you launch the holiday blend")
     expect(taskTitleFor('Thursday we launch the holiday blend. Can you get posts ready?')).toBe('Get posts ready')
   })
-  it('questions come back as indirect questions, without the approval line', () => {
-    expect(reply("how did last week's ads do?")).toBe("On it. I'll find out how last week's ads did and answer you here.")
+  it('questions come back as indirect questions', () => {
     expect(paraphrase('why did our orders drop last week?')).toBe("I'll find out why your orders dropped last week and answer you here")
     expect(paraphrase('which keywords should we rank for?')).toBe("I'll find out which keywords you should rank for and answer you here")
     expect(paraphrase('is the shop ready for Black Friday?')).toBe("I'll find out whether the shop is ready for Black Friday and answer you here")
     expect(paraphrase('does the newsletter go out on Monday?')).toBe("I'll find out whether the newsletter goes out on Monday and answer you here")
     expect(paraphrase('Can we post on Sunday?')).toBe("I'll find out whether you can post on Sunday and answer you here")
     expect(paraphrase('what are competitors running as ads?')).toBe("I'll find out what competitors are running as ads and answer you here")
-  })
-  it('a merge says where the work stands ("already drafting" only while it is drafted) and only what the request adds', () => {
-    const req = 'can you also do the homepage copy, mention the holiday blend launch on Thursday'
-    expect(findDuplicate(req, [{ id: 'h', title: 'Draft homepage copy', status: 'todo' }])?.id).toBe('h')
-    expect(deskReply({ request: req, autonomy: 'Asks before posting', merged: { title: 'Draft homepage copy', origin: 'setup', status: 'todo' } })).toBe(
-      "Got it. Drafting homepage copy is already in my queue (from setup), not started yet. I've added this to it: mention the holiday blend launch on Thursday. Press Start when you want me on it."
-    )
-    expect(deskReply({ request: req, autonomy: 'Asks before posting', merged: { title: 'Draft homepage copy', origin: 'setup', status: 'blocked', waitingOnOther: true } })).toContain('waiting on another task first')
-    expect(deskReply({ request: req, autonomy: 'Asks before posting', merged: { title: 'Draft homepage copy', origin: 'setup', status: 'in_progress' } })).toBe(
-      "Got it. I'm already drafting homepage copy (from setup); I'll add this: mention the holiday blend launch on Thursday."
-    )
-  })
-  it('new specific work is not merged into a loosely similar task (Harbor: teeth whitening ≠ the monthly blog post)', () => {
-    const open = [{ id: 'b', title: 'First monthly blog post draft', status: 'todo' as const }]
-    expect(findDuplicate('Write a blog post about teeth whitening for the La Jolla clinic', open)).toBeNull()
-    expect(findDuplicate('add a section on whitening to the monthly blog post', open)?.id).toBe('b')
   })
 })
 

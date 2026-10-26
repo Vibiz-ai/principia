@@ -327,6 +327,40 @@ export function lastSaid(a: Pick<AgentNode, 'report'>, max = 400): string | null
   if (!t) return null
   return t.length > max ? `…${t.slice(t.length - max + 1).trimStart()}` : t
 }
+/**
+ * Markdown as plain words for a one-line preview (a chat's row in Chats, Needs you on the phone): no code fences,
+ * headings, list marks, **bold**, `code` or link syntax; a principia:// link keeps only its label.
+ */
+export function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?(```|$)/g, ' ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\s*\(\s*<?principia:\/\/[^\s)]+>?\s*\)/g, '')
+    .replace(/<?principia:\/\/\S+>?/g, '')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=[^\w*]|$)/g, '$1$2')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^\s*([-*_]\s*){3,}$/gm, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
+/**
+ * The gist of what an agent said last, for a list row: its first real line in plain words (a list of 300 numbers
+ * previews as "1", never as its last number).
+ */
+export function saidPreview(a: Pick<AgentNode, 'report'>, max = 160): string | null {
+  const t = a.report?.trim()
+  if (!t) return null
+  const lines = plainText(t)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const first = lines.find((l) => l.length > 3 && /[A-Za-z\u00C0-\u024F]/.test(l)) ?? lines[0]
+  if (!first) return null
+  return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first
+}
 export const ANSWER_TRACE_MS = 3 * 60_000
 /**
  * The row's "↩ You allowed it" trace: only once nothing is pending for that root (no open ask in its tree, root not

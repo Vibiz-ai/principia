@@ -75,6 +75,7 @@ export interface SessionRow {
   agent_session_id: string | null
   company_id?: string | null
   department_id?: string | null
+  company_agent_id?: string | null
 }
 export const sessionFromRow = (r: SessionRow): Session => ({
   id: r.id,
@@ -94,7 +95,8 @@ export const sessionFromRow = (r: SessionRow): Session => ({
   fromRunId: r.from_run_id,
   agentSessionId: r.agent_session_id,
   companyId: stamp(r.company_id),
-  ...(r.department_id ? { departmentId: r.department_id } : {})
+  ...(r.department_id ? { departmentId: r.department_id } : {}),
+  ...(r.company_agent_id ? { companyAgentId: r.company_agent_id } : {})
 })
 
 export interface WorkflowRow {

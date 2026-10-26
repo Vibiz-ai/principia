@@ -35,6 +35,7 @@ import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
 import { chatLink, createChatHub } from './chat/wire'
+import { AgentChats } from './chat/agentChat'
 import { createRemote } from './remote/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
@@ -382,6 +383,7 @@ if (!app.requestSingleInstanceLock()) {
       secrets: { resolve: (n, companyId) => vault.resolve(n, companyId), redact: (t) => vault.redact(t), names: (n, companyId) => vault.names(n, companyId) },
       company: h.companyBridge(),
       chat: (req) => h.safe(() => h.chatContext(req), null),
+      agentChat: (agentId) => h.safe(() => h.agentChats?.spawnOptions(agentId) ?? null, null),
       worktreeGuard: (cwd, p) => h.worktrees?.guardEnvForPath(cwd, p) ?? null,
       trustFolder: (cwd, env) => {
         if (!trustFolderForClaude(cwd, env)) log.warn('could not pre-accept Claude folder trust', { cwd })
@@ -422,6 +424,25 @@ if (!app.requestSingleInstanceLock()) {
         h.statusChanged()
       },
       reaper
+    })
+    // AGENT CHAT: each company agent's standing chat (its brief, its folder, resumed across restarts)
+    h.agentChats = new AgentChats({
+      getAgent: (id) => h.company.departments.getAgent(id),
+      agentsOf: (companyId) => h.company.departments.listAgents({ companyId }),
+      departmentsOf: (companyId) => h.company.departments.list(companyId, { includeArchived: true }),
+      companyName: (companyId) => h.safe(() => h.company.passport(companyId).name, 'the company'),
+      profileAdapter: (profileId) => store.getProfile(profileId)?.adapter ?? null,
+      repoPath: (repoId) => {
+        const r = store.getRepo(repoId)
+        return r?.exists ? r.path : null
+      },
+      workspaceDir: (companyId) => h.safe(() => h.company.workspaceDir(companyId), null),
+      isCode: (companyId) => h.safe(() => h.company.passport(companyId).repoIds.length > 0, false),
+      personasOn: () => store.getSettings().personas !== false,
+      teamContext: (companyId, agentId) => h.orchestrator?.chatContext(companyId, agentId) ?? null,
+      sessionsOf: (agentId, companyId) => store.listSessions('all', undefined, companyId).filter((s) => s.companyAgentId === agentId),
+      sessions: () => h.sessions,
+      redact: (t) => vault.redact(t)
     })
     // Hive's scratch dir (New chat, no repo) is Hive's own: pre-accept Claude's folder-trust prompt for it.
     try {

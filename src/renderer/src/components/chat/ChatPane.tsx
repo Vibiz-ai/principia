@@ -12,21 +12,37 @@ import { hive, errorCode, errorMessage } from '../../lib/hive'
 import { confirmNative } from '../../lib/hive'
 import { useChat, reloadChat, peekChat } from '../../state/chat'
 import { getState, restartSession, toast, toastError } from '../../state/store'
-import { Blocks } from './ChatCards'
+import { Blocks, ChatWho } from './ChatCards'
 import { Composer } from './Composer'
+import { countMessages, newPillLabel, stampsFor } from '../../lib/agentChatView'
 import '../../styles/chat.css'
 
 const SHOW = 300
 
-export function ChatPane({ session: s, focused }: { session: Session; focused: boolean }): React.JSX.Element {
+/** AGENT CHAT: the agent this chat is with (its name in every line, its face in the empty state and the working line). */
+export interface ChatWhoProps {
+  name: string
+  face?: React.ReactNode
+  /** the empty state's line ("Message Vitruvius. …") */
+  intro?: string
+  /** an ended agent chat sends through its agent (the chat comes back resuming the same conversation) */
+  sendEnded?(text: string, images: ChatImage[]): Promise<boolean>
+}
+
+export function ChatPane({ session: s, focused, who }: { session: Session; focused: boolean; who?: ChatWhoProps }): React.JSX.Element {
   const v = useChat(s.id)
+  const name = who?.name ?? (v.meta.harness === 'codex' || s.adapter === 'codex' ? 'Codex' : 'Claude')
   const exited = s.status === 'exited'
   const scroller = useRef<HTMLDivElement | null>(null)
   const stuck = useRef(true)
   const [pill, setPill] = useState(false)
+  // the "N new messages" pill counts what arrived since the reader scrolled up (answers and messages, not tool lines)
+  const seenCount = useRef<number | null>(null)
   const [showAll, setShowAll] = useState(false)
   const blocks = useMemo(() => buildBlocks(v.items), [v.items])
   const shown = showAll || blocks.length <= SHOW ? blocks : blocks.slice(-SHOW)
+  const stamps = useMemo(() => stampsFor(shown), [shown])
+  const msgCount = useMemo(() => countMessages(v.items), [v.items])
   const live = !exited && (v.turn === 'working' || v.turn === 'needs' || v.turn === 'starting')
   const openReq = useMemo(() => {
     for (let i = v.items.length - 1; i >= 0; i--) {
@@ -40,8 +56,10 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
   useLayoutEffect(() => {
     const el = scroller.current
     if (!el) return
-    if (stuck.current) el.scrollTop = el.scrollHeight
-    else setPill(true)
+    if (stuck.current) {
+      el.scrollTop = el.scrollHeight
+      seenCount.current = null
+    } else setPill(true)
   }, [v.items, v.queue, v.turn])
 
   const answer = (requestId: string, d: ChatDecision): void => {
@@ -51,6 +69,7 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
   const send = async (text: string, images: ChatImage[]): Promise<boolean> => {
     stuck.current = true
     try {
+      if (exited && who?.sendEnded) return await who.sendEnded(text, images)
       if (exited) {
         // an ended chat picks up the same conversation in a new session row (Restart), then sends
         await restartSession(s.id)
@@ -84,22 +103,27 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
   const elapsed = useElapsed(live ? v.turnStartedAt : null)
   const lastText = [...v.items].reverse().find((i) => i.kind === 'text' && !i.streaming)
   return (
-    <div className={`chat-pane ${exited ? 'is-exited' : ''}`} data-turn={v.turn}>
+    <ChatWho.Provider value={name}>
+    <div className={`chat-pane ${exited ? 'is-exited' : ''} ${who ? 'chat-pane--agent' : ''}`} data-turn={v.turn}>
       <div
         className="chat-scroll"
         ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget
           stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-          if (stuck.current) setPill(false)
+          if (stuck.current) {
+            setPill(false)
+            seenCount.current = null
+          } else seenCount.current ??= msgCount
         }}
       >
         <div className="chat-col">
           {!v.loaded && <div className="chat-notice">Loading the conversation…</div>}
           {v.loaded && v.items.length === 0 && !exited && (
-            <div className="chat-empty">
-              <Icon name="chat" size={20} />
-              <div>Ask Claude anything. It can read and change files in this chat’s folders, run commands and use your company’s tools. It asks before anything risky.</div>
+            <div className={`chat-empty ${who?.face ? 'chat-empty--agent' : ''}`}>
+              {who?.face ?? <Icon name="chat" size={20} />}
+              {who?.face && <div className="chat-empty__name">{name}</div>}
+              <div>{who?.intro ?? `Ask ${name} anything. It can read and change files in this chat’s folders, run commands and use your company’s tools. It asks before anything risky.`}</div>
             </div>
           )}
           {blocks.length > shown.length && (
@@ -107,11 +131,11 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
               {blocks.length - shown.length} earlier messages · Show
             </button>
           )}
-          <Blocks blocks={shown} live={live} actions={exited ? null : { answer, hotkeyFor: focused ? openReq : null, cwd: s.cwd }} onNotice={exited ? undefined : onNotice} />
+          <Blocks blocks={shown} live={live} stamps={stamps} actions={exited ? null : { answer, hotkeyFor: focused ? openReq : null, cwd: s.cwd }} onNotice={exited ? undefined : onNotice} />
           {live && (
             <div className="chat-working">
-              <span className="chat-spin" aria-hidden />
-              <span className="shimmer-text">{v.turn === 'needs' ? 'Waiting for you' : `${v.activity ?? 'Working'}…`}</span>
+              {who?.face ? <span className="chat-working__face" aria-hidden>{who.face}</span> : <span className="chat-spin" aria-hidden />}
+              <span className="shimmer-text">{v.turn === 'needs' ? 'Waiting for you' : who ? `${name} · ${v.activity ?? 'Working'}…` : `${v.activity ?? 'Working'}…`}</span>
               {elapsed && <span className="chat-meta">{elapsed}</span>}
               {v.turn !== 'starting' && <span className="chat-meta">· esc to stop</span>}
             </div>
@@ -129,10 +153,11 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
           onClick={() => {
             stuck.current = true
             setPill(false)
+            seenCount.current = null
             scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })
           }}
         >
-          ↓ New activity
+          ↓ {newPillLabel(msgCount - (seenCount.current ?? msgCount))}
         </button>
       )}
       <div className="chat-dock">
@@ -155,9 +180,11 @@ export function ChatPane({ session: s, focused }: { session: Session; focused: b
           onTerminal={(c) => void toTerminal(c)}
           onSetMode={(m) => void hive.chat.setPermissionMode({ id: s.id, mode: m as 'default' }).catch((e) => toastError(e, 'Mode'))}
           onSetModel={(m) => void hive.chat.setModel({ id: s.id, model: m }).catch((e) => toastError(e, 'Model'))}
+          who={name}
         />
       </div>
     </div>
+    </ChatWho.Provider>
   )
 }
 
@@ -188,7 +215,7 @@ function QueuedRow({ sessionId, id, text, images, held }: { sessionId: string; i
           }}
         />
       )}
-      <span className="chat-meta">{held ? 'held after Stop' : 'sends when Claude finishes'}</span>
+      <span className="chat-meta">{held ? 'held after Stop' : 'sends when this turn finishes'}</span>
       {edit === null && (
         <button type="button" className="chat-link" onClick={() => setEdit(text)}>
           Edit

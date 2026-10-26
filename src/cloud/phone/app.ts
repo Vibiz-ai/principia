@@ -203,6 +203,15 @@ async function loadSession(id: string): Promise<void> {
 }
 async function loadAgent(id: string): Promise<void> {
   st.agent = await api.call<PhoneAgent>('agent', { params: { ...cid(), agentId: id } })
+  // AGENT CHAT: an agent's conversation is its own chat, read with the same chat model as any chat (streaming, tool
+  // lines, Allow / Deny): the agent's screen becomes that chat, in place (Back still returns to the list)
+  const sid = st.agent.chatSessionId
+  if (sid && st.route.open?.kind === 'agent' && st.route.open.id === id) {
+    st.route = { ...st.route, open: { kind: 'session', id: sid } }
+    history.replaceState(null, '', routeHash(st.route))
+    st.agent = null
+    await loadSession(sid)
+  }
 }
 
 /** What the screen needs, fetched; the needs count always (the tab badge). */
@@ -622,7 +631,7 @@ function dockSpec(): DockSpec | null {
   if (r.open?.kind === 'session') {
     const s = st.session
     if (!s) return null
-    if (st.replica) return { key: `session:${s.ref.id}`, placeholder: 'Message Claude', stop: st.replica.busy, label: st.replica.busy ? 'Queue' : 'Send', mentions: false }
+    if (st.replica) return { key: `session:${s.ref.id}`, placeholder: `Message ${s.who?.name ?? 'Claude'}`, stop: st.replica.busy, label: st.replica.busy ? 'Queue' : 'Send', mentions: false }
     return s.terminal?.canReply ? { key: `reply:${s.ref.id}`, placeholder: 'Reply', stop: false, label: 'Send', mentions: false } : null
   }
   if (r.open?.kind === 'agent') return st.agent ? { key: `agent:${st.agent.ref.id}`, placeholder: `Message ${st.agent.who.name}`, stop: false, label: 'Send', mentions: false } : null
@@ -731,14 +740,20 @@ async function send(spec: DockSpec, ta: HTMLTextAreaElement): Promise<void> {
   sendingDock = true
   const r = st.route
   try {
-    if (r.open?.kind === 'session' && spec.key.startsWith('session:')) await api.call('sessionSend', { params: { ...cid(), sessionId: r.open.id }, body: { text } })
+    if (r.open?.kind === 'session' && spec.key.startsWith('session:')) {
+      // an agent's ended chat reopens in a new session (same conversation): follow it there
+      const out = await api.call<{ ok: boolean; sessionId?: string }>('sessionSend', { params: { ...cid(), sessionId: r.open.id }, body: { text } })
+      if (out?.sessionId && out.sessionId !== r.open.id) go({ open: { kind: 'session', id: out.sessionId } })
+      else if (st.replica && !st.replica.snap.available) await loadSession(r.open.id)
+    }
     else if (r.open?.kind === 'session') {
       await api.call('sessionReply', { params: { ...cid(), sessionId: r.open.id }, body: { text } })
       await loadSession(r.open.id)
     } else if (r.open?.kind === 'agent') {
-      const out = await api.call<{ merged: boolean; started: boolean; agent: PhoneAgent }>('agentSend', { params: { ...cid(), agentId: r.open.id }, body: { text } })
+      // the agent's own chat: it answers there (and files board tasks itself when the work needs one)
+      const out = await api.call<{ sessionId?: string; agent: PhoneAgent }>('agentSend', { params: { ...cid(), agentId: r.open.id }, body: { text } })
       st.agent = out.agent
-      say(out.merged ? 'Added to the task it is on' : out.started ? 'On it' : 'In the queue')
+      if (out.sessionId) go({ open: { kind: 'session', id: out.sessionId } })
     } else if (st.room?.channelId) {
       const m = await api.call<PhoneRoomMessage>('roomPost', { params: cid(), body: { channelId: st.room.channelId, text } })
       if (st.room && !st.room.messages.some((x) => x.id === m.id)) st.room = { ...st.room, messages: [...st.room.messages, m] }

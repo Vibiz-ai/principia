@@ -154,7 +154,8 @@ export function reloadChat(sessionId: Id): void {
 /** Which pane a session shows: chat for Claude chats, terminal otherwise. null while it is being looked up. */
 export function useChatMode(s: Pick<Session, 'id' | 'adapter'>): ChatMode | null {
   const v = useChat(s.id)
-  if (s.adapter !== 'claude') return 'terminal'
+  // AGENT CHAT: a Codex session is a chat only when it was started as one (an agent's chat)
+  if (s.adapter !== 'claude' && s.adapter !== 'codex') return 'terminal'
   if (!v.loaded) return null
   return v.mode
 }

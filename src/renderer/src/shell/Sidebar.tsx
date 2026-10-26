@@ -69,6 +69,7 @@ import { useForumBadge, useForumUnread } from '../components/forum/SidebarSectio
 import { useCloudBadge } from '../state/cloud'
 import { plansEnabled } from '@shared/plans'
 import { nativeMenu } from '../lib/hive'
+import { ChatsSidebar } from '../components/chats/ChatsSidebar'
 
 /** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
 export const REPO_DRAG_TYPE = 'application/x-principia-repository'
@@ -166,6 +167,19 @@ export function Sidebar(): React.JSX.Element {
   }, [])
   const filterRef = useRef<HTMLInputElement>(null)
   const moreRef = useRef<HTMLDivElement>(null)
+  // Chats switches the sidebar to the conversations list; "‹ Back" brings the menu back while the chat stays open, until
+  // the next navigation (pressing Chats again shows the list again)
+  const [chatsBack, setChatsBack] = useState(false)
+  const [backed, setBacked] = useState(false)
+  useEffect(() => setChatsBack(false), [view])
+  const chatsList = view.name === 'chats' && !chatsBack
+  const navEl = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!backed) return
+    setBacked(false)
+    const nav = navEl.current
+    ;(nav?.querySelector<HTMLElement>('.side-row[aria-current="page"]') ?? nav?.querySelector<HTMLElement>('.side-row--nav'))?.focus({ preventScroll: true })
+  }, [backed])
 
   useEffect(() => {
     const onRename = (e: Event): void => setRenaming({ kind: (e.type === 'hive:renameRepo' ? 'repo' : 'session') as 'repo' | 'session', id: (e as CustomEvent<string>).detail })
@@ -524,12 +538,21 @@ export function Sidebar(): React.JSX.Element {
           <CompanyHeader company={companies[0] ?? null} flat />
         </div>
       )}
+      {chatsList ? (
+        <ChatsSidebar
+          onBack={() => {
+            setChatsBack(true)
+            setBacked(true)
+          }}
+        />
+      ) : (
+      <div className={`side-menu ${chatsBack ? 'is-back' : ''}`}>
       <button type="button" className="side-search" onClick={() => openPalette('all')} title="Search pages, agents, chats and commands (⌘K)">
         <Icon name="search" size={14} />
         <span className="side-search__text">Search or ask…</span>
         <Kbd>⌘K</Kbd>
       </button>
-      <nav className="sidebar__nav sidebar__doors" aria-label="Main">
+      <nav className="sidebar__nav sidebar__doors" aria-label="Main" ref={navEl}>
         {PRIMARY.map((d) =>
           navRow({
             key: d.key,
@@ -648,6 +671,8 @@ export function Sidebar(): React.JSX.Element {
           badge: cloudBadge > 0 ? <span className="side-row__count" title={`${cloudBadge} thing${cloudBadge === 1 ? '' : 's'} from Cloud sync need${cloudBadge === 1 ? 's' : ''} you`}>{cloudBadge}</span> : null
         })}
       </div>
+      </div>
+      )}
       <div className="sidebar__resizer" onMouseDown={startResize} />
       {customizing && <CustomizeSidebarSheet onClose={() => setCustomizing(false)} />}
       {more && (

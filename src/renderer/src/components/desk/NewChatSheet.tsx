@@ -46,7 +46,7 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
         const res = await sendToAgent(withWho.id, t, { open: true })
         if (res) {
           closeNewChat()
-          toast(res.merged ? `${agent?.name ?? 'The agent'} added it to work already queued` : res.started ? `Sent to ${agent?.name ?? 'the agent'}` : `Queued for ${agent?.name ?? 'the agent'}`)
+          toast(`Sent to ${agent?.name ?? 'the agent'}`)
         }
         return
       }

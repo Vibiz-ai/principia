@@ -416,14 +416,17 @@ export class Store {
   // ---------- sessions ----------
   /** COMPANY.md §3: stamped with the launcher's companyId, else the repo's company, else Personal. */
   insertSession(s: SessionInsert): void {
+    // optional columns only when set (an older schema without them still inserts plain sessions)
+    const opt: [col: string, key: 'departmentId' | 'companyAgentId'][] = [['department_id', 'departmentId'], ['company_agent_id', 'companyAgentId']]
+    const used = opt.filter(([, k]) => !!s[k])
     this.db
       .prepare(
         `INSERT INTO sessions(id, title, profile_id, adapter, repo_id, cwd, status, pid, cols, rows, exit_code, started_at,
-          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id, company_id${s.departmentId ? ', department_id' : ''})
+          ended_at, artifacts_dir, log_path, from_run_id, agent_session_id, company_id${used.map(([c]) => `, ${c}`).join('')})
          VALUES (@id, @title, @profileId, @adapter, @repoId, @cwd, @status, @pid, @cols, @rows, @exitCode, @startedAt,
-          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')})${s.departmentId ? ', @departmentId' : ''})`
+          @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')})${used.map(([, k]) => `, @${k}`).join('')})`
       )
-      .run((({ departmentId, ...rest }) => ({ ...rest, companyId: s.companyId ?? null, ...(departmentId ? { departmentId } : {}) }))(s))
+      .run((({ departmentId, companyAgentId, ...rest }) => ({ ...rest, companyId: s.companyId ?? null, ...(departmentId ? { departmentId } : {}), ...(companyAgentId ? { companyAgentId } : {}) }))(s))
   }
   updateSession(id: Id, patch: Partial<Omit<Session, 'id'>>): Session {
     const { set, params } = buildPatch(patch as Record<string, unknown>, {

@@ -1,21 +1,17 @@
 /**
- * Five doors step 3: the agent desk's actions and data. A message to an agent (Home's Ask box, the desk composer, a
- * Chats agent thread, ⌘K "Ask Marcus: …") becomes work the agent really does:
- * - it repeats open work (findDuplicate): your words join that task as a comment, which wakes it (D11 "merge");
- * - else a new task assigned to that agent, which starts at once when the agent is free and the company runs, and
- *   otherwise waits in the agent's Queue.
- * Either way the agent's reply (deskReply: the request restated in a full sentence) is stored on the task as the
- * agent's comment, so the conversation reads the same on the agent page, in Chats and after a restart.
+ * Five doors step 3, AGENT CHAT: the agent desk's actions and data. A message to an agent (Home's Ask box, the agent's
+ * chat, Chats, ⌘K "Ask Marcus: …", New chat) goes straight into that agent's own standing chat (main: chat:sendAgent):
+ * a live CLI conversation on the agent's harness, with its persona, role, instructions and Principia's tools. The
+ * agent answers there itself and files board tasks when the work needs one; Principia never writes a reply in its name.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CompanyAgent, CompanyTask, TaskDetail } from '@shared/company'
-import type { Id } from '@shared/types'
-import { errorMessage, hive, useHiveEvent } from '../lib/hive'
-import { autonomyPhrase, deskReply, DESK_PREFIX, findDuplicate, taskOrigin, taskTitleFor, waitsOnOther, type DeskAgent } from '../lib/desk'
-import { deskTasks, deskThread, type ThreadItem } from '../lib/deskThread'
+import { useEffect, useMemo, useState } from 'react'
+import type { CompanyAgent } from '@shared/company'
+import type { Id, Session } from '@shared/types'
+import { errorMessage, hive } from '../lib/hive'
+import { autonomyPhrase, type DeskAgent } from '../lib/desk'
 import { displayName, personasOf } from '../lib/personaView'
 import { personasOn } from '../lib/voice'
-import { companyName, getState, openAgentSeat, refreshTasks, toast, useStore, type State } from './store'
+import { companyName, getState, openAgentSeat, toast, upsertSession, useStore, type State } from './store'
 
 /** Who an agent is on the desk: persona name, role label, department name (personas on or off). */
 export function deskAgentOf(a: CompanyAgent, s: State = getState()): DeskAgent {
@@ -49,77 +45,27 @@ export function agentAutonomy(a: CompanyAgent, s: State = getState()): string {
 }
 
 export interface SendResult {
-  taskId: Id
-  merged: boolean
-  started: boolean
+  sessionId: Id
 }
 let sending = false
 /**
- * Sends a request to one agent of its company. Returns null when nothing was sent (empty, gone, or an error, which is
- * the toast). `open`: go to the agent's page afterwards (Home's Ask box, ⌘K).
+ * Sends a message into one agent's chat (started, or resumed with its conversation, when it was not running). Returns
+ * null when nothing was sent (empty, gone, or an error, which is the toast). `open`: go to the agent's page afterwards.
  */
 export async function sendToAgent(agentId: Id, text: string, opts: { open?: boolean } = {}): Promise<SendResult | null> {
   const request = text.trim()
   if (!request || sending) return null
-  const s = getState()
-  const agent = s.companyAgents.find((a) => a.id === agentId && !a.archivedAt)
+  const agent = getState().companyAgents.find((a) => a.id === agentId && !a.archivedAt)
   if (!agent) {
     toast('That agent is no longer on the team', 'error')
     return null
   }
-  const company = s.companies.find((c) => c.id === agent.companyId)
-  const pausedCompany = company?.pausedAt ? company.name : null
-  const autonomy = agentAutonomy(agent, s)
-  const mine = s.tasks.filter((t) => t.agentId === agent.id && t.companyId === agent.companyId)
-  const busy = mine.find((t) => t.status === 'in_progress') ?? null
-  // the agent picks up its next task by itself only when it acts on its own and Autopilot is on
-  const startsNext = agent.data.autonomy === 'auto' && !!company?.autopilot
   sending = true
   try {
-    const dup = findDuplicate(request, mine)
-    if (dup) {
-      // your words go on the task as yours: a human comment wakes it, so the agent reads them on its next turn
-      await hive.tasks.comment({ id: dup.id, message: request })
-      const reply = deskReply({ request, autonomy, merged: { title: dup.title, origin: taskOrigin(dup, company?.createdAt), status: dup.status, waitingOnOther: waitsOnOther(dup, s.tasks) }, startsNext, pausedCompany, agentPaused: !!agent.pausedAt })
-      await hive.tasks.comment({ id: dup.id, message: reply, by: 'agent' })
-      await refreshTasks()
-      if (opts.open) openAgentSeat(agent)
-      return { taskId: dup.id, merged: true, started: false }
-    }
-    const task = await hive.tasks.create({
-      task: {
-        title: taskTitleFor(request),
-        description: request,
-        companyId: agent.companyId,
-        repoId: agent.data.defaultRepoId ?? null,
-        status: 'todo',
-        priority: 0,
-        source: 'manual',
-        sourceUrl: null,
-        externalId: `${DESK_PREFIX}${agent.id}:${Date.now()}`,
-        assigneeProfileId: null,
-        parentId: null,
-        dependencyIds: [],
-        departmentId: agent.departmentId,
-        agentId: agent.id
-      }
-    })
-    const canStart = !pausedCompany && !agent.pausedAt && !busy
-    const reply = deskReply({ request, autonomy, busyWith: canStart ? null : (busy?.title ?? null), startsNext, pausedCompany, agentPaused: !!agent.pausedAt })
-    await hive.tasks.comment({ id: task.id, message: reply, by: 'agent' })
-    let started = false
-    if (canStart) {
-      try {
-        await hive.tasks.start({ id: task.id })
-        started = true
-      } catch (e) {
-        // it stays in the Queue with its Start button; say why it did not start
-        toast(`${taskTitleFor(request)} is in the queue: ${errorMessage(e)}`, 'error')
-      }
-    }
-    await refreshTasks()
+    const s = await hive.chat.sendAgent({ agentId, text: request })
+    upsertSession(s)
     if (opts.open) openAgentSeat(agent)
-    return { taskId: task.id, merged: false, started }
+    return { sessionId: s.id }
   } catch (e) {
     toast(errorMessage(e), 'error')
     return null
@@ -129,36 +75,40 @@ export async function sendToAgent(agentId: Id, text: string, opts: { open?: bool
 }
 
 /**
- * The conversation with one agent: its latest tasks' activity, live. Reloads when the agent's tasks change (a new
- * request, a report, an approval); a slower answer for the agent we just left never lands on this one.
+ * The agent's standing chat session, as the store has it: the running one, else the last one (ended: it reads its
+ * history, and your next message reopens it resuming the same conversation). Looking never starts a CLI: an agent
+ * with no chat yet shows an empty chat, and the first message starts it (sendToAgent). Only an ended Codex chat is
+ * reopened on sight, since its history comes back only from a running thread. `error`: why it cannot chat.
  */
-export function useDeskThread(agent: CompanyAgent | undefined): { items: ThreadItem[] | null; tasks: CompanyTask[]; error: string | null } {
-  const all = useStore((s) => s.tasks)
-  const companyCreatedAt = useStore((s) => s.companies.find((c) => c.id === agent?.companyId)?.createdAt ?? null)
-  const name = useStore((s) => (agent ? deskAgentOf(agent, s).name : ''))
-  const tasks = useMemo(() => (agent ? deskTasks(all, agent.id, agent.companyId) : []), [all, agent?.id, agent?.companyId])
-  const key = tasks.map((t) => `${t.id}@${t.updatedAt}`).join()
-  const [details, setDetails] = useState<{ agentId: Id; list: TaskDetail[] } | null>(null)
+export function useAgentChat(agent: Pick<CompanyAgent, 'id' | 'archivedAt' | 'refId' | 'kind'> | undefined): { session: Session | null; error: string | null } {
   const [error, setError] = useState<string | null>(null)
-  const seq = useRef(0)
-  const load = (): void => {
-    if (!agent) return
-    const n = ++seq.current
-    const forAgent = agent.id
-    Promise.all(tasks.map((t) => hive.tasks.get({ id: t.id }).catch(() => ({ task: t, activity: [] }) as TaskDetail))).then(
-      (list) => {
-        if (n !== seq.current) return
-        setDetails({ agentId: forAgent, list })
-        setError(null)
-      },
-      (e) => n === seq.current && setError(errorMessage(e))
+  const id = agent?.id
+  const refId = agent?.refId
+  const session = useStore((s) => {
+    if (!id) return null
+    let best: Session | null = null
+    for (const x of s.sessions) {
+      if (x.companyAgentId !== id || x.profileId !== refId) continue
+      if (!best || Number(x.status === 'running') - Number(best.status === 'running') > 0 || (x.status === best.status && x.startedAt > best.startedAt)) best = x
+    }
+    return best
+  })
+  const reopen = !!session && session.status === 'exited' && session.adapter === 'codex' && !!agent && !agent.archivedAt
+  const sid = session?.id
+  useEffect(() => {
+    if (!reopen || !id) return
+    let live = true
+    hive.chat.openAgent({ agentId: id }).then(
+      (s) => live && upsertSession(s),
+      (e) => live && setError(errorMessage(e))
     )
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [agent?.id, key])
-  useHiveEvent('data:changed', ({ domain }) => domain === 'tasks' && load())
-  const items = useMemo(() => (details && details.agentId === agent?.id ? deskThread(details.list, { companyCreatedAt, agentName: name }) : null), [details, agent?.id, companyCreatedAt, name])
-  return { items, tasks, error }
+    return () => {
+      live = false
+    }
+  }, [reopen, id, sid])
+  useEffect(() => setError(null), [id])
+  if (agent?.kind === 'workflow') return { session: null, error: 'This agent is a workflow: it runs, it does not chat' }
+  return { session, error }
 }
 
 /** "Paused companies still allow chats you start yourself" (step 2 carry-over): the line under a paused company. */

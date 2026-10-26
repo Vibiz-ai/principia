@@ -60,6 +60,8 @@ export interface ChatSessionDeps {
   asks?: ChatAskBridge
   /** the live tracker says the terminal's turn is still running (Terminal -> Chat waits for it) */
   terminalWorking?(): boolean
+  /** AGENT CHAT: the name this chat speaks in (an agent's name); null = Claude */
+  speaker?(): string | null
   /** Claude's own transcript records for this conversation (replay on resume and on hand-back) */
   transcript?(conversationId: string): unknown[]
   onModeChanged?(mode: ChatMode): void
@@ -125,7 +127,7 @@ export class ChatSession implements PtyLike {
     this.meta.bypass = this.bypass
     this.mode = d.mode
     this.startedAs = d.mode
-    this.reducer = new ChatReducer({ now: () => this.now(), idPrefix: '' })
+    this.reducer = new ChatReducer({ now: () => this.now(), who: () => this.who(), idPrefix: '' })
     if (this.started && this.convId) this.replayInto(this.convId, 'Resumed this conversation')
     this.maybeTitle()
     if (d.mode === 'terminal') this.startTerminal()
@@ -203,6 +205,15 @@ export class ChatSession implements PtyLike {
   }
 
   // ---------- helpers ----------
+  /** who speaks in this chat: the agent's name in an agent's chat, else Claude */
+  private who(): string {
+    try {
+      return this.d.speaker?.()?.trim() || 'Claude'
+    } catch {
+      return 'Claude'
+    }
+  }
+
   private now(): number {
     return this.d.now ? this.d.now() : Date.now()
   }
@@ -390,7 +401,7 @@ export class ChatSession implements PtyLike {
         // Needs you, the Chats list and the status line read like the chat card, never "Write /private/…"
         ...(perm?.kind === 'permission'
           ? {
-              title: permissionTitle(toolName, req.input ?? {}),
+              title: permissionTitle(toolName, req.input ?? {}).replace(/^Claude\b/, this.who()),
               options: [
                 { id: 'allow', label: 'Allow', kind: 'allow' as const },
                 ...perm.suggestions.map((sg, i) => ({ id: `sug_${i}`, label: plainLabel(sg.label), kind: 'allow_step' as const })),
@@ -658,7 +669,7 @@ export class ChatSession implements PtyLike {
       this.stopTimer = null
       if (this.proc !== p || p.exited || (this.turn !== 'working' && this.turn !== 'needs')) return
       this.emit(this.reducer.settle('interrupted'))
-      this.emit(this.reducer.notice('Stopped. Claude kept everything up to here.'))
+      this.emit(this.reducer.notice(`Stopped. ${this.who()} kept everything up to here.`))
       this.d.asks?.stopped?.()
       this.onTurnEnd()
     }, STOP_SETTLE_MS)
@@ -866,11 +877,11 @@ export class ChatSession implements PtyLike {
     } catch (e) {
       this.d.log?.warn('chat: transcript replay failed', { error: String(e) })
     }
-    const r = new ChatReducer({ now: () => this.now(), idPrefix: `r${this.now().toString(36)}_` })
+    const r = new ChatReducer({ now: () => this.now(), who: () => this.who(), idPrefix: `r${this.now().toString(36)}_` })
     for (const rec of records) r.line(rec)
     r.settle('expired')
     if (records.length) r.notice(notice)
-    this.reducer = new ChatReducer({ now: () => this.now() }, r.model)
+    this.reducer = new ChatReducer({ now: () => this.now(), who: () => this.who() }, r.model)
     this.emit([{ op: 'reset', items: r.model.items.slice() }])
   }
 }

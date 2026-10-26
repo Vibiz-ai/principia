@@ -528,13 +528,17 @@ export class Dispatcher {
       if (this.d.sessions.isLive(r.sessionId) || this.leaseOf(r.taskId) !== r.sessionId) continue
       try { this.endLease(r.taskId, 'canceled', 'The session closed before Submit for review or Park') } catch (err) { this.warn('closing a session lease failed', { taskId: r.taskId, error: String(err) }) }
     }
-    // PROACTIVE.md §3: a chat closed while it still had tracked work in progress: the task waits for the human
+    // PROACTIVE.md §3: a chat closed while it still had tracked work in progress: the task waits for the human. AGENT
+    // CHAT: so does an agent's task its chat had moved to in progress
     const tracked = this.db.prepare("SELECT id, run_id FROM company_tasks WHERE status='in_progress' AND run_id IS NOT NULL AND json_extract(data,'$.externalId') LIKE 'track:%'").all() as { id: string; run_id: string }[]
-    for (const r of tracked) {
+    let agentHeld: { id: string; run_id: string }[] = []
+    try { agentHeld = this.db.prepare("SELECT t.id AS id, t.run_id AS run_id FROM company_tasks t JOIN sessions s ON s.id=t.run_id WHERE t.status='in_progress' AND s.company_agent_id IS NOT NULL").all() as { id: string; run_id: string }[] } catch { /* older db */ }
+    const chatHeld = new Set(agentHeld.map(r => r.id))
+    for (const r of [...tracked, ...agentHeld.filter(r => !tracked.some(x => x.id === r.id))]) {
       if (this.d.sessions.isLive(r.run_id)) continue
       try {
         const t = this.c.task(r.id)
-        if (trackedBy(t) !== r.run_id) continue
+        if (trackedBy(t) !== r.run_id && !(chatHeld.has(r.id) && t.runId === r.run_id)) continue
         const out = this.c.park(r.id, 'no_report', 'The chat closed before it finished this task')
         this.d.onChange?.(out.companyId)
       } catch (err) { this.warn('parking a tracked task failed', { taskId: r.id, error: String(err) }) }

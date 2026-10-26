@@ -140,6 +140,22 @@ function Inlines({ c }: { c: Inline[] }): React.JSX.Element {
             )
           case 'url':
             if (isDeepLinkUrl(n.href)) return <InAppLink key={i} href={n.href} c={n.c} />
+            // a bare web address reads as a source chip with its site ("github.com"), the full address on hover
+            if (n.c.length === 1 && n.c[0]!.t === 'text' && n.c[0]!.v === n.href && /^https?:\/\//.test(n.href))
+              return (
+                <a
+                  key={i}
+                  className="dgm-md__src"
+                  href={n.href}
+                  title={n.href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    followLink(n.href)
+                  }}
+                >
+                  {siteOf(n.href)}
+                </a>
+              )
             return (
               <a
                 key={i}
@@ -156,4 +172,13 @@ function Inlines({ c }: { c: Inline[] }): React.JSX.Element {
       })}
     </>
   )
+}
+
+/** "github.com" from "https://www.github.com/x/y" (the address itself when it does not parse). */
+export function siteOf(href: string): string {
+  try {
+    return new URL(href).hostname.replace(/^www\./, '') || href
+  } catch {
+    return href
+  }
 }

@@ -124,6 +124,12 @@ function questionsOf(input: Record<string, unknown>): ChatQuestionSpec[] {
 }
 
 const INTERRUPT = /^\[Request interrupted by user/
+/** "[Subagent hand-back] … The report follows:\n<report>" -> "<report>" (the frame is for the model, not for people). */
+export function handBack(text: string): string {
+  if (!/^\s*\[Subagent hand-back\]/.test(text)) return text
+  const i = text.indexOf('The report follows:')
+  return i < 0 ? text : text.slice(i + 'The report follows:'.length).replace(/^\s*\n/, '')
+}
 // "Interrupted by the user" is Principia's own deny when Stop closes an open approval (replayed from the transcript)
 const DENIED = /doesn't want to proceed|was rejected|permission.*denied|denied in principia|user denied|The user doesn't want|^Interrupted by the user/i
 
@@ -144,7 +150,7 @@ export class ChatReducer {
   meta: Partial<ChatMeta> = {}
 
   constructor(
-    private o: { now?: () => number; idPrefix?: string } = {},
+    private o: { now?: () => number; idPrefix?: string; /** AGENT CHAT: who speaks (the agent's name) */ who?: () => string } = {},
     model?: ChatModel
   ) {
     this.model = model ?? new ChatModel()
@@ -173,8 +179,8 @@ export class ChatReducer {
 
   /** Principia sent (or queued) a user message: the item shows at once, the CLI's echo is matched to it. */
   userSent(text: string, images = 0, state: ChatUserItem['state'] = 'sent', id?: string, thumbs: string[] = []): ChatOp[] {
-    const item: ChatUserItem = { id: id ?? this.newId('u'), kind: 'user', parent: null, text, images, state, ...(thumbs.length ? { thumbs: thumbs.slice(0, 6) } : {}) }
-    if (this.model.has(item.id)) this.patch(item.id, { state, text })
+    const item: ChatUserItem = { id: id ?? this.newId('u'), kind: 'user', parent: null, text, images, state, at: this.now(), ...(thumbs.length ? { thumbs: thumbs.slice(0, 6) } : {}) }
+    if (this.model.has(item.id)) this.patch(item.id, state === 'sent' ? { state, text, at: item.at } : { state, text })
     else this.add(item)
     if (state === 'sent') {
       this.awaitingEcho.push({ id: item.id, text: text.trim() })
@@ -378,7 +384,7 @@ export class ChatReducer {
     const images = blocks.filter((b) => b.type === 'image').length
     if (INTERRUPT.test(text.trim())) {
       this.settleItems('interrupted')
-      this.add({ id: this.newId('n'), kind: 'notice', parent: null, tone: 'info', text: 'Stopped. Claude kept everything up to here.', action: null })
+      this.add({ id: this.newId('n'), kind: 'notice', parent: null, tone: 'info', text: `Stopped. ${this.o.who?.() || 'Claude'} kept everything up to here.`, action: null })
       return
     }
     const shown = commandText(text)
@@ -394,7 +400,8 @@ export class ChatReducer {
     }
     if (!want && !images) return
     this.turnStart ??= this.now()
-    this.add({ id: this.newId('u'), kind: 'user', parent: null, text: shown, images, state: 'sent' })
+    const at = typeof o.timestamp === 'string' ? Date.parse(o.timestamp) : NaN
+    this.add({ id: this.newId('u'), kind: 'user', parent: null, text: shown, images, state: 'sent', at: Number.isFinite(at) ? at : this.now() })
   }
 
   private toolResult(r: Record<string, unknown>, o: Record<string, unknown>): void {
@@ -403,7 +410,8 @@ export class ChatReducer {
     const id = `tool:${tid}`
     const cur = this.model.get(id)
     if (cur?.kind !== 'tool') return
-    const full = contentText(r.content)
+    // a subagent's report reads as its words, without the CLI's hand-back frame around it
+    const full = handBack(contentText(r.content))
     const perm = this.model.items.find((x): x is ChatPermissionItem => x.kind === 'permission' && x.toolUseId === tid)
     const isErr = r.is_error === true
     const status: ChatToolItem['status'] = !isErr

@@ -99,6 +99,8 @@ export interface SessionDeps {
    * workspace with the Passport block only.
    */
   chat?(req: { companyId: Id; departmentId: Id | null; adapter: AgentProfile['adapter'] }): ChatPlacement | null
+  /** AGENT CHAT: an agent's chat options from its seat (Restart rebuilds the brief); null = the agent is gone. */
+  agentChat?(companyAgentId: Id): AgentChatSpawn | null
   author?: {
     /** `chat`: a chat (no task, no repo): the company tools are listed (DEPARTMENTS.md §9) */
     server(sessionId: Id, liveDir: string, companyId?: Id | null, opts?: { chat?: boolean }): McpServerSpec | null
@@ -159,6 +161,26 @@ export interface CreateOptions extends Omit<SessionCreateRequest, 'initialPrompt
    */
   task?: boolean
   taskDepartmentId?: Id | null
+  /**
+   * AGENT CHAT: the standing chat of a company agent. The session row is stamped with it, the agent's brief (persona,
+   * role, instructions, autonomy, Principia's team context) joins the chat brief, the agent's department adds its
+   * Passport slot, and the pane always opens as a chat. Main-only.
+   */
+  companyAgentId?: Id | null
+  agentBrief?: string | null
+  agentDepartmentId?: Id | null
+  /** chat or terminal for this pane (absent: Settings › Open chats as) */
+  mode?: 'chat' | 'terminal' | null
+}
+
+/** AGENT CHAT: how an agent's chat is spawned again (Restart): its profile, folder, title and brief, fresh from its seat. */
+export interface AgentChatSpawn {
+  profileId: Id
+  companyId: Id
+  cwd: string
+  title: string
+  agentBrief: string
+  agentDepartmentId: Id | null
 }
 
 /**
@@ -335,7 +357,7 @@ export class SessionManager {
     let author: McpServerSpec | null = null
     if ((profile.adapter === 'claude' || profile.adapter === 'codex') && channel && this.d.author) {
       try {
-        author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId) })
+        author = this.d.author.server(id, channel.dir, companyId, { chat: !req.task && (!repoId || !!req.departmentId || !!req.companyAgentId) })
       } catch {
         author = null // authoring never blocks a session
       }
@@ -358,8 +380,9 @@ export class SessionManager {
         ...(this.d.reaper ? { spawnTag: this.d.reaper.tag(id) } : {}),
         ...(initialPrompt ? { initialPrompt } : {}),
         // DEPARTMENTS.md §7, §9: the department slot (department chats, task sessions) and the chat's brief and folders
-        ...(department || req.taskDepartmentId ? { departmentId: department?.id ?? req.taskDepartmentId ?? null } : {}),
-        ...(chat?.brief ? { chatBrief: chat.brief } : {}),
+        ...(department || req.taskDepartmentId || req.agentDepartmentId ? { departmentId: department?.id ?? req.taskDepartmentId ?? req.agentDepartmentId ?? null } : {}),
+        // AGENT CHAT: the agent's own brief first (who it is), then what the chat is told about the company
+        ...(chat?.brief || req.agentBrief?.trim() ? { chatBrief: [req.agentBrief?.trim() ?? '', chat?.brief ?? ''].filter(Boolean).join('\n\n') } : {}),
         ...(chat?.addDirs.length ? { addDirs: chat.addDirs } : {}),
         // per-session dir: the config names this session's live dir, so it must never be shared between panes
         ...(author && this.d.author && channel ? { author, authorTools: this.d.author.tools, authorSpawnDir: channel.dir } : {})
@@ -407,7 +430,8 @@ export class SessionManager {
         sessionId: id,
         adapter: profile.adapter,
         codeWork: !!repoId || guarded,
-        resumeId: req.resumeAgentSessionId ?? null
+        resumeId: req.resumeAgentSessionId ?? null,
+        mode: req.companyAgentId ? 'chat' : (req.mode ?? null)
       })
     } catch (e) {
       if (memory) this.d.memory?.release(memory.grantId)
@@ -443,7 +467,8 @@ export class SessionManager {
       fromRunId: req.fromRunId ?? null,
       agentSessionId: spec.agentSessionId ?? req.resumeAgentSessionId ?? null,
       ...(companyId ? { companyId } : {}),
-      ...(department ? { departmentId: department.id } : {})
+      ...(department ? { departmentId: department.id } : {}),
+      ...(req.companyAgentId ? { companyAgentId: req.companyAgentId } : {})
     }
     this.d.store.insertSession({ ...session, logPath })
     if (repoId) this.d.store.updateSettings({ lastRepoId: repoId })
@@ -783,6 +808,28 @@ export class SessionManager {
     // found". Start fresh under the same id instead so later restarts keep resuming the same conversation.
     const conv = s.agentSessionId
     const resumable = !!conv && (this.d.conversationExists?.(s.adapter, conv) ?? true)
+    // AGENT CHAT: the agent's chat comes back as itself (its brief rebuilt from the seat, same conversation)
+    if (s.companyAgentId) {
+      const a = this.d.agentChat?.(s.companyAgentId)
+      if (!a) throw new HiveError('not_found', 'That agent is no longer on the team')
+      // the seat moved to another harness: its old conversation cannot be resumed there, a new one starts
+      const same = this.d.store.getProfile(a.profileId)?.adapter === s.adapter
+      return this.create({
+        profileId: a.profileId,
+        companyId: a.companyId,
+        cwd: a.cwd,
+        chat: true,
+        title: s.title || a.title,
+        companyAgentId: s.companyAgentId,
+        agentBrief: a.agentBrief,
+        agentDepartmentId: a.agentDepartmentId,
+        cols: s.cols,
+        rows: s.rows,
+        memory: this.d.memory?.lastMode(id) ?? 'off',
+        resumeAgentSessionId: same && resumable ? conv : null,
+        freshAgentSessionId: same && !resumable && s.adapter === 'claude' ? conv : null
+      })
+    }
     return this.create({
       profileId: profile,
       adapter: profile ? undefined : s.adapter,

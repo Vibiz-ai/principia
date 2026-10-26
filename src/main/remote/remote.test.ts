@@ -82,7 +82,7 @@ function world() {
         case 'forum:state': return { companyId: req.companyId, me: 'mb_owner_a', members: d.members.filter((m) => m.companyId === req.companyId), channels: d.channels.filter((c) => c.companyId === req.companyId), presence: [], openAsks: 0, openProposals: 0 }
         case 'forum:messages': return { messages: [msg('fm_1', req.companyId, req.channelId, 'hello')], hasMore: false }
         case 'forum:post': return msg('fm_2', req.companyId, req.channelId, req.text)
-        case 'tasks:create': return task('ta_new', req.task.companyId, { title: req.task.title })
+        case 'chat:sendAgent': return { id: 'se_agent', companyId: 'co_a', companyAgentId: req.agentId }
         default: return { ok: true }
       }
     }) as PhoneHost['invoke'],
@@ -406,17 +406,47 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(phoneOptions(d.asks[1]!).map((o) => o.id)).toEqual(['allow'])
     expect(phoneOptions(d.asks[0]!).map((o) => o.id)).toEqual(['allow', 'deny'])
   })
-  it('the agent desk send path: a new task for the agent, the reply stored, started when free', async () => {
+  it('a message to an agent goes straight into its own chat: no task, no fixed reply', async () => {
     const { host, d } = world()
-    d.tasks = d.tasks.filter((t) => t.status !== 'in_progress')
     const api = new PhoneApi(host)
-    const out = (await api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { text: 'Write a post about the new decaf' }, dev)) as { merged: boolean; started: boolean }
-    expect(out.merged).toBe(false)
-    expect(out.started).toBe(true)
-    const create = d.calls.find((c) => c.channel === 'tasks:create')?.req as { task: { companyId: string; agentId: string; externalId: string } }
-    expect(create.task).toMatchObject({ companyId: 'co_a', agentId: 'ag_a' })
-    expect(create.task.externalId).toMatch(/^desk:ag_a:/)
-    expect(d.calls.some((c) => c.channel === 'tasks:comment' && (c.req as { by?: string }).by === 'agent')).toBe(true)
+    const out = (await api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { text: 'just do it bro' }, dev)) as { sessionId: string }
+    expect(out.sessionId).toBe('se_agent')
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'just do it bro' })
+    expect(d.calls.some((c) => c.channel === 'tasks:create' || c.channel === 'tasks:comment' || c.channel === 'tasks:start')).toBe(false)
+  })
+  it('an agent on the phone opens its own chat: the agent view names it, so the phone reads it with the chat model', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    expect(((await api.handle('agent', { companyId: 'co_a', agentId: 'ag_a' }, {}, dev)) as { chatSessionId: string | null }).chatSessionId).toBeNull()
+    d.sessions.push({ ...sess('se_old', 'co_a'), status: 'exited', companyAgentId: 'ag_a' } as never, { ...sess('se_chat', 'co_a'), companyAgentId: 'ag_a' } as never)
+    expect(((await api.handle('agent', { companyId: 'co_a', agentId: 'ag_a' }, {}, dev)) as { chatSessionId: string | null }).chatSessionId).toBe('se_chat')
+  })
+  it('after a restart the phone still reaches an agent: its ended chat reads, and a message reopens it through the agent', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    d.sessions.push({ ...sess('se_old', 'co_a'), status: 'exited', companyAgentId: 'ag_a', title: 'Livia · Copywriter' } as never)
+    const view = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_old' }, {}, dev)) as { chat: unknown; terminal: unknown; who: { name: string; role: string } }
+    expect(view.chat).not.toBeNull()
+    expect(view.terminal).toBeNull()
+    // it speaks as the agent (its persona and role), never as "Claude"
+    expect(view.who.name).not.toBe('Claude')
+    expect(view.who.role).toBe('Copywriter')
+    const out = (await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_old' }, { text: 'still there?' }, dev)) as { ok: boolean; sessionId?: string }
+    expect(out).toEqual({ ok: true, sessionId: 'se_agent' })
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'still there?' })
+    expect(d.calls.some((c) => c.channel === 'chat:send')).toBe(false)
+  })
+  it('a Codex agent chat reads and replies on the phone like a Claude one', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    d.sessions.push({ ...sess('se_codex', 'co_a'), adapter: 'codex', companyAgentId: 'ag_a' } as never, { ...sess('se_plain', 'co_a'), adapter: 'codex' } as never)
+    expect(((await api.handle('session', { companyId: 'co_a', sessionId: 'se_codex' }, {}, dev)) as { chat: unknown }).chat).not.toBeNull()
+    // a Codex chat of yours (no agent) is a chat too
+    expect(((await api.handle('session', { companyId: 'co_a', sessionId: 'se_plain' }, {}, dev)) as { chat: unknown }).chat).not.toBeNull()
+    await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_plain' }, { text: 'hi' }, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:send')?.req).toEqual({ id: 'se_plain', text: 'hi' })
+    await api.handle('sessionStop', { companyId: 'co_a', sessionId: 'se_codex' }, {}, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:interrupt')?.req).toEqual({ id: 'se_codex' })
   })
   it('the room posts through forum:post (the responder answers @mentions)', async () => {
     const { host, d } = world()
