@@ -126,6 +126,8 @@ export class Hive {
   dashboards: DashboardService | null = null
   /** LINEAR.md: optional Linear sync per company (null until wired / on failure). */
   linear: import('./company/sync/service').LinearSyncService | null = null
+  /** REMOTE.md: Phone (off at every launch; null until wired / on failure). */
+  remote: import('./remote/service').RemoteService | null = null
   private cloudWiring: CloudWiring | null = null
   /** CLOUD.md §4.1: this Mac's link to a Principia Cloud workspace (built on first use; idle until paired). */
   get cloud(): CloudWiring {
@@ -886,6 +888,8 @@ export class Hive {
     this.dispatcher?.dispose()
     // SLACK.md §2.3: close the socket with 1000, no retries
     await this.slack?.stop().catch(() => undefined)
+    // REMOTE.md RA1: quitting is Turn off (tunnel, server, every phone signed out)
+    await this.remote?.stop().catch(() => undefined)
     for (const t of this.sessionRetries.values()) clearTimeout(t)
     this.sessionRetries.clear()
     // CONTRACT §13: nothing tagged by this Hive outlives it (dev servers, watchers, leftovers nobody stopped)

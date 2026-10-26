@@ -30,7 +30,15 @@ export interface ChatAskBridge {
   stopped?(): void
   /** a chat turn started (the live tree works even when no UserPromptSubmit hook line comes) */
   working?(): void
+  /**
+   * a turn ended with its result and the chat is still idle a moment later: the live tree goes idle with this report
+   * when the Stop hook did not already do it (a hook can be late, missing or turned off)
+   */
+  turnEnded?(report: string | null): void
 }
+
+/** how long a finished turn waits for the CLI's own Stop hook before the chat settles the live tree itself */
+export const TURN_END_SETTLE_MS = 1500
 
 export interface ChatSessionDeps {
   sessionId: Id
@@ -408,6 +416,18 @@ export class ChatSession implements PtyLike {
     if (type === 'result') {
       if (o.subtype === 'error_during_execution') this.d.asks?.stopped?.()
       this.onTurnEnd()
+      if (this.d.asks?.turnEnded) {
+        const report = typeof o.result === 'string' && o.result.trim() ? o.result : null
+        const p = this.proc
+        this.timer(() => {
+          if (this.proc !== p || (this.turn !== 'idle' && this.turn !== 'sleeping')) return
+          try {
+            this.d.asks?.turnEnded?.(report)
+          } catch {
+            /* never block the chat on live state */
+          }
+        }, TURN_END_SETTLE_MS)
+      }
       return
     }
     // a replayed user line is not a turn: set_model after a turn replays "<local-command-stdout>Set model…" with no

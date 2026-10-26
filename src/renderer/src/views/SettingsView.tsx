@@ -29,6 +29,7 @@ import { useIsCode } from '../components/desk/Desk'
 import { useDeskAgents } from '../state/desk'
 import { ConnectionsPage, type ConnectSheet } from '../components/connections/ConnectionsPage'
 import { DiskSection } from '../components/usage/DiskSection'
+import { PhoneSettings } from '../components/phone/PhoneSettings'
 import { CompanyAvatar } from '../shell/CompanyRail'
 import { PassportView } from './PassportView'
 import { KeysView } from './KeysView'
@@ -132,6 +133,8 @@ export function SettingsView({ section, nonce, connect }: { section?: SettingsSe
               <Providers />
             ) : cur === 'notifications' ? (
               <Notifications />
+            ) : cur === 'phone' ? (
+              <PhoneSettings />
             ) : cur === 'storage' ? (
               <Storage />
             ) : cur === 'experimental' ? (
@@ -1162,7 +1165,7 @@ function About(): React.JSX.Element {
           {info.isPackaged ? '' : ' · development build'}
         </div>
       )}
-      <p className="text-secondary">No network listeners. No telemetry. Everything stays on this Mac.</p>
+      <p className="text-secondary">No network listeners unless you turn on Phone. No telemetry. Everything stays on this Mac.</p>
     </div>
     </>
   )

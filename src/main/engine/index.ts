@@ -105,12 +105,14 @@ export interface EngineOverrides {
 }
 
 /**
- * A prompt run's title source. A framed prompt (a board task turn, a Forum reply: `<principia-role …>` first) is named by
+ * A prompt run's title source. A framed prompt (a board task turn, a Forum reply: `<principia-role …>` first, or after
+ * one plain line) is named by
  * its task's Title line, else by the first text outside the frames, never by the frame itself.
  */
 export function framedPromptTitle(prompt: string): string {
   const text = prompt.trim()
-  if (!/^<principia-[a-z]/i.test(text)) return text
+  // a Forum reply starts with one plain line ("Forum reply in #general") before its frames: framed all the same
+  if (!/^<principia-[a-z]/i.test(text) && !/^[^\n]*\n\s*<principia-[a-z]/i.test(text)) return text
   const title = /<principia-task\b[^>]*>\s*Title:[ \t]*([^\n]*)/i.exec(text)?.[1]?.trim()
   if (title) return title
   const rest = text.replace(/<principia-([a-z-]+)\b[^>]*>[\s\S]*?<\/principia-\1>/gi, '').trim()

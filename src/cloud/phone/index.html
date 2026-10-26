@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#17181b" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Principia" />
+    <title>Principia</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <link rel="stylesheet" href="./phone.css" />
+  </head>
+  <body data-phase="boot">
+    <div class="app">
+      <div id="hdr"></div>
+      <main id="main" aria-live="polite"></main>
+    </div>
+    <div class="bottom">
+      <div id="dock" class="dock"></div>
+      <div id="tabs"></div>
+    </div>
+    <div id="toast" class="toast" role="status"></div>
+    <noscript>Principia on your phone needs JavaScript.</noscript>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>

@@ -259,6 +259,20 @@ export class SessionLive {
     this.applier.flush()
   }
 
+  /**
+   * A chat turn ended (its result came) and the root still reads working: the Stop hook did not settle it, so the
+   * root goes idle here with the turn's last words. A root working on background tasks (the hook said so) stays.
+   * True when it changed something.
+   */
+  chatTurnEnded(report: string | null): boolean {
+    if (this.ended) return false
+    const r = this.d.store.getAgent(this.root.id)
+    if (!r || r.status !== 'working' || /^Background:/.test(r.activity ?? '')) return false
+    this.feed({ kind: 'stop', background: 0, report })
+    this.applier.flush()
+    return true
+  }
+
   /** Answered in the chat (summary) or gone (null: canceled). */
   closeChatAsk(gateId: string, summary: string | null): void {
     if (this.ended || !this.tracker.ask(gateId)) return

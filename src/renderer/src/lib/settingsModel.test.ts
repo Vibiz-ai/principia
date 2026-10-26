@@ -7,7 +7,7 @@ describe('Settings in two scopes (design §2.4)', () => {
     // no code: no Repositories (Diego's page stays out of Maya's way)
     expect(companySections({ personal: false, code: false }).map((s) => s.id)).not.toContain('repos')
     expect(companySections({ personal: true, code: false }).map((s) => s.id)).toEqual(['company', 'connections', 'repos', 'keys'])
-    expect(APP_SECTIONS.map((s) => s.label)).toEqual(['General', 'AI providers', 'Notifications', 'Cloud sync', 'Storage', 'Experimental', 'About'])
+    expect(APP_SECTIONS.map((s) => s.label)).toEqual(['General', 'AI providers', 'Notifications', 'Cloud sync', 'Phone', 'Storage', 'Experimental', 'About'])
   })
   it('old names still open: Agents → AI providers, Data → Storage', () => {
     expect(normalizeSection('agents')).toBe('providers')

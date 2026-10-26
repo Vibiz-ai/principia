@@ -44,6 +44,9 @@ export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' 
         working: () => {
           sl.chatWorking()
           h.statusChanged()
+        },
+        turnEnded: (report) => {
+          if (sl.chatTurnEnded(report)) h.statusChanged()
         }
       }
     },

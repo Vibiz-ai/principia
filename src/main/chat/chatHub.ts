@@ -145,7 +145,8 @@ export class ChatHub {
         open: (e) => this.d.asks?.(id)?.open(e),
         close: (rid, summary) => this.d.asks?.(id)?.close(rid, summary),
         stopped: () => this.d.asks?.(id)?.stopped?.(),
-        working: () => this.d.asks?.(id)?.working?.()
+        working: () => this.d.asks?.(id)?.working?.(),
+        turnEnded: (report) => this.d.asks?.(id)?.turnEnded?.(report)
       },
       terminalWorking: () => this.d.terminalWorking?.(id) ?? false,
       transcript: (conv) => this.transcript(conv),

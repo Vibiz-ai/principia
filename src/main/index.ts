@@ -35,6 +35,7 @@ import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
 import { chatLink, createChatHub } from './chat/wire'
+import { createRemote } from './remote/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
@@ -258,6 +259,12 @@ if (!app.requestSingleInstanceLock()) {
       h.forum = wireForum(h, { mainDir: __dirname })
     } catch (e) {
       log.error('forum unavailable', { e: String(e) })
+    }
+    // REMOTE.md: Phone (built idle: no listener until the user turns it on)
+    try {
+      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH })
+    } catch (e) {
+      log.error('phone unavailable', { e: String(e) })
     }
     // DASHBOARDS.md: department dashboards (fetch and refresh in main); failure = no dashboards, Principia runs
     try {

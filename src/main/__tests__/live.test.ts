@@ -437,6 +437,17 @@ d('SessionLive with recorded claude hooks (A1, A3, A4, A9)', () => {
     expect(live.getAsk(asks[0].id)).toMatchObject({ status: 'answered', answeredVia: 'terminal' })
   })
 
+  it('a chat turn that ended with no Stop hook settles the root idle with its last words; never twice', () => {
+    const s = new SessionLive(deps(), session, null)
+    s.chatWorking()
+    expect(live.getAgent(s.root.id)!.status).toBe('working')
+    expect(s.chatTurnEnded('Pushed. The menu is live.')).toBe(true)
+    expect(live.getAgent(s.root.id)).toMatchObject({ status: 'needs_you', needs: 'idle', report: 'Pushed. The menu is live.' })
+    // the hook got there first: nothing changes, its report stays
+    expect(s.chatTurnEnded(null)).toBe(false)
+    expect(live.getAgent(s.root.id)!.report).toBe('Pushed. The menu is live.')
+  })
+
   it('A9: with the dialog on screen, Allow writes "1" and the ask is answered via hive', () => {
     const s = new SessionLive(deps(), session, null)
     for (const l of fixture('claude-hooks-pty-permission.jsonl')) s.onLine(wrap(l))

@@ -6,6 +6,7 @@ import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, Forum
 import type { CompanyProposal, ProposalDecision } from './chatCompany'
 import { PLANS_CHANNELS, type PlansInvokeMap } from './plans'
 import { CHAT_CHANNELS, CHAT_EVENTS, type ChatEventMap, type ChatInvokeMap } from './chat'
+import { REMOTE_CHANNELS, REMOTE_EVENTS, type RemoteEventMap, type RemoteInvokeMap } from './remote'
 import type { GithubTaskPreview, BoardSettings, CompanyAgent, CompanyAgentSaveInput, CompanyCreateInput, CompanyLogo, CompanyOverview, CompanyPauseResult, LogoCandidate, LogoPick, CompanyPassport, CompanyPassportInput, CompanyTask, CompanyTaskInput, CompanyUpdateInput, Department, DepartmentPresetKey, DepartmentSaveInput, PassportExport, TaskActivity, TaskDetail } from './company'
 /**
  * Typed IPC contract between main and renderer. The ONLY bridge is `window.hive` (src/preload).
@@ -149,7 +150,7 @@ type KeySpace = { companyId?: Id | null }
 
 /** invoke channels: [request, response]. `void` request = call with no argument. */
 /** PLANS.md: tasks:brief, tasks:proofPreview and the plans:* channels live in shared/plans.ts. */
-export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap {
+export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMap {
   /** Rail order, Personal last; archived companies only with includeArchived (Settings → Companies). */
   'company:list': [{ includeArchived?: boolean } | V, CompanyPassport[]]
   'company:save': [{id?: string; passport: CompanyPassportInput}, CompanyPassport]
@@ -613,7 +614,7 @@ export interface SendMap {
 }
 
 /** main -> renderer events. Subscribe with window.hive.on(name, cb). */
-export interface EventMap extends ChatEventMap {
+export interface EventMap extends ChatEventMap, RemoteEventMap {
   'pty:data': { sessionId: Id; data: string } // batched ~16 ms, redacted
   'pty:exit': { sessionId: Id; exitCode: number | null; signal: number | null }
   'session:updated': Session
@@ -836,7 +837,9 @@ export const INVOKE_CHANNELS = [
   'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
   ...PLANS_CHANNELS,
   // CHAT-UI.md §3.2
-  ...CHAT_CHANNELS
+  ...CHAT_CHANNELS,
+  // REMOTE.md
+  ...REMOTE_CHANNELS
 ] as const satisfies readonly InvokeChannel[]
 
 // compile-time check: INVOKE_CHANNELS covers InvokeMap exactly
@@ -853,7 +856,8 @@ export const EVENT_NAMES = [
   'activity:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',
   'onboarding:progress', 'onboarding:cloneProgress', 'forum:event', 'cloud',
-  ...CHAT_EVENTS
+  ...CHAT_EVENTS,
+  ...REMOTE_EVENTS
 ] as const satisfies readonly EventName[]
 type _MissingEv = Exclude<EventName, (typeof EVENT_NAMES)[number]>
 const _exhaustiveEv: [_MissingEv] extends [never] ? true : _MissingEv = true

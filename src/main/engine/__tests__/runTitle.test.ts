@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { framedPromptTitle } from '../index'
 import { buildResumePrompt, buildTaskPrompt } from '../../company/taskPrompt'
+import { buildReplyPrompt } from '../../forum/responder'
 
 describe('framedPromptTitle', () => {
   it('a plain prompt is its own title source', () => {
@@ -19,5 +20,10 @@ describe('framedPromptTitle', () => {
   it('a framed prompt without a task block takes the first text outside the frames', () => {
     expect(framedPromptTitle('<principia-role agent="Scout">\nYou scout.\n</principia-role>\n\nThe message for you:\n- m1 @ana: hi')).toBe('The message for you:')
     expect(framedPromptTitle(buildResumePrompt(['go on'])).startsWith('<principia')).toBe(false)
+  })
+  it('a Forum reply (one plain line, then frames) is named by that line, never its role frame', () => {
+    const p = buildReplyPrompt({ seat: { name: 'Copywriter', instructions: 'Write.' }, department: 'Marketing', me: 'marcus', channel: '#general', messages: [{ ref: 'm1', author: 'you', text: 'hi' }], thread: [], replyTo: 'm1' })
+    expect(framedPromptTitle(p)).toBe('Forum reply in #general')
+    expect(framedPromptTitle('Line one\nline two')).toBe('Line one\nline two')
   })
 })

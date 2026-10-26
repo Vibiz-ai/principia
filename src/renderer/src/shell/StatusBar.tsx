@@ -2,6 +2,8 @@ import { companyName, navigate, resumeCompanyAsked, scopeCompanyId, useStore } f
 import { useNeeds, useWorking } from '../state/live'
 import { RelativeTime } from '../components/ui'
 import { statusNext } from '../lib/statusNext'
+import { remoteStatusLine } from '@shared/remote'
+import { useRemote } from '../state/remote'
 
 /**
  * The status bar (five doors §2.6, A2): scoped to the company you are in, every item clickable. "Working" and "need
@@ -20,6 +22,7 @@ export function StatusBar(): React.JSX.Element {
   const queued = own ? own.queued : (status?.queuedRuns ?? 0)
   const day = status ? (companyId ? (status.last24hByCompany?.[companyId] ?? (status.last24hByCompany ? { passed: 0, failed: 0 } : status.last24h)) : status.last24h) : null
   const upcoming = statusNext(status, companyId ?? null)
+  const phone = remoteStatusLine(useRemote())
   const next = upcoming?.fire ?? null
   const name = companyId && multi ? companyName(companyId) : null
   // All companies: the next fire names its company ("Next for which client?")
@@ -57,6 +60,11 @@ export function StatusBar(): React.JSX.Element {
         </button>
       )}
       <span className="flex1" />
+      {phone && (
+        <button type="button" className="statusbar__item statusbar__phone" onClick={() => void navigate({ name: 'settings', section: 'phone', nonce: Date.now() })} title="Settings › App › Phone">
+          <span className="glyph text-success" aria-hidden>■</span> {phone}
+        </button>
+      )}
       {hint && <span className="statusbar__item statusbar__static statusbar__hint">{hint}</span>}
       {day && (day.passed > 0 || day.failed > 0) && (
         <span className="statusbar__item statusbar__static">

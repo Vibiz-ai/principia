@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { ChatSession, type ChatSessionDeps } from './chatSession'
+import { TURN_END_SETTLE_MS, ChatSession, type ChatSessionDeps } from './chatSession'
 import type { ChildLike } from './streamProc'
 import type { PtyLike } from '../sessions'
 import type { ChatOp, ChatPermissionItem } from '../../shared/chat'
@@ -155,6 +155,26 @@ describe('ChatSession (CHAT-UI.md §3)', () => {
     expect(s.meta.plan).toBe('Claude Max')
     expect(JSON.stringify(ops)).not.toContain('x@y.z')
     expect(s.meta.commands[0]!.name).toBe('compact')
+  })
+
+  it('a finished turn settles the live tree when no Stop hook did, never while the next turn runs', async () => {
+    const ended: (string | null)[] = []
+    const { s, children, timers } = setup({ asks: { open: () => undefined, close: () => undefined, turnEnded: (r) => ended.push(r) } })
+    const c = children[0]!
+    await ready(c)
+    await s.send('first')
+    c.say({ type: 'result', subtype: 'success', result: 'Pushed. The menu is live.' })
+    await flush()
+    const t = timers.find((x) => x.ms === TURN_END_SETTLE_MS)!
+    t.fn()
+    expect(ended).toEqual(['Pushed. The menu is live.'])
+    // a queued message started the next turn before the moment passed: nothing settles
+    await s.send('again')
+    c.say({ type: 'result', subtype: 'success', result: 'x' })
+    await flush()
+    await s.send('third')
+    timers.filter((x) => x.ms === TURN_END_SETTLE_MS).at(-1)!.fn()
+    expect(ended).toHaveLength(1)
   })
 
   it('sends, holds follow-ups while working, then sends them together after the turn', async () => {

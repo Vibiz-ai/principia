@@ -5,7 +5,7 @@
  * resolve (deep links: Agents → AI providers, Data → Storage), and the task prefix rule.
  */
 export type CompanySection = 'company' | 'team' | 'connections' | 'repos' | 'keys' | 'danger'
-export type AppSection = 'general' | 'providers' | 'notifications' | 'cloud' | 'storage' | 'experimental' | 'about'
+export type AppSection = 'general' | 'providers' | 'notifications' | 'cloud' | 'phone' | 'storage' | 'experimental' | 'about'
 /** Older names kept as aliases (notifications, the app menu, other views): agents → providers, data → storage. */
 export type LegacySection = 'agents' | 'data'
 export type SettingsSection = CompanySection | AppSection | LegacySection
@@ -31,6 +31,7 @@ export const APP_SECTIONS: SectionDef<AppSection>[] = [
   { id: 'providers', label: 'AI providers' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'cloud', label: 'Cloud sync' },
+  { id: 'phone', label: 'Phone' },
   { id: 'storage', label: 'Storage' },
   { id: 'experimental', label: 'Experimental' },
   { id: 'about', label: 'About' }

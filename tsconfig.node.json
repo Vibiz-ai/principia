@@ -32,6 +32,21 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/cloud/**/*",
-    "vite.cloud.config.ts"
+    "vite.cloud.config.ts",
+    "vite.phone.config.ts",
+    "src/renderer/src/lib/liveTruth.ts",
+    "src/renderer/src/lib/companyModel.ts",
+    "src/renderer/src/lib/departments.ts",
+    "src/renderer/src/lib/board.ts",
+    "src/renderer/src/lib/live.ts",
+    "src/renderer/src/lib/plainActivity.ts",
+    "src/renderer/src/lib/deskThread.ts",
+    "src/renderer/src/lib/desk.ts",
+    "src/renderer/src/lib/format.ts",
+    "src/renderer/src/lib/graph.ts",
+    "src/renderer/src/lib/slack.ts",
+    "src/renderer/src/lib/workflow.ts",
+    "src/renderer/src/lib/time.ts",
+    "src/renderer/src/lib/memory.ts"
   ]
 }

@@ -8,6 +8,7 @@ import { EMBLEM_VARIANTS } from '../shared/chatCompany'
 import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
 import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
+import { REMOTE_REQUEST_SCHEMAS } from './remote/remoteSchemas'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
@@ -967,7 +968,9 @@ export const REQUEST_SCHEMAS = {
   // PLANS.md §3: tasks:brief, tasks:proofPreview, plans:*
   ...PLANS_REQUEST_SCHEMAS,
   // CHAT-UI.md §3.2: chat:*
-  ...CHAT_REQUEST_SCHEMAS
+  ...CHAT_REQUEST_SCHEMAS,
+  // REMOTE.md: remote:*
+  ...REMOTE_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {
