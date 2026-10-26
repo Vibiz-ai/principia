@@ -1,0 +1,38 @@
+# OpenSSF Scorecard (https://scorecard.dev): weekly and on every push to main, scores this repository's supply-chain
+# practices (branch protection, pinned dependencies, token permissions, SAST, signed releases, dangerous workflows,
+# ...), publishes the result for the README badge and uploads the findings to code scanning. Ubuntu only.
+# publish_results requires this workflow to stay simple: no workflow-level env or write permissions, and only the
+# actions below.
+name: scorecard
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 1'
+  branch_protection_rule:
+  workflow_dispatch:
+permissions: read-all # Scorecard reads the repository through the API (branch protection, workflows, checks); never write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write # upload the SARIF to code scanning
+      id-token: write # sign the published result (publish_results), for the badge and the public API
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: results.sarif
+          category: scorecard

@@ -1,0 +1,24 @@
+# Changes to how Principia is built, signed, released and published need the code owner's review
+# (docs/RELEASING.md §9). Turn on "Require review from Code Owners" in the main branch ruleset for it to be enforced.
+# The last matching line wins; these paths do not overlap.
+
+# workflows, Dependabot, zizmor config, this file
+/.github/                           @lausuarez02
+
+# the release scripts: build, sign, notarize, checksums, update manifests, the public export screen
+/scripts/release*                   @lausuarez02
+/scripts/mac-sign*                  @lausuarez02
+/scripts/update-info*               @lausuarez02
+/scripts/prepare-public-release*    @lausuarez02
+/scripts/public-release-fixtures.sha256 @lausuarez02
+
+# packaging, signing entitlements, versions, dependencies
+/electron-builder.yml               @lausuarez02
+/build/entitlements*                @lausuarez02
+/package-lock.json                  @lausuarez02
+/release-please-config.json         @lausuarez02
+/.release-please-manifest.json      @lausuarez02
+
+# the published cloud image and the security policy
+/cloud/Dockerfile                   @lausuarez02
+/SECURITY.md                        @lausuarez02

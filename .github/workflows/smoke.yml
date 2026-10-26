@@ -1,0 +1,51 @@
+# Packaged-app smoke test (docs/RELEASING.md §6.1): builds the unsigned Principia.app (electron-builder --dir: no dmg,
+# no signing, no notarization) and drives it with Playwright (e2e/packaged.spec.ts): the window opens, Home renders,
+# the database opens and takes a company, a shell terminal spawns through node-pty and echoes, the app quits cleanly.
+# Throwaway data folder, scheduler off, no AI calls. Catches what only the packaged app shows: asarUnpack mistakes,
+# native modules built for the wrong Electron, a missing spawn-helper exec bit, preload path errors.
+#
+# Runs nightly on main, by hand, and from Checks (ci.yml) on pull requests and main pushes that touch the app's main
+# process, preload, packaging or dependencies; there `all-green` counts it when it ran and allows the skip otherwise.
+name: smoke
+on:
+  schedule:
+    - cron: '23 4 * * *' # nightly, 04:23 UTC
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  packaged-app:
+    name: packaged app
+    runs-on: macos-15
+    timeout-minutes: 25
+    # job level, not workflow level: called from ci.yml, `github.workflow` would be the caller's name and share its group.
+    # One group per pull request; any other run gets its own (run_id): a pending job in a shared group is cancelled as
+    # soon as a newer one queues (a nightly run or the next merge), which would fail all-green on main.
+    concurrency:
+      group: smoke-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Package the unsigned app
+        run: npm run pack:dir
+      - name: Smoke test the packaged app
+        run: npm run smoke:packaged
+        timeout-minutes: 5
+        env:
+          PRINCIPIA_APP: release/mac-arm64/Principia.app
+      - name: Keep the app log and last screenshot
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-test-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,39 @@
+# SwiftLint for the iOS app: `swiftlint lint --config ios/.swiftlint.yml` from the repository root, or `swiftlint lint`
+# from ios/ (never --strict): errors fail, warnings are reported.
+# Lenient on purpose: correctness-flavoured rules stay on, naming/length/complexity metrics and formatting are off so
+# the linter never asks for churn. Run in CI by .github/workflows/ios.yml.
+included:
+  - Principia
+  - PrincipiaTests
+  - PrincipiaLiveUITests
+excluded:
+  - build
+  - DerivedData
+  - .build
+  - "*.xcodeproj"
+
+disabled_rules:
+  # naming and formatting: the code base has its own conventions (short names like `d`, `st`, `id` are fine here)
+  - identifier_name
+  - type_name
+  - line_length
+  - statement_position
+  - trailing_comma
+  - opening_brace
+  - multiple_closures_with_trailing_closure
+  - implicit_optional_initialization
+  - todo
+  # size and complexity metrics: reviewed by humans, not gated
+  - cyclomatic_complexity
+  - function_body_length
+  - type_body_length
+  - file_length
+  - large_tuple
+  - function_parameter_count
+  - nesting
+  # XCTFail("") reads fine in short tests
+  - xctfail_message
+
+# Reported, never failing: each existing use is on a value that cannot fail (e.g. serialising a [String: String]).
+force_cast: warning
+force_try: warning

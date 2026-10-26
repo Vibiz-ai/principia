@@ -1,0 +1,185 @@
+# Post-release verification (docs/RELEASING.md §5.4): on a fresh Mac, download the published release the way a person
+# does (the public releases/latest/download links; a beta from its own tag) and check what they would rely on:
+#   - SHA256SUMS.txt matches the dmg and zip, and the update manifest's sha512 and size match the zip;
+#   - Gatekeeper accepts the dmg as a notarized Developer ID file, and its notarization ticket is stapled;
+#   - the app inside the dmg, and the one in the updater's zip, pass codesign --verify --deep --strict, Gatekeeper
+#     and the stapler, and carry the release's version;
+#   - the dmg and zip have a build-provenance attestation from this repository's release workflow.
+# Anything failing opens an issue (one per release) and fails the run.
+#
+# Triggers: a release published by a person (`release: published`; a release published with the release workflow's
+# GITHUB_TOKEN triggers no workflow, so release.yml dispatches this one instead), and by hand.
+name: post-release
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to verify, like v0.3.0 (empty: the latest stable release)'
+        type: string
+        required: false
+        default: ''
+      check-latest:
+        description: 'A stable release must be the one releases/latest/download serves'
+        type: boolean
+        required: false
+        default: true
+permissions: {}
+concurrency:
+  group: post-release-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    name: verify the published download
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read # read the release
+      attestations: read # gh attestation verify
+      issues: write # report a failure
+    steps:
+      - name: Download and verify
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_FROM_EVENT: ${{ github.event.release.tag_name }}
+          TAG_FROM_INPUT: ${{ inputs.tag }}
+          CHECK_LATEST: ${{ github.event_name == 'release' || inputs.check-latest }}
+        run: |
+          # every check runs and reports, so no errexit (Actions starts bash with -e): failures are collected instead
+          set +e -uo pipefail
+          failures="$RUNNER_TEMP/failures.txt"
+          : > "$failures"
+          ok() { echo "✓ $1"; echo "- ✓ $1" >> "$GITHUB_STEP_SUMMARY"; }
+          bad() { echo "::error::$1"; echo "- ✗ $1" >> "$GITHUB_STEP_SUMMARY"; echo "$1" >> "$failures"; }
+          finish() {
+            local code=$?
+            if [ "$code" -ne 0 ] && [ ! -s "$failures" ]; then bad "the verification stopped unexpectedly (exit $code)"; fi
+            if [ -s "$failures" ]; then echo "failed=true" >> "$GITHUB_OUTPUT"; exit 1; fi
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          }
+          trap finish EXIT
+
+          latest="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+          tag="${TAG_FROM_EVENT:-${TAG_FROM_INPUT:-$latest}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            bad "no release to verify ('$tag' is not a vX.Y.Z tag)"; exit 1
+          fi
+          version="${tag#v}"
+          echo "## Post-release verification of $tag" >> "$GITHUB_STEP_SUMMARY"
+          release="$(gh release view "$tag" --repo "$REPO" --json isDraft,isPrerelease,author)" || { bad "$tag has no release"; exit 1; }
+          if [ "$(jq -r .isDraft <<< "$release")" = true ]; then bad "$tag is still a draft"; exit 1; fi
+          prerelease="$(jq -r .isPrerelease <<< "$release")"
+          author="$(jq -r .author.login <<< "$release")"
+
+          # where a person gets it: the stable links (what the website's Download button uses), or a beta's own tag
+          if [ "$prerelease" = true ]; then
+            base="https://github.com/$REPO/releases/download/$tag"; manifests="beta-mac.yml"
+            ok "$tag is a pre-release (beta channel): downloading from its tag"
+          elif [ "$latest" = "$tag" ]; then
+            base="https://github.com/$REPO/releases/latest/download"; manifests="latest-mac.yml beta-mac.yml"
+            ok "releases/latest is $tag"
+          else
+            base="https://github.com/$REPO/releases/download/$tag"; manifests="latest-mac.yml beta-mac.yml"
+            if [ "$CHECK_LATEST" = true ]; then bad "releases/latest/download serves ${latest:-nothing}, not $tag"; fi
+          fi
+
+          dl="$RUNNER_TEMP/download"
+          mkdir -p "$dl" && cd "$dl" || exit 1
+          for f in Principia-arm64.dmg Principia-arm64.zip SHA256SUMS.txt $manifests; do
+            # the CDN may need a moment after publishing
+            if ! curl -fsSL --proto '=https' --retry 6 --retry-delay 10 --retry-all-errors -o "$f" "$base/$f"; then
+              bad "could not download $base/$f"
+            fi
+          done
+          [ -s Principia-arm64.dmg ] && [ -s Principia-arm64.zip ] || exit 1
+
+          # 1. checksums
+          for f in Principia-arm64.dmg Principia-arm64.zip; do
+            grep -Eq "^[0-9a-f]{64}  $f\$" SHA256SUMS.txt || bad "SHA256SUMS.txt has no line for $f"
+          done
+          if shasum -a 256 -c SHA256SUMS.txt --ignore-missing; then ok "shasum -a 256 -c SHA256SUMS.txt"; else bad "SHA256SUMS.txt does not match the downloads"; fi
+
+          # 2. the update manifests describe the zip
+          zip_sha512="$(openssl dgst -sha512 -binary Principia-arm64.zip | openssl base64 -A)"
+          zip_size="$(stat -f%z Principia-arm64.zip)"
+          for m in $manifests; do
+            [ -s "$m" ] || continue
+            mv_version="$(sed -n 's/^version: *//p' "$m")"
+            m_path="$(sed -n 's/^path: *//p' "$m")"
+            m_sha="$(sed -n 's/^sha512: *//p' "$m")"
+            m_size="$(sed -n 's/^ *size: *//p' "$m" | head -1)"
+            if [ "$mv_version" = "$version" ] && [ "$m_path" = Principia-arm64.zip ] && [ "$m_sha" = "$zip_sha512" ] && [ "$m_size" = "$zip_size" ]; then
+              ok "$m offers $version with the zip's sha512 and size"
+            else
+              bad "$m does not describe this zip (version '$mv_version', path '$m_path', size '$m_size')"
+            fi
+          done
+
+          # 3. the dmg: Gatekeeper as a notarized Developer ID file, and its stapled ticket. Require the notarized
+          # source explicitly: on a Mac with assessments off, spctl accepts everything ("override=security disabled").
+          out="$(spctl -a -vvv -t open --context context:primary-signature Principia-arm64.dmg 2>&1)"; echo "$out"
+          if grep -q 'source=Notarized Developer ID' <<< "$out" && grep -q ': accepted' <<< "$out"; then ok "spctl accepts the dmg (Notarized Developer ID)"; else bad "spctl does not accept the dmg as notarized: $(tr '\n' ' ' <<< "$out")"; fi
+          if xcrun stapler validate Principia-arm64.dmg; then ok "stapler validate (dmg)"; else bad "the dmg has no valid stapled ticket"; fi
+
+          # 4. the app, as installed from the dmg and as the updater installs it from the zip
+          check_app() { # <label> <path to Principia.app>
+            local label="$1" app="$2" out v
+            if codesign --verify --deep --strict --verbose=2 "$app"; then ok "codesign --verify --deep --strict ($label)"; else bad "codesign --verify --deep --strict fails ($label)"; fi
+            out="$(spctl -a -vvv -t exec "$app" 2>&1)"; echo "$out"
+            if grep -q 'source=Notarized Developer ID' <<< "$out" && grep -q ': accepted' <<< "$out"; then ok "spctl accepts the app ($label)"; else bad "spctl does not accept the app ($label): $(tr '\n' ' ' <<< "$out")"; fi
+            if xcrun stapler validate "$app"; then ok "stapler validate ($label)"; else bad "the app has no valid stapled ticket ($label)"; fi
+            v="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2>/dev/null)"
+            if [ "$v" = "$version" ]; then ok "app version $v ($label)"; else bad "app version is '$v', not $version ($label)"; fi
+          }
+          mnt="$RUNNER_TEMP/principia-dmg"
+          mkdir -p "$mnt"
+          if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" Principia-arm64.dmg > /dev/null; then
+            if [ -d "$mnt/Principia.app" ]; then check_app dmg "$mnt/Principia.app"; else bad "the dmg holds no Principia.app"; fi
+            hdiutil detach "$mnt" -force > /dev/null || true
+          else
+            bad "the dmg does not mount"
+          fi
+          unz="$RUNNER_TEMP/principia-zip"
+          if ditto -x -k Principia-arm64.zip "$unz" && [ -d "$unz/Principia.app" ]; then check_app "updater zip" "$unz/Principia.app"; else bad "the zip does not hold Principia.app"; fi
+
+          # 5. build provenance from this repository's release workflow (releases built by Actions; a release published
+          # from a Mac with npm run release:mac has none, which is reported but not a failure)
+          for f in Principia-arm64.dmg Principia-arm64.zip; do
+            if gh attestation verify "$f" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" > /dev/null; then
+              ok "gh attestation verify $f (signed by $REPO/.github/workflows/release.yml)"
+            elif [ "$author" = "github-actions[bot]" ]; then
+              bad "$f has no valid build-provenance attestation from the release workflow"
+            else
+              echo "::warning::$f has no build-provenance attestation (published by $author, not by the release workflow)"
+              echo "- ! $f: no attestation (published from a Mac, not by Actions)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Open an issue
+        if: failure() && steps.verify.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.verify.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Post-release verification failed for ${TAG:-the latest release}"
+          body="$RUNNER_TEMP/issue.md"
+          {
+            echo "The published download of \`${TAG:-?}\` did not pass verification ([run]($RUN_URL)):"
+            echo
+            sed 's/^/- /' "$RUNNER_TEMP/failures.txt"
+            echo
+            echo "What to do: docs/RELEASING.md §8.1 (pulling a bad release)."
+          } > "$body"
+          existing="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body-file "$body"
+          fi
