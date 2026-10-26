@@ -66,7 +66,7 @@
     "croner": "10.0.1",
     "d3-force": "3.0.0",
     "electron-updater": "6.8.10",
-    "geist": "1.7.2",
+    "geist": "1.8.2",
     "node-pty": "1.1.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
