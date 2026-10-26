@@ -37,6 +37,7 @@ import { SessionLiveHub } from './live/sessionLive'
 import { chatLink, createChatHub } from './chat/wire'
 import { AgentChats } from './chat/agentChat'
 import { createRemote } from './remote/wire'
+import { createBrowser } from './browser/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
@@ -47,6 +48,9 @@ import { SlackService } from './connectors/slack/service'
 import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
 
 applyUserDataOverride()
+// BROWSER.md §2: agents drive the company browser while Principia sits behind other windows. An occluded window must
+// keep rendering: clicks are hit-tested against rendered frames and screenshots need one.
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.setName('Hive')
 // Local minidumps only (<userData>/Crashpad), never uploaded: lets us see why a renderer or GPU process died.
 crashReporter.start({ uploadToServer: false })
@@ -273,6 +277,12 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('forum unavailable', { e: String(e) })
     }
+    // BROWSER.md: the company browser (views, sessions, the agents' 127.0.0.1 endpoint); failure = no browser
+    try {
+      h.browser = createBrowser(h, { mainDir: __dirname })
+    } catch (e) {
+      log.error('company browser unavailable', { e: String(e) })
+    }
     // REMOTE.md: Phone (built idle: no listener until the user turns it on)
     try {
       h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl })
@@ -347,6 +357,7 @@ if (!app.requestSingleInstanceLock()) {
       emit: (e) => h.onEngineEvent(e),
       log,
       gateway: h.gateway ?? undefined,
+      browser: h.browser?.service ?? undefined,
       memory: h.memory ?? undefined,
       live: liveBridge,
       reaper,

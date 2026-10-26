@@ -104,9 +104,11 @@ describe('the main area is only the conversation', () => {
     const off = registerPanelTab({ key: 'browser', label: 'Browser', render: () => createElement('div', null, 'browser here') })
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'agent:agt_julia' }))
-    expect(html).toContain('>Browser<')
+    // the header's Browser button is always there; the slot adds a panel tab of that name
+    const tab = /role="tab"[^>]*>Browser</
+    expect(html).toMatch(tab)
     off()
-    expect(renderToStaticMarkup(createElement(ChatsView, { chat: 'agent:agt_julia' }))).not.toContain('>Browser<')
+    expect(renderToStaticMarkup(createElement(ChatsView, { chat: 'agent:agt_julia' }))).not.toMatch(tab)
   })
 })
 

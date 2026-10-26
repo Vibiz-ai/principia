@@ -114,6 +114,12 @@ const RULES: readonly Rule[] = [
     kinds: ALL,
     text: "The company's connected tools (Notion, Stripe, …) are behind principia_list_tools / principia_call_tool: list them when one could help."
   },
+  // BROWSER.md §3: the company browser
+  {
+    needs: [['browser_navigate']],
+    kinds: ALL,
+    text: "You have a browser in Principia (browser_navigate, browser_snapshot, browser_click, browser_type, browser_screenshot); the founder can watch it beside this chat and take over. Use it to look at websites instead of guessing, and use it rather than any other browser tool or skill. If the founder takes over, browser_wait and try again; do not end your turn. Never type passwords or card numbers or pay without the founder's yes."
+  },
   {
     needs: [['task_report']],
     kinds: ['task'],

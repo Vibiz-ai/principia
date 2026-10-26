@@ -113,6 +113,11 @@ export interface EngineContext {
   /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
   gateway?: { attachment(cwd: string, companyId?: Id | null): McpServerSpec | null }
   /**
+   * BROWSER.md §3: the principia-browser MCP server for one claude / codex spawn of a company (its own token, bound to
+   * that company's browser). null = no company, or the browser is off.
+   */
+  browser?: { attachment(req: { companyId: Id; agent: string; sessionKey: string }): McpServerSpec | null; toolNames(): string[] }
+  /**
    * Company context for one spawn; never global chat context. COMPANY.md §5: with `companyId` it is that company's
    * Passport (passportContextFor); without it, the company of the working directory (older callers).
    */
@@ -423,7 +428,7 @@ export interface LiveBridge {
 /** The hivemem stdio MCP server, as each agent CLI must spawn it. */
 export interface McpServerSpec {
   /** 'hive' = the authoring server (AUTHORING.md §1.1), interactive claude sessions only (PO1, PO7). */
-  name: 'hivemem' | 'hive' | 'principia' | 'principia-forum'
+  name: 'hivemem' | 'hive' | 'principia' | 'principia-forum' | 'principia-browser'
   command: string // process.execPath
   args: string[] // [<abs>/out/main/mcp-memory.js]
   /** ELECTRON_RUN_AS_NODE=1, HIVE_MEM_DB, HIVE_MEM_GRANT, HIVE_MEM_FP. Goes into the MCP config, never the agent env. */

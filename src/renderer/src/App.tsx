@@ -44,6 +44,7 @@ import { WorkflowEditor } from './views/WorkflowEditor'
 import { MarketplaceView } from './views/MarketplaceView'
 import { WorkflowsView } from './views/WorkflowsView'
 import { UsageView } from './views/UsageView'
+import { BrowserDock } from './components/browser/BrowserDock'
 
 type PassportViewState = Extract<ViewState, { name: 'passport' }>
 /**
@@ -112,6 +113,8 @@ export function App(): React.JSX.Element {
         )}
         <StatusBar />
       </main>
+      {/* BROWSER.md §6: the company browser, beside whatever page is open */}
+      {!firstRunFlow && <BrowserDock />}
       <CommandPalette />
       <RunInputsSheet />
       <SiblingOffer />

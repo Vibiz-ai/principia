@@ -87,3 +87,16 @@ describe('principiaOps (PROACTIVE.md §1)', () => {
     expect(principiaOpsReminder('')).toBe('')
   })
 })
+
+describe('principiaOps: the company browser', () => {
+  it('names the browser only when its tools are attached', () => {
+    const without = principiaOps({ tools: ['memory_search'], kind: 'chat' })
+    expect(without).not.toContain('browser')
+    const withB = principiaOps({ tools: ['memory_search', 'mcp__principia-browser__browser_navigate', 'mcp__principia-browser__browser_snapshot'], kind: 'chat' })
+    expect(withB).toContain('You have a browser in Principia')
+    expect(withB).toContain('the founder can watch it')
+    expect(withB).toContain('rather than any other browser tool')
+    expect(approxTokens(withB)).toBeLessThan(600)
+    expect(principiaOps({ tools: ['browser_navigate'], kind: 'task' })).toContain('browser_snapshot')
+  })
+})

@@ -16,6 +16,8 @@
  *   principia://knowledge[?note=<title>]       Knowledge (the company Passport), searching for that note
  *   principia://forum[/join/<code>]            the Forum
  *   principia://home                           Home
+ *   principia://browser[?url=<http(s) url>]    the company browser on the right (opens that page there; nothing is
+ *                                              submitted or sent)
  *
  * Every link may carry `?company=<company id>`: it then opens in that company (a link naming a company this Principia
  * does not have is refused by the caller, never opened somewhere else).
@@ -52,6 +54,7 @@ export type DeepLink = { companyId?: string } & (
   | { kind: 'knowledge'; note?: string }
   | { kind: 'forum'; joinCode?: string }
   | { kind: 'home' }
+  | { kind: 'browser'; url?: string }
 )
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
@@ -66,6 +69,18 @@ function text(v: string | null, max: number): string | undefined {
   // eslint-disable-next-line no-control-regex
   const t = v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
   return t || undefined
+}
+
+/** An http(s) address a browser link may open (no credentials in it), normalized; null = not one. */
+function webUrl(raw: string): string | null {
+  if (raw.length > 1500) return null
+  try {
+    const u = new URL(raw)
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return null
+    return u.href
+  } catch {
+    return null
+  }
 }
 
 /** `stripe`, `Stripe`, `ig` → the catalog id; null = not a tool Principia knows. */
@@ -152,6 +167,12 @@ export function parseDeepLink(raw: unknown): DeepLink | null {
       return a.toLowerCase() === 'join' && b && INVITE.test(b) && !rest.length ? { kind: 'forum', joinCode: b, ...scope } : null
     case 'home':
       return none(1) ? { kind: 'home', ...scope } : null
+    case 'browser': {
+      if (!none(1)) return null
+      const url = q.get('url')
+      if (url === null) return { kind: 'browser', ...scope }
+      return webUrl(url) ? { kind: 'browser', url: webUrl(url)!, ...scope } : null
+    }
     default:
       return null
   }
@@ -187,6 +208,8 @@ export function formatDeepLink(l: DeepLink): string {
       return withQuery(`principia://forum${l.joinCode ? `/join/${enc(l.joinCode)}` : ''}`, { company: c })
     case 'home':
       return withQuery('principia://home', { company: c })
+    case 'browser':
+      return withQuery('principia://browser', { url: l.url, company: c })
   }
 }
 

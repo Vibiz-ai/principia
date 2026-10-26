@@ -30,6 +30,7 @@ import { registerLinearHandlers } from './linear'
 import { registerPlansHandlers } from './plans'
 import { registerChatHandlers } from '../chat/wire'
 import { registerRemoteHandlers } from '../remote/wire'
+import { registerBrowserHandlers } from '../browser/wire'
 
 export function registerAllHandlers(h: Hive): void {
   registerCompanyHandlers(h)
@@ -61,6 +62,7 @@ export function registerAllHandlers(h: Hive): void {
   registerPlansHandlers(h)
   registerChatHandlers(h)
   registerRemoteHandlers(h)
+  registerBrowserHandlers(h)
   const missing = registerMissingAsNotImplemented()
   if (missing.length) log.warn('IPC channels without a handler', { missing })
 }

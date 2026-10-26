@@ -36,6 +36,9 @@ export function deepLinkView(l: DeepLink, o: { nonce: number; taskId?: Id | null
       return { name: 'forum', nonce: o.nonce }
     case 'home':
       return { name: 'home' }
+    case 'browser':
+      // the browser opens beside the current page (state/store openDeepLink); this is where it lands without one
+      return { name: 'chats' }
   }
 }
 
@@ -79,6 +82,16 @@ export function deepLinkLabel(href: string): string | null {
       return 'Open the Forum'
     case 'home':
       return 'Open Home'
+    case 'browser':
+      return l.url ? `Open ${hostLabel(l.url)} in the browser` : 'Open the browser'
+  }
+}
+
+function hostLabel(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return 'the page'
   }
 }
 

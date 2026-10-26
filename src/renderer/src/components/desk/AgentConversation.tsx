@@ -18,6 +18,7 @@ import { navigate, providerLabel, sessionTitle, setCompanyPaused, useStore } fro
 import { useCompanyShortName } from '../../lib/company'
 import { AgentChat, useAgentStatus, useIsCode } from './Desk'
 import { AgentPanel, PanelToggle, SessionPanel, usePanel } from './AgentPanel'
+import { BrowserToggle } from '../browser/BrowserToggle'
 
 export function AgentConversation({ agent, crumb = false, nonce }: { agent: CompanyAgent; crumb?: boolean; nonce?: number }): React.JSX.Element {
   const who = useDeskWho(agent)
@@ -58,6 +59,8 @@ export function AgentConversation({ agent, crumb = false, nonce }: { agent: Comp
           </Button>
         )}
         {chat.session && <ChatModeToggle session={chat.session} focused />}
+        {/* BROWSER.md §6: the company's browser opens beside the conversation; agents use it, you watch and take over */}
+        <BrowserToggle companyId={agent.companyId} />
         <PanelToggle open={panel.open} onToggle={panel.toggle} label={`${who.name}’s panel`} />
       </Toolbar>
       <div ref={area} className={`convo ${panel.docked ? 'has-panel' : ''}`}>
@@ -91,6 +94,7 @@ export function SessionConversation({ session: s, children }: { session: Session
         sub={<span className="convo-title__sub">{custom ? s.title : sessionTitle(s)}{place && s.repoId ? ` · ${place}` : ''}</span>}
       >
         <ChatModeToggle session={s} focused />
+        <BrowserToggle companyId={s.companyId} />
         <PanelToggle open={panel.open} onToggle={panel.toggle} label="this chat’s panel" />
       </Toolbar>
       <div ref={area} className={`convo ${panel.docked ? 'has-panel' : ''}`}>

@@ -12,6 +12,7 @@ import { DEFAULT_ADAPTERS, type Adapter } from './adapters'
 import { Execution, ensureRunDirs } from './executor'
 import { StallMonitor, stallThresholdMs } from './live/stall'
 import { attachGateway, GATEWAY_TOOLS } from '../gateway/attach'
+import { attachForum } from '../forum/attach'
 import { MCP_TOOL_TIMEOUT_MS, agentBrief, claudeSessionMcpAttach, codexSessionMcpAttach, memoryTransport, writeMcpFiles, type McpAttachment } from './memory'
 import { AUTHOR_TOOLS, CODEX_AUTHOR_HINT, authorAttachable } from './authoring'
 import { CHAT_COMPANY_CODEX_HINT, CHAT_COMPANY_HINT, CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
@@ -478,9 +479,27 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
           if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) { writeMcpFiles(mcp.files); gatewayOn = true } }
         }
+        // BROWSER.md §3: the company browser for company panes (claude, codex), its own token
+        let browserTools: string[] = []
+        if (opts.companyId && ctx.browser && (profile.adapter === 'claude' || profile.adapter === 'codex')) {
+          try {
+            const spec = ctx.browser.attachment({ companyId: opts.companyId, agent: profile.adapter === 'codex' ? 'Codex' : 'Claude', sessionKey: `pane:${opts.spawnTag?.HIVE_SPAWN_ID ?? opts.freshAgentSessionId ?? opts.resumeAgentSessionId ?? Date.now().toString(36)}` })
+            const dir = opts.live?.dir ?? authorDir ?? (grant ? grant.spawnDir : null) ?? join(ctx.paths.scratchDir, 'mcp-browser')
+            if (spec) {
+              const att = attachForum(profile.adapter, spec, ctx.browser.toolNames(), mcp, join(dir, 'browser.mcp.json'))
+              if (att) {
+                writeMcpFiles(att.files)
+                mcp = att
+                browserTools = ctx.browser.toolNames()
+              }
+            }
+          } catch (e) {
+            ctx.log.warn('engine: session browser MCP attach failed; no browser for this pane', { error: String(e) })
+          }
+        }
         // PROACTIVE.md §1: the "Use Principia" section, from the tools this pane really has (company panes only)
         const proactive = !!opts.companyId && ctx.getSettings().proactiveAgents !== false && (profile.adapter === 'claude' || profile.adapter === 'codex')
-        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? codexHiveTools ?? listedHiveTools(authorSpec.env ?? {}) : []), ...(gatewayOn ? GATEWAY_TOOLS : [])]
+        const paneTools = [...(memAttached && grant ? grant.toolNames : []), ...(authored && authorSpec ? codexHiveTools ?? listedHiveTools(authorSpec.env ?? {}) : []), ...(gatewayOn ? GATEWAY_TOOLS : []), ...browserTools]
         // Settings → "Track work as tasks" (absent = when it helps)
         const track = ctx.getSettings().trackTasks ?? 'auto'
         const ops = proactive ? principiaOps({ tools: paneTools, kind: authorSpec?.env?.HIVE_TASK_ID ? 'task' : opts.chatBrief?.trim() ? 'chat' : 'session', track }) : ''

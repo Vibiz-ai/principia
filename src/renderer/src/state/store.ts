@@ -648,6 +648,12 @@ export async function openDeepLink(url: string): Promise<boolean> {
     if (multiCompany() && activeCompany() !== seat.companyId) return enterCompany(seat.companyId, { view })
     return navigate(view)
   }
+  // BROWSER.md §6: the company browser opens beside the current page
+  if (link.kind === 'browser') {
+    const { openBrowser } = await import('./browser')
+    openBrowser({ companyId: companyId ?? scopeCompanyId() ?? null, url: link.url ?? null })
+    return true
+  }
   const scope = companyId ?? scopeCompanyId() ?? null
   const taskId = link.kind === 'board' && link.task ? resolveTaskRef(link.task, state.tasks, scope) : null
   if (link.kind === 'board' && link.task && !taskId) toast(`${link.task} isn’t on this company’s board; opening the Board.`)

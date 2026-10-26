@@ -9,6 +9,7 @@ import { CLOUD_REQUEST_SCHEMAS } from './cloud/schemas'
 import { PLANS_REQUEST_SCHEMAS } from './company/plansSchemas'
 import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
 import { REMOTE_REQUEST_SCHEMAS } from './remote/remoteSchemas'
+import { BROWSER_REQUEST_SCHEMAS } from './browser/schemas'
 import { siteOrigin } from '../shared/remote'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
@@ -1008,7 +1009,9 @@ export const REQUEST_SCHEMAS = {
   // CHAT-UI.md §3.2: chat:*
   ...CHAT_REQUEST_SCHEMAS,
   // REMOTE.md: remote:*
-  ...REMOTE_REQUEST_SCHEMAS
+  ...REMOTE_REQUEST_SCHEMAS,
+  // BROWSER.md: browser:*
+  ...BROWSER_REQUEST_SCHEMAS
 } satisfies Record<InvokeChannel, z.ZodType>
 
 export const SEND_SCHEMAS = {

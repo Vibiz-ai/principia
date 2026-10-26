@@ -871,13 +871,32 @@ export class Execution {
           this.ctx.log.warn('engine: forum MCP attach failed; the step keeps the CLI and the fenced block', { stepId, error: String(e) })
         }
       }
+      // BROWSER.md §3: the company browser (its own token, this run's company only)
+      let browserTools: string[] = []
+      if (runnable && this.run.companyId && this.ctx.browser && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
+        try {
+          const spec = this.ctx.browser.attachment({ companyId: this.run.companyId, agent: s.participantLabel ?? s.profile?.name ?? (s.adapterId === 'codex' ? 'Codex' : 'Claude'), sessionKey: `run:${this.run.id}` })
+          if (spec) {
+            const dir = live?.channel?.dir ?? mem?.grant.spawnDir ?? join(this.ctx.paths.runLogsDir, this.run.id)
+            const att = attachForum(s.adapterId, spec, this.ctx.browser.toolNames(), slackMcp ?? mem?.attachment ?? null, join(dir, `${stepId}.browser.mcp.json`))
+            if (att) {
+              writeMcpFiles(att.files)
+              slackMcp = att
+              browserTools = this.ctx.browser.toolNames()
+            }
+          }
+        } catch (e) {
+          this.ctx.log.warn('engine: browser MCP attach failed; the step runs without the browser', { stepId, error: String(e) })
+        }
+      }
       // PROACTIVE.md §1: a board task turn ends with the "Use Principia" section, from the tools this step really has;
       // a resumed turn (its conversation already holds the section) gets a one-line reminder. ORCHESTRATOR.md §1.1: then
       // Principia's own context and the run report contract, on every harness
       const principia = this.withPrincipia(s, stepId, briefed, [
         ...(mem?.attachment ? (mem.servers ?? []).flatMap((x) => x.toolNames) : []),
         ...(forum?.server ? forum.toolNames : []),
-        ...(gatewayOn ? GATEWAY_TOOLS : [])
+        ...(gatewayOn ? GATEWAY_TOOLS : []),
+        ...browserTools
       ])
       const prompt = principia.prompt
       const logDir = join(this.ctx.paths.runLogsDir, this.run.id)
