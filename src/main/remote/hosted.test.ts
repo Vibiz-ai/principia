@@ -311,7 +311,7 @@ describe('RemoteService, hosted mode (RA6)', () => {
     expect(local.site).toBeNull()
     await svc.setEnabled(false)
   })
-  it('the site origin gets a token; Revoke and Turn off sign the bearer out', async () => {
+  it('the site origin gets a token; Revoke and Sign out all phones sign the bearer out; Turn off does not', async () => {
     const svc = new RemoteService({ host, bundleDir: null, emit: () => undefined, tunnel: { bin: () => null }, site: () => SITE })
     const on = await svc.setEnabled(true)
     const code = new URL(svc.pairLink().link).hash.match(/code=([0-9a-f]{32})/)![1]
@@ -320,11 +320,13 @@ describe('RemoteService, hosted mode (RA6)', () => {
     const me = () => fetch(`${on.localUrl}/api/sign-out`, { method: 'POST', headers: { origin: SITE, authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}' })
     svc.revoke(device.id)
     expect((await me()).status).toBe(401)
-    // pair again, then Turn off: every token dies
+    // pair again, then Turn off: the token survives (RA2); Sign out all phones kills it
     const code2 = new URL(svc.pairLink().link).hash.match(/code=([0-9a-f]{32})/)![1]
     const r2 = await fetch(`${on.localUrl}/api/pair`, { method: 'POST', headers: { origin: SITE, 'content-type': 'application/json' }, body: JSON.stringify({ code: code2, name: 'iPhone' }) })
     const t2 = ((await r2.json()) as { token: string }).token
     await svc.setEnabled(false)
+    expect(svc.auth.verify(t2)).not.toBeNull()
+    expect(svc.signOutAll().devices).toEqual([])
     expect(svc.auth.verify(t2)).toBeNull()
   })
 })

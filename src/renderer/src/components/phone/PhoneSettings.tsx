@@ -1,12 +1,14 @@
 /**
  * Settings › App › Phone (REMOTE.md): one switch for the server on this Mac, one button for the tunnel, a QR code with
- * a one-time link, and the paired phones with Revoke. Plain words about what it opens and what it never does.
+ * a one-time link, and the paired phones (kept across restarts) with Revoke and Sign out all phones. RA8: "Turn Phone
+ * on when Principia starts", and the Mac's new address for phones that are already paired. Plain words about what it
+ * opens and what it never does.
  */
 import { useEffect, useState } from 'react'
-import { PHONE_SITE_URL, phoneSiteOrigin, siteOrigin, type RemotePairLink } from '@shared/remote'
+import { moveLinkFor, PHONE_SITE_URL, phoneSiteOrigin, siteOrigin, tunnelWords, type RemotePairLink } from '@shared/remote'
 import { Button, RelativeTime, Switch } from '../ui'
 import { QrCode } from '../cloud/bits'
-import { hive } from '../../lib/hive'
+import { confirmNative, hive } from '../../lib/hive'
 import { attempt, toast, updateSettings, useStore } from '../../state/store'
 import { setRemote, useRemote } from '../../state/remote'
 import '../../styles/cloud.css'
@@ -50,6 +52,19 @@ export function PhoneSettings(): React.JSX.Element {
       return s
     })
   const secs = link ? Math.max(0, Math.round((Date.parse(link.expiresAt) - now) / 1000)) : 0
+  const devices = st?.devices ?? []
+  const signOutAll = async (): Promise<void> => {
+    const ok = await confirmNative({ message: `Sign out ${devices.length === 1 ? 'your phone' : `all ${devices.length} phones`}?`, detail: 'Each phone has to scan a new code to get back in.', confirmLabel: 'Sign Out', destructive: true })
+    if (ok) await run(() => hive.remote.signOutAll())
+  }
+  const setAutoStart = (v: boolean): Promise<void> =>
+    run(async () => {
+      await updateSettings({ phoneAutoStart: v })
+      return hive.remote.state()
+    })
+  // RA8: a paired phone whose Mac moved (a new quick-tunnel address after a restart) takes these words or this link
+  const words = tunnel.state === 'on' ? tunnelWords(tunnel.url) : null
+  const moveLink = tunnel.state === 'on' && tunnel.url && site ? moveLinkFor({ site, mac: tunnel.url }) : null
   return (
     <>
       <div className="s5">
@@ -60,7 +75,7 @@ export function PhoneSettings(): React.JSX.Element {
         <div className="srow">
           <div className="srow__text">
             <div>Phone</div>
-            <div className="srow__desc">{on ? `On. A small server runs on this Mac only (${st?.localUrl ?? ''}).` : 'Off. Nothing on this Mac listens for your phone.'}</div>
+            <div className="srow__desc">{on ? `On. A small server runs on this Mac only (${st?.localUrl ?? ''}).` : `Off. Nothing on this Mac listens for your phone.${devices.length ? ' Paired phones stay paired and get back in when Phone is on again.' : ''}`}</div>
           </div>
           <div className="srow__ctl">
             <Switch checked={on} disabled={busy} onChange={(v) => void toggle(v)} label="Phone" />
@@ -91,6 +106,15 @@ export function PhoneSettings(): React.JSX.Element {
             </div>
           </div>
         )}
+        <div className="srow">
+          <div className="srow__text">
+            <div>Turn Phone on when Principia starts</div>
+            <div className="srow__desc">Phone and its tunnel come back by themselves after a restart or an update, so paired phones get back in without a new code. On by default once a phone is paired.</div>
+          </div>
+          <div className="srow__ctl">
+            <Switch checked={!!st?.autoStart} disabled={busy} onChange={(v) => void setAutoStart(v)} label="Turn Phone on when Principia starts" />
+          </div>
+        </div>
         <PhoneSiteRow />
       </div>
 
@@ -128,17 +152,17 @@ export function PhoneSettings(): React.JSX.Element {
         </div>
       )}
 
-      {on && (
+      {(on || devices.length > 0) && (
         <div className="sgroup">
           <div className="sgroup__title">Paired phones</div>
-          {!st?.devices.length ? (
+          {!devices.length ? (
             <div className="srow">
               <div className="srow__text">
                 <div className="srow__desc">No phone yet.</div>
               </div>
             </div>
           ) : (
-            st.devices.map((d) => (
+            devices.map((d) => (
               <div className="srow" key={d.id}>
                 <div className="srow__text">
                   <div>
@@ -156,13 +180,52 @@ export function PhoneSettings(): React.JSX.Element {
               </div>
             ))
           )}
+          {devices.length > 0 && words && (
+            <div className="phone-pair">
+              {moveLink ? <QrCode text={moveLink} size={132} /> : null}
+              <div className="phone-pair__text">
+                <p>A phone that says it cannot reach this Mac (its address changes when Principia restarts): type these words in it, or scan this with its camera. No new code: it is still paired.</p>
+                <p>
+                  <strong className="selectable">{words}</strong>
+                </p>
+                {moveLink && (
+                  <div className="phone-pair__btns">
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        void attempt(async () => {
+                          await hive.clipboard.writeText({ text: moveLink })
+                          toast('Link copied. Only a phone paired with this Mac can use it.')
+                        })
+                      }
+                    >
+                      Copy the new address
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {devices.length > 0 && (
+            <div className="srow">
+              <div className="srow__text">
+                <div className="srow__desc">Signs every phone out. Each has to scan a new code to get back in.</div>
+              </div>
+              <div className="srow__ctl">
+                <Button size="sm" disabled={busy} onClick={() => void signOutAll()}>
+                  Sign out all phones
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       <div className="sgroup phone-facts">
         <div className="sgroup__title">What it opens</div>
         <ul>
-          <li>Off by default, and off again every time Principia starts. Turning it off signs every phone out.</li>
+          <li>Off until you turn it on. Once a phone is paired, it comes back on when Principia starts (you can turn that off above).</li>
+          <li>Paired phones stay paired across restarts and updates. This Mac keeps only a fingerprint of each phone’s key, never the key. A phone unused for 90 days is signed out; Revoke or Sign out all phones signs out at once.</li>
           <li>The server listens on this Mac only (127.0.0.1). The tunnel is outbound, and only while it is on.</li>
           <li>From the phone: watch, answer, approve, send back, pause a company, chat. Never settings, keys, shell commands, repositories, workflows, deleting or spending.</li>
           <li>The phone app address is only a page: it keeps no data. Everything it shows comes from this Mac, and only a paired phone gets in.</li>

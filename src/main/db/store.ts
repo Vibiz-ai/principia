@@ -84,6 +84,8 @@ export const DEFAULT_SETTINGS: Settings = {
   marketplaceUrl: null,
   // REMOTE.md RA6: null = the official phone app address
   phoneSiteUrl: null,
+  // REMOTE.md RA8: null = on once a phone is paired
+  phoneAutoStart: null,
   // COMPANY.md §8.6 (UI state) and §6 (guards warn while experimental.companies is off)
   activeCompanyId: 'all',
   expandedCompanies: {},

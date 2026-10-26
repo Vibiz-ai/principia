@@ -15,6 +15,17 @@ export const REMOTE_PAIR_TTL_MS = 5 * 60_000
 /** RA2: pairing tries per minute, across all callers */
 export const REMOTE_PAIR_PER_MINUTE = 5
 export const REMOTE_LIMITS = { name: 60, text: 8000, answer: 4000 } as const
+/** RA2: a device token lives 90 days after its last use (each use pushes it out) */
+export const REMOTE_TOKEN_TTL_MS = 90 * 24 * 60 * 60_000
+/** RA2: after a rotation the old token still works this long, so a lost answer never signs the phone out */
+export const REMOTE_ROTATE_GRACE_MS = 2 * 60_000
+
+/**
+ * RA8: "Turn Phone on when Principia starts". null/undefined (never set): on once at least one phone is paired, else off.
+ */
+export function phoneAutoStartOn(setting: boolean | null | undefined, paired: number): boolean {
+  return typeof setting === 'boolean' ? setting : paired > 0
+}
 
 // ---------- hosted mode (REMOTE.md RA6): the phone app on its own https site, talking to this Mac cross-origin ----------
 
@@ -74,6 +85,63 @@ export function parsePairHash(hash: string): { code: string; mac: string | null 
   return mac ? { code, mac } : null
 }
 
+// ---------- a new address for a paired phone (REMOTE.md RA8) ----------
+
+/**
+ * What the Mac signs to prove it is the Mac a paired phone knows, at the address the phone is calling. The key is the
+ * SHA-256 (hex) of the phone's token: the Mac keeps only that, the phone can compute it, nobody else has it. The origin
+ * binds the proof to the address the phone asked, so a look-alike address that relays to the real Mac gets a proof
+ * the phone refuses (the real Mac signs its own address).
+ */
+export function helloMessage(origin: string, nonce: string): string {
+  return `principia-hello-v1|${origin.replace(/\/+$/, '').toLowerCase()}|${nonce}`
+}
+export const HELLO_NONCE_RE = /^[A-Za-z0-9_-]{22,128}$/
+/** quick-tunnel words ("quiet-tree-forty-two") -> their https origin */
+const TUNNEL_SUFFIX = '.trycloudflare.com'
+/**
+ * The link the Mac shows a paired phone after its address changed: `<site>/#move=<this Mac's address>`. It carries
+ * no code and no secret: the phone only goes there after the Mac there proves it knows this phone (helloMessage).
+ */
+export function moveLinkFor(o: { site: string; mac: string }): string {
+  return `${o.site}/#move=${encodeURIComponent(o.mac.replace(/\/+$/, ''))}`
+}
+/** `#move=<mac>` -> the Mac's origin, or null */
+export function parseMoveHash(hash: string): string | null {
+  const q = new URLSearchParams(hash.replace(/^#\/?/, ''))
+  return q.has('move') ? siteOrigin(q.get('move')) : null
+}
+/** A quick tunnel's words, shown on the Mac to type on the phone: `https://quiet-tree.trycloudflare.com` -> `quiet-tree`. */
+export function tunnelWords(url: string | null | undefined): string | null {
+  const o = siteOrigin(url)
+  if (!o) return null
+  const host = new URL(o).hostname
+  return host.endsWith(TUNNEL_SUFFIX) ? host.slice(0, -TUNNEL_SUFFIX.length) : null
+}
+/**
+ * What the phone's "New address" field accepts: the move link of this site (or its `#move=…` part), a Mac address
+ * (https), or the tunnel's words ("quiet tree forty two" / "quiet-tree-forty-two"). Returns the Mac's origin, or null.
+ */
+export function macFromTyped(text: string, siteOriginNow: string | null): string | null {
+  const t = String(text ?? '').trim()
+  if (!t || t.length > 2048) return null
+  const i = t.indexOf('#')
+  if (i >= 0) {
+    if (i > 0) {
+      try {
+        if (new URL(t).origin !== siteOriginNow) return null
+      } catch {
+        return null
+      }
+    }
+    return parseMoveHash(t.slice(i))
+  }
+  if (/^https?:\/\//i.test(t)) return siteOrigin(t)
+  const words = t.toLowerCase().replace(/\.trycloudflare\.com\/?$/, '').replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+  if (!/^[a-z0-9]+(-[a-z0-9]+){1,9}$/.test(words) || words.length > 63) return null
+  return `https://${words}${TUNNEL_SUFFIX}`
+}
+
 // ---------- desktop (Settings › App › Phone) ----------
 
 export interface RemoteDevice {
@@ -90,7 +158,10 @@ export interface RemoteState {
   /** `http://127.0.0.1:<port>` while on */
   localUrl: string | null
   tunnel: { state: RemoteTunnelState; url: string | null; message: string | null }
+  /** every paired phone (kept across restarts), whether Phone is on or off */
   devices: RemoteDevice[]
+  /** RA8: Phone and its tunnel turn on by themselves when Principia starts (the setting, or its default) */
+  autoStart?: boolean
 }
 export interface RemotePairLink {
   /** `<url>/#pair=<code>`: the code is in the fragment, never sent to a server log */
@@ -108,8 +179,10 @@ export interface RemoteInvokeMap {
   'remote:tunnel': [{ on: boolean }, RemoteState]
   'remote:pairLink': [V, RemotePairLink]
   'remote:revoke': [{ id: Id }, RemoteState]
+  /** RA2: every paired phone is signed out (each must pair again) */
+  'remote:signOutAll': [V, RemoteState]
 }
-export const REMOTE_CHANNELS = ['remote:state', 'remote:setEnabled', 'remote:tunnel', 'remote:pairLink', 'remote:revoke'] as const satisfies readonly (keyof RemoteInvokeMap)[]
+export const REMOTE_CHANNELS = ['remote:state', 'remote:setEnabled', 'remote:tunnel', 'remote:pairLink', 'remote:revoke', 'remote:signOutAll'] as const satisfies readonly (keyof RemoteInvokeMap)[]
 export interface RemoteEventMap {
   'remote:changed': RemoteState
 }
@@ -126,6 +199,10 @@ export function remoteStatusLine(s: Pick<RemoteState, 'enabled' | 'devices'> | n
 
 export const REMOTE_ROUTES = {
   pair: 'POST /api/pair',
+  /** RA8: no token; the Mac proves it knows a paired phone at this address (helloMessage) */
+  hello: 'POST /api/hello',
+  /** RA2: the phone came back: a new token for the one it holds (the old one works for REMOTE_ROTATE_GRACE_MS) */
+  resume: 'POST /api/resume',
   me: 'GET /api/me',
   signOut: 'POST /api/sign-out',
   now: 'GET /api/c/:companyId/now',
@@ -347,6 +424,20 @@ export interface PhonePairResponse {
   device: { id: Id; name: string }
   token?: string
 }
+/** POST /api/hello */
+export interface PhoneHelloRequest {
+  device: Id
+  nonce: string
+}
+export interface PhoneHelloResponse {
+  /** hex HMAC-SHA256(key = sha256hex(token), helloMessage(the address called, nonce)) */
+  proof: string
+}
+/** POST /api/resume: hosted mode gets the new token in the body; the Mac's own page gets a new cookie */
+export interface PhoneResumeResponse {
+  token?: string
+  expiresAt: string
+}
 export interface PhoneAnswerRequest {
   optionId?: string
   text?: string
@@ -382,5 +473,5 @@ export type PhoneServerMsg =
   | { t: 'chat'; sessionId: Id; seq: number; ops: ChatOp[] }
   /** a new message in the subscribed room channel */
   | { t: 'room'; message: PhoneRoomMessage }
-  /** the Mac turned Phone off, or this device was revoked */
+  /** this device was revoked (or every phone signed out). 'off' is no longer sent: turning Phone off keeps phones paired */
   | { t: 'bye'; reason: 'off' | 'revoked' }

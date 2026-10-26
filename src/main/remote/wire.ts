@@ -10,12 +10,14 @@ import { HiveError } from '../../shared/errors'
 import type { InvokeReq, InvokeRes } from '../../shared/ipc'
 import { phoneSiteOrigin, type RemoteState } from '../../shared/remote'
 import { PHONE_CHANNELS, type PhoneChannel, type PhoneHost } from './api'
+import type { DB } from '../db'
+import { SqliteDeviceStore } from './devices'
 import { RemoteService } from './service'
 import { findCloudflared } from './tunnel'
 
 const allowed = new Set<string>(PHONE_CHANNELS)
 
-export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined }): RemoteService {
+export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined }): RemoteService {
   const host: PhoneHost = {
     invoke: <C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> => {
       // defense in depth: the type already limits the list
@@ -32,6 +34,9 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
     tunnel: { bin: () => findCloudflared(o.envPath()) },
     // RA6: read each time, so a new Phone app address applies to the next code and request
     site: () => phoneSiteOrigin(o.siteSetting?.()),
+    // RA2: paired phones survive restarts (token hashes only)
+    devices: o.db ? new SqliteDeviceStore(o.db) : undefined,
+    autoStart: o.autoStartSetting,
     log
   })
 }
@@ -50,9 +55,10 @@ export function registerRemoteHandlers(h: Hive): void {
       throw e
     }
   }
-  handle('remote:state', (): RemoteState => (h.remote ? h.remote.state() : { enabled: false, localUrl: null, tunnel: { state: 'off', url: null, message: null }, devices: [] }))
+  handle('remote:state', (): RemoteState => (h.remote ? h.remote.state() : { enabled: false, localUrl: null, tunnel: { state: 'off', url: null, message: null }, devices: [], autoStart: false }))
   handle('remote:setEnabled', ({ on }) => wrap(() => svc().setEnabled(on)))
   handle('remote:tunnel', ({ on }) => wrap(() => svc().setTunnel(on)))
   handle('remote:pairLink', () => wrap(() => svc().pairLink()))
   handle('remote:revoke', ({ id }) => svc().revoke(id))
+  handle('remote:signOutAll', () => svc().signOutAll())
 }

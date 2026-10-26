@@ -218,3 +218,6 @@
 .chat-stamp { align-self: center; margin: 14px 0 2px; font-size: 11px; color: var(--text-tertiary); letter-spacing: 0.01em; }
 .chat-pane--agent .chat-col { line-height: 1.6; }
 .chat-text .dgm-md h1, .chat-text .dgm-md .dgm-md__h1 { font-size: 17px; }
+/* drop images or files anywhere on the conversation */
+.chat-pane.is-dropping .chat-scroll { opacity: 0.55; }
+.chat-drop { position: absolute; inset: 10px; z-index: 6; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1.5px dashed rgba(255, 255, 255, 0.45); border-radius: 14px; background: rgba(15, 18, 19, 0.72); color: var(--text-primary); font-size: 13px; pointer-events: none; }

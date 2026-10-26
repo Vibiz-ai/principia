@@ -586,6 +586,11 @@ export interface Settings {
    * Mac's own page).
    */
   phoneSiteUrl?: string | null
+  /**
+   * REMOTE.md RA8: "Turn Phone on when Principia starts" (Phone and its tunnel). null (default): on once at least one
+   * phone is paired, off otherwise.
+   */
+  phoneAutoStart?: boolean | null
   /** COMPANY.md §1.3, §8.6: the renderer's active company (UI state only; main never reads it). Default 'all'. */
   activeCompanyId?: Id | 'all'
   /** COMPANY.md §8.3: All-mode sidebar groups, companyId -> expanded. Missing = default (expanded). */

@@ -766,3 +766,23 @@ CREATE TABLE IF NOT EXISTS orch_usage (           -- (M) Principia's own cheap c
 );
 CREATE INDEX IF NOT EXISTS orch_usage_company ON orch_usage(company_id, at);
 `
+
+/**
+ * REMOTE.md RA2: the paired phones, kept across restarts. Only the SHA-256 of a device token is stored (never the token);
+ * prev_hash is the token before the last rotation, accepted until prev_until (a lost answer never signs a phone out).
+ * Revoke and "Sign out all phones" set revoked_at and clear both hashes. Still schema v2 (older builds ignore it).
+ */
+export const DDL_PHONE = /* sql */ `
+CREATE TABLE IF NOT EXISTS phone_devices (        -- (M)
+  id           TEXT PRIMARY KEY,                  -- 'dev_…'
+  name         TEXT NOT NULL,
+  token_hash   TEXT,                              -- sha256(token), hex; NULL once revoked
+  prev_hash    TEXT,
+  prev_until   TEXT,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT,
+  expires_at   TEXT NOT NULL,                     -- last use + 90 days
+  revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS phone_devices_active ON phone_devices(revoked_at);
+`

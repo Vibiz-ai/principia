@@ -5,14 +5,16 @@ continue a chat, message an agent, talk in the team room. Everything else stays 
 
 ## RA1. Amends SPEC A1 ("zero TCP listeners")
 
-- **Off by default.** With Phone off (every launch starts off), Principia opens no listener and starts no process for it.
-  The CONTRACT §9 `lsof -iTCP -sTCP:LISTEN` check stays empty.
+- **Off by default.** With Phone off, Principia opens no listener and starts no process for it. The CONTRACT §9
+  `lsof -iTCP -sTCP:LISTEN` check stays empty. Once a phone is paired, "Turn Phone on when Principia starts" (RA8,
+  default on from then) turns the server and the tunnel on at launch; with it off, every launch starts off as before.
 - **On** (Settings › App › Phone, one switch): main starts one HTTP + WebSocket server bound to **127.0.0.1 only**, on a
   random port. Nothing on the network can reach it directly.
 - **Reach it from the phone** (one button, "Share over the internet"): Principia runs `cloudflared tunnel --url
   http://127.0.0.1:<port>` (a quick tunnel: outbound only, a random `https://….trycloudflare.com` address). If
   `cloudflared` is not installed, the page says `brew install cloudflared`. Principia never downloads it.
-- **Turn off** stops the tunnel and the server, closes every socket and ends every phone session. Quitting does the same.
+- **Turn off** stops the tunnel and the server and closes every socket. Quitting does the same. Paired phones stay
+  paired (RA2): they get back in when Phone is on again. Signing them out is its own action (Sign out all phones).
 - The tunnel is the only outbound traffic Phone adds, and only while it is on. While it runs, `cloudflared` also opens
   its own metrics listener on `localhost` (20241-20245 by default), loopback only, and it closes with the tunnel.
 - An address `cloudflared` prints in an error line (`https://api.trycloudflare.com`, its own service) is never taken as
@@ -23,15 +25,24 @@ continue a chat, message an agent, talk in the team room. Everything else stays 
 - **Pair a phone**: the Mac shows a QR code and a link `<url>/#pair=<code>`. The code is random (128 bits), lives
   5 minutes and works once. Only the newest code works: New code cancels the earlier ones. It is in the URL fragment, so it never reaches a server log or the tunnel.
 - The phone sends the code with a name ("My iPhone"), and gets a **device token** (256 bits) in an `httpOnly`,
-  `Secure`, `SameSite=Strict` cookie. Only the SHA-256 of the token is kept, in memory: turning Phone off (or quitting)
-  signs every phone out.
+  `Secure`, `SameSite=Strict` cookie. Only the SHA-256 of the token is kept, in hive.db (`phone_devices`: id, name,
+  token hash, the previous hash and its grace, created, last seen, expires, revoked), so a phone stays paired across
+  restarts and updates. The raw token is never written anywhere on the Mac (a test greps the database file).
+- **Expiry.** A token lives 90 days after its last use; every request pushes it out (last seen is written at most once
+  a minute). A phone unused for 90 days is signed out, and its hashes leave the disk at the next start.
+- **Rotation on resume.** When the phone app opens it calls `POST /api/resume`: the Mac swaps the token for a new one
+  (hosted: in the body; the Mac's own page: a new cookie). The old one works for 2 more minutes, and only until the new
+  one is first used, so a lost answer never signs the phone out. The iPhone app (RA7) does not rotate yet; its token
+  still expires 90 days after its last use.
 - Writes need the CSRF header (`x-principia-csrf`, from `GET /api/me`, bound to the device). The WebSocket checks the
   cookie and the `Origin`.
 - Wrong codes are rate limited per caller (5 a minute; through the tunnel the caller is Cloudflare's
   `CF-Connecting-IP`), with a ceiling of 60 a minute across everyone. A live code always pairs, so someone who found
   the address cannot lock the founder out by sending junk. A wrong or used code says "This link expired".
 - Hosted mode (RA6) carries the same token as a bearer header instead of a cookie.
-- Settings lists every device with its last use and a **Revoke** button; revoking closes its socket at once.
+- Settings lists every device with its last use and a **Revoke** button; revoking closes its socket at once. **Sign
+  out all phones** does the same for every device. Both set `revoked_at` and clear the hashes in hive.db, so a restart
+  never brings them back. The list shows even while Phone is off.
 - Every request checks the token. Unknown `Host` headers are refused (only `127.0.0.1`, `localhost` and the current
   tunnel host), which stops DNS rebinding.
 
@@ -76,7 +87,7 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
 - **Pairing.** The phone posts the code to the Mac named in the link. The Mac gives the token **in the body** only when
   the request's `Origin` is exactly the configured site; the app keeps it in that site's `localStorage` and sends it as
   `Authorization: Bearer`. There are no cookies (Safari blocks third-party cookies) and no CSRF value (a browser never
-  sends a bearer on its own). The Mac keeps only its SHA-256, in memory, as before. A pairing request from a browser
+  sends a bearer on its own). The Mac keeps only its SHA-256 (in hive.db, RA2), as before. A pairing request from a browser
   page on any other origin (neither the Mac's own page nor the configured site) is refused with 403 **before** the code
   is spent, so no orphan device appears and the same link works once the address is right.
 - **Home Screen app (iPhone).** iOS gives a Home Screen web app its own storage, apart from Safari's, and the camera's
@@ -96,9 +107,10 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
   tunnel, set by Cloudflare's edge; the socket address locally): at most 4 waiting at once and 30 hosted upgrades a
   minute (429 beyond), and when the whole pool (64) is full the oldest waiting socket is closed, never the newcomer. The
   real phone sends its auth within one round trip, so a flood can at worst make it reconnect, never keep it out.
-- **Signed out.** Revoke and Turn off work as before (bye, then close). The app then deletes its token. When the Mac's
-  last address does not answer at all (the quick tunnel stopped or changed), the app keeps the address and says "Scan
-  again on your Mac", with Try again and Forget this Mac.
+- **Signed out.** Revoke and Sign out all phones say bye, then close; the app then deletes its token. Turn off closes
+  the sockets without a bye (1001), so the app keeps its token. When the Mac's last address does not answer at all
+  (Phone off, or a new quick-tunnel address after a restart), the app keeps the token and asks for the Mac's new address
+  (RA8), with Try again and Forget this Mac.
 - **Site headers** (`phone-site/vercel.json`): `default-src 'none'`; scripts, styles, fonts, images and the manifest
   from `'self'` only; `connect-src https://*.trycloudflare.com wss://*.trycloudflare.com` (plus
   `PHONE_SITE_CLOUD_ORIGIN` when set at build time); `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'none'`;
@@ -112,11 +124,11 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
   Mac, which is the authority: it decides who is paired, what a phone can see and do (RA3), and it can sign everyone out.
 - **The token** is on the phone (the site's `localStorage`) and as a hash on the Mac. Anyone who runs script on the
   site's origin could read it, so the site runs none but its own (the CSP above, no third parties, no inline script).
-  Revoke or Turn off makes a copied token worthless at once.
+  Revoke or Sign out all phones makes a copied token worthless at once (Turn off only stops the server until it is on again).
 - **A stolen token is worth what the phone is worth, and that is a lot.** The phone cannot open settings, keys,
   terminals or repositories itself (RA3), but it can message agents, approve their drafts and answer their asks, and
   those agents run shell, git and file tools on the Mac. So a stolen bearer means: prompts to agents that execute code
-  on the Mac, until Revoke or Turn off. Treat it like a signed-in laptop.
+  on the Mac, until Revoke or Sign out all phones (or 90 days unused). Treat it like a signed-in laptop.
 - **A compromised deploy** of the site (anyone who can push to the Vercel project) could read the token from
   `localStorage` and so do all of the above while the tunnel is up. Keep the Vercel project to the owner, with 2FA,
   and deploy only from a reviewed build. The CSP still limits where the page may connect, but `connect-src` allows
@@ -136,11 +148,51 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
 
 ## RA5. Not in v1
 
-A fixed address (a named tunnel or Cloud): a quick tunnel gets a new address each time, so a phone pairs again after
-Phone was turned off. Push notifications. Images from the phone. LAN mode.
+A fixed address (a named tunnel or Cloud, see RA8). Push notifications. Images from the phone. LAN mode.
 
 ## RA7. The native iPhone app
 
 `ios/` holds a native app (SwiftUI, Liquid Glass) that speaks this same API in hosted mode: it names the pairing
 link's site as its `Origin`, keeps the token in the Keychain and sends it as a bearer and as the socket's first
 message. See docs/IOS.md.
+
+## RA8. After a restart: Phone comes back, and a paired phone finds the Mac again
+
+- **"Turn Phone on when Principia starts"** (Settings › App › Phone; `phoneAutoStart`). Unset: on once at least one
+  phone is paired, off while none is. On: at launch Principia turns the server on and asks for the tunnel, exactly as
+  the founder's two clicks would. Off: every launch starts off.
+- **The address problem.** A quick tunnel gets a new random `https://<words>.trycloudflare.com` address each time it
+  starts, and the Mac cannot reach the phone to tell it. The phone still holds a valid token, so what it needs is only
+  the new address, and a way to be sure the new address is its own Mac before it sends that token there.
+- **What we built (option c, made short).** Settings › App › Phone, under Paired phones, shows the tunnel's words
+  (`quiet-tree-forty-two`), a QR code and Copy the new address (`<site>/#move=<the Mac's address>`; no code, no secret).
+  On the phone, the "Waiting for your Mac" screen has one field: type the words (or paste the link, or open it). No new
+  code, no new name, no new token.
+- **Why it is safe.** Before it sends its token to a new address, the phone asks it to prove it is its Mac:
+  `POST /api/hello { device, nonce }` (no token; a fresh random nonce). The Mac answers
+  `HMAC-SHA256(key = sha256hex(token), "principia-hello-v1|<the address it was reached at>|<nonce>")`. Only the Mac
+  (which keeps that hash) and the phone (which can compute it) know the key. The address is taken from the request's
+  Host, already limited to the tunnel host and loopback, so a look-alike address that relays to the real Mac gets a
+  proof for the real address, which the phone refuses. A wrong proof, an unknown device (revoked, expired: "pair
+  again") or no answer never sends the token. Hello is rate limited (20 a minute per caller), refused from a foreign
+  page, and says nothing beyond "known" or "not known" for a random 64-bit device id. The hashes in hive.db could make
+  such a proof, so whoever can read hive.db can pose as this Mac to a paired phone; that person already has the Mac.
+
+### Options we did not build (yet)
+
+- **(a) A named Cloudflare tunnel with a stable hostname.** The founder creates a tunnel in their own Cloudflare account
+  (`cloudflared tunnel create principia`, a DNS route such as `phone.example.com`), and Principia would run
+  `cloudflared tunnel run --token <tunnel token>` instead of a quick tunnel. The address never changes, so nothing has to
+  be found again, and the site's CSP could name that one host instead of `*.trycloudflare.com`. Needs: a domain on
+  Cloudflare, the tunnel token kept with safeStorage like other keys, a Settings field for it and the hostname, and the
+  hosted site built with that host in `connect-src` (`PHONE_SITE_CLOUD_ORIGIN`-style build variable). The best
+  experience for a founder who has a domain; not built because it needs an account and a domain we cannot test here.
+- **(b) A rendezvous on the phone site.** The Mac would publish its current address to a tiny endpoint on the
+  principia-phone site (a Vercel function with a KV store) under `id = HMAC(sha256hex(token), "rdv-id")`, sealed with
+  AES-GCM under `HMAC(sha256hex(token), "rdv-key")`, so the store only ever holds random ids and ciphertext; the phone
+  derives both, fetches, decrypts, and still runs the hello check above before it sends its token. Fully automatic, but
+  it needs a server-side store on the site (today a static site with no data), its own abuse limits and a deploy we
+  cannot exercise from here, and it adds a write path from every Mac to a shared service. Worth doing once the site
+  has a backend (or with Principia Cloud, CLOUD.md §13.2).
+- The iPhone app (RA7) does not have the "new address" field yet: after a restart with a new quick-tunnel address it
+  asks to pair again. It can use the same `POST /api/hello` check.

@@ -101,10 +101,45 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
   }
 
   const elapsed = useElapsed(live ? v.turnStartedAt : null)
+  // drop images or files anywhere on the conversation, not only on the box
+  const dropFiles = useRef<((files: FileList | File[]) => void) | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
+  const hasFiles = (e: React.DragEvent): boolean => Array.from(e.dataTransfer.types).includes('Files')
   const lastText = [...v.items].reverse().find((i) => i.kind === 'text' && !i.streaming)
   return (
     <ChatWho.Provider value={name}>
-    <div className={`chat-pane ${exited ? 'is-exited' : ''} ${who ? 'chat-pane--agent' : ''}`} data-turn={v.turn}>
+    <div
+      className={`chat-pane ${exited ? 'is-exited' : ''} ${who ? 'chat-pane--agent' : ''} ${dragging ? 'is-dropping' : ''}`}
+      data-turn={v.turn}
+      onDragEnter={(e) => {
+        if (!hasFiles(e) || v.mode === 'terminal') return
+        dragDepth.current++
+        setDragging(true)
+      }}
+      onDragOver={(e) => {
+        if (!hasFiles(e) || v.mode === 'terminal') return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (!dragDepth.current) setDragging(false)
+      }}
+      onDrop={(e) => {
+        dragDepth.current = 0
+        setDragging(false)
+        if (!e.dataTransfer.files.length || v.mode === 'terminal') return
+        e.preventDefault()
+        dropFiles.current?.(e.dataTransfer.files)
+      }}
+    >
+      {dragging && (
+        <div className="chat-drop" aria-hidden>
+          <Icon name="plus" size={18} />
+          <span>Drop to attach: images go to {name}, other files are mentioned by their path</span>
+        </div>
+      )}
       <div
         className="chat-scroll"
         ref={scroller}
@@ -181,6 +216,7 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
           onSetMode={(m) => void hive.chat.setPermissionMode({ id: s.id, mode: m as 'default' }).catch((e) => toastError(e, 'Mode'))}
           onSetModel={(m) => void hive.chat.setModel({ id: s.id, model: m }).catch((e) => toastError(e, 'Model'))}
           who={name}
+          dropRef={dropFiles}
         />
       </div>
     </div>

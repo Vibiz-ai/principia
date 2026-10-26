@@ -12,8 +12,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { matchRemoteRoute, REMOTE_AUTH_SCHEME, REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_WS_AUTH_MS, type RemoteRouteName } from '../../shared/remote'
-import { PairError, type RemoteAuth, type StoredDevice } from './auth'
+import { matchRemoteRoute, REMOTE_AUTH_SCHEME, REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_TOKEN_TTL_MS, REMOTE_WS_AUTH_MS, type RemoteRouteName } from '../../shared/remote'
+import { KeyedRateLimit, PairError, type RemoteAuth, type StoredDevice } from './auth'
 
 export class HttpError extends Error {
   constructor(
@@ -57,6 +57,9 @@ const TYPES: Record<string, string> = {
   '.woff2': 'font/woff2'
 }
 const BODY_MAX = 64 * 1024
+/** RA8: hello tries per caller a minute (a phone needs one) */
+export const HELLO_PER_MINUTE = 20
+const cookieFor = (token: string): string => `${REMOTE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${Math.floor(REMOTE_TOKEN_TTL_MS / 1000)}`
 
 /** url path -> absolute file, for every file under the bundle (built once; the request never names a disk path). */
 export function bundleFiles(dir: string | null): Map<string, string> {
@@ -114,6 +117,7 @@ export class RemoteServer {
   /** caller -> times of their recent hosted upgrades (the attempt limit) */
   private upgrades = new Map<string, number[]>()
   private port = 0
+  private hellos = new KeyedRateLimit(HELLO_PER_MINUTE, 60_000)
 
   constructor(private readonly o: RemoteServerOptions) {}
 
@@ -466,8 +470,18 @@ export class RemoteServer {
         const { token, device } = this.o.auth.pair(b?.code, b?.name, this.callerOf(req))
         // RA6: the hosted app (an allowed origin) keeps the token itself and sends it as a bearer; no cookie crosses
         if (this.originAllowed(req.headers.origin)) return this.json(req, res, 200, { device: { id: device.id, name: device.name }, token })
-        const cookie = `${REMOTE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`
-        return this.json(req, res, 200, { device: { id: device.id, name: device.name } }, { 'set-cookie': cookie })
+        return this.json(req, res, 200, { device: { id: device.id, name: device.name } }, { 'set-cookie': cookieFor(token) })
+      }
+      if (route.name === 'hello') {
+        // RA8: a paired phone checks that this address is its Mac before it sends its token here
+        if (this.foreignOrigin(req)) return this.json(req, res, 403, { message: 'Not allowed' })
+        if (!this.hellos.take(this.callerOf(req))) return this.json(req, res, 429, { message: 'Too many tries. Wait a minute.' })
+        const b = (await this.body(req)) as { device?: unknown; nonce?: unknown }
+        // the address the phone called, as this Mac is reached there (the Host is already one of ours)
+        const origin = `${this.secure(req) ? 'https' : 'http'}://${(req.headers.host ?? '').toLowerCase()}`
+        const proof = this.o.auth.helloProof(b?.device, origin, b?.nonce)
+        if (!proof) return this.json(req, res, 404, { message: 'This Mac does not know this phone. Pair it again.' })
+        return this.json(req, res, 200, { proof })
       }
       const who = this.deviceOf(req)
       if (!who) return this.json(req, res, 401, { message: 'Open the pairing link from Principia on your Mac.' })
@@ -480,6 +494,13 @@ export class RemoteServer {
         this.o.auth.revoke(device.id)
         this.closeDevice(device.id)
         return this.json(req, res, 200, { ok: true }, { 'set-cookie': `${REMOTE_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0` })
+      }
+      if (route.name === 'resume') {
+        // RA2: rotate on resume. Hosted: the new token in the body; the Mac's own page: a new cookie
+        const r = this.o.auth.rotate(device.id)
+        if (!r) return this.json(req, res, 401, { message: 'Open the pairing link from Principia on your Mac.' })
+        if (who.bearer) return this.json(req, res, 200, { token: r.token, expiresAt: r.expiresAt })
+        return this.json(req, res, 200, { expiresAt: r.expiresAt }, { 'set-cookie': cookieFor(r.token) })
       }
       // the one query value a route reads (the room's channel); path params always win
       const q = new URL(req.url ?? '/', 'http://x').searchParams.get('channelId')

@@ -9,9 +9,9 @@
  * carries it. The site itself holds no data: everything comes from the Mac, which is the authority.
  */
 import type { ChatOp, ChatSnapshot } from '../../shared/chat'
-import { parsePairHash, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef } from '../../shared/remote'
+import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
-import { forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
+import { checkMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
 import { ChatReplica, placeMessage, deviceName, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
@@ -181,6 +181,63 @@ async function loadMe(): Promise<void> {
       st.route = { companyId: first.id, tab: st.route.tab, open: null }
       history.replaceState(null, '', routeHash(st.route))
     }
+  }
+}
+/**
+ * RA2: rotate on resume. The app opened (or came back to a Mac): the Mac gives a new token for the one this phone
+ * holds (hosted: in the body; the Mac's own page: a new cookie). The old one keeps working for a moment, so a lost
+ * answer never signs the phone out. Once per start.
+ */
+async function resumeToken(): Promise<void> {
+  try {
+    const out = await api.call<PhoneResumeResponse>('resume', { body: {} })
+    if (HOSTED && paired && out.token && /^[A-Za-z0-9_-]{16,200}$/.test(out.token)) {
+      paired = { ...paired, token: out.token }
+      saveMac(store, paired)
+    }
+  } catch {
+    /* the old token still works; next start tries again */
+  }
+}
+/**
+ * RA8: the Mac's address changed (a quick tunnel is new after each restart). The new address must prove it is this
+ * phone's Mac (checkMac: a fresh nonce signed with the token's hash, bound to that address) before the token goes there.
+ */
+async function moveTo(mac: string): Promise<void> {
+  if (!HOSTED || !paired) return
+  if (st.busy.has('move')) return
+  st.busy.add('move')
+  st.pasteError = null
+  render()
+  try {
+    const r = await checkMac((...a) => fetch(...a), mac, paired)
+    if (r !== 'ok') {
+      st.phase = 'out'
+      st.outReason = r === 'unknown' ? 'unpaired' : 'gone'
+      st.pasteError =
+        r === 'unknown'
+          ? 'That Mac does not know this phone any more. Scan a new code on your Mac.'
+          : r === 'gone'
+            ? 'Nothing answers at that address. On your Mac, check that Phone is on and shared, then try again.'
+            : 'That address is not your Mac. Check the words in Settings › App › Phone on your Mac.'
+      if (r === 'unknown') {
+        forgetMac(store)
+        paired = null
+      }
+      return
+    }
+    paired = { ...paired, mac }
+    saveMac(store, paired)
+    live?.close()
+    live = null
+    st.drafts['pair:paste'] = ''
+    history.replaceState(null, '', remembered() ?? '#/')
+    st.route = parseRoute(location.hash)
+    await start()
+    if (st.phase === 'in') say('Connected to your Mac at its new address')
+  } finally {
+    st.busy.delete('move')
+    render()
   }
 }
 const cid = (): Record<string, string> => ({ companyId: companyId() ?? '' })
@@ -491,7 +548,10 @@ const actions: Actions = {
   pasteLink(text) {
     const frag = pastedPairHash(text, location.origin)
     if (!frag) {
-      st.pasteError = 'That is not a pairing link for this app. Copy the whole link from your Mac and paste it again.'
+      // RA8: a phone that is still paired can take the Mac's new address (its words, its link) instead
+      const mac = HOSTED && paired ? macFromTyped(text, location.origin) : null
+      if (mac) return void moveTo(mac)
+      st.pasteError = paired ? 'Type the words your Mac shows under Paired phones, or paste its link.' : 'That is not a pairing link for this app. Copy the whole link from your Mac and paste it again.'
       return render()
     }
     st.pasteError = null
@@ -568,7 +628,7 @@ function render(o: { live?: boolean } = {}): void {
   if (st.phase === 'out') {
     swap($('hdr'), null)
     swap($('tabs'), null)
-    swap(main, renderSignedOut({ reason: st.outReason, hosted: HOSTED, mac: macHost(paired?.mac) || null, error: st.error, standalone: STANDALONE, paste: st.drafts['pair:paste'] ?? '', pasteError: st.pasteError }, actions))
+    swap(main, renderSignedOut({ reason: st.outReason, hosted: HOSTED, mac: macHost(paired?.mac) || null, error: st.error, standalone: STANDALONE, paste: st.drafts['pair:paste'] ?? '', pasteError: st.pasteError, busy: st.busy.has('move') }, actions))
     dock(null)
     return
   }
@@ -787,6 +847,13 @@ async function start(): Promise<void> {
     st.phase = 'pair'
     return render()
   }
+  // RA8: the Mac's "new address" link (#move=…): a paired phone checks it and goes there; nothing else uses it
+  const move = HOSTED ? parseMoveHash(location.hash) : null
+  if (move) {
+    history.replaceState(null, '', remembered() ?? '#/')
+    st.route = parseRoute(location.hash)
+    if (paired) return moveTo(move)
+  }
   // hosted with no Mac kept: nothing to ask, show how to pair
   if (HOSTED && !paired) {
     st.phase = 'out'
@@ -803,6 +870,7 @@ async function start(): Promise<void> {
   try {
     await loadMe()
     st.phase = 'in'
+    void resumeToken()
   } catch (e) {
     if (e instanceof NotPaired) return signedOut('unpaired')
     st.phase = 'out'
@@ -836,6 +904,7 @@ window.addEventListener('hashchange', () => {
     st.phase = 'pair'
     return render()
   }
+  if (HOSTED && parseMoveHash(location.hash)) return void start()
   void onRoute()
 })
 // ticking times ("4m") stay true without a refetch

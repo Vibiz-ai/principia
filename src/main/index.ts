@@ -285,7 +285,9 @@ if (!app.requestSingleInstanceLock()) {
     }
     // REMOTE.md: Phone (built idle: no listener until the user turns it on)
     try {
-      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl })
+      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart })
+      // RA8: paired phones find this Mac again after a restart (when the founder wants it, by default once one is paired)
+      void h.remote.autoStartIfWanted().catch((e) => log.warn('phone did not start at launch', { e: String(e) }))
     } catch (e) {
       log.error('phone unavailable', { e: String(e) })
     }

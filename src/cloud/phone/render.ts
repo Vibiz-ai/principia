@@ -435,6 +435,8 @@ export interface OutView {
   /** hosted: what is in the paste field, and why it was not a pairing link */
   paste?: string
   pasteError?: string | null
+  /** RA8: checking a new address */
+  busy?: boolean
 }
 /**
  * Hosted: the pairing link, pasted. On iPhone a Home Screen app keeps its own storage and the camera's QR always opens
@@ -443,31 +445,37 @@ export interface OutView {
  */
 function pasteField(o: OutView, a: Actions): VNode {
   const read = (el: EventTarget | null): string => ((el as HTMLElement | null)?.closest('.paste')?.querySelector('input') as HTMLInputElement | null)?.value ?? ''
+  // RA8: a phone that is still paired takes the Mac's new address: its words (or its link), no new pairing
+  const moved = o.reason === 'gone'
   return h(
     'div',
     { class: 'paste' },
     h(
       'label',
       { class: 'field' },
-      h('span', null, o.standalone ? 'Paste the pairing link' : 'Or paste the pairing link'),
-      h('input', { class: 'inp', 'data-k': 'pair:paste', value: o.paste ?? '', type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'https://…#mac=…&code=…', on: { input: (e: Event) => a.draft('pair:paste', (e.target as HTMLInputElement).value), keydown: (e: Event) => (e as KeyboardEvent).key === 'Enter' && a.pasteLink(read(e.target)) } })
+      h('span', null, moved ? 'The new address from your Mac' : o.standalone ? 'Paste the pairing link' : 'Or paste the pairing link'),
+      h('input', { class: 'inp', 'data-k': 'pair:paste', value: o.paste ?? '', type: moved ? 'text' : 'url', inputmode: moved ? 'text' : 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: moved ? 'quiet-tree-forty-two' : 'https://…#mac=…&code=…', on: { input: (e: Event) => a.draft('pair:paste', (e.target as HTMLInputElement).value), keydown: (e: Event) => (e as KeyboardEvent).key === 'Enter' && a.pasteLink(read(e.target)) } })
     ),
     o.pasteError ? h('p', { class: 'err' }, o.pasteError) : null,
-    h('button', { type: 'button', class: `btn btn--wide${o.standalone ? ' btn--primary' : ''}`, on: { click: (e: Event) => a.pasteLink(read(e.target)) } }, 'Open the link'),
-    o.standalone ? h('p', { class: 'fine' }, 'On your Mac, Copy link under the code, or long-press the code in the Camera and Copy Link.') : null
+    h('button', { type: 'button', class: `btn btn--wide${o.standalone || moved ? ' btn--primary' : ''}`, disabled: o.busy ? true : undefined, on: { click: (e: Event) => a.pasteLink(read(e.target)) } }, moved ? (o.busy ? 'Checking…' : 'Connect') : 'Open the link'),
+    moved
+      ? h('p', { class: 'fine' }, 'On your Mac: Settings › App › Phone shows its address in words under Paired phones. Type them here. The address must prove it is your Mac before this phone signs in there.')
+      : o.standalone
+        ? h('p', { class: 'fine' }, 'On your Mac, Copy link under the code, or long-press the code in the Camera and Copy Link.')
+        : null
   )
 }
 
 export function renderSignedOut(o: OutView, a: Actions): VNode {
   const line =
     o.reason === 'gone'
-      ? 'Your Mac is not at its last address. Phone may be off there, or its address changed.'
+      ? 'Your Mac is not at its last address. Phone may be off there, or its address changed after a restart. This phone is still paired.'
       : o.reason === 'off'
         ? 'Phone was turned off on your Mac. Turn it on again and scan a new code.'
         : o.reason === 'revoked'
           ? 'This phone was removed on your Mac. Scan a new code to pair it again.'
           : 'On your Mac, open Settings › App › Phone, turn it on and scan the code with this phone.'
-  const head = o.reason === 'gone' ? status('q', 'Scan again on your Mac') : o.reason === 'unpaired' ? status('q', 'Not paired') : status('fail', o.reason === 'off' ? 'Phone is off' : 'Removed on your Mac')
+  const head = o.reason === 'gone' ? status('q', 'Waiting for your Mac') : o.reason === 'unpaired' ? status('q', 'Not paired') : status('fail', o.reason === 'off' ? 'Phone is off' : 'Removed on your Mac')
   return h(
     'section',
     { class: 'pairing' },

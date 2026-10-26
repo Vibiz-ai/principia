@@ -1,9 +1,9 @@
 /**
  * Hosted mode (REMOTE.md RA6): the Mac this phone paired with, kept in this site's localStorage. The address (a quick
  * tunnel's https origin) and the device token; nothing else from the Mac is stored. The Mac keeps only the token's
- * SHA-256, so revoking it there, or turning Phone off, makes this copy worthless at once.
+ * SHA-256, so revoking it there (or Sign out all phones) makes this copy worthless at once. Turning Phone off keeps it.
  */
-import { parsePairHash, siteOrigin } from '../../shared/remote'
+import { helloMessage, parsePairHash, siteOrigin, type PhoneHelloResponse } from '../../shared/remote'
 
 export interface PairedMac {
   /** the Mac's origin, e.g. https://quiet-tree-42.trycloudflare.com */
@@ -82,4 +82,52 @@ export function pastedPairHash(text: string, siteOriginNow: string): string | nu
   const frag = t.slice(i)
   const p = parsePairHash(frag)
   return p && p.mac ? frag : null
+}
+
+// ---------- RA8: the Mac's new address ----------
+
+const enc = new TextEncoder()
+const hex = (b: ArrayBuffer): string => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('')
+export async function sha256Hex(s: string): Promise<string> {
+  return hex(await crypto.subtle.digest('SHA-256', enc.encode(s)))
+}
+/** The proof the real Mac gives at `origin`: HMAC-SHA256 keyed with sha256hex(token) (the Mac keeps only that hash). */
+export async function helloProofFor(token: string, origin: string, nonce: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', enc.encode(await sha256Hex(token)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return hex(await crypto.subtle.sign('HMAC', key, enc.encode(helloMessage(origin, nonce))))
+}
+export function newNonce(): string {
+  const b = crypto.getRandomValues(new Uint8Array(24))
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+export type MacCheck = 'ok' | 'unknown' | 'wrong' | 'gone'
+/**
+ * RA8: is `mac` the Mac this phone is paired with? It must sign a fresh nonce bound to that very address with the
+ * token's hash. The token itself is never sent: a look-alike address (a forged link, a typo, a relay) learns nothing.
+ * ok: go there; unknown: that Mac does not know this phone (pair again); wrong: not our Mac; gone: nothing answers.
+ */
+export async function checkMac(f: typeof fetch, mac: string, p: Pick<PairedMac, 'token' | 'device'>): Promise<MacCheck> {
+  const origin = siteOrigin(mac)
+  if (!origin || !p.device.id) return 'wrong'
+  const nonce = newNonce()
+  let res: Response
+  try {
+    res = await f(`${origin}/api/hello`, {
+      method: 'POST',
+      credentials: 'omit',
+      mode: 'cors',
+      cache: 'no-store',
+      referrerPolicy: 'no-referrer',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ device: p.device.id, nonce })
+    })
+  } catch {
+    return 'gone'
+  }
+  const body = (await res.json().catch(() => null)) as (PhoneHelloResponse & { message?: string }) | null
+  // a dead quick tunnel answers from Cloudflare's edge (HTML), never JSON
+  if (!body || typeof body !== 'object') return res.status >= 500 || res.status === 404 ? 'gone' : 'wrong'
+  if (res.status === 404) return 'unknown'
+  if (!res.ok || typeof body.proof !== 'string') return 'wrong'
+  return body.proof === (await helloProofFor(p.token, origin, nonce)) ? 'ok' : 'wrong'
 }

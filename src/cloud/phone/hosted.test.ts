@@ -179,9 +179,12 @@ describe('pairing and signed-out screens (the landing look)', () => {
     expect(JSON.stringify(v)).toContain('/art/arch.webp')
     expect(textOf(renderPair({ name: 'iPhone', error: 'This link expired.', busy: false, mac: null }, noop))).toContain('Code not accepted')
   })
-  it('the Mac is gone: "Scan again on your Mac", with its last address and Forget', () => {
+  it('the Mac is gone: still paired, it asks for the new address (words), with its last address and Forget', () => {
     const t = textOf(renderSignedOut({ reason: 'gone', hosted: true, mac: 'quiet-tree-42.trycloudflare.com', error: null }, noop))
-    expect(t).toContain('Scan again on your Mac')
+    expect(t).toContain('Waiting for your Mac')
+    expect(t).toContain('still paired')
+    expect(t).toContain('The new address from your Mac')
+    expect(t).toContain('Connect')
     expect(t).toContain('quiet-tree-42.trycloudflare.com')
     expect(t).toContain('Forget this Mac')
     expect(t).toContain('keeps nothing but the key')

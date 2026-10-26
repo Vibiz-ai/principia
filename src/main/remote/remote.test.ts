@@ -95,7 +95,7 @@ function world() {
   const fire = (e: string, p: unknown): void => listeners.forEach((f) => f(e, p))
   return { d, host, fire }
 }
-const dev = { id: 'dev_1', name: 'Phone', hash: 'x'.repeat(64), createdAt: T, lastSeenAt: null }
+const dev = { id: 'dev_1', name: 'Phone', hash: 'x'.repeat(64), createdAt: T, lastSeenAt: null, prevHash: null, prevUntil: null, expiresAt: '2099-01-01T00:00:00.000Z' }
 
 // ---------- auth ----------
 describe('RemoteAuth (RA2)', () => {
@@ -299,7 +299,7 @@ describe('RemoteServer (RA1, RA2)', () => {
 })
 
 describe('RemoteService (RA1: off by default, off closes everything)', () => {
-  it('nothing listens until it is turned on; off closes the port and signs phones out', async () => {
+  it('nothing listens until it is turned on; off closes the port and keeps phones paired', async () => {
     const { host } = world()
     const states: unknown[] = []
     const svc = new RemoteService({ host, bundleDir: null, emit: (s) => states.push(s), tunnel: { bin: () => null } })
@@ -321,7 +321,7 @@ describe('RemoteService (RA1: off by default, off closes everything)', () => {
     expect(t.tunnel.message).toMatch(/brew install cloudflared/)
     const off = await svc.setEnabled(false)
     expect(off.enabled).toBe(false)
-    expect(off.devices).toEqual([])
+    expect(off.devices).toHaveLength(1)
     const refused = await new Promise<boolean>((resolve) => {
       const s = net.connect(port, '127.0.0.1')
       s.on('connect', () => (s.destroy(), resolve(false)))

@@ -8,6 +8,7 @@ import type { ChatImage, ChatMeta, ChatModeOption, ChatTurn } from '@shared/chat
 import { TERMINAL_ONLY_COMMANDS } from '@shared/chat'
 import { Icon } from '../Icon'
 import { hive, nativeMenu } from '../../lib/hive'
+import { toast } from '../../state/store'
 
 const drafts = new Map<string, string>()
 const MAX_IMAGE = 5 * 1024 * 1024
@@ -47,6 +48,34 @@ async function thumbOf(url: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * An image too big for Claude (or in a format it reads poorly) is redrawn: at most 2048 px on its long side, JPEG,
+ * stepping the quality down until it fits. null when it still cannot fit or the file is not an image the page can draw.
+ */
+async function fitImage(f: File): Promise<{ mediaType: ChatImage['mediaType']; data: string } | null> {
+  const url = URL.createObjectURL(f)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    const k = Math.min(1, 2048 / Math.max(img.naturalWidth, img.naturalHeight, 1))
+    const c = document.createElement('canvas')
+    c.width = Math.max(1, Math.round(img.naturalWidth * k))
+    c.height = Math.max(1, Math.round(img.naturalHeight * k))
+    c.getContext('2d')?.drawImage(img, 0, 0, c.width, c.height)
+    for (const q of [0.85, 0.7, 0.55]) {
+      const out = c.toDataURL('image/jpeg', q)
+      const data = out.slice(out.indexOf(',') + 1)
+      if (data.length * 0.75 <= MAX_IMAGE) return { mediaType: 'image/jpeg', data }
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 type Menu = { kind: 'slash' | 'mention'; query: string; start: number; index: number }
 
 export function Composer({
@@ -61,7 +90,8 @@ export function Composer({
   onTerminal,
   onSetMode,
   onSetModel,
-  who = 'Claude'
+  who = 'Claude',
+  dropRef
 }: {
   sessionId: string
   turn: ChatTurn
@@ -76,6 +106,8 @@ export function Composer({
   onSetModel(model: string): void
   /** AGENT CHAT: who answers in this chat ("Vitruvius", "Codex"); default Claude */
   who?: string
+  /** the chat pane hands files dropped anywhere on the conversation to the composer through this */
+  dropRef?: React.MutableRefObject<((files: FileList | File[]) => void) | null>
 }): React.JSX.Element {
   const [text, setTextState] = useState(drafts.get(sessionId) ?? '')
   const [images, setImages] = useState<Attached[]>([])
@@ -154,18 +186,48 @@ export function Composer({
     ta.current?.focus()
   }
 
+  // images attach (a big or HEIC one is redrawn to fit); any other file is mentioned by its path, as @ does
   const addFiles = async (list: FileList | File[]): Promise<void> => {
     const out: Attached[] = []
+    const paths: string[] = []
+    const skipped: string[] = []
     for (const f of Array.from(list)) {
-      if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type) || f.size > MAX_IMAGE) continue
-      const buf = new Uint8Array(await f.arrayBuffer())
-      let bin = ''
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
-      const url = URL.createObjectURL(f)
-      out.push({ mediaType: f.type as ChatImage['mediaType'], data: btoa(bin), url, name: f.name || 'image', thumb: await thumbOf(url) })
+      const name = f.name || 'image'
+      if (f.type.startsWith('image/')) {
+        let img: { mediaType: ChatImage['mediaType']; data: string } | null = null
+        if (/^image\/(png|jpeg|gif|webp)$/.test(f.type) && f.size <= MAX_IMAGE) {
+          const buf = new Uint8Array(await f.arrayBuffer())
+          let bin = ''
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+          img = { mediaType: f.type as ChatImage['mediaType'], data: btoa(bin) }
+        } else img = await fitImage(f)
+        if (!img) {
+          skipped.push(name)
+          continue
+        }
+        const url = URL.createObjectURL(f)
+        out.push({ ...img, url, name, thumb: await thumbOf(url) })
+        continue
+      }
+      const p = hive.pathForFile?.(f as File)
+      if (p) paths.push(/\s/.test(p) ? `@"${p}"` : `@${p}`)
+      else skipped.push(name)
     }
-    if (out.length) setImages((cur) => [...cur, ...out].slice(0, 6))
+    if (out.length) {
+      setImages((cur) => {
+        const all = [...cur, ...out]
+        if (all.length > 6) toast(`Up to 6 images per message: kept the first 6.`)
+        return all.slice(0, 6)
+      })
+    }
+    if (paths.length) {
+      const cur = ta.current?.value ?? text
+      setText(`${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}${paths.join(' ')} `)
+    }
+    if (skipped.length) toast(`Couldn't attach ${skipped.join(', ')}: use a PNG, JPEG, GIF or WebP image.`, 'error')
+    ta.current?.focus()
   }
+  if (dropRef) dropRef.current = (l) => void addFiles(l)
 
   const submit = async (): Promise<void> => {
     const t = text.trim()

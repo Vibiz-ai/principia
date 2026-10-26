@@ -209,6 +209,8 @@ const settingsPatch = z
       .refine((u) => u === '' || siteOrigin(u) === u.replace(/\/+$/, ''), 'Use the site address, like https://phone.example.com')
       .transform((u) => (u === '' ? '' : siteOrigin(u)!))
       .nullable(),
+    // REMOTE.md RA8: null = the default (on once a phone is paired)
+    phoneAutoStart: z.boolean().nullable(),
     // COMPANY.md §8.6: UI state only (main never reads it to decide anything)
     activeCompanyId: z.union([z.literal('all'), id]),
     expandedCompanies: z.record(id, z.boolean()).refine((r) => Object.keys(r).length <= 1000, 'Too many companies'),
