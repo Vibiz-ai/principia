@@ -70,6 +70,8 @@ const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/
 const version = positional[0] ?? (dryRun ? pkg.version : null)
 if (!version) fail('Give the version to release, for example: npm run release:mac -- 0.2.0 (or --dry-run)')
 if (!SEMVER.test(version)) fail(`"${version}" is not a version like 1.2.3`)
+// electron-updater's beta channel offers only -beta prereleases: an -rc or -alpha would publish and never reach anyone
+if (!releaseChannel(version)) fail(`"${version}": the only prerelease the updater offers is -beta (1.2.3-beta.1), not -rc/-alpha`)
 const tag = `v${version}`
 // RELEASING.md §4.1: 1.2.3-beta.1 is a GitHub pre-release on the beta channel (beta-mac.yml only); releases/latest never
 // points at it, so the website's download link and the stable updater feed stay on the newest stable release

@@ -154,7 +154,7 @@ Which files a version publishes (`scripts/update-info.mjs`, tested in `scripts/u
 | Version | GitHub release | Update manifests |
 | --- | --- | --- |
 | `0.3.0` | normal, marked latest | `latest-mac.yml` and `beta-mac.yml` |
-| `0.3.0-beta.1` (any `-prerelease`) | pre-release, never latest | `beta-mac.yml` only |
+| `0.3.0-beta.1` (`-beta` only: `-rc`/`-alpha` are refused, the updater's beta channel never offers them) | pre-release, never latest | `beta-mac.yml` only |
 
 The policy lives in `src/shared/updates.ts` (`updateChannelPolicy`): channel `latest` or `beta`, `allowPrerelease`,
 and `allowDowngrade` always false (electron-updater turns it on whenever the channel is set, so it is set back).

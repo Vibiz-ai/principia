@@ -15,17 +15,22 @@ import path from 'node:path'
 
 export const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
 
-/** 'beta' for a prerelease version (any prerelease tag: beta, rc, ...), 'latest' for a stable one; null if not semver. */
+/**
+ * 'latest' for a stable version, 'beta' for a beta (1.2.3-beta or 1.2.3-beta.N); null for anything else, including
+ * other prereleases (rc, alpha, ...): on the `beta` channel electron-updater's GitHub provider skips every prerelease
+ * whose first identifier is not alpha/beta and moves beta users down to no alpha, so an rc would never reach anyone.
+ */
 export function releaseChannel(version) {
   const m = SEMVER.exec(String(version ?? ''))
   if (!m) return null
-  return m[4] ? 'beta' : 'latest'
+  if (!m[4]) return 'latest'
+  return m[4].split('.')[0] === 'beta' ? 'beta' : null
 }
 
 /** The update manifests a release of `version` publishes (macOS). */
 export function channelFiles(version) {
   const channel = releaseChannel(version)
-  if (!channel) throw new Error(`"${version}" is not a version like 1.2.3 or 1.2.3-beta.1`)
+  if (!channel) throw new Error(`"${version}" is not a version like 1.2.3 or 1.2.3-beta.1 (the only prerelease the updater offers is -beta)`)
   return channel === 'beta' ? ['beta-mac.yml'] : ['latest-mac.yml', 'beta-mac.yml']
 }
 

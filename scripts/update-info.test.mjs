@@ -10,10 +10,15 @@ import { channelFiles, parseUpdateInfo, releaseChannel, sha512Base64File, update
 const require = createRequire(import.meta.url)
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'update-info-'))
 
-test('stable versions go to latest (and beta); any prerelease goes to beta only', () => {
+test('stable versions go to latest (and beta); betas go to beta only; other prereleases are refused', () => {
   assert.equal(releaseChannel('0.3.0'), 'latest')
   assert.equal(releaseChannel('0.3.0-beta.1'), 'beta')
-  assert.equal(releaseChannel('1.0.0-rc.2'), 'beta')
+  assert.equal(releaseChannel('0.3.0-beta'), 'beta')
+  // electron-updater's beta channel never offers these (custom channel) or moves beta users to them (alpha)
+  assert.equal(releaseChannel('1.0.0-rc.2'), null)
+  assert.equal(releaseChannel('1.0.0-alpha.1'), null)
+  assert.equal(releaseChannel('1.0.0-betax.1'), null)
+  assert.throws(() => channelFiles('1.0.0-rc.2'), /only prerelease/)
   assert.equal(releaseChannel('v0.3.0'), null)
   assert.equal(releaseChannel('0.3'), null)
   assert.deepEqual(channelFiles('0.3.0'), ['latest-mac.yml', 'beta-mac.yml'])
