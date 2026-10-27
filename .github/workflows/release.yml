@@ -173,7 +173,7 @@ jobs:
           if [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
           rm -rf "$RUNNER_TEMP/principia-notary" "$RUNNER_TEMP/principia-signing.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
 
-      # verify a download with: gh attestation verify Principia-arm64.dmg -R example-org/principia (RELEASING.md §5.3)
+      # verify a download with: gh attestation verify Principia-arm64.dmg -R Vibiz-ai/principia (RELEASING.md §5.3)
       - name: Attest build provenance of the dmg, zip and checksums
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

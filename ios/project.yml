@@ -8,6 +8,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    # the App Store version; TestFlight builds pass a new CURRENT_PROJECT_VERSION each upload (the CI run number,
+    # scripts/ios-testflight.mjs); "1" is only for local builds
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     # a personal device build: set your own team here or in Xcode (Signing & Capabilities); never commit it
@@ -36,6 +38,10 @@ targets:
         UIAppFonts: [Cinzel-Medium.ttf, Cinzel-SemiBold.ttf]
         NSCameraUsageDescription: Principia uses the camera to scan the pairing code your Mac shows.
         NSFaceIDUsageDescription: Principia can ask for Face ID before it shows your company.
+        NSLocalNetworkUsageDescription: Principia connects to your Mac when its address is on your local network.
+        # only standard HTTPS/TLS (URLSession) and HMAC-SHA256 (CryptoKit, the Mac's hello proof): exempt, no export
+        # compliance documents (docs/IOS.md, TestFlight)
+        ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [remote-notification]
         CFBundleURLTypes:
           - CFBundleURLName: ai.principia.phone.pair
@@ -78,7 +84,26 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.principia.phone.liveuitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Principia
+  PrincipiaDemoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PrincipiaDemoUITests
+    dependencies:
+      - target: Principia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.principia.phone.demouitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Principia
 schemes:
+  PrincipiaDemo:
+    build:
+      targets:
+        Principia: all
+        PrincipiaDemoUITests: [test]
+    test:
+      targets: [PrincipiaDemoUITests]
   PrincipiaLive:
     build:
       targets:

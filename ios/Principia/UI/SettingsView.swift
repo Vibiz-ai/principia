@@ -11,24 +11,32 @@ struct SettingsView: View {
         @Bindable var app = app
         NavigationStack {
             Form {
-                Section {
-                    LabeledContent("Mac", value: app.macHost)
-                    LabeledContent("This phone", value: app.paired?.deviceName ?? "")
-                    if let at = app.paired?.pairedAt {
-                        LabeledContent("Paired", value: at.formatted(date: .abbreviated, time: .shortened))
+                if app.inDemo {
+                    Section {
+                        Button("Leave the demo and pair your Mac") { app.exitDemo(); dismiss() }
+                    } header: { Text("Demo company") } footer: {
+                        Text("You are looking at a sample company that lives only on this phone. Nothing is sent anywhere. Pair your Mac to see your own.")
                     }
-                } header: { Text("Your Mac") } footer: {
-                    Text("This app keeps only the key to your Mac, in the Keychain. Your work stays on the Mac. Revoke this phone there any time: Settings › App › Phone.")
-                }
-                Section {
-                    Button("Disconnect from this Mac", role: .destructive) { confirmForget = true }
-                    if app.online {
-                        Button("Sign out on this phone and the Mac", role: .destructive) { confirmSignOut = true }
+                } else {
+                    Section {
+                        LabeledContent("Mac", value: app.macHost)
+                        LabeledContent("This phone", value: app.paired?.deviceName ?? "")
+                        if let at = app.paired?.pairedAt {
+                            LabeledContent("Paired", value: at.formatted(date: .abbreviated, time: .shortened))
+                        }
+                    } header: { Text("Your Mac") } footer: {
+                        Text("This app keeps only the key to your Mac, in the Keychain. Your work stays on the Mac. Revoke this phone there any time: Settings › App › Phone.")
                     }
-                } footer: {
-                    Text(app.online
-                         ? "Disconnect forgets the Mac on this phone only; the Mac still lists it until you Revoke it there. Sign out also removes this phone on the Mac."
-                         : "Disconnect forgets the Mac on this phone only. Your Mac is not answering now, so it still lists this phone: Revoke it there in Settings › App › Phone.")
+                    Section {
+                        Button("Disconnect from this Mac", role: .destructive) { confirmForget = true }
+                        if app.online {
+                            Button("Sign out on this phone and the Mac", role: .destructive) { confirmSignOut = true }
+                        }
+                    } footer: {
+                        Text(app.online
+                             ? "Disconnect forgets the Mac on this phone only; the Mac still lists it until you Revoke it there. Sign out also removes this phone on the Mac."
+                             : "Disconnect forgets the Mac on this phone only. Your Mac is not answering now, so it still lists this phone: Revoke it there in Settings › App › Phone.")
+                    }
                 }
                 Section {
                     Toggle("Lock with Face ID", isOn: $app.lockEnabled)

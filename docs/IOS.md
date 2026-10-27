@@ -9,12 +9,13 @@ beyond what the web app already uses. SwiftUI, iOS 26, Liquid Glass, no third-pa
 | Path | What |
 |---|---|
 | `project.yml` | XcodeGen project (`xcodegen generate` makes `Principia.xcodeproj`, not committed) |
-| `Principia/Core` | `PairLink` (the `#mac=&code=` link), `APIClient` (routes, bearer, errors), `LiveSocket` (WebSocket, auth first, backoff), `ChatReplica` (the Mac's chat ops, chat lines), `Markdown` (blocks and AttributedString), `MacStore` (Keychain), `MacMove` (RA8: the Mac's new address, the hello proof, what counts as "the Mac is gone"), `Push` (client side) |
+| `Principia/Core` | `PairLink` (the `#mac=&code=` link), `APIClient` (routes, bearer, errors), `LiveSocket` (WebSocket, auth first, backoff), `ChatReplica` (the Mac's chat ops, chat lines), `Markdown` (blocks and AttributedString), `MacStore` (Keychain), `MacMove` (RA8: the Mac's new address, the hello proof, what counts as "the Mac is gone"), `Push` (client side), `DemoMac` (demo mode: the sample company behind the same transport and socket protocols) |
 | `Principia/App` | `AppModel` (state and actions), `PrincipiaApp` |
 | `Principia/UI` | Pair, signed-out and Waiting for your Mac screens, Now, the board (from Now), Needs you, Chats (chat, terminal, agent thread), Team room, Settings |
-| `Principia/Resources` | Cinzel (static Medium and SemiBold instances, OFL), the asset catalog: engravings, persona busts, app icon |
+| `Principia/Resources` | Cinzel (static Medium and SemiBold instances, OFL), the asset catalog: engravings, persona busts, app icon (1024, no alpha); `PrivacyInfo.xcprivacy` |
 | `PrincipiaTests` | Unit tests: link parsing, API client, the board's routes and decoding, socket auth order and reconnects, markdown, chat replica, the Mac's new address (error classification, words and move links, hello proof against the web app's fixture) |
 | `PrincipiaLiveUITests` | UI tests against a real, paired Mac (scheme `PrincipiaLive`, skipped unless told where) |
+| `PrincipiaDemoUITests` | Demo mode end to end, no Mac (scheme `PrincipiaDemo`; `TEST_RUNNER_PRINCIPIA_SHOTS=<folder>` saves each screen) |
 
 `node scripts/ios-assets.mjs` copies the engravings (`src/cloud/phone/public/art`), every bust
 (`src/cloud/console/busts.gen.ts`, as vector SVG) and the arch icon into the asset catalog. Run it when they change.
@@ -119,12 +120,6 @@ The camera does not scan in the simulator (the scan sheet says so); paste the li
    would open Safari), and pair.
 4. Optional: Settings in the app › Lock with Face ID.
 
-### TestFlight (later)
-
-Needs the paid account: an App Store Connect app record for the bundle id, an app icon and privacy answers (the app
-collects nothing; everything stays between the phone and the Mac), then Product › Archive in Xcode and Distribute App ›
-TestFlight. Testers install it from the TestFlight app.
-
 ### Push notifications (deferred)
 
 The client side is wired: Settings › Allow notifications asks iOS, registers with APNs and hands the device token to
@@ -137,6 +132,125 @@ To turn pushes on:
   "something needs you" (no work content: a count and an id, the app fetches the rest from the Mac); the app registers
   its token with the Mac, and the Mac tells the relay when to push;
 - replace `DeferredPushRegistration` with a call to that registration; a tap opens `principia://tab/needs` or the chat.
+
+## Demo mode ("Try it without a Mac")
+
+The first screen offers **Try it without a Mac** under Scan and paste. It opens Northwind, a made-up company that
+lives only in the app's memory: Now (who is working, what finished), the board, Needs you (a command to allow, a page
+to approve, a question with choices), Chats (open "Plan this week" and its reply streams in and finishes; anything
+typed gets an honest, streamed answer), and the Team room. `DEMO` sits next to the company on every tab; tapping it,
+the card on Now, or Settings › Leave the demo returns to the pairing screen. Opening a pairing link from the demo pairs
+as usual and leaves it.
+
+It is `Principia/Core/DemoMac.swift`: a `DemoTransport` (the `HTTPTransport` the real API client uses) and a
+`DemoLiveConnector` (the `LiveConnector` the live socket uses) answer from memory, so every screen runs the real code.
+The demo's address is `https://demo.principia.invalid` (a reserved name that never resolves), nothing goes to the
+Keychain or the last-company preference, and no URLSession or socket is created. `DemoModeTests` checks that the real
+transport and connector are never touched; `PrincipiaDemoUITests` walks it like a reviewer would. Debug builds also
+open it at launch with `SIMCTL_CHILD_PRINCIPIA_DEMO=1`.
+
+## TestFlight
+
+Anyone can install the app from a public TestFlight link before the App Store has it. Apple reviews the first build
+for external testers (Beta App Review, usually within a day or two); the demo mode is what the reviewer uses, since
+they have no Mac to pair.
+
+What is ready in the repository:
+
+- `ITSAppUsesNonExemptEncryption: false` (project.yml, Info.plist): the app uses only standard HTTPS/TLS (URLSession,
+  WebSocket) and HMAC-SHA256 from CryptoKit for the Mac's hello proof. That is exempt, so TestFlight asks no export
+  compliance question.
+- `Principia/Resources/PrivacyInfo.xcprivacy`: no tracking, no collected data (the app talks only to the user's own
+  Mac), and the one required-reason API it uses: UserDefaults (`CA92.1`, its own settings). The Keychain holds the
+  Mac's address and device key.
+- The app icon: `AppIcon.appiconset/icon-1024.png`, 1024 × 1024, no alpha, the white line arch on near-black
+  (`scripts/ios-assets.mjs` makes it from `src/cloud/phone/public/icon.svg`).
+- Permission strings: camera (scan the pairing code), Face ID (the optional lock), local network (a Mac on the same
+  network). Notifications need no string.
+- Versions: `MARKETING_VERSION` in project.yml is the App Store version (0.1.0); the build number
+  (`CURRENT_PROJECT_VERSION`) is the testflight workflow's run number, a new one every upload.
+- `scripts/ios-testflight.mjs` (`npm run release:ios`): `xcodegen generate`, `xcodebuild archive` (Release, generic
+  iOS, automatic signing with `-allowProvisioningUpdates` and the API key), `xcodebuild -exportArchive` with an
+  ExportOptions plist (`method` app-store-connect), then `xcrun altool --upload-app` with the same key. `--dry-run`
+  prints every command with the credentials as placeholders; `--unsigned` archives with `CODE_SIGNING_ALLOWED=NO`
+  (no Apple account; proves the Release build and checks the archive holds the privacy manifest and icons);
+  `--skip-upload` stops at the .ipa. Output goes to `ios/build/testflight` (git-ignored).
+- `.github/workflows/testflight.yml`: by hand (Actions › testflight › Run workflow) or on a tag `ios-vX.Y.Z`, in the
+  `release` environment (it waits for approval), with pinned actions, read-only permissions, a temporary keychain for
+  the certificate Xcode fetches and the key in the runner's temp folder, both deleted at the end.
+- The privacy policy for the app record: `website/public/privacy/index.html`, served at
+  `https://principia-vibiz-deployments.vercel.app/privacy/` once the website is deployed (website/README.md).
+
+### One time: the Apple side
+
+1. **Join the Apple Developer Program** ($99 a year): [developer.apple.com/programs/enroll](https://developer.apple.com/programs/enroll),
+   as an individual or as the company (a company needs its D-U-N-S number). Wait for the approval email.
+2. **Register the bundle id.** [developer.apple.com/account](https://developer.apple.com/account) › Certificates,
+   Identifiers & Profiles › Identifiers › **+** › App IDs › App › Continue. Description `Principia`, Bundle ID
+   **Explicit** `ai.principia.phone`, no capabilities › Continue › Register.
+3. **Create the app record.** [appstoreconnect.apple.com](https://appstoreconnect.apple.com) › Apps › **+** › New App:
+   Platforms iOS, Name `Principia` (if taken, something like `Principia: Company Agents`), Primary Language English
+   (U.S.), Bundle ID `ai.principia.phone`, SKU `principia-ios`, User Access Full Access › Create.
+4. **Privacy.** In the app › App Privacy: Privacy Policy URL
+   `https://principia-vibiz-deployments.vercel.app/privacy/` (deploy the website first so it answers). Data Collection
+   › Get Started › **No, we do not collect data from this app** › Save › Publish.
+5. **The API key.** App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys (the first
+   time, the Account Holder clicks Request Access) › **+** (Generate API Key): name `Principia CI`, access **App
+   Manager** › Generate. Download the `.p8` (only possible once), and note the **Key ID** (in the row) and the
+   **Issuer ID** (above the table). The Mac release can use the same key (docs/RELEASING.md §3.2); if it already has
+   one with a lower role, make this one and replace the three secrets.
+6. **The team id.** developer.apple.com/account › Membership details › **Team ID** (10 characters). Never commit it.
+7. **GitHub secrets**, in the `release` environment (Settings › Environments › release), the same names as the Mac
+   release:
+
+   ```bash
+   gh secret set APPLE_API_KEY_P8 --env release --repo Vibiz-ai/principia < AuthKey_<KEY ID>.p8
+   gh secret set APPLE_API_KEY_ID --env release --repo Vibiz-ai/principia
+   gh secret set APPLE_API_ISSUER --env release --repo Vibiz-ai/principia
+   gh secret set APPLE_TEAM_ID --env release --repo Vibiz-ai/principia
+   ```
+
+If the archive step says the key may not create a certificate or profile, the key's role is too low for Xcode's
+automatic signing on this account: generate one with the **Admin** role and set the three key secrets again.
+
+### Each build: upload
+
+- GitHub: Actions › testflight › Run workflow (on `main`), or tag a version:
+  `git tag ios-v0.1.0 && git push origin ios-v0.1.0` (the tag's version replaces project.yml's). Approve the run in
+  the `release` environment. The build number is the run number.
+- Or from a Mac with the key: `APPLE_TEAM_ID=… APPLE_API_KEY=~/.appstoreconnect/private_keys/AuthKey_<KEY ID>.p8
+  APPLE_API_KEY_ID=… APPLE_API_ISSUER=… npm run release:ios -- --build-number <higher than the last one>`.
+
+App Store Connect › the app › TestFlight shows the build as Processing for 5 to 30 minutes, then Ready to Submit
+(no export compliance question: the plist answers it).
+
+### One time: the public link
+
+1. TestFlight › **Test Information** (left column): Beta App Description (for example "Principia's iPhone app: watch
+   your agents and keep the work going from your phone. Try it without a Mac from the first screen."), Feedback Email,
+   Marketing URL `https://principia-vibiz-deployments.vercel.app`, Privacy Policy URL (as above).
+2. Same page, **Beta App Review Information**: the contact's first and last name, phone and email (the founder's), and
+   **Sign-in required: off**. Review Notes:
+
+   > Principia for iPhone is a remote for the open-source Principia app on the user's own Mac. There is no account and
+   > no server of ours. To review without a Mac, tap "Try it without a Mac" on the first screen: it opens a sample
+   > company that runs entirely on the phone, with no network. Try Now and The board, Needs you (Allow, Approve, the
+   > choices), Chats (open "Plan this week" to see a reply stream in, or type a message), and Team room. "DEMO" at the
+   > top, or Settings › "Leave the demo and pair your Mac", goes back to the pairing screen. Pairing a real Mac needs
+   > Principia for Mac (github.com/Vibiz-ai/principia) with Settings › App › Phone turned on; the camera scans the QR
+   > code it shows. The camera is used only for that code.
+
+3. TestFlight › **External Testing** › **+** › Create a group `Public` › in the group, Builds › **+** › pick the build
+   › What to Test (one or two lines) › Submit for Review.
+4. Once Beta App Review approves it (an email): the `Public` group › **Public Link** › Enable Public Link (optionally a
+   tester limit) › copy `https://testflight.apple.com/join/…`.
+5. Put the link in the README (the `TESTFLIGHT_LINK` placeholder under "Run from your phone") and on the website.
+
+### Each later build
+
+Upload as above, then add it to the `Public` group (or turn on automatic distribution in the group's settings). A new
+build of the same version usually goes out without another full review; a new version may be reviewed again. Testers
+with the TestFlight app get it automatically. Builds expire after 90 days, so upload at least that often.
 
 ## Not in this version
 
