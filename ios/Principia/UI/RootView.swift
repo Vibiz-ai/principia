@@ -91,17 +91,23 @@ struct TopBar: ToolbarContent {
                     Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(Theme.muted)
                 }
                 .padding(.horizontal, 6)
-                .frame(maxWidth: 210)
+                .frame(maxWidth: app.inDemo ? 160 : 210)
             }
             .accessibilityLabel("Company: \(app.company?.name ?? "")")
         }
+        if app.inDemo {
+            // its own item, beside the company: the trailing group keeps Pause and Settings
+            ToolbarItem(placement: .topBarLeading) { DemoBadge() }
+        }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            HStack(spacing: 6) {
-                Tile(kind: app.online ? .ok : .quiet)
-                if !app.online { Text("Offline").font(.caption).foregroundStyle(Theme.faint) }
+            if !app.inDemo {
+                HStack(spacing: 6) {
+                    Tile(kind: app.online ? .ok : .quiet)
+                    if !app.online { Text("Offline").font(.caption).foregroundStyle(Theme.faint) }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(app.online ? "Connected to your Mac" : "Reconnecting")
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(app.online ? "Connected to your Mac" : "Reconnecting")
             if let c = app.company, !c.personal {
                 Button {
                     confirmPause = true
@@ -119,6 +125,48 @@ struct TopBar: ToolbarContent {
             Button { app.showSettings = true } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
         }
+    }
+}
+
+/// "DEMO" on every screen of the sample company; a tap offers the way out to pairing a real Mac.
+struct DemoBadge: View {
+    @Environment(AppModel.self) private var app
+    @State private var ask = false
+    var body: some View {
+        Button { ask = true } label: {
+            Text("DEMO").font(Theme.display(10, semibold: true)).tracking(1.6).foregroundStyle(Theme.ink)
+                .lineLimit(1).fixedSize()
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .overlay(Capsule().stroke(Color.white.opacity(0.45)))
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Demo company")
+        .accessibilityHint("Leave the demo and pair your Mac")
+        .accessibilityIdentifier("demo-badge")
+        .confirmationDialog("This is a sample company", isPresented: $ask, titleVisibility: .visible) {
+            Button("Pair your Mac") { app.exitDemo() }
+            Button("Keep looking", role: .cancel) {}
+        } message: {
+            Text("Everything here is made up and stays on this phone. Pair your Mac to see your own company.")
+        }
+    }
+}
+
+/// The demo's first card on Now: what this is and the way out.
+struct DemoCard: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("DEMO COMPANY").font(Theme.kicker).tracking(2.4).foregroundStyle(Theme.muted)
+            Text("A sample company, on this phone only. Open a chat, answer what needs you, look at the board: nothing is sent anywhere.")
+                .font(.subheadline).foregroundStyle(Theme.soft)
+            Button { app.exitDemo() } label: {
+                Label("Pair your Mac", systemImage: "qrcode.viewfinder").font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.glass)
+        }
+        .glassCard(radius: 20)
     }
 }
 

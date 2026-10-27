@@ -7,6 +7,7 @@ struct NowView: View {
         ScrollView {
             if let n = app.now {
                 VStack(alignment: .leading, spacing: 12) {
+                    if app.inDemo { DemoCard().padding(.top, 4) }
                     Text(n.name).font(Theme.display(30)).foregroundStyle(Theme.ink).padding(.top, 4)
                     Text(Words.headline(working: n.working.count, needs: n.needs, paused: n.paused)).foregroundStyle(Theme.soft)
                     if n.paused {

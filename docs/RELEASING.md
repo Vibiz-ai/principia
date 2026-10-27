@@ -121,7 +121,7 @@ xcrun notarytool store-credentials principia-notary --key <path to .p8> --key-id
 export APPLE_KEYCHAIN_PROFILE=principia-notary
 ```
 
-Also sign in the GitHub CLI with an account that can publish releases on https://github.com/example-org/principia: `gh auth login`.
+Also sign in the GitHub CLI with an account that can publish releases on https://github.com/Vibiz-ai/principia: `gh auth login`.
 
 ## 4. App updates
 
@@ -258,11 +258,11 @@ To make the .p12 (on the Mac that holds the certificate, §3.1):
    file:
 
    ```sh
-   base64 -i ~/Desktop/principia-developer-id.p12 | gh secret set MAC_CERT_P12_BASE64 --env release --repo example-org/principia
-   gh secret set MAC_CERT_PASSWORD --env release --repo example-org/principia          # paste the password when asked
-   gh secret set APPLE_API_KEY_P8 --env release --repo example-org/principia < ~/.appstoreconnect/private_keys/AuthKey_<KEY ID>.p8
-   gh secret set APPLE_API_KEY_ID --env release --repo example-org/principia
-   gh secret set APPLE_API_ISSUER --env release --repo example-org/principia
+   base64 -i ~/Desktop/principia-developer-id.p12 | gh secret set MAC_CERT_P12_BASE64 --env release --repo Vibiz-ai/principia
+   gh secret set MAC_CERT_PASSWORD --env release --repo Vibiz-ai/principia          # paste the password when asked
+   gh secret set APPLE_API_KEY_P8 --env release --repo Vibiz-ai/principia < ~/.appstoreconnect/private_keys/AuthKey_<KEY ID>.p8
+   gh secret set APPLE_API_KEY_ID --env release --repo Vibiz-ai/principia
+   gh secret set APPLE_API_ISSUER --env release --repo Vibiz-ai/principia
    rm -P ~/Desktop/principia-developer-id.p12
    ```
 
@@ -313,17 +313,17 @@ cd ~/Downloads
 curl -fsSLO https://github.com/Vibiz-ai/principia/releases/latest/download/SHA256SUMS.txt
 shasum -a 256 -c SHA256SUMS.txt --ignore-missing      # "Principia-arm64.dmg: OK"
 
-# 2. the build provenance (GitHub CLI): built by .github/workflows/release.yml in example-org/principia
-gh attestation verify Principia-arm64.dmg -R example-org/principia \
-  --signer-workflow example-org/principia/.github/workflows/release.yml
+# 2. the build provenance (GitHub CLI): built by .github/workflows/release.yml in Vibiz-ai/principia
+gh attestation verify Principia-arm64.dmg -R Vibiz-ai/principia \
+  --signer-workflow Vibiz-ai/principia/.github/workflows/release.yml
 
 # 3. the release itself (with immutable releases on): tag, commit and files as published
-gh release verify vX.Y.Z -R example-org/principia
-gh release verify-asset vX.Y.Z Principia-arm64.dmg -R example-org/principia
+gh release verify vX.Y.Z -R Vibiz-ai/principia
+gh release verify-asset vX.Y.Z Principia-arm64.dmg -R Vibiz-ai/principia
 ```
 
 The cloud image is attested the same way: `gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:X.Y.Z -R
-example-org/principia` ([CLOUD.md](CLOUD.md) §12.1).
+Vibiz-ai/principia` ([CLOUD.md](CLOUD.md) §12.1).
 
 ### 5.4 Post-release verification
 
@@ -414,8 +414,8 @@ links, and a fixed **newer** version replaces it.
    pre-release so it can never become latest again:
 
    ```sh
-   gh release edit vX.Y.(Z-1) --repo example-org/principia --latest           # the last good release
-   gh release edit vX.Y.Z --repo example-org/principia --prerelease --latest=false
+   gh release edit vX.Y.(Z-1) --repo Vibiz-ai/principia --latest           # the last good release
+   gh release edit vX.Y.Z --repo Vibiz-ai/principia --prerelease --latest=false
    ```
 
    The website's Download button and the stable update feed (`releases/latest/download/...`) now serve the previous
@@ -427,7 +427,7 @@ links, and a fixed **newer** version replaces it.
    release-please pull request, or a tag). Macs on the bad version update to it like any update. The whole path takes
    under 30 minutes plus Apple's notarization.
 4. **If the bad build must not stay downloadable at all** (for example it leaks something), delete the release:
-   `gh release delete vX.Y.Z --repo example-org/principia` (keep the tag: the `Protect release tags` ruleset forbids
+   `gh release delete vX.Y.Z --repo Vibiz-ai/principia` (keep the tag: the `Protect release tags` ruleset forbids
    deleting it, and the version number is never reused). Do this after step 1, so `releases/latest` never points at
    nothing.
 5. **Check**: run Actions › post-release on the good release (§5.4) and download the dmg from the website once.

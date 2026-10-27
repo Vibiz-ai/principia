@@ -72,6 +72,8 @@ for (const relative of candidates) {
     .replaceAll(privateOrg, 'example-org')
     // the public repositories keep their real address (the README, compose and the Render button point at them)
     .replace(/https:\/\/(?:github\.com|raw\.githubusercontent\.com)\/example-org\/(?:principia|open-passport)(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
+    // so does the public repo's own name anywhere (badges, `gh -R`, `--repo`): it is public, masking it only breaks links
+    .replace(/(?<![\w.-])example-org\/principia(?![\w-])/g, `${privateOrg}/principia`)
     .replaceAll(privateProject, 'example-project')))
   // keep the permission bits: the fake CLIs the tests spawn (src/cloud/agent/__tests__/bin) must stay executable
   await fs.chmod(path.join(target, relative), (await fs.stat(path.join(root, relative))).mode & 0o777)

@@ -639,7 +639,7 @@ export interface NativeMenuItem {
   submenu?: NativeMenuItem[]
 }
 export interface ConfirmRequest {
-  message: string // "Kill Claude in vibiz-04?"
+  message: string // "Kill Claude in example-project?"
   detail?: string
   confirmLabel: string // verb: "Kill Session", "Delete Key"
   destructive?: boolean

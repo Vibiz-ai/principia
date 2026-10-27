@@ -30,6 +30,9 @@ updates:
       # @types/node follows the Node major the app and CI run on (24), not the newest Node
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
+      # TypeScript 7 waits for typescript-eslint to accept it (its peer range stops below 6); move both in one PR
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
   - package-ecosystem: npm
     directory: /website
     schedule:

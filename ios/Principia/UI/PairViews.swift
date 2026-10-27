@@ -82,6 +82,13 @@ struct SignedOutView: View {
                         if !paste.isEmpty {
                             Button("Open the link", action: openPasted).buttonStyle(.glass).frame(maxWidth: .infinity)
                         }
+                        if app.paired == nil {
+                            Button { Task { await app.startDemo() } } label: {
+                                Label("Try it without a Mac", systemImage: "sparkles.rectangle.stack").frame(maxWidth: .infinity).padding(.vertical, 4)
+                            }
+                            .buttonStyle(.glass)
+                            .accessibilityHint("Opens a sample company on this phone. Nothing is sent anywhere.")
+                        }
                         if reason == .gone {
                             HStack(spacing: 12) {
                                 Button { Task { await app.retry() } } label: { Text("Try again").frame(maxWidth: .infinity) }.buttonStyle(.glass)

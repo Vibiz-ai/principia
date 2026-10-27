@@ -141,7 +141,7 @@ export const ADAPTER_LABELS: Record<AdapterId, string> = {
   gemini: 'Gemini CLI',
   shell: 'Shell'
 }
-/** Short label used in session titles ("vibiz-04 · Claude"). */
+/** Short label used in session titles ("example-project · Claude"). */
 export const ADAPTER_SHORT: Record<AdapterId, string> = {
   claude: 'Claude',
   codex: 'Codex',
