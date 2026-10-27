@@ -579,6 +579,8 @@ export interface Settings {
   soundNeedsYou?: boolean
   soundProblem?: boolean
   soundVolume?: number
+  /** RELEASING.md §4.1: Settings › About › "Get beta updates": prereleases too (beta-mac.yml). Absent = false. */
+  betaUpdates?: boolean
   /** SLACK.md §6.2: backfill window in days. Default 7, 0..90. */
   slackBackfillDays?: number
   /** SLACK.md §6.3: gap-filled messages newer than this still trigger. Default 10, 0..120. */

@@ -83,6 +83,8 @@ export const DEFAULT_SETTINGS: Settings = {
   soundNeedsYou: true,
   soundProblem: true,
   soundVolume: 0.5,
+  // RELEASING.md §4.1: stable releases only unless the founder opts in
+  betaUpdates: false,
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,

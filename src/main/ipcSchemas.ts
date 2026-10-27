@@ -201,6 +201,8 @@ const settingsPatch = z
     soundNeedsYou: z.boolean(),
     soundProblem: z.boolean(),
     soundVolume: z.number().min(0).max(1),
+    // RELEASING.md §4.1
+    betaUpdates: z.boolean(),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),
