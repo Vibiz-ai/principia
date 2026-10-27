@@ -4,6 +4,6 @@
  */
 import { runHook } from './hook'
 
-runHook(process.argv.slice(2), { stdin: process.stdin, stdout: process.stdout })
+void runHook(process.argv.slice(2), { stdin: process.stdin, stdout: process.stdout })
   .catch(() => 0)
   .then(() => process.exit(0))

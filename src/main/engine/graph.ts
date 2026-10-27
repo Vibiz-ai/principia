@@ -47,14 +47,14 @@ export function descendants(deps: DepMap, id: string): Set<string> {
   for (const [n, ds] of deps) for (const d of ds) children.set(d, [...(children.get(d) ?? []), n])
   const out = new Set<string>()
   const stack = [id]
-  while (stack.length) for (const c of children.get(stack.pop()!) ?? []) if (!out.has(c)) out.add(c), stack.push(c)
+  while (stack.length) for (const c of children.get(stack.pop()!) ?? []) if (!out.has(c)) { out.add(c); stack.push(c) }
   return out
 }
 
 export function ancestors(deps: DepMap, id: string): Set<string> {
   const out = new Set<string>()
   const stack = [id]
-  while (stack.length) for (const d of deps.get(stack.pop()!) ?? []) if (!out.has(d)) out.add(d), stack.push(d)
+  while (stack.length) for (const d of deps.get(stack.pop()!) ?? []) if (!out.has(d)) { out.add(d); stack.push(d) }
   return out
 }
 

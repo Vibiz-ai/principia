@@ -104,7 +104,7 @@ struct ConversationView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if canWrite {
-                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send"), held: held) {
+                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send"), held: held, note: heldNote) {
                     let t = draft
                     draft = ""
                     Task { if !(await app.send(t)) { draft = t } }
@@ -144,8 +144,14 @@ struct ConversationView: View {
         guard ref.kind == .session, let s = app.session, s.ref.id == ref.id, let t = s.terminal, t.canType != nil else { return false }
         return t.composer(name: s.who?.name ?? "Claude")?.held ?? false
     }
+    /// why it cannot take a message now, in full above the field (a placeholder cuts it off)
+    private var heldNote: String? {
+        guard held, let s = app.session, let t = s.terminal else { return nil }
+        return t.composer(name: s.who?.name ?? "Claude")?.placeholder
+    }
     private var placeholder: String {
         if ref.kind == .agent { return "Ask \(app.agent?.who.name ?? "them") for something" }
+        if held { return "Message \(app.session?.who?.name ?? "Claude")" }
         if let s = app.session, let t = s.terminal, t.canType != nil, let c = t.composer(name: s.who?.name ?? "Claude") { return c.placeholder }
         if app.session?.terminal != nil { return "Message \(app.session?.who?.name ?? "Claude")" }
         if let r = app.replica, r.busy { return "Queue a message" }
@@ -179,9 +185,30 @@ struct SessionBody: View {
                     .padding(16)
                 }
             }
+        } else if app.loadFailed == ref {
+            LoadFailed(ref: ref)
         } else {
             Skeleton()
         }
+    }
+}
+
+/// The conversation did not load: why, and Try again (never an endless skeleton).
+struct LoadFailed: View {
+    @Environment(AppModel.self) private var app
+    let ref: PhoneChatRef
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(app.loadFailure ?? "It did not load.").foregroundStyle(Theme.ink)
+            HStack(spacing: 8) {
+                Button("Try again") { Task { await app.load(ref) } }
+                    .buttonStyle(.glassProminent).tint(Theme.ink.opacity(0.9)).foregroundStyle(Theme.page)
+                Button("Back to Chats") { app.chatPath = [] }.buttonStyle(.glass)
+            }
+        }
+        .glassCard()
+        .padding(16)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -203,10 +230,7 @@ struct TerminalFooter: View {
                 Text(t.activity.map { "\($0). Its words show here as it works." } ?? "It runs in a terminal on your Mac. Its words show here as it works; send a message below.")
                     .font(.subheadline).foregroundStyle(Theme.muted).frame(maxWidth: .infinity)
             }
-            ForEach(t.asks ?? []) { a in AskCard(ask: a) }
-            if let held = t.held, (t.asks ?? []).isEmpty {
-                Text(held).font(.footnote).foregroundStyle(Theme.muted)
-            }
+            ForEach(t.asks ?? []) { a in AskCard(ask: a, inChat: true) }
             if t.ended {
                 if t.canContinue == true {
                     VStack(alignment: .leading, spacing: 10) {
@@ -226,6 +250,13 @@ struct TerminalFooter: View {
     }
 }
 
+/// A conversation's scroll: it opens at the newest message and stays there as the chat grows (new lines, a card that
+/// comes or goes, the keyboard). Once the reader scrolls up it keeps their place until they come back down.
+///
+/// Its rows are a plain stack, not a lazy one: a lazy stack only estimates the height of rows it has not drawn, so a
+/// jump to its end can land past every drawn row (a black screen until the reader swipes, QA PQ-01 and PQ-20), its
+/// distance from the end reads hundreds of points off, and a fling can snap to the end. Every row laid out keeps all
+/// of that exact; a long chat shows its newest `ChatFollow.page` rows, with "Show earlier messages" above them.
 struct ChatScroll: View {
     @Environment(AppModel.self) private var app
     let lines: [ChatLine]
@@ -233,11 +264,40 @@ struct ChatScroll: View {
     let busy: Bool
     var footer: AnyView? = nil
 
+    @State private var position = ScrollPosition(edge: .bottom)
+    /// at the newest message (or put there): growth keeps it there
+    @State private var pinned = true
+    /// the reader's finger (or its fling) moves it: their scroll decides `pinned`
+    @State private var reading = false
+    @State private var atEnd = true
+    /// the reader's finger took it toward older messages (only their drag counts: a bounce, or a reply growing under
+    /// a flick, moves it too)
+    @State private var movedUp = false
+    @State private var dragging = false
+    @State private var dragFrom: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    /// the oldest row shown (nil: the newest page)
+    @State private var first: String?
+    @Environment(\.scenePhase) private var scene
+
     var body: some View {
+        let from = ChatFollow.start(ids: lines.map(\.id), first: first)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(lines) { l in ChatLineView(line: l).id(l.id) }
+                VStack(alignment: .leading, spacing: 10) {
+                    if from > 0 {
+                        Button("Show earlier messages") {
+                            let top = lines[from].id
+                            first = lines[ChatFollow.earlier(from)].id
+                            pinned = false
+                            // the row that was on top stays where it was
+                            DispatchQueue.main.async { proxy.scrollTo(top, anchor: .top) }
+                        }
+                        .font(.subheadline).buttonStyle(.glass)
+                        .frame(maxWidth: .infinity)
+                    }
+                    // a row is drawn again only when it changed (a streamed word redraws its own row, not the page)
+                    ForEach(lines[from...]) { l in ChatLineRow(line: l).equatable().id(l.id) }
                     ForEach(Array(queue.enumerated()), id: \.element.id) { n, q in
                         VStack(alignment: .trailing, spacing: 6) {
                             Text(q.text).foregroundStyle(Theme.ink)
@@ -254,17 +314,79 @@ struct ChatScroll: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     if let footer { footer }
-                    Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 14).padding(.top, 8)
+                .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 4)
             }
-            .defaultScrollAnchor(.bottom)
+            .scrollPosition($position)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .scrollDismissesKeyboard(.interactively)
+            // the reader's own scroll: pinned again once they come back to the end
+            .onScrollPhaseChange { old, phase in
+                dragging = phase == .interacting
+                switch phase {
+                case .interacting:
+                    reading = true
+                    dragFrom = offset
+                    movedUp = false
+                case .idle:
+                    if reading || old == .decelerating {
+                        pinned = ChatFollow.afterScroll(pinned: pinned, atEnd: atEnd, movedUp: movedUp)
+                        // a flick at the end while the reply grew: its end moved on, catch up with it
+                        if pinned && !atEnd { toBottom() }
+                    }
+                    reading = false
+                default: break
+                }
+            }
+            .onScrollGeometryChange(for: ChatFollow.Spot.self) { g in
+                ChatFollow.Spot(offset: g.contentOffset.y, gap: g.contentSize.height + g.contentInsets.bottom - (g.contentOffset.y + g.containerSize.height))
+            } action: { _, s in
+                offset = s.offset
+                if dragging && s.offset < dragFrom - 2 { movedUp = true }
+                atEnd = s.atEnd
+                if reading { pinned = ChatFollow.afterScroll(pinned: pinned, atEnd: atEnd, movedUp: movedUp) }
+            }
+            // anything that changes the content's or the window's height (a line, a streamed word, a card, the keyboard):
+            // a pinned chat follows it to the bottom, after layout
+            .onScrollGeometryChange(for: [CGFloat].self) { g in [g.contentSize.height, g.containerSize.height] } action: { _, _ in
+                if pinned && !reading { toBottom() }
+            }
             .onChange(of: lines.last) { _, _ in
-                withAnimation(.smooth) { proxy.scrollTo("bottom", anchor: .bottom) }
+                guard pinned && !reading else { return }
+                // at the newest message: older rows past a page leave the top (nobody is looking at them)
+                if let f = ChatFollow.trim(ids: lines.map(\.id), from: from) { first = f }
+                toBottom()
+            }
+            // the reader left the end: the rows they see stay put as new ones come (the page stops sliding)
+            .onChange(of: pinned) { _, p in
+                if !p && first == nil && !lines.isEmpty { first = lines[ChatFollow.start(ids: lines.map(\.id), first: nil)].id }
+            }
+            // you sent something: back to the newest message
+            .onChange(of: app.sentTick) { _, _ in pinned = true; toBottom() }
+            // opened, a fresh snapshot (back from the background, after a gap), or the app active again: its rows lay out
+            // anew (markdown measures late). A reader at the end is put back there once they did.
+            .task(id: "\(app.snapshotTick)/\(scene == .active)") {
+                guard scene == .active else { return }
+                var waited: UInt64 = 0
+                for at in ChatFollow.settle {
+                    if at > waited { try? await Task.sleep(nanoseconds: at - waited); waited = at }
+                    if Task.isCancelled { return }
+                    if pinned && !reading { toBottom() }
+                }
             }
         }
     }
+
+    private func toBottom() {
+        DispatchQueue.main.async { position.scrollTo(edge: .bottom) }
+    }
+}
+
+/// One row of a conversation, compared by its line: the page's other rows skip their body (and their markdown parse)
+/// while one streams.
+struct ChatLineRow: View, Equatable {
+    let line: ChatLine
+    var body: some View { ChatLineView(line: line) }
 }
 
 struct ChatLineView: View {
@@ -422,6 +544,8 @@ struct AgentBody: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
+        } else if app.loadFailed == ref {
+            LoadFailed(ref: ref)
         } else {
             Skeleton()
         }
@@ -467,18 +591,27 @@ struct Composer: View {
     let busy: Bool
     /// it cannot take a message now (the placeholder says why): Send is off
     var held: Bool = false
+    /// a line above the field (why Send is off)
+    var note: String? = nil
     var onSend: () -> Void
     var accessory: AnyView? = nil
 
     var body: some View {
         VStack(spacing: 8) {
             if let accessory { accessory }
+            if let note {
+                Text(note).font(.footnote).foregroundStyle(Theme.soft)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             GlassEffectContainer(spacing: 8) {
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField(placeholder, text: $text, axis: .vertical)
                         .lineLimit(1...6)
                         .padding(.horizontal, 16).padding(.vertical, 12)
-                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+                        // tinted dark: the conversation scrolling under it never shows through the words
+                        .background(Theme.page.opacity(0.85), in: .rect(cornerRadius: 22))
+                        .glassEffect(.regular.tint(Theme.page.opacity(0.6)).interactive(), in: .rect(cornerRadius: 22))
                     Button(action: onSend) {
                         Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 26, height: 30)
                     }
@@ -492,5 +625,11 @@ struct Composer: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(alignment: .bottom) {
+            // the page fades in behind the composer, so text passing under it is never under the field's words
+            LinearGradient(colors: [Theme.page.opacity(0), Theme.page.opacity(0.92)], startPoint: .top, endPoint: .init(x: 0.5, y: 0.3))
+                .ignoresSafeArea(edges: .bottom)
+                .allowsHitTesting(false)
+        }
     }
 }

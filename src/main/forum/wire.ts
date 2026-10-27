@@ -43,7 +43,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   const board = () => boardActions(h, (companyId) => {
     emit('data:changed', { domain: 'tasks' })
     try {
-      h.dispatcher?.pump(companyId)
+      void h.dispatcher?.pump(companyId)
     } catch {
       /* the 60 s tick pumps anyway */
     }

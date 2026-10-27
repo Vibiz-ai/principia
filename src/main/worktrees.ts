@@ -367,7 +367,7 @@ ${SHIM_REAL('gh')}prev=""; api=0
 for a in "$@"; do
   [ "$prev" = pr ] && [ "$a" = merge ] && deny "gh pr merge is blocked in Hive workflows: the user merges."
   [ "$a" = api ] && api=1
-  if [ "$api" = 1 ]; then case "$a" in */merge|*/merge\?*|*/merges) deny "merging through gh api is blocked in Hive workflows: the user merges." ;; esac; fi
+  if [ "$api" = 1 ]; then case "$a" in */merge|*/merge?*|*/merges) deny "merging through gh api is blocked in Hive workflows: the user merges." ;; esac; fi
   prev="$a"
 done
 exec "$real" "$@"

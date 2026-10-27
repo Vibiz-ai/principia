@@ -15,6 +15,7 @@ import { updateSettings, useStore } from '../../state/store'
 import { Chip, NextSteps, StepTitle, useReducedMotion, Voiced } from './bits'
 import { landOnHome, useFlowLocal } from './actions'
 import { ClaudeCheck } from './ClaudeCheck'
+import { ConnectedServiceChips, ConnectionSlot } from '../../components/connections/ConnectionSlot'
 import { autonomyLine, launchFacts, nextSteps, passportMeta, readySchedules, summaryParts } from './model'
 
 /** ⌘↵ on Ready = Start now (the flow calls it). */
@@ -115,6 +116,14 @@ export function ReadyStep({ color }: { color?: string } = {}): React.JSX.Element
           </>
         )}
       </div>
+      {/* CONNECTIONS.md §4.3 S16: the keys setup saved (fal, OpenAI, Firecrawl…) are the business's connections from now on */}
+      {result?.companyId && (
+        <div className="ob-startbox">
+          <div className="ob-label">Connected for {name}</div>
+          <ConnectedServiceChips companyId={result.companyId} />
+          <ConnectionSlot companyId={result.companyId} service={d.hasCode ? 'posthog' : 'stripe'} purpose="agentTools" />
+        </div>
+      )}
       <NextSteps items={nextSteps({ plan, name, repoNames, passport, agentsCreated, ...(facts?.passport ? { notes: facts.notes } : {}) })} />
       {mode === 'first' && (
         <div className="ob-consent ob-consent--solid">

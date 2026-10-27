@@ -508,13 +508,13 @@ export function checkAfterProblems(draft: Pick<WorkflowDraft, 'nodes'>): { error
   const down = (id: string): Set<string> => {
     const out = new Set<string>()
     const stack = [id]
-    while (stack.length) for (const c of children.get(stack.pop()!) ?? []) if (!out.has(c)) (out.add(c), stack.push(c))
+    while (stack.length) for (const c of children.get(stack.pop()!) ?? []) if (!out.has(c)) { out.add(c); stack.push(c) }
     return out
   }
   const up = (id: string): Set<string> => {
     const out = new Set<string>()
     const stack = [id]
-    while (stack.length) for (const d of deps.get(stack.pop()!) ?? []) if (!out.has(d)) (out.add(d), stack.push(d))
+    while (stack.length) for (const d of deps.get(stack.pop()!) ?? []) if (!out.has(d)) { out.add(d); stack.push(d) }
     return out
   }
   for (const n of draft.nodes) {

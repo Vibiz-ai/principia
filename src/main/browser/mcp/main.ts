@@ -16,7 +16,7 @@ export async function callBrowser(tool: string, args: unknown, signal?: AbortSig
     if (!res.ok) return { content: [{ type: 'text', text: (await res.text()) || `Principia answered ${res.status}` }], isError: true }
     return (await res.json()) as BrowserToolResult
   } catch (e) {
-    if (signal?.aborted) throw new Error('canceled')
+    if (signal?.aborted) throw new Error('canceled', { cause: e })
     return { content: [{ type: 'text', text: `Principia is not reachable: ${e instanceof Error ? e.message : String(e)}` }], isError: true }
   }
 }

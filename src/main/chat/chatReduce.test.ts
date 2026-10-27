@@ -46,7 +46,7 @@ describe('ChatReducer on the recorded probe (claude 2.1.310)', () => {
     const text = r.model.items.find((i) => i.kind === 'text')!
     expect(text.kind === 'text' && text.streaming).toBe(false)
     const end = r.model.items[r.model.items.length - 1]!
-    expect(end.kind === 'turnEnd' && end.ms).toBe(6533 > 0 ? (end as { ms: number }).ms : 0)
+    expect(end.kind === 'turnEnd' && end.ms).toBe(6633) // the probe's result duration_ms
     expect(r.meta.planPct).toBe(19)
   })
 

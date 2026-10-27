@@ -10,6 +10,8 @@
 
 [Website](https://principia-vibiz-deployments.vercel.app) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/example-org/principia/badge)](https://scorecard.dev/viewer/?uri=github.com/example-org/principia)
+
 **Run your entire company. From one workspace.**
 
 Principia brings agent sessions, company tool connections, memory, workflows and schedules together. Use Claude Code and Codex in the same workspace, keep context when changing harnesses, and run work on your Mac or a self-hosted cloud worker.
@@ -93,6 +95,7 @@ We welcome reproducible bug reports, harness compatibility fixes, accessible UI 
 
 ```sh
 npm run typecheck
+npm run lint
 npm test
 npm run build
 npm run cloud:build

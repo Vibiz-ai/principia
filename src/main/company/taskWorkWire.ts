@@ -16,7 +16,7 @@ export function wireTaskWork(h: Hive): TaskWorkService {
     onChange: (companyId) => {
       emit('data:changed', { domain: 'tasks' })
       h.statusChanged()
-      try { h.dispatcher?.pump(companyId) } catch { /* the dispatcher logs its own */ }
+      try { void h.dispatcher?.pump(companyId) } catch { /* the dispatcher logs its own */ }
     },
     log
   })

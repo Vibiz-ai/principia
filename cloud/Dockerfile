@@ -4,6 +4,8 @@
 # repository as a named context:
 #   docker build -f cloud/Dockerfile --build-context open-passport=https://github.com/Vibiz-ai/open-passport.git#main .
 #   (or: docker compose -f cloud/compose.yml -f cloud/compose.build.yml up --build -d)
+# The published image (.github/workflows/cloud-images.yml) builds from one pinned Open Passport commit
+# (OPEN_PASSPORT_COMMIT there), not from main.
 # CLI versions are pinned (CLOUD.md §7.2, §11 supply chain). Bump them deliberately and record them in cloud/README.md.
 
 FROM node:24-bookworm-slim AS build

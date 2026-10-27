@@ -45,6 +45,7 @@ import { createBrowser } from './browser/wire'
 import { bootAuthoring, wireAuthoring } from './author/wire'
 import { wireForum } from './forum/wire'
 import { wireDashboards } from './dashboards/wire'
+import { backfillConnections, connectionsChanged, wireConnections } from './connections/wire'
 import { wireTaskWork } from './company/taskWorkWire'
 import { wireLinearSync } from './company/sync/wire'
 import { startOrchestrator } from './orchestrator/wire'
@@ -170,7 +171,7 @@ if (!app.requestSingleInstanceLock()) {
     wc.setWindowOpenHandler(() => ({ action: 'deny' }))
   })
 
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     installSignalHandlers()
     nativeTheme.themeSource = 'dark'
     const paths = resolvePaths()
@@ -198,8 +199,27 @@ if (!app.requestSingleInstanceLock()) {
     h.gateway = new GatewayService({ userData: paths.userData, mainDir: __dirname, cipher, vault, baseEnv: () => baseChildEnv(), seedDefaults: true,
       companies: { forCwd: (cwd) => h.company.companyForCwd(cwd).id, enforced: () => store.companyGuardsEnforced(), warn: (m, meta) => log.warn(m, meta) },
       // AUTOPILOT.md §6: an autopilot's run is checked call by call against its level, before each call is made
-      guard: (c) => h.playbooks?.gatewayCall(c) ?? null })
+      guard: (c) => h.playbooks?.gatewayCall(c) ?? null,
+      // CONNECTIONS.md §3.3: a saved key the vendor's MCP takes as a bearer gives agents its tools; reuse across companies
+      virtuals: (companyId) => h.connections?.virtuals(companyId) ?? [],
+      reuses: (connectionId, companyId) => h.connections?.reusedConnectionReaches(connectionId, companyId) ?? false,
+      // CONN-QA-01: an agent's call the vendor turned down marks the key on every surface
+      onVirtualRejected: (companyId, serviceId) => {
+        const r = h.connections
+        if (!r) return
+        const k = h.safe(() => r.virtuals(companyId).find((v) => v.serviceId === serviceId)?.keyNames[0] ?? null, null)
+        if (!k) return
+        r.recordKeyProblem(companyId, serviceId, k, 'The service turned down the key when an agent used it. Paste a new key.')
+        connectionsChanged(companyId, serviceId)
+      },
+      onChange: () => connectionsChanged(null) })
     app.on('will-quit', () => h.gateway?.close())
+    // CONNECTIONS.md: the per-company connection index and resolver; failure = surfaces fall back to their own checks
+    try {
+      h.connections = wireConnections(h, cipher)
+    } catch (e) {
+      log.error('connections unavailable', { e: String(e) })
+    }
 
     // shared memory (MEMORY.md): separate memory.db, opened + migrated by main only. Failure = memory off, Hive runs.
     try {
@@ -334,6 +354,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('slack unavailable', { e: String(e) })
     }
+    backfillConnections(h)
     const sessionStall = new StallMonitor({ thresholdMs: () => stallThresholdMs(store.getSettings().stallMinutes) })
     sessionStall.startTimer(15_000)
     h.sessionLive = new SessionLiveHub({
@@ -550,6 +571,7 @@ if (!app.requestSingleInstanceLock()) {
       emit: (s) => emit('updates:changed', s),
       log,
       quit: (install) => h.requestQuit(install),
+      beta: () => store.getSettings().betaUpdates === true,
       load: async () => {
         // the getter-defined `autoUpdater` export is only on the CommonJS default when the bundle keeps import()
         const m = (await import('electron-updater')) as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }

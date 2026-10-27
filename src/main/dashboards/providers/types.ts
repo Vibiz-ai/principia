@@ -25,12 +25,25 @@ export interface ProviderCtx {
   geoEngines?: () => GeoEngine[]
   /** GitHub: the signed-in `gh` CLI as an HttpFn for api.github.com URLs, when no token is set. null = not installed. */
   gh?: HttpFn | null
+  /** CONNECTIONS.md §4.3: the company's sign-in to the service, when the dashboard reads through it (no key saved). */
+  mcp?: McpReader | null
+}
+
+/** One saved MCP connection, as a dashboard reads it (main only; the gateway makes the calls). */
+export interface McpReader {
+  tools(): Promise<string[]>
+  call(tool: string, args: Record<string, unknown>): Promise<unknown>
 }
 
 export interface DashboardProvider {
   kind: DashboardKind
   /** One cheap, read-only real call per key (DASHBOARDS.md §3). Throws DashboardFetchError. */
   validate(ctx: ProviderCtx): Promise<void>
+  /**
+   * CONN-QA-01: a check of the key alone, for when the dashboard's settings are not known yet (connections:connectKey).
+   * Read-only. May find a setting on the way (PostHog: the EU host). Throws DashboardFetchError.
+   */
+  checkKey?(ctx: ProviderCtx): Promise<{ settings?: Record<string, string> } | void>
   fetch(ctx: ProviderCtx): Promise<DashboardSnapshot>
 }
 

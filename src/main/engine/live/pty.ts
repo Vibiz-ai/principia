@@ -21,7 +21,8 @@ export function stripAnsi(s: string): string {
 
 const TAIL = 4096
 const CLAUDE_TRUST = /Quick safety check|Is this a project you created or one you trust/
-const CLAUDE_PERMISSION = /Do you want to (proceed|make this edit[^?]*)\?/
+/** "Do you want to proceed?", "…make this edit to a.ts?", "…create notes.txt?" (any of its dialogs; CLAUDE_YES must follow) */
+const CLAUDE_PERMISSION = /Do you want to [^?\n]{1,160}\?/
 const CLAUDE_YES = /❯\s*1\.\s*Yes/
 /** trust dialog options (numbered in older CLIs, "❯ No, exit / Yes, I trust this folder" in 2.1.x). */
 const CLAUDE_TRUST_OPTION = /No,\s*exit|Yes,\s*I\s*trust|Yes,\s*proceed/

@@ -1,4 +1,6 @@
 /** Review an item before installing it. Installation never starts a workflow. */
+import { serviceForKey } from '@shared/services'
+import { ConnectionSlot } from './connections/ConnectionSlot'
 import { useEffect, useState } from 'react'
 import type { MarketItem, MarketPreview } from '@shared/marketplace'
 import { errorMessage, hive } from '../lib/hive'
@@ -30,6 +32,8 @@ export function InstallSheet({
     return () => { active = false }
   }, [item])
   const missing = (item.keys ?? []).filter((k) => !keys.has(k))
+  const svcMissing = [...new Set(missing.map((k) => serviceForKey(k)?.id).filter((x): x is string => !!x))]
+  const rawMissing = missing.filter((k) => !serviceForKey(k) || !scopeCompanyId())
   const commands = p?.nodes.filter((n) => n.command) ?? []
 
   const install = async (): Promise<void> => {
@@ -65,9 +69,17 @@ export function InstallSheet({
       }
     >
       <p className="sheet__desc text-secondary">{item.description}</p>
-      {missing.length > 0 && (
+      {/* CONNECTIONS.md §4.3 S13: a key that belongs to a service is that service's connection, connected in place */}
+      {svcMissing.length > 0 && scopeCompanyId() && (
+        <div className="cx-forms">
+          {svcMissing.map((id) => (
+            <ConnectionSlot key={id} companyId={scopeCompanyId()!} service={id} purpose="agentTools" actions={false} label={`Needs ${(item.keys ?? []).filter((k) => serviceForKey(k)?.id === id).join(', ')}`} />
+          ))}
+        </div>
+      )}
+      {rawMissing.length > 0 && (
         <div className="market__warn">
-          Needs {missing.join(', ')} — not in your Keys yet.{' '}
+          Needs {rawMissing.join(', ')} — not in your Keys yet.{' '}
           <a href="#" onClick={(e) => (e.preventDefault(), onClose(), void navigate({ name: 'keys' }))}>
             Add in Keys
           </a>

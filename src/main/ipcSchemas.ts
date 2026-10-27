@@ -15,6 +15,7 @@ import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
 import { DASHBOARD_KINDS, type DashboardKind } from '../shared/dashboards'
+import { PURPOSES, serviceById, type Purpose } from '../shared/services'
 import { AGENT_STATUSES } from '../shared/live'
 import { USAGE_RANGES } from '../shared/usage'
 import { ROUTINE_IDS, type RoutineId } from '../shared/routines'
@@ -195,6 +196,13 @@ const settingsPatch = z
     slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
     slackMirrorNeedsYou: z.boolean(),
     notifyNeedsYou: z.boolean(),
+    // SOUNDS.md
+    soundDone: z.boolean(),
+    soundNeedsYou: z.boolean(),
+    soundProblem: z.boolean(),
+    soundVolume: z.number().min(0).max(1),
+    // RELEASING.md §4.1
+    betaUpdates: z.boolean(),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),
@@ -304,6 +312,9 @@ const secretName = z.string().min(1).max(128)
 const dashboardKind = z.enum(DASHBOARD_KINDS as unknown as [DashboardKind, ...DashboardKind[]])
 const dashboardConfig = z.record(z.string().regex(/^[a-zA-Z]{1,40}$/), z.union([z.string().max(2000), z.array(z.string().max(500)).max(20)]))
 const dashboardKeys = z.record(secretName.regex(/^[A-Z][A-Z0-9_]*$/), z.string().max(64 * 1024))
+const serviceId = z.string().max(64).refine((s) => !!serviceById(s), 'unknown service')
+const purpose = z.enum(PURPOSES as unknown as [Purpose, ...Purpose[]])
+const serviceSettings = z.record(z.string().regex(/^[a-zA-Z]{1,40}$/), z.string().max(300)).refine((o) => Object.keys(o).length <= 10, 'too many settings')
 
 // ---------- Passport vault (PASSPORT.md §11; implemented by P3) ----------
 /** frontmatter id, or `h:<vault-relative path>` for a note without one (§3.1) */
@@ -710,6 +721,19 @@ export const REQUEST_SCHEMAS = {
   'dashboards:refresh': z.object({ id }).strict(),
   'dashboards:remove': z.object({ id }).strict(),
   'dashboards:sample': z.object({ kind: dashboardKind }).strict(),
+  // CONNECTIONS.md §3.6 (unknown services are refused here; settings are re-checked against the registry in main)
+  'connections:list': z.object({ companyId: id }).strict(),
+  'connections:get': z.object({ companyId: id, serviceId }).strict(),
+  'connections:connectKey': z.object({ companyId: id, serviceId, keys: dashboardKeys.refine((k) => Object.keys(k).length > 0 && Object.keys(k).length <= 8, 'one to eight keys'), settings: serviceSettings.optional(), purpose: purpose.optional() }).strict(),
+  'connections:signIn': z.object({ companyId: id, serviceId }).strict(),
+  'connections:settings': z.object({ companyId: id, serviceId, settings: serviceSettings }).strict(),
+  'connections:choose': z.object({ companyId: id, serviceId, purpose, keyName: secretName.regex(/^[A-Z][A-Z0-9_]*$/) }).strict(),
+  'connections:reuse': z.object({ companyId: id, serviceId, from: id.nullable() }).strict(),
+  'connections:disconnect': z.object({ companyId: id, serviceId, forms: z.array(z.enum(['key', 'mcp'])).min(1).max(2) }).strict(),
+  'connections:usage': z.object({ companyId: id, serviceId }).strict(),
+  'connections:confirm': z.object({ companyId: id, serviceId, connectionId: z.string().min(1).max(200).nullable() }).strict(),
+  'connections:sources': z.object({ companyId: id, serviceId }).strict(),
+  'connections:keyTools': z.object({ companyId: id, serviceId, on: z.boolean() }).strict(),
   // LINEAR.md §6
   'linear:status': z.object({ companyId: id }).strict(),
   'linear:checkKey': z.object({ companyId: id, key: z.string().max(500).optional() }).strict(),
@@ -1015,6 +1039,7 @@ export const REQUEST_SCHEMAS = {
   'usage:disk': optObj({ fresh: z.boolean().optional() }),
   'usage:cleanupList': none,
   'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|tw|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
+  'usage:tokens': none,
   'activity:open': none,
   'activity:close': none,
   // CLOUD.md §13.1: the cloud:* channels
@@ -1038,7 +1063,7 @@ export const SEND_SCHEMAS = {
   'sessions:resize': z.object({ id, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
   'artifacts:startDrag': z.object({ id }),
   'ui:ready': none,
-  'ui:visibleOwner': z.object({ sessionId: id.nullish(), runId: id.nullish() })
+  'ui:visibleOwner': z.object({ sessionId: id.nullish(), runId: id.nullish(), board: z.string().max(64).nullish() })
 }
 
 /** zod issues -> contract ValidationError[] */

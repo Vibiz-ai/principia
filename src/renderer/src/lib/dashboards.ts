@@ -2,6 +2,7 @@
  * DASHBOARDS.md §9: pure helpers for the department dashboards UI: line-chart geometry, the install form's readiness,
  * and status copy. Formatting lives in @shared/dashboards (main uses it for the agent summary too).
  */
+import { serviceMonogram } from './serviceActions'
 import type { DashboardConfig, DashboardDef, DashboardKeyLookup, DashboardStatus, Series } from '@shared/dashboards'
 import { configList, configText } from '@shared/dashboards'
 
@@ -95,16 +96,21 @@ export interface InstallReadiness {
   missing: string[]
 }
 
-/** Whether the install form can be sent: each required key pasted or already saved, each required config field set. */
-export function installReadiness(def: DashboardDef, lookups: readonly DashboardKeyLookup[], pasted: Record<string, string>, config: DashboardConfig): InstallReadiness {
+/**
+ * Whether the install form can be sent: each required key pasted or already saved, each required config field set.
+ * `connection`: the company's connection to the dashboard's service already serves it (CONNECTIONS.md §4.3), so no key
+ * is asked; `signIn` when it reads through a sign-in, which also makes `def.viaSignIn.config` fields optional.
+ */
+export function installReadiness(def: DashboardDef, lookups: readonly DashboardKeyLookup[], pasted: Record<string, string>, config: DashboardConfig, connection: 'key' | 'signIn' | null = null): InstallReadiness {
   const missing: string[] = []
+  const optional = new Set(connection === 'signIn' ? (def.viaSignIn?.config ?? []) : [])
   for (const k of def.keys) {
-    if (!k.required) continue
+    if (!k.required || connection) continue
     const saved = lookups.find((l) => l.name === k.name)?.source
     if (!saved && !(pasted[k.name] ?? '').trim()) missing.push(k.label)
   }
   for (const f of def.config) {
-    if (!f.required) continue
+    if (!f.required || optional.has(f.key)) continue
     const has = f.kind === 'list' ? configList(config[f.key]).length > 0 : !!configText(config[f.key])
     if (!has) missing.push(f.label)
   }
@@ -148,8 +154,6 @@ export function statusCopy(status: DashboardStatus, hasSnapshot: boolean): Statu
 
 /** Two letters for a provider's line-art monogram ("Google Search Console" → "GS", "Stripe" → "St"). */
 export function monogram(provider: string): string {
-  const words = provider.replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean)
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase()
-  const w = words[0] ?? '?'
-  return w.slice(0, 1).toUpperCase() + w.slice(1, 2).toLowerCase()
+  // QA-12: one monogram everywhere (the connection roundel's)
+  return serviceMonogram(provider)
 }

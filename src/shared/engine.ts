@@ -111,7 +111,7 @@ export interface EngineContext {
    */
   orchestrator?: { stepContext(req: OrchestratorStepRequest): string | null }
   /** COMPANY.md §6: `companyId` (the run's / session's company) limits the connections to that company's. */
-  gateway?: { attachment(cwd: string, companyId?: Id | null, runId?: Id | null): McpServerSpec | null }
+  gateway?: { attachment(cwd: string, companyId?: Id | null, runId?: Id | null, secretNames?: readonly string[] | null): McpServerSpec | null }
   /** AUTOPILOT.md §6: a money autopilot's run loads only Principia's own MCP servers (outside calls go through the gateway). */
   autopilot?: { strictMcp(runId: Id): boolean }
   /**
@@ -435,6 +435,11 @@ export interface McpServerSpec {
   args: string[] // [<abs>/out/main/mcp-memory.js]
   /** ELECTRON_RUN_AS_NODE=1, HIVE_MEM_DB, HIVE_MEM_GRANT, HIVE_MEM_FP. Goes into the MCP config, never the agent env. */
   env: Record<string, string>
+  /**
+   * principia (CONNECTIONS.md QP-2): claude tool rules kept out of the spawn (`mcp__posthog`): the founder's own MCP
+   * servers for services this spawn already reaches through Principia, which may be another company's account.
+   */
+  deny?: string[]
 }
 export interface MemoryGrantRequest {
   mode: 'read' | 'read-write'

@@ -25,6 +25,7 @@ import { registerOrchestratorHandlers } from './orchestrator'
 import { registerPlaybookHandlers } from './playbooks'
 import { registerCloudHandlers } from './cloud'
 import { registerDashboardHandlers } from './dashboards'
+import { registerConnectionHandlers } from './connections'
 import { registerTaskWorkHandlers } from './taskWork'
 import { registerUsageHandlers } from './usage'
 import { registerLinearHandlers } from './linear'
@@ -59,6 +60,7 @@ export function registerAllHandlers(h: Hive): void {
   registerOrchestratorHandlers(h)
   registerCloudHandlers(h)
   registerDashboardHandlers(h)
+  registerConnectionHandlers(h)
   registerTaskWorkHandlers(h)
   registerUsageHandlers(h)
   registerLinearHandlers(h)

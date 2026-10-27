@@ -22,7 +22,7 @@ import type { OrchSuggestion } from '../../shared/orchestrator'
 import { PHONE_CHANNELS, PhoneApi, terminalReply, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared, parseTunnelUrl } from './tunnel'
-import { phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
+import { askHeading, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
 
 const T = '2026-10-25T10:00:00.000Z'
 
@@ -574,9 +574,38 @@ describe('PhoneApi live (RA3)', () => {
     fire('chat:ops', { sessionId: 'se_a', seq: 2, ops: [{ op: 'state', turn: 'working' }] })
     fire('forum:event', { kind: 'message', companyId: 'co_a', message: msg('fm_9', 'co_a', 'ch_a', 'hi') })
     fire('forum:event', { kind: 'message', companyId: 'co_b', message: msg('fm_8', 'co_b', 'ch_b', 'secret') })
-    expect(a.sent.map((m) => m.t)).toEqual(['hello', 'chat', 'room'])
+    expect(a.sent.map((m) => m.t)).toEqual(['hello', 'subbed', 'chat', 'room'])
     expect(b.sent.map((m) => m.t)).toEqual(['hello'])
     expect(JSON.stringify(a.sent)).not.toContain('secret')
+    api.dispose()
+  })
+  it('a subscription is acked with the chat’s last op number, so a phone whose snapshot is older refetches (PQ-02)', async () => {
+    const { host, fire } = world()
+    const api = new PhoneApi(host)
+    const a = fakeWs()
+    api.socket(a.ws, dev)
+    const sub = api.subscriptions()[0]!
+    // ops the phone was not subscribed for yet (it was fetching its snapshot): numbered here all the same
+    fire('chat:ops', { sessionId: 'se_a', seq: 763, ops: [{ op: 'append', id: 't1', field: 'md', text: 'science' }] })
+    fire('chat:ops', { sessionId: 'se_a', seq: 764, ops: [{ op: 'state', turn: 'idle' }] })
+    await api.subscribe(sub, { t: 'sub', companyId: 'co_a', sessionId: 'se_a' })
+    expect(a.sent.filter((m) => m.t !== 'hello')).toEqual([{ t: 'subbed', sessionId: 'se_a', seq: 764 }])
+    // no chat: 0
+    await api.subscribe(sub, { t: 'sub', companyId: 'co_a', sessionId: null })
+    expect(a.sent.at(-1)).toEqual({ t: 'subbed', sessionId: null, seq: 0 })
+    api.dispose()
+  })
+  it('two subs in a row: the newer one wins even when the older one finishes its checks last', async () => {
+    const { host } = world()
+    const api = new PhoneApi(host)
+    const a = fakeWs()
+    api.socket(a.ws, dev)
+    const sub = api.subscriptions()[0]!
+    const older = api.subscribe(sub, { t: 'sub', companyId: 'co_a', sessionId: 'se_a', channelId: 'ch_a' })
+    const newer = api.subscribe(sub, { t: 'sub', companyId: 'co_a', sessionId: null })
+    await newer
+    await older
+    expect(sub).toMatchObject({ companyId: 'co_a', sessionId: null })
     api.dispose()
   })
 })
@@ -597,6 +626,28 @@ describe('Phone views (the desktop’s one live source)', () => {
     expect(now.working[0]!.open).toEqual({ kind: 'agent', id: 'ag_a' })
     expect(now.done.map((x) => x.status)).toEqual(['review'])
     expect(now.needs).toBe(phoneNeeds(data(), 'co_a').count)
+  })
+  it('Now: a session\'s working time counts from its current turn, not from when the session began (PQ-19)', () => {
+    const d = data()
+    d.agents = [...d.agents, node('n_chat', { kind: 'session', sessionId: 'se_a', status: 'working', companyId: 'co_a', startedAt: '2026-10-25T09:00:00.000Z' })]
+    const row = (m?: Map<string, string>) => phoneNow(d, 'co_a', [], new Map(), m).working.find((w) => w.key.includes('n_chat') || w.open?.id === 'se_a')
+    expect(row()?.startedAt).toBe('2026-10-25T09:00:00.000Z')
+    expect(row(new Map([['se_a', '2026-10-25T09:58:00.000Z']]))?.startedAt).toBe('2026-10-25T09:58:00.000Z')
+  })
+  it('a permission reads as a plain question on the phone; Write creates (PQ-13, PQ-14)', () => {
+    expect(askHeading('Write', { file_path: '/x/y/qa-notes.txt' })).toBe('Create qa-notes.txt?')
+    expect(askHeading('Edit', { file_path: '/x/a.ts' })).toBe('Edit a.ts?')
+    expect(askHeading('Bash', { command: 'F=/var/tmp/x ls' })).toBe('Run a command?')
+    expect(askHeading('WebFetch', { url: 'https://example.com/a' })).toBe('Open example.com?')
+    expect(askHeading('mcp__x__y', {})).toBeNull()
+  })
+  it('Chats: an ended session that Continue replaced is not listed twice (PQ-15)', () => {
+    const d = data()
+    d.sessions = [...d.sessions, sess('se_old', 'co_a', { title: 'QA term', status: 'exited', agentSessionId: 'conv-1', startedAt: '2026-10-25T08:00:00.000Z' } as Partial<Session>), sess('se_new', 'co_a', { title: 'QA term', agentSessionId: 'conv-1', startedAt: '2026-10-25T09:00:00.000Z' } as Partial<Session>), sess('se_lone', 'co_a', { title: 'Ended alone', status: 'exited', agentSessionId: 'conv-2' } as Partial<Session>)]
+    const ids = phoneChats(d, 'co_a').rows.map((r) => r.ref.id)
+    expect(ids).toContain('se_new')
+    expect(ids).toContain('se_lone')
+    expect(ids).not.toContain('se_old')
   })
   it('Now carries the company\'s Autopilot switch, read-only, from the same truth as the Mac (AUTOPILOT.md §7)', () => {
     const d = data()

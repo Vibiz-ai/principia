@@ -7,6 +7,7 @@ import { ChatCompanyCardHost } from './components/ChatCompanyCard'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
 import { NewChatSheet } from './components/desk/NewChatSheet'
+import { ConnectSheetHost } from './components/connections/ConnectSheet'
 import { DiagramOverlays } from './components/diagrams/DiagramOverlays'
 import { Sidebar } from './shell/Sidebar'
 import { StatusBar } from './shell/StatusBar'
@@ -85,12 +86,14 @@ export function App(): React.JSX.Element {
   const winFocused = useStore((s) => s.window.focused)
   useEffect(() => {
     if (ready) reportVisibleOwner()
-  }, [ready, view, focusedSession, grid, winFocused])
+    // SOUNDS.md: the Board on screen is per company (`active`)
+  }, [ready, view, focusedSession, grid, winFocused, active])
 
   if (firstRunFlow)
     return (
       <div className="shell shell--onboarding">
         <OnboardingFlow />
+        <ConnectSheetHost />
         <Toasts />
       </div>
     )
@@ -128,6 +131,8 @@ export function App(): React.JSX.Element {
       <LogoPickerSheet />
       <ChatCompanyCardHost />
       <OnboardingFlow />
+      {/* after the flow, so a connect sheet opened from the Ready step sits above it */}
+      <ConnectSheetHost />
     </div>
   )
 }
@@ -185,7 +190,7 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'artifacts':
       return <ArtifactsView runId={view.runId} sessionId={view.sessionId} />
     case 'settings':
-      return <SettingsView section={view.section} nonce={view.nonce} connect={view.connect} />
+      return <SettingsView section={view.section} nonce={view.nonce} connect={view.connect} purpose={view.purpose} />
     case 'memory':
       return <MemoryView view={view} />
     case 'slack':

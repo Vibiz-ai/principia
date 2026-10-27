@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting } from '../../shared/company'
+import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -20,6 +20,8 @@ export type { CompanyRef, Located, PassportContextOptions, PassportRenderer, Res
 export { assertTransition, transitionError, TRANSITIONS, type Actor, type TaskState, type TransitionCtx } from './taskState'
 /** What startTask hands the engine besides the target (§4.3): the run's task and seat, its cwd and a Claude resume id. */
 /** LINEAR.md: the tracker issue behind a task, as agents and the Board see it. */
+/** A task write; `prev` is the row's status and run before it (null on create). */
+export type TaskWriteListener = (task: BoardTask, prev: { status: TaskStatus; runId: string | null } | null) => void
 export interface ExternalTaskLink { provider: 'linear'; key: string; url: string }
 export interface TaskRunLink {
   taskId: string
@@ -57,7 +59,7 @@ export class CompanyStore {
   /** runs.task_id / agent_id exist (healed by openDatabase) */
   private readonly runLinks: boolean
   /** LINEAR.md: told after every task write (sync schedules a push); never fails the write */
-  private readonly writeListeners = new Set<(task: BoardTask) => void>()
+  private readonly writeListeners = new Set<TaskWriteListener>()
   /** LINEAR.md: the tracker issue a task is linked to (plugged in by the sync service) */
   private externalLink: (taskId: string) => ExternalTaskLink | null = ()=>null
   constructor(readonly store: Store, opts: { companiesRoot?: string | null } = {}) {
@@ -415,9 +417,12 @@ export class CompanyStore {
   }
   /** One statement: the JSON and its §1.2 query mirrors (status, department_id, agent_id). */
   private writeTask(task: CompanyTask): void {
+    // the row before this write (null on create): SOUNDS.md hears a task reach review from its status mirror
+    const before=this.writeListeners.size ? (this.store.db.prepare('SELECT status,run_id FROM company_tasks WHERE id=?').get(task.id) as {status:string|null;run_id:string|null}|undefined) : undefined
     this.store.db.prepare('UPDATE company_tasks SET company_id=?,source_key=?,run_id=?,status=?,department_id=?,agent_id=?,data=? WHERE id=?')
       .run(task.companyId,this.sourceKey(task),task.runId,task.status,task.departmentId??null,task.agentId??null,JSON.stringify(task),task.id)
-    for(const fn of this.writeListeners) { try { fn(task as BoardTask) } catch { /* a listener never fails a write */ } }
+    const prev=before?.status ? {status:before.status as TaskStatus,runId:before.run_id} : null
+    for(const fn of this.writeListeners) { try { fn(task as BoardTask,prev) } catch { /* a listener never fails a write */ } }
   }
   updateTask(id:string, patch:Partial<CompanyTaskInput>): BoardTask {
     return this.store.db.transaction(()=> {
@@ -462,7 +467,7 @@ export class CompanyStore {
 
   // ---------- LINEAR.md: hooks for tracker sync (src/main/company/sync) ----------
 
-  onTaskWrite(fn: (task: BoardTask) => void): () => void { this.writeListeners.add(fn); return ()=>{ this.writeListeners.delete(fn) } }
+  onTaskWrite(fn: TaskWriteListener): () => void { this.writeListeners.add(fn); return ()=>{ this.writeListeners.delete(fn) } }
   setExternalLinks(fn: ((taskId: string) => ExternalTaskLink | null) | null): void { this.externalLink = fn ?? (()=>null) }
   externalOf(taskId: string): ExternalTaskLink | null { try { return this.externalLink(taskId) } catch { return null } }
   /** In progress in a linked tracker, with no run or session of ours holding it. */

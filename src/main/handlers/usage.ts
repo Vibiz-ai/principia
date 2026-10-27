@@ -1,9 +1,10 @@
 /**
- * docs/USAGE.md: usage:* (the Usage page: summary, disk, Clean Up…) and activity:* (the portfolio Activity canvas:
+ * docs/USAGE.md: usage:* (the Usage page: summary, token activity, disk, Clean Up…) and activity:* (the portfolio Activity canvas:
  * outside Claude Code sessions, read-only). The services are built on first use; every channel answers even when a
  * service it leans on (worktrees, history) is missing.
  */
 import { app } from 'electron'
+import path from 'node:path'
 import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
@@ -13,6 +14,7 @@ import { historyRoots } from '../history'
 import { usageSummary } from '../usage/summary'
 import { DiskUsageService } from '../usage/disk'
 import { OutsideActivity } from '../usage/activity'
+import { CACHE_FILE, TokenActivityService, codexRoots, principiaRows } from '../usage/tokens'
 import { gitRunner } from '../worktrees'
 
 export function registerUsageHandlers(h: Hive): void {
@@ -44,6 +46,17 @@ export function registerUsageHandlers(h: Hive): void {
   handle('usage:disk', (q) => diskSvc().measure(!!q?.fresh))
   handle('usage:cleanupList', () => diskSvc().cleanupItems())
   handle('usage:cleanup', ({ ids }) => diskSvc().cleanup(ids))
+
+  // §5 Token activity: every token on this Mac (Claude Code, Codex, Principia's own), cached in our data dir
+  const tokens = new TokenActivityService({
+    cachePath: path.join(h.paths.userData, CACHE_FILE),
+    claudeRoots: () => historyRoots({ ...baseChildEnv(), HIVE_CLAUDE_DIRS: process.env.HIVE_CLAUDE_DIRS }),
+    claudeEnabled: () => h.settings().claudeHistory !== false,
+    codexRoots: () => codexRoots({ ...baseChildEnv(), HIVE_CODEX_DIRS: process.env.HIVE_CODEX_DIRS }),
+    principia: () => principiaRows(h.db),
+    log
+  })
+  handle('usage:tokens', () => tokens.get())
 
   const activity = new OutsideActivity({
     roots: () => historyRoots({ ...baseChildEnv(), HIVE_CLAUDE_DIRS: process.env.HIVE_CLAUDE_DIRS }),

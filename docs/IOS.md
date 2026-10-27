@@ -77,6 +77,18 @@ xcrun simctl launch booted ai.principia.phone
 `CODE_SIGN_IDENTITY=-` signs ad hoc: no team is needed, and the Keychain works (an unsigned build cannot keep the
 token). Unit tests: the same command with `test` instead of `build`.
 
+Lint: `swiftlint lint --config ios/.swiftlint.yml` from the repository root (errors fail, warnings are reported).
+
+### CI
+
+`.github/workflows/ios.yml` runs on pull requests and `main` pushes that touch `ios/` (called from Checks, so
+`all-green` counts it when it ran): SwiftLint 0.65.1 in its container on ubuntu, then on `macos-15` with Xcode 26.2
+`xcodegen generate` and the two commands above (`build`, then `test` on an iPhone simulator of the newest iOS 26+ runtime the image ships, created if the image has
+none), with
+DerivedData cached by `project.yml` and the sources. No Apple team, account or secret is involved. The
+`PrincipiaLiveUITests` target is not run there: it needs a real, paired Mac. When the runner image changes its Xcode
+versions, update `DEVELOPER_DIR` and the DerivedData cache key in that file together.
+
 ### Check it against your Mac (simulator)
 
 The simulator reaches the Mac's `127.0.0.1`, so no tunnel is needed:

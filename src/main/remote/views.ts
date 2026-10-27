@@ -118,7 +118,7 @@ export function runTitle(title: string): string {
  * `runAgents`: run id → the agent seat that run belongs to (runs.agent_id), for runs with no board task, such as a
  * Forum reply run.
  */
-export function phoneNow(d: PhoneData, companyId: Id, done: RunCard[] = [], runAgents: ReadonlyMap<Id, Id> = new Map()): PhoneNow {
+export function phoneNow(d: PhoneData, companyId: Id, done: RunCard[] = [], runAgents: ReadonlyMap<Id, Id> = new Map(), turnSince: ReadonlyMap<Id, string> = new Map()): PhoneNow {
   const t = truthOf(d)
   const who = whoResolver(d)
   const co = d.companies.find((c) => c.id === companyId)
@@ -133,7 +133,8 @@ export function phoneNow(d: PhoneData, companyId: Id, done: RunCard[] = [], runA
       who: w ?? (session ? chatWho(session) : null),
       title: task ? task.title : session ? oneLine(session.title, 80) : runTitle(i.title),
       activity: i.detail,
-      startedAt: i.startedAt ?? i.at,
+      // a session works in turns: how long this turn has run, not how old the session is
+      startedAt: (i.sessionId ? turnSince.get(i.sessionId) : undefined) ?? i.startedAt ?? i.at,
       open: chatRefOf(d, companyId, i.sessionId, agent)
     }
   })
@@ -161,6 +162,35 @@ function inputLine(input: unknown): string | null {
   const i = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
   const v = [i.command, i.file_path, i.url, i.pattern].find((x) => typeof x === 'string' && x.trim()) as string | undefined
   return v ? oneLine(v, 300) : null
+}
+
+/** A permission as a plain question ("Run a command?", "Create notes.txt?"), or null when its tool says nothing plain. */
+export function askHeading(tool: string | null | undefined, input: unknown): string | null {
+  const i = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+  const file = (typeof i.file_path === 'string' ? i.file_path : typeof i.notebook_path === 'string' ? i.notebook_path : '').split('/').pop() || 'a file'
+  switch (tool) {
+    case 'Bash':
+      return 'Run a command?'
+    case 'Write':
+      return `Create ${file}?`
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return `Edit ${file}?`
+    case 'Read':
+      return `Read ${file}?`
+    case 'WebFetch': {
+      try {
+        return `Open ${new URL(String(i.url)).host}?`
+      } catch {
+        return 'Open a page?'
+      }
+    }
+    case 'WebSearch':
+      return 'Search the web?'
+    default:
+      return null
+  }
 }
 
 const oneLine = (s: string, max: number): string => {
@@ -203,6 +233,7 @@ export function phoneNeeds(d: PhoneData, companyId: Id): PhoneNeeds {
       asks.push({
         id: ask.id,
         title: ask.title,
+        heading: ask.kind === 'permission' ? askHeading(ask.toolName, ask.toolInput) : null,
         question: ask.question,
         detail: ask.kind === 'approval' ? 'A workflow change: review it on your Mac.' : ok ? (ask.detail ?? inputLine(ask.toolInput)) : (ask.detail ?? 'Answer this on your Mac.'),
         who: w,
@@ -277,8 +308,13 @@ export function phoneChats(d: PhoneData, companyId: Id): PhoneChats {
     }
   const agentsBySession = new Map<Id, AgentNode>()
   for (const a of d.agents) if (a.kind === 'session' && a.sessionId && a.parentId === null) agentsBySession.set(a.sessionId, a)
+  // Continue made a new session in the same conversation: the ended one it replaced is not listed again
+  const newest = new Map<string, string>()
+  for (const s of d.sessions) if (s.agentSessionId && (newest.get(s.agentSessionId) ?? '') < s.startedAt) newest.set(s.agentSessionId, s.startedAt)
+  const replaced = (s: Session): boolean => s.status === 'exited' && !!s.agentSessionId && (newest.get(s.agentSessionId) ?? '') > s.startedAt
   for (const s of d.sessions) {
     if ((s.companyId || PERSONAL_COMPANY_ID) !== companyId || covered.has(s.id)) continue
+    if (replaced(s)) continue
     const root = agentsBySession.get(s.id)
     const live = liveSessions.has(s.id)
     rows.push({ key: `session:${s.id}`, ref: { kind: 'session', id: s.id }, title: s.title, who: { name: providerName(s.adapter), role: '', bust: null }, live, at: s.endedAt ?? root?.updatedAt ?? s.startedAt, line: live ? (activity.get(s.id) ?? 'Working') : root ? saidPreview(root, 140) : s.status === 'exited' ? 'Ended' : null })

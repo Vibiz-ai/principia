@@ -112,9 +112,9 @@ async function waitFor(fn, timeoutMs, everyMs = 1000) {
     )
     ok('workflow saved', !!wf.id)
     const run = await page.evaluate((id) => window.hive.runs.start({ target: { kind: 'workflow', workflowId: id, inputs: {} } }), wf.id)
-    await page.evaluate((id) => {
+    await page.evaluate(() => {
       document.querySelectorAll('.side-row--nav').forEach((el) => /Canvas/.test(el.textContent) && el.click())
-    }, run.id)
+    })
     const final = await waitFor(async () => {
       const d = await page.evaluate((id) => window.hive.runs.get({ id }), run.id)
       return ['passed', 'failed', 'canceled'].includes(d.run.status) ? d : null

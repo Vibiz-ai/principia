@@ -34,7 +34,6 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
     return () => {
       alive = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId])
 
   useEffect(() => {

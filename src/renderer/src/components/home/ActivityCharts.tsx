@@ -141,7 +141,6 @@ export function ActivityCharts({ days, successRate, providers }: { days: Activit
         const row = series.values[di] ?? []
         return { date: d.date, total: row.reduce((a, b) => a + b, 0), stacks: series.models.map((m, i) => ({ label: m, value: row[i] ?? 0, color: colorOf(i, m) })) }
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [days, series]
   )
   const spend = useMemo<Col[]>(() => days.map((d) => ({ date: d.date, total: d.costUsd ?? 0, stacks: [{ label: 'spend', value: d.costUsd ?? 0, color: 'var(--series-1)' }] })), [days])

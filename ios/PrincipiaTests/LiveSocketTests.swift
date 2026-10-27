@@ -124,6 +124,50 @@ final class LiveSocketTests: XCTestCase {
         s.stop()
     }
 
+    func testASubscribeWhileTheFirstOnesAreOnTheirWayIsSentOnceReady() async throws {
+        // QA PQ-10: a chat opened right as the socket connects must not keep the older subscription
+        let k = FakeConnector()
+        let s = make(k) { _ in }
+        s.subscribe(companyId: "co_a")
+        s.start()
+        s.subscribe(companyId: "co_a", sessionId: "se_9")
+        await settle()
+        let c = k.opened[0].2
+        XCTAssertTrue(c.sent.last?.contains("se_9") == true, "sent: \(c.sent)")
+        s.stop()
+    }
+
+    func testASocketThatDoesNotAnswerAPingIsDroppedAndOpenedAgain() async throws {
+        // QA PQ-09: back from the background, a socket that still looks open must prove it
+        let k = FakeConnector()
+        var events: [String] = []
+        let s = make(k) { events.append($0) }
+        var release: CheckedContinuation<Void, Never>?
+        s.pongWait = { _ in await withCheckedContinuation { release = $0 } }
+        s.start()
+        await settle()
+        k.opened[0].2.deliver(#"{"t":"hello"}"#)
+        await settle()
+        s.kick()
+        await settle()
+        XCTAssertTrue(k.opened[0].2.sent.contains(#"{"t":"ping"}"#))
+        release?.resume()
+        await settle()
+        XCTAssertEqual(k.opened.count, 2, "no pong: a new socket")
+        XCTAssertTrue(events.contains("up:false"))
+        // one that answers stays
+        k.opened[1].2.deliver(#"{"t":"hello"}"#)
+        await settle()
+        s.kick()
+        await settle()
+        k.opened[1].2.deliver(#"{"t":"pong"}"#)
+        await settle()
+        release?.resume()
+        await settle()
+        XCTAssertEqual(k.opened.count, 2)
+        s.stop()
+    }
+
     func testServerMessagesDecode() {
         XCTAssertEqual(PhoneServerMsg.decode(#"{"t":"changed","companyId":null,"what":["now","needs"]}"#), .changed(companyId: nil, what: ["now", "needs"]))
         XCTAssertEqual(PhoneServerMsg.decode(#"{"t":"bye","reason":"off"}"#), .bye(reason: "off"))

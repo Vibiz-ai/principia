@@ -19,10 +19,12 @@ enum Theme {
 
     static func display(_ size: CGFloat, semibold: Bool = false) -> Font {
         let name = semibold ? "Cinzel-SemiBold" : "Cinzel-Medium"
-        return UIFont(name: name, size: size) != nil ? .custom(name, size: size, relativeTo: .title) : .system(size: size, weight: .semibold, design: .serif)
+        // grows with Dynamic Type like the text around it: a small label like a caption, a heading like a title
+        let style: Font.TextStyle = size <= 12 ? .caption : size <= 16 ? .subheadline : size <= 20 ? .title3 : size <= 24 ? .title2 : .title
+        return UIFont(name: name, size: size) != nil ? .custom(name, size: size, relativeTo: style) : .system(style, design: .serif).weight(.semibold)
     }
     /// small capitals in Cinzel, tracked out (section labels, kickers, tab names)
-    static let kicker = display(11, semibold: true)
+    static var kicker: Font { display(11, semibold: true) }
 }
 
 extension View {

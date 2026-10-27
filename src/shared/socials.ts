@@ -10,6 +10,11 @@
  * turned that channel on explicitly (AutopilotRecord.publish).
  */
 import type { GatewayConnection } from './gateway'
+import { serviceById, serviceForConnection, serviceKeyFields, suggestServiceForConnection } from './services'
+
+/** CONNECTIONS.md §2: a channel's keys and MCP name fragments come from its registry entry (one name per key everywhere). */
+const socialKeys = (id: SocialId): SocialKey[] => serviceKeyFields(id).map(({ name, label, required }) => ({ name, label, required }))
+const socialMatch = (id: SocialId): string[] => serviceById(id)?.match?.fragments ?? [id]
 
 export type SocialId = 'x' | 'linkedin' | 'instagram' | 'tiktok' | 'youtube'
 export const SOCIAL_IDS: readonly SocialId[] = ['x', 'linkedin', 'instagram', 'tiktok', 'youtube']
@@ -31,7 +36,7 @@ export interface SocialChannel {
   docsLabel: string
   /** One or two plain sentences: what to create, which permission, and the catch. */
   setup: string
-  /** Lowercase fragments of an MCP connection's name or URL that mean this network. */
+  /** Whole words of an MCP connection's name that mean this network (its host is matched by domain). */
   mcpMatch: string[]
 }
 
@@ -40,59 +45,51 @@ export const SOCIAL_CHANNELS: readonly SocialChannel[] = [
     id: 'x',
     name: 'X (Twitter)',
     can: 'post',
-    keys: [
-      { name: 'X_API_KEY', label: 'API key (consumer key)', required: true },
-      { name: 'X_API_SECRET', label: 'API key secret', required: true },
-      { name: 'X_ACCESS_TOKEN', label: 'Access token', required: true },
-      { name: 'X_ACCESS_TOKEN_SECRET', label: 'Access token secret', required: true }
-    ],
+    keys: socialKeys('x'),
     docs: 'https://developer.x.com/en/portal/dashboard',
     docsLabel: 'X developer portal',
     setup: 'Create a project and app in the X developer portal, set its permissions to Read and write, then generate the access token and secret for your account. Posting needs an X API plan that includes write access.',
-    mcpMatch: ['twitter', 'x.com', 'x-mcp', 'xapi']
+    mcpMatch: socialMatch('x')
   },
   {
     id: 'linkedin',
     name: 'LinkedIn',
     can: 'post',
-    keys: [{ name: 'LINKEDIN_ACCESS_TOKEN', label: 'Member access token', required: true }],
+    keys: socialKeys('linkedin'),
     docs: 'https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/share-on-linkedin',
     docsLabel: 'Share on LinkedIn',
     setup: 'Create an app at linkedin.com/developers, add the “Share on LinkedIn” and “Sign In with LinkedIn” products, and generate a token with the w_member_social scope. Member tokens expire after 60 days.',
-    mcpMatch: ['linkedin']
+    mcpMatch: socialMatch('linkedin')
   },
   {
     id: 'instagram',
     name: 'Instagram',
     can: 'post',
-    keys: [
-      { name: 'INSTAGRAM_ACCESS_TOKEN', label: 'Access token', required: true },
-      { name: 'INSTAGRAM_USER_ID', label: 'Instagram account id', required: true }
-    ],
+    keys: socialKeys('instagram'),
     docs: 'https://developers.facebook.com/docs/instagram-platform/content-publishing',
     docsLabel: 'Instagram content publishing',
     setup: 'Needs an Instagram professional (Business or Creator) account and a Meta app with the instagram_content_publish permission. Publishing for accounts you do not own needs Meta app review.',
-    mcpMatch: ['instagram']
+    mcpMatch: socialMatch('instagram')
   },
   {
     id: 'tiktok',
     name: 'TikTok',
     can: 'post',
-    keys: [{ name: 'TIKTOK_ACCESS_TOKEN', label: 'User access token', required: true }],
+    keys: socialKeys('tiktok'),
     docs: 'https://developers.tiktok.com/doc/content-posting-api-get-started',
     docsLabel: 'TikTok Content Posting API',
     setup: 'Create a TikTok developer app with the Content Posting API and the video.publish scope. Until TikTok audits the app, everything it posts is private to your account.',
-    mcpMatch: ['tiktok']
+    mcpMatch: socialMatch('tiktok')
   },
   {
     id: 'youtube',
     name: 'YouTube',
     can: 'read',
-    keys: [{ name: 'YOUTUBE_API_KEY', label: 'YouTube Data API key', required: true }],
+    keys: socialKeys('youtube'),
     docs: 'https://developers.google.com/youtube/v3/getting-started',
     docsLabel: 'YouTube Data API',
     setup: 'Google Cloud → enable the YouTube Data API v3 → Credentials → API key. A key reads public channel and video stats; uploading needs Google sign-in, which Principia does not do yet, so YouTube stays drafts-only.',
-    mcpMatch: ['youtube']
+    mcpMatch: socialMatch('youtube')
   }
 ]
 
@@ -135,8 +132,8 @@ export function socialStatuses(companyId: string, keyNames: ReadonlySet<string>,
       if (!connectionReaches(c, companyId)) return false
       const usable = c.authentication === 'oauth' ? c.authStatus === 'connected' : c.hasCredentials || c.transport === 'stdio'
       if (!usable) return false
-      const hay = `${c.id} ${c.name} ${c.url ?? ''} ${c.command ?? ''} ${(c.args ?? []).join(' ')}`.toLowerCase()
-      return ch.mcpMatch.some((m) => hay.includes(m))
+      // its exact URL, or a whole word of its name or its host under the network's domain (never a substring: Dropbox is not X)
+      return (serviceForConnection(c) ?? suggestServiceForConnection(c))?.id === ch.id
     })
     const required = ch.keys.filter((k) => k.required)
     const missingKeys = required.filter((k) => !keyNames.has(k.name)).map((k) => k.name)

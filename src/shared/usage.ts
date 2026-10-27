@@ -114,3 +114,40 @@ export interface ActivitySnapshot {
   /** Claude history is off in Settings: outside sessions are not read. */
   disabled: boolean
 }
+
+// ---------- token activity (USAGE.md §5) ----------
+/** One slice of tokens. `input` is fresh (uncached) input; the four parts add up to the tokens counted. */
+export interface TokenCounts {
+  input: number
+  output: number
+  cacheWrite: number
+  cacheRead: number
+}
+/** Where tokens are read from: Claude Code and Codex transcripts on this Mac, and Principia's own records (hive.db). */
+export type TokenSourceId = 'claude' | 'codex' | 'principia'
+export interface TokenActivityDay {
+  /** Local day, YYYY-MM-DD. Only days with tokens are listed. */
+  date: string
+  byProvider: Partial<Record<TokenSourceId, TokenCounts>>
+  /** Tokens per model that day (all four parts), biggest first in the tooltip. */
+  byModel: Record<string, number>
+}
+export interface TokenSource {
+  id: TokenSourceId
+  label: string
+  counted: boolean
+  /** Why it is not counted, or what is special about it. */
+  note?: string
+  /** All four parts, every day. */
+  tokens: number
+}
+export interface TokenActivity {
+  /** counting = the first (or a large) scan is still running: `days` may be partial. */
+  state: 'counting' | 'ready'
+  progress: { bytesDone: number; bytesTotal: number; filesDone: number; filesTotal: number } | null
+  days: TokenActivityDay[]
+  /** The longest single agent turn (prompt to finished reply), in ms. 0 = none seen. */
+  longestTaskMs: number
+  sources: TokenSource[]
+  at: ISODate
+}

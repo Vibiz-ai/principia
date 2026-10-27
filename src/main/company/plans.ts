@@ -150,7 +150,11 @@ const taskEditSchema = z.object({
 
 // ---------- the store ----------
 
-export interface PlanStoreDeps { company: () => CompanyStore; redact?: (s: string) => string; now?: () => Date }
+export interface PlanStoreDeps {
+  company: () => CompanyStore; redact?: (s: string) => string; now?: () => Date
+  /** every write, with the plan as it was before (null on create): SOUNDS.md hears milestones and plans finish */
+  onSaved?: (prev: Plan | null, next: Plan) => void
+}
 interface Row { id: string; company_id: string; status: string; data: string }
 
 export class PlanStore {
@@ -173,8 +177,10 @@ export class PlanStore {
   /** Writes the whole row (the JSON is the source of truth; status is a query mirror). */
   save(p: Plan): Plan {
     const next = { ...p, updatedAt: this.now() }
+    const before = this.d.onSaved ? this.db.prepare('SELECT * FROM company_plans WHERE id=?').get(next.id) as Row | undefined : undefined
     this.db.prepare('INSERT INTO company_plans(id,company_id,status,created_at,updated_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at, data=excluded.data')
       .run(next.id, next.companyId, next.status, next.createdAt, next.updatedAt, JSON.stringify(next))
+    if (this.d.onSaved) try { this.d.onSaved(before ? read(before) : null, next) } catch { /* a listener never fails a write */ }
     return next
   }
   /** One read-modify-write in a transaction. */

@@ -66,7 +66,6 @@ export function useRoutineContext(companyId: Id): { ctx: RoutineContext | null; 
   const repoIds = useMemo(() => reposOf(repos, companyId).map((r) => r.id), [repos, companyId])
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const loadWf = (): void => void hive.workflows.list({ companyId }).then(setWorkflows, () => undefined)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(loadWf, [companyId])
   useHiveEvent('data:changed', ({ domain }) => domain === 'workflows' && loadWf())
   const ctx = useMemo<RoutineContext | null>(() => (setup.ctx ? { ...setup.ctx, repoIds } : null), [setup.ctx, repoIds])

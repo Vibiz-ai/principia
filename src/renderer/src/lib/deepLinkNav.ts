@@ -3,7 +3,7 @@
  * place to look at; nothing here files, connects, approves or sends.
  */
 import type { CompanyTask } from '@shared/company'
-import { CONNECTION_CATALOG } from '@shared/connectionCatalog'
+import { SERVICE_REGISTRY } from '@shared/services'
 import { parseDeepLink, type DeepLink } from '@shared/deepLink'
 import { cadenceOf, isRoutineId, parseAt, parseDays, routineDef, routineTimeOf, type RoutineId, type RoutineTime } from '@shared/routines'
 import { isPlaybookId, playbookDef } from '@shared/autopilotPlaybooks'
@@ -19,7 +19,7 @@ export function resolveTaskRef(ref: string, tasks: readonly Pick<CompanyTask, 'i
 export function deepLinkView(l: DeepLink, o: { nonce: number; taskId?: Id | null }): NavTarget {
   switch (l.kind) {
     case 'connect':
-      return { name: 'settings', section: 'connections', connect: l.tool, nonce: o.nonce }
+      return { name: 'settings', section: 'connections', connect: l.tool, ...(l.purpose ? { purpose: l.purpose } : {}), nonce: o.nonce }
     case 'settings':
       return { name: 'settings', section: l.section, nonce: o.nonce }
     case 'board':
@@ -45,7 +45,7 @@ export function deepLinkView(l: DeepLink, o: { nonce: number; taskId?: Id | null
 }
 
 export const TOOL_NAMES: Record<string, string> = {
-  ...Object.fromEntries(CONNECTION_CATALOG.map((p) => [p.id, p.name])),
+  ...Object.fromEntries(SERVICE_REGISTRY.map((s) => [s.id, s.name])),
   instagram: 'Instagram',
   github: 'GitHub',
   linear: 'Linear',

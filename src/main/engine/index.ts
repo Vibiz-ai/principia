@@ -476,7 +476,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
         let gatewayOn = false
         if (profile.adapter === 'claude' || profile.adapter === 'codex') {
           const gwCwd = opts.cwd ?? ctx.paths.scratchDir
-          const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId) : ctx.gateway?.attachment(gwCwd)
+          // SEC-4: key-backed connections only for the keys this profile may read
+          const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId, null, profile.secretNames) : ctx.gateway?.attachment(gwCwd, null, null, profile.secretNames)
           if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) { writeMcpFiles(mcp.files); gatewayOn = true } }
         }
         // BROWSER.md §3: the company browser for company panes (claude, codex), its own token

@@ -5,6 +5,7 @@
  * profile (the seven fields; once the vault exists they edit the company hub note), repositories, Passport vault
  * location, export / import, archive.
  */
+import { KnowledgeSources } from '../components/passport/KnowledgeSources'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanyPassport, CompanyPassportInput, PassportExport } from '@shared/company'
 import { PERSONAL_COMPANY_ID, PROFILE_FIELDS } from '@shared/company'
@@ -180,7 +181,6 @@ function useHubNote(company: CompanyPassport): { status: VaultStatus | null; not
       }
     })()
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [enabled, company.id, company.name, company.vaultPath])
   return { status, note, reload: load }
 }
@@ -493,6 +493,7 @@ function CompanySettings({ company: c, importButton, part }: { company: CompanyP
           </section>
 
           {hub.status?.exists && <PassportConnect companyId={c.id} />}
+          {c.system !== 'personal' && <KnowledgeSources companyId={c.id} />}
           </>}
 
 

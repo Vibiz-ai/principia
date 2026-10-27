@@ -9,6 +9,7 @@
 import { useMemo, useState } from 'react'
 import type { AdapterId, Id } from '@shared/types'
 import { Sheet } from '../ui'
+import { ChatServiceStarters } from '../connections/ConnectionSlot'
 import { reposOf } from '../../lib/companyModel'
 import { taskTitleFor } from '../../lib/desk'
 import { sendToAgent, useDeskAgents } from '../../state/desk'
@@ -112,6 +113,8 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
             onChange={(e) => setText(e.target.value)}
             aria-label="Message"
           />
+          {/* QA-13: what this company has connected, with a starter question that reads it */}
+          <ChatServiceStarters companyId={companyId} onAsk={(t) => setText(t)} />
           <div className="newchat__hint">
             {withWho.kind === 'agent'
               ? `It lands in ${agent?.name ?? 'the agent'}’s Queue; the answer comes back in your conversation with ${agent?.name ?? 'them'}.`

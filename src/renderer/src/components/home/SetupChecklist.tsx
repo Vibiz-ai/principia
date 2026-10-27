@@ -13,10 +13,11 @@ import type { Id } from '@shared/types'
 import { Button, Disclosure, IconButton, Sheet } from '../ui'
 import { checklistProgress, nextItem, type ChecklistAction, type ChecklistItem } from '../../lib/checklist'
 import { setChecklistPref, useChecklistPref } from '../../state/checklist'
-import { confirmNative, errorMessage, hive } from '../../lib/hive'
+import { confirmNative, errorMessage, hive, nativeMenu } from '../../lib/hive'
 import { addRepos, attempt, createDepartmentPresets, getState, navigate, openLogoPicker, toast, updateSettings, useStore } from '../../state/store'
 import { getSlack, isConnected } from '../../state/slack'
 import { useCompanySetup, type CompanySetup } from './useCompanySetup'
+import { openConnect } from '../../state/connections'
 import { AutopilotSheet } from './AutopilotSheet'
 import '../../styles/checklist.css'
 
@@ -86,6 +87,12 @@ export async function runChecklistAction(a: ChecklistAction, companyId: Id, setu
       return void navigate({ name: 'schedules', seed: {}, nonce: Date.now() })
     case 'autopilot':
       return open.autopilot(a.id)
+    case 'connect': {
+      if (!a.choices?.length) return openConnect(companyId, a.serviceId, 'dashboard')
+      const pick = await nativeMenu(a.choices.map((c) => ({ id: c.serviceId, label: `Connect ${c.name}…` })))
+      if (pick) openConnect(companyId, pick, 'dashboard')
+      return
+    }
   }
 }
 

@@ -69,7 +69,7 @@ function parseValue(first: string, rest: string[]): string | string[] {
 
 /** Splits `---` frontmatter off a note. Unknown keys and their formatting are preserved in `raw`. */
 export function parseFrontmatter(text: string): { entries: FrontmatterEntry[]; body: string; present: boolean } {
-  const norm = text.replace(/^﻿/, '')
+  const norm = text.replace(/^\uFEFF/, '')
   const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(norm)
   if (!m) return { entries: [], body: norm, present: false }
   const entries: FrontmatterEntry[] = []

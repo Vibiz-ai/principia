@@ -868,7 +868,8 @@ export class Execution {
       }
       let gatewayOn = false
       if (runnable && (!this.slackAccess() || this.slackAccess()?.fullPermissions) && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
-        const gateway = this.ctx.gateway?.attachment(s.cwd, this.run.companyId ?? null, this.run.id)
+        // SEC-4: key-backed connections only for the keys this step may read (its trigger's list, else its profile's)
+        const gateway = this.ctx.gateway?.attachment(s.cwd, this.run.companyId ?? null, this.run.id, this.secretOverride() ?? s.profile?.secretNames ?? [])
         if (gateway) { slackMcp = attachGateway(s.adapterId, gateway, slackMcp ?? mem?.attachment ?? null, gateway.env.PRINCIPIA_GATEWAY_DIR); if (slackMcp) { writeMcpFiles(slackMcp.files); gatewayOn = true } }
       }
       if (forum?.server && (s.adapterId === 'claude' || s.adapterId === 'codex')) {

@@ -1,6 +1,12 @@
 # Publishes the Principia Cloud image to ghcr.io/vibiz-ai/principia-cloud (CLOUD.md §12.1), so `docker compose up -d`
-# and the Render button need no clone and no build. Runs on version tags and by hand; it pushes images only and never
-# deploys anything. The Open Passport host sources come from that repository as a named build context.
+# and the Render button need no clone and no build. Runs on version tags: a pushed `v*` tag, or release-please.yml's
+# dispatch on the tag it created (a tag created with GITHUB_TOKEN fires no push event). By hand, dispatch it on a tag
+# (`gh workflow run cloud-images.yml --ref vX.Y.Z`); a dispatch on a branch does nothing. It pushes images only and
+# never deploys anything. The Open Passport host sources come from that repository as a named build context, pinned
+# to one reviewed commit (OPEN_PASSPORT_COMMIT below: bump it in a pull request to ship a newer Open Passport).
+# Publishing waits for approval in the `release` environment, like the macOS release; the image carries BuildKit
+# provenance and an SBOM, and a build-provenance attestation pushed to the registry
+# (verify: gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:<version> -R example-org/principia).
 name: cloud-images
 on:
   push:
@@ -13,10 +19,18 @@ concurrency:
   cancel-in-progress: false
 jobs:
   principia-cloud:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 45
     permissions:
-      contents: read
-      packages: write
+      contents: read # checkout
+      packages: write # push the image to ghcr.io
+      id-token: write # Sigstore signing of the build-provenance attestation
+      attestations: write # store the attestation on the repository
+    env:
+      # the only place the Open Passport version is set: a full commit SHA of example-org/open-passport, never a branch
+      OPEN_PASSPORT_COMMIT: f1543801d15463771feb8d9453ff4fcb5b8140ac
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,17 +46,35 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/vibiz-ai/principia-cloud
+          # `latest` comes from latest=auto, which tags it for stable semver versions only: a prerelease such as
+          # v0.3.0-beta.1 gets just its own version tag (and the sha), never `latest` or the {{major}}.{{minor}} tag
+          flavor: |
+            latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Check the Open Passport pin is a full commit SHA
+        run: |
+          if ! printf '%s' "$OPEN_PASSPORT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::OPEN_PASSPORT_COMMIT must be a full 40-character commit SHA, not a branch or tag"
+            exit 1
+          fi
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: cloud/Dockerfile
           platforms: linux/amd64,linux/arm64
-          build-contexts: open-passport=https://github.com/Vibiz-ai/open-passport.git#main
+          build-contexts: open-passport=https://github.com/Vibiz-ai/open-passport.git#${{ env.OPEN_PASSPORT_COMMIT }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+      - name: Attest build provenance of the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/vibiz-ai/principia-cloud
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

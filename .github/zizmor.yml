@@ -1,0 +1,7 @@
+# zizmor settings (.github/workflows/workflow-lint.yml; locally: zizmor .github)
+rules:
+  dependabot-cooldown:
+    config:
+      # .github/dependabot.yml waits 5 days before a new version (14 for a new major), long enough for a hijacked
+      # npm release to be caught and yanked, short enough to take fixes the same week
+      days: 5

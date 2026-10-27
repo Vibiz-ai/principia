@@ -620,10 +620,10 @@ CREATE INDEX IF NOT EXISTS slack_work_sessions_thread ON slack_work_sessions(tea
     if (!fts) return []
     const where = ['slack_messages_fts MATCH @fts', 'm.team_id = @teamId', 'm.deleted = 0']
     const p: Record<string, unknown> = { fts, teamId: q.teamId, limit: Math.min(Math.max(q.limit ?? 20, 1), 100) }
-    if (q.channelId) (where.push('m.channel_id = @channelId'), (p.channelId = q.channelId))
-    if (q.userId) (where.push('m.user_id = @userId'), (p.userId = q.userId))
-    if (q.after) (where.push('m.ts >= @after'), (p.after = (Date.parse(q.after) / 1000).toFixed(6)))
-    if (q.before) (where.push('m.ts < @before'), (p.before = (Date.parse(q.before) / 1000).toFixed(6)))
+    if (q.channelId) { where.push('m.channel_id = @channelId'); p.channelId = q.channelId }
+    if (q.userId) { where.push('m.user_id = @userId'); p.userId = q.userId }
+    if (q.after) { where.push('m.ts >= @after'); p.after = (Date.parse(q.after) / 1000).toFixed(6) }
+    if (q.before) { where.push('m.ts < @before'); p.before = (Date.parse(q.before) / 1000).toFixed(6) }
     const rows = this.db
       .prepare(
         `SELECT m.*, snippet(slack_messages_fts, 0, '«', '»', '…', 24) AS snip, COALESCE(c.name, m.channel_id) AS cname
@@ -732,16 +732,16 @@ CREATE INDEX IF NOT EXISTS slack_work_sessions_thread ON slack_work_sessions(tea
   autoPostsSince(q: { teamId: string; channelId?: string; threadKey?: string; runId?: string; sinceMs: number; withNotify?: boolean }): number {
     const where = ["team_id = @teamId", q.withNotify ? "purpose IN ('auto', 'notify')" : "purpose = 'auto'", "status <> 'failed'", 'created_at >= @since']
     const p: Record<string, unknown> = { teamId: q.teamId, since: new Date(q.sinceMs).toISOString() }
-    if (q.channelId) (where.push('channel_id = @channelId'), (p.channelId = q.channelId))
-    if (q.threadKey) (where.push('thread_key = @threadKey'), (p.threadKey = q.threadKey))
-    if (q.runId) (where.push('run_id = @runId'), (p.runId = q.runId))
+    if (q.channelId) { where.push('channel_id = @channelId'); p.channelId = q.channelId }
+    if (q.threadKey) { where.push('thread_key = @threadKey'); p.threadKey = q.threadKey }
+    if (q.runId) { where.push('run_id = @runId'); p.runId = q.runId }
     return (this.db.prepare(`SELECT count(*) AS n FROM slack_outbox WHERE ${where.join(' AND ')}`).get(p) as { n: number }).n
   }
   /** Notify-node posts (purpose 'notify', not failed) since a time, optionally for one run: the durable alert rate guard. */
   notifyPostsSince(q: { runId?: string | null; sinceMs: number }): number {
     const where = ["purpose = 'notify'", "status <> 'failed'", 'created_at >= @since']
     const p: Record<string, unknown> = { since: new Date(q.sinceMs).toISOString() }
-    if (q.runId) (where.push('run_id = @runId'), (p.runId = q.runId))
+    if (q.runId) { where.push('run_id = @runId'); p.runId = q.runId }
     return (this.db.prepare(`SELECT count(*) AS n FROM slack_outbox WHERE ${where.join(' AND ')}`).get(p) as { n: number }).n
   }
 
@@ -785,9 +785,9 @@ CREATE INDEX IF NOT EXISTS slack_work_sessions_thread ON slack_work_sessions(tea
       where.push(`status IN (${q.status.map((_, i) => `@s${i}`).join(',')})`)
       q.status.forEach((s, i) => (p[`s${i}`] = s))
     }
-    if (q.channelId) (where.push('channel_id = @channelId'), (p.channelId = q.channelId))
-    if (q.threadTs) (where.push('thread_ts = @threadTs'), (p.threadTs = q.threadTs))
-    if (q.runId) (where.push('run_id = @runId'), (p.runId = q.runId))
+    if (q.channelId) { where.push('channel_id = @channelId'); p.channelId = q.channelId }
+    if (q.threadTs) { where.push('thread_ts = @threadTs'); p.threadTs = q.threadTs }
+    if (q.runId) { where.push('run_id = @runId'); p.runId = q.runId }
     return (
       this.db.prepare(`SELECT * FROM slack_drafts ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT @limit`).all(p) as DraftRowDb[]
     ).map(draftFromRow)

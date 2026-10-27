@@ -38,6 +38,43 @@ export interface UpdatesEventMap {
 }
 export const UPDATES_EVENTS = ['updates:changed'] as const satisfies readonly (keyof UpdatesEventMap)[]
 
+/**
+ * RELEASING.md §4.1: where updates come from. The public repository; the stable feed is its
+ * releases/latest/download (electron-builder.yml publish.url, checked by a test), which GitHub never points at a
+ * pre-release.
+ */
+export const RELEASE_REPO_URL = 'https://github.com/Vibiz-ai/principia'
+export const STABLE_FEED_URL = `${RELEASE_REPO_URL}/releases/latest/download`
+
+export type UpdateFeed = { provider: 'generic'; url: string; channel: 'latest' } | { provider: 'github'; owner: string; repo: string; channel: 'beta' }
+
+export interface UpdateChannelPolicy {
+  /** electron-updater `channel`: which manifest it reads (latest-mac.yml / beta-mac.yml) */
+  channel: 'latest' | 'beta'
+  allowPrerelease: boolean
+  /** always false: setting `channel` turns electron-updater's allowDowngrade on, so it is set back after it */
+  allowDowngrade: false
+  feed: UpdateFeed
+}
+
+/**
+ * Settings › About › "Get beta updates" (off by default).
+ *   off: the stable feed (releases/latest/download/latest-mac.yml): stable releases only. Someone already on a beta
+ *        stays on it until a stable version is newer (never a downgrade).
+ *   on:  the repository's release list (releases.atom, no API rate limit), newest stable or beta release first, and
+ *        its beta-mac.yml. Stable releases carry beta-mac.yml too, so beta users also get every stable release.
+ */
+export function updateChannelPolicy(beta: boolean): UpdateChannelPolicy {
+  if (!beta) return { channel: 'latest', allowPrerelease: false, allowDowngrade: false, feed: { provider: 'generic', url: STABLE_FEED_URL, channel: 'latest' } }
+  const [owner, repo] = new URL(RELEASE_REPO_URL).pathname.split('/').filter(Boolean)
+  return { channel: 'beta', allowPrerelease: true, allowDowngrade: false, feed: { provider: 'github', owner, repo, channel: 'beta' } }
+}
+
+/** A prerelease version (0.3.0-beta.1) is a beta build. */
+export function isPrereleaseVersion(version: string): boolean {
+  return /^\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(version)
+}
+
 /** The first check waits for startup to settle; then one every four hours. */
 export const FIRST_CHECK_DELAY_MS = 30_000
 export const CHECK_EVERY_MS = 4 * 60 * 60_000

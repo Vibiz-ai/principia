@@ -110,6 +110,77 @@ export class ChatReplica {
   }
 }
 
+/**
+ * Loading the open chat's snapshot without losing or rewinding anything (PQ-02, PQ-06):
+ * - one fetch at a time per chat; asking again while one is out runs it once more after, so the snapshot on screen is
+ *   always the newest one asked for (an older answer never lands last);
+ * - ops that arrive while it is out are held, then applied on top of the snapshot (those it already has are skipped);
+ * - the socket's ack ("subbed": the Mac's last op number when the subscription took effect) that is ahead of the
+ *   snapshot means ops fell between the two: one more fetch.
+ */
+export interface ReplicaLike {
+  apply(seq: number, ops: ChatOp[]): 'ok' | 'old' | 'gap'
+  readonly snap: { seq: number }
+}
+export class ChatLoad {
+  private id: string | null = null
+  private running: Promise<void> | null = null
+  private again = false
+  private held: { seq: number; ops: ChatOp[] }[] = []
+  private ack: number | null = null
+  private token: object | null = null
+
+  /** fetch: gets the snapshot and puts it on screen; null when it no longer applies (another chat opened, no chat) */
+  run(id: string, fetch: () => Promise<ReplicaLike | null>): Promise<void> {
+    if (this.running && this.id === id) {
+      this.again = true
+      return this.running
+    }
+    this.id = id
+    this.held = []
+    this.ack = null
+    const token = {}
+    this.token = token
+    const p: Promise<void> = (async () => {
+      try {
+        do {
+          this.again = false
+          this.held = []
+          const r = await fetch()
+          if (!r || this.id !== id) break
+          for (const x of this.held.sort((a, b) => a.seq - b.seq)) if (r.apply(x.seq, x.ops) === 'gap') this.again = true
+          this.held = []
+          if (this.ack !== null && this.ack > r.snap.seq) this.again = true
+          this.ack = null
+        } while (this.again && this.id === id)
+      } finally {
+        if (this.token === token) {
+          this.running = null
+          this.held = []
+          this.ack = null
+        }
+      }
+    })()
+    this.running = p
+    return p
+  }
+  /** ops for a chat whose snapshot is on the way: kept for it (true), or not loading (false: apply them as usual) */
+  hold(id: string, seq: number, ops: ChatOp[]): boolean {
+    if (!this.running || this.id !== id) return false
+    this.held.push({ seq, ops })
+    return true
+  }
+  /** the socket's ack while loading: checked once the snapshot is in (true), or not loading (false) */
+  acked(id: string, seq: number): boolean {
+    if (!this.running || this.id !== id) return false
+    this.ack = Math.max(this.ack ?? 0, seq)
+    return true
+  }
+  get loading(): string | null {
+    return this.running ? this.id : null
+  }
+}
+
 /** What one chat row on the phone shows. */
 export type ChatLine =
   | { t: 'me'; id: string; text: string; queued: boolean }

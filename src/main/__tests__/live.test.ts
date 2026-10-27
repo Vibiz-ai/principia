@@ -40,6 +40,7 @@ import { buildHandlers } from '../memory/server/build'
 import { dispatch, type Inflight } from '../memory/server/jsonrpc'
 import { SessionLive, SessionLiveHub, isTerminalReport, screenMessage, type SessionLiveDeps } from '../live/sessionLive'
 import { NeedsYouNotifier, type NotifyRequest } from '../live/asks'
+import type { ChimeEvent } from '../chime'
 import { activity, dashboard, localDay, markSeen, resolveSince } from '../live/dashboard'
 import { trayMenuModel, trayTitle } from '../trayModel'
 import type { LiveEmit } from '../live/apply'
@@ -739,10 +740,12 @@ describe('NeedsYouNotifier (A7)', () => {
   const mk = (over: { focused?: boolean; visible?: { sessionId: string | null; runId: string | null } } = {}) => {
     vi.useFakeTimers()
     const sent: NotifyRequest[] = []
+    const chimes: ChimeEvent[] = []
     const open = new Set<string>()
     let t = 0
     const n = new NeedsYouNotifier({
       notify: (r) => sent.push(r),
+      chime: (e) => chimes.push(e),
       focused: () => over.focused ?? false,
       visible: () => over.visible ?? { sessionId: null, runId: null },
       rootTitle: () => 'repo · Claude',
@@ -757,7 +760,7 @@ describe('NeedsYouNotifier (A7)', () => {
       open.add(id)
       return ask({ id, agentId: root, rootId: root, sessionId: 's_aaaaaaaaaa', title: `t-${id}` })
     }
-    return { n, sent, open, advance, a }
+    return { n, sent, chimes, open, advance, a }
   }
 
   it('no notification for an ask resolved within 3 s', () => {
@@ -774,7 +777,7 @@ describe('NeedsYouNotifier (A7)', () => {
     n.askOpened(a('ask_1'))
     n.askOpened(a('ask_2'))
     advance(3000)
-    expect(sent).toEqual([{ title: 'repo · Claude needs you', body: '2 things need you', agentId: 'ag_root' }])
+    expect(sent).toEqual([{ title: 'repo · Claude needs you', body: '2 things need you', agentId: 'ag_root', chime: { kind: 'needs', key: 'ask:ask_1' } }])
     n.askOpened(a('ask_3'))
     advance(5000)
     expect(sent.length).toBe(1)
@@ -802,6 +805,22 @@ describe('NeedsYouNotifier (A7)', () => {
     n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 25_000)
     n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 25_000)
     expect(sent.length).toBe(2) // <= 1 per session per 60 s
+    expect(sent[1].chime).toMatchObject({ kind: 'done' })
+  })
+
+  it('SOUNDS.md: a long turn ending while the window is focused elsewhere is a sound alone; never while its chat is on screen', () => {
+    const elsewhere = mk({ focused: true, visible: { sessionId: 's_other', runId: null } })
+    elsewhere.n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 5000)
+    expect(elsewhere.chimes).toEqual([]) // short turn
+    elsewhere.n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 25_000)
+    expect(elsewhere.sent).toEqual([]) // focused: no notification (A7)
+    expect(elsewhere.chimes).toMatchObject([{ kind: 'done' }])
+    elsewhere.n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 25_000)
+    expect(elsewhere.chimes.length).toBe(1) // the idle cooldown holds for the sound too
+    const looking = mk({ focused: true, visible: { sessionId: 's_1', runId: null } })
+    looking.n.idle({ id: 'ag_s', sessionId: 's_1', title: 'x' }, 25_000)
+    expect(looking.chimes).toEqual([])
+    expect(looking.sent).toEqual([])
   })
 })
 

@@ -69,6 +69,8 @@ struct PhoneAsk: Codable, Hashable, Identifiable, Sendable {
     }
     var id: String
     var title: String
+    /// a permission as a plain question ("Run a command?", "Create notes.txt?"); nil on an older Mac
+    var heading: String?
     var question: String?
     var detail: String?
     var who: PhoneWho?
@@ -235,6 +237,8 @@ struct PhoneAgent: Codable, Sendable {
     var who: PhoneWho
     var status: String
     var items: [PhoneThreadItem]
+    /// AGENT CHAT: the agent's own chat session; its screen is that chat (nil: an older Mac, or none yet)
+    var chatSessionId: String?
 }
 
 struct PhoneRoomMember: Codable, Hashable, Identifiable, Sendable {
@@ -288,6 +292,8 @@ enum PhoneServerMsg: Sendable, Equatable {
     case pong
     case changed(companyId: String?, what: [String])
     case chat(sessionId: String, seq: Int, ops: [JSONValue])
+    /// the subscription took effect: the chat's last op number then (a replica behind it missed some)
+    case subbed(sessionId: String?, seq: Int)
     /// a terminal session's last lines (no transcript to show as a chat yet)
     case screen(sessionId: String, text: String)
     case room(PhoneRoomMessage)
@@ -304,6 +310,8 @@ enum PhoneServerMsg: Sendable, Equatable {
         case "chat":
             guard let sid = v["sessionId"]?.string, let seq = v["seq"]?.int else { return nil }
             return .chat(sessionId: sid, seq: seq, ops: v["ops"]?.array ?? [])
+        case "subbed":
+            return .subbed(sessionId: v["sessionId"]?.string, seq: v["seq"]?.int ?? 0)
         case "screen":
             guard let sid = v["sessionId"]?.string, let text = v["text"]?.string else { return nil }
             return .screen(sessionId: sid, text: text)
