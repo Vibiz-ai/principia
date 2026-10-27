@@ -35,10 +35,11 @@ mac:
   icon: build/icon.icns
   darkModeSupport: true
   minimumSystemVersion: '13.0' # Electron's own minimum (macOS Ventura)
-  # Signing identity: never written here. electron-builder takes it from the environment at build time
-  # (CSC_NAME = the Developer ID Application certificate's name without its prefix, or CSC_LINK + CSC_KEY_PASSWORD
-  # for a .p12), else finds the one Developer ID Application certificate in the login keychain. `npm run dist`
-  # turns discovery off (CSC_IDENTITY_AUTO_DISCOVERY=false), so a local build stays unsigned as before.
+  # Releases (scripts/release-mac.mjs) build the app UNSIGNED here (identity null, notarize false) and sign it with
+  # scripts/mac-sign.mjs (codesign inside-out, hardened runtime, the entitlement files below, notarytool, stapler),
+  # so the CI signing job needs no node_modules (RELEASING.md §5.2). The settings below are electron-builder's own
+  # signing for anyone running it directly; `npm run dist` turns identity discovery off, so it stays unsigned.
+  # Signing identity: never written here.
   hardenedRuntime: true
   # Entitlements (plists cannot carry comments: codesign's parser rejects them, so the reasons live here).
   # build/entitlements.mac.plist, the app itself:
@@ -60,8 +61,8 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
   # Notarization credentials come from the environment only: APPLE_API_KEY (path to the .p8) + APPLE_API_KEY_ID +
-  # APPLE_API_ISSUER, or APPLE_KEYCHAIN_PROFILE (a `xcrun notarytool store-credentials` profile). Without them
-  # electron-builder skips notarization; scripts/release-mac.mjs refuses to publish in that case.
+  # APPLE_API_ISSUER, or APPLE_KEYCHAIN_PROFILE (a `xcrun notarytool store-credentials` profile). scripts/release-mac.mjs
+  # passes them to notarytool itself and refuses to publish without them.
   notarize: true
   extendInfo:
     CFBundleName: Principia
@@ -69,12 +70,14 @@ mac:
     LSApplicationCategoryType: public.app-category.developer-tools
     NSAppleEventsUsageDescription: Principia opens files and folders in Finder.
 dmg:
-  # signed, notarized and stapled by scripts/release-mac.mjs after the build (the app inside is already stapled)
+  # `npm run dist` only: release dmgs are made, signed, notarized and stapled by scripts/mac-sign.mjs (hdiutil)
   sign: false
   writeUpdateInfo: false
 # Updates (src/main/updates.ts): the app reads latest-mac.yml from the newest GitHub release through the
-# releases/latest/download redirect (no GitHub API call, no rate limit). Uploading is scripts/release-mac.mjs's
-# job (gh release create), never electron-builder's: the build always runs with --publish never.
+# releases/latest/download redirect (no GitHub API call, no rate limit); with "Get beta updates" on, beta-mac.yml from
+# the newest release including pre-releases (src/shared/updates.ts, RELEASING.md §4.1). electron-builder writes this
+# feed into the app (app-update.yml); the manifests are written by scripts/update-info.mjs and uploaded by
+# scripts/release-mac.mjs (gh release create), never by electron-builder: the build always runs with --publish never.
 publish:
   provider: generic
   url: https://github.com/Vibiz-ai/principia/releases/latest/download

@@ -67,7 +67,6 @@ export function isExecutableName(name: string): boolean {
 
 /** A safe file name for the company's Downloads folder (no folders, no dot files, no control characters). */
 export function safeDownloadName(name: string): string {
-  // eslint-disable-next-line no-control-regex
   const base = path.basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f:/]+/g, '_').replace(/^\.+/, '').trim()
   return (base || 'download').slice(0, 180)
 }

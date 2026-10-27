@@ -1,0 +1,71 @@
+# Versions and the changelog (docs/RELEASING.md §5.2): release-please reads the Conventional Commits merged to main and
+# keeps one release pull request open that bumps package.json / package-lock.json and adds the CHANGELOG.md section.
+# Merging that pull request makes release-please create the tag vX.Y.Z on the merge commit and a DRAFT release holding
+# the changelog section (release-please-config.json: draft + force-tag-creation). A draft, because with immutable
+# releases a published release can never gain the dmg and zip; release.yml fills and publishes it.
+#
+# Why this job starts release.yml itself: a tag (or release) created with the job's GITHUB_TOKEN never triggers another
+# workflow; GitHub makes an exception only for workflow_dispatch. So when a release was created, this job dispatches
+# release.yml and cloud-images.yml on the new tag (`gh workflow run --ref vX.Y.Z`): each run is a normal tag run
+# (GITHUB_REF_TYPE=tag, GITHUB_SHA = the tagged commit) and still waits for approval in the `release` environment. No
+# personal access token or GitHub App is needed. If a token that does trigger workflows is ever used here, drop the
+# dispatch, or the tag push and the dispatch would start two release (and two cloud-images) runs.
+#
+# The same rule means the release pull request (pushed with GITHUB_TOKEN) gets no `pull_request` Checks run, and its
+# required `all-green` check would never appear. So when release-please opened or updated it, this job dispatches
+# Checks on the release branch; those check runs land on the pull request's head commit.
+name: release-please
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the release branch, the tag and the draft release
+      pull-requests: write # the release pull request
+      issues: write # its `autorelease: pending` / `autorelease: tagged` labels
+      actions: write # workflow_dispatch of release.yml, cloud-images.yml and ci.yml
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Start the release workflow on the new tag
+        if: steps.rp.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # release.yml and scripts/release-mac.mjs release only tags like v1.2.3 / v1.2.3-beta.1
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release-please created '$TAG', which is not a vX.Y.Z tag"
+            exit 1
+          fi
+          gh workflow run release.yml --repo "$REPO" --ref "$TAG"
+          gh workflow run cloud-images.yml --repo "$REPO" --ref "$TAG"
+          echo "Dispatched release.yml and cloud-images.yml for $TAG: approve them in Actions (environment: release)."
+
+      - name: Run Checks on the release pull request
+        if: steps.rp.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$BRANCH" =~ ^release-please--[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::unexpected release branch name '$BRANCH'"
+            exit 1
+          fi
+          gh workflow run ci.yml --repo "$REPO" --ref "$BRANCH"

@@ -224,7 +224,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
         }
       } else if (e.key === 'Escape' && !document.querySelector('.sheet-layer')) {
         if (threadId) setThreadId(null)
-        else if (results) (setSearch(''), setResults(null))
+        else if (results) { setSearch(''); setResults(null) }
       }
     }
     window.addEventListener('keydown', onKey)

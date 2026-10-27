@@ -1156,6 +1156,7 @@ function Storage(): React.JSX.Element {
 
 function About(): React.JSX.Element {
   const info = useStore((s) => s.info)
+  const beta = useStore((s) => s.settings?.betaUpdates === true)
   const upd = useUpdates()
   const [checking, setChecking] = useState(false)
   return (
@@ -1192,6 +1193,14 @@ function About(): React.JSX.Element {
             </Button>
           ) : null}
         </SRow>
+        {upd.phase !== 'off' && (
+          <SRow
+            label="Get beta updates"
+            desc={beta ? 'Beta versions arrive before everyone else and may have rough edges. Turning this off keeps the beta until a newer stable version is out.' : 'Try new versions before everyone else. Off: stable releases only.'}
+          >
+            <Switch checked={beta} onChange={(v) => void updateSettings({ betaUpdates: v })} label="Get beta updates" />
+          </SRow>
+        )}
       </div>
     )}
     </>

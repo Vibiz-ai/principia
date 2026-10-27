@@ -68,7 +68,6 @@ const INVITE = /^[A-Za-z0-9_-]{4,128}$/
 /** Plain text from a query value: no control characters, trimmed, capped. Empty = absent. */
 function text(v: string | null, max: number): string | undefined {
   if (v === null) return undefined
-  // eslint-disable-next-line no-control-regex
   const t = v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
   return t || undefined
 }

@@ -16,3 +16,4 @@ cloud/workspace/
 .env.gcp
 dist-phone-site/
 .vercel/
+test-results/

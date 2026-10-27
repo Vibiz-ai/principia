@@ -269,7 +269,7 @@ d('report back', () => {
     const sid = s.session_id as string
     lastSaid = `Fixed cart.ts. Key ${SECRET} removed. ${'x'.repeat(3000)}`
     expect(work.onAgent(root(sid, 'needs_you', 'idle'))).toBeNull() // no work yet: not a finished turn
-    work.onAgent(root(sid, 'working'))
+    void work.onAgent(root(sid, 'working'))
     expect(work.onAgent(root(sid, 'needs_you', 'permission'))).toBeNull() // a permission prompt is not the end
     const p1 = work.onAgent(root(sid, 'needs_you', 'idle'))
     await settle(2000)
@@ -281,7 +281,7 @@ d('report back', () => {
     expect(h.fake.posted).toHaveLength(1)
     expect(h.fake.posted[0]).toMatchObject({ channel: 'C1', thread_ts: parent })
     // the user keeps working in the app: no more reports
-    work.onAgent(root(sid, 'working'))
+    void work.onAgent(root(sid, 'working'))
     expect(work.onAgent(root(sid, 'needs_you', 'idle'))).toBeNull()
     expect(reports).toHaveLength(1)
     // a follow-up from the same thread re-arms exactly one report
@@ -290,7 +290,7 @@ d('report back', () => {
     expect(f).toMatchObject({ status: 'continued', session_id: sid })
     expect(continued[0].text).toContain('also add a test')
     lastSaid = null
-    work.onAgent(root(sid, 'working'))
+    void work.onAgent(root(sid, 'working'))
     const p2 = work.onAgent(root(sid, 'needs_you', 'idle', null))
     await settle(2000)
     await p2
@@ -308,7 +308,7 @@ d('report back', () => {
     const s = await tools.call(owner, 'principia_start_session', { repo_id: 'repo_web000001', title: 'Fix checkout', task: 'fix' })
     const sid = s.session_id as string
     lastSaid = 'Done: fixed cart.ts'
-    work.onAgent(root(sid, 'working'))
+    void work.onAgent(root(sid, 'working'))
     const p = work.onAgent(root(sid, 'needs_you', 'idle'))
     await settle(2000)
     await p

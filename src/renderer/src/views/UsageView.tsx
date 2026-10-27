@@ -40,7 +40,6 @@ export function UsageView({ cap: capAsk }: { cap?: number } = {}): React.JSX.Ele
     saveJson('principia.spendUsd', true)
     setCapEdit(Date.now())
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (capAsk) openCap() }, [capAsk])
   const [week, setWeek] = useState<UsageSummary | null>(null)
   const [month, setMonth] = useState<UsageSummary | null>(null)
@@ -53,7 +52,6 @@ export function UsageView({ cap: capAsk }: { cap?: number } = {}): React.JSX.Ele
       (e) => setError(errorMessage(e))
     )
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [scope, nonce])
   useHiveEvent('run:updated', (r) => {
     if (r.status !== 'running' && r.status !== 'queued') load()

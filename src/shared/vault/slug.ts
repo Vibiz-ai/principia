@@ -6,7 +6,6 @@ import { type NoteType, TYPE_FOLDER, normalizeNoteType } from './grammar'
 import { normName } from './resolve'
 
 const FORBIDDEN_RE = /[#|^:[\]\\/*"<>?]/g
-// eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f]/g
 const WINDOWS_RESERVED_RE = /^(con|prn|aux|nul|com\d|lpt\d)$/i
 /** UTF-8 bytes; leaves room for ` (Customer) 12.md` within the 255-byte name limit of APFS/ext4. */

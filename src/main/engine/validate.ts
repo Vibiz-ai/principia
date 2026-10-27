@@ -34,7 +34,7 @@ const INPUT_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 const INPUT_TYPES = ['text', 'multiline', 'repo', 'boolean']
 export const NODE_TYPES = ['agent', 'room', 'check', 'shell', 'wait', 'notify'] as const
 /** A git branch name for worktree.base (no templates, no spaces, no `..`). */
-const BRANCH = /^(?!.*\.\.)(?!-)[A-Za-z0-9._\/-]{1,200}$/
+const BRANCH = /^(?!.*\.\.)(?!-)[A-Za-z0-9._/-]{1,200}$/
 const WORKTREE_INPUT = /^\{\{\s*inputs\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}$/
 
 export interface ValidateDeps {

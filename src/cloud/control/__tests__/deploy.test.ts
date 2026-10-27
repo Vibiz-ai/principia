@@ -15,7 +15,7 @@ import { parseMasterKey } from '../vault'
 import { isPassportPath } from '../passportProxy'
 
 const root = resolve(__dirname, '../../../..')
-const yaml = (p: string) => load(readFileSync(join(root, p), 'utf8')) as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+const yaml = (p: string) => load(readFileSync(join(root, p), 'utf8')) as Record<string, any>
 
 describe('compose: one file, pulled images, nothing else on disk', () => {
   const c = yaml('cloud/compose.yml')

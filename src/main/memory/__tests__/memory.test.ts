@@ -958,7 +958,6 @@ d('MemoryService (main)', () => {
 const built = path.resolve(__dirname, '../../../../out/main/mcp-memory.js')
 const electronBin = (() => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('electron') as unknown as string
   } catch {
     return null

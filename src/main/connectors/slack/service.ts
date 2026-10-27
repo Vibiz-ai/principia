@@ -638,7 +638,7 @@ export class SlackService {
   // ---------- Slack-started work: report back (SLACK.md §11.4) ----------
   /** hive.onLiveEvent: a root agent row changed. */
   onAgentUpdated(a: AgentNode): void {
-    this.work.onAgent(a)
+    void this.work.onAgent(a)
   }
 
   /** The report goes through the original run's trigger policy (post or draft). */

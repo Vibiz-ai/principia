@@ -15,8 +15,8 @@ const target = process.argv[2] && path.resolve(process.argv[2])
 if (!target || target === root || target.startsWith(root + path.sep)) {
   throw new Error('Usage: node scripts/prepare-public-release.mjs /absolute/new-empty-directory (outside source tree)')
 }
-const roots = ['src', 'resources', 'scripts', '.github', 'cloud', 'website', 'ios', 'phone-site']
-const files = ['.dockerignore', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'vitest.config.ts', 'vite.cloud.config.ts', 'vite.console.config.ts', 'vite.phone.config.ts', 'vite.phone-site.config.ts', 'render.yaml', 'build/icon.icns', 'build/icon.png', 'build/entitlements.mac.plist', 'build/entitlements.mac.inherit.plist', 'build/entitlements.mac.adhoc.plist', 'docs/RELEASING.md', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/slack-app-manifest.json', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md', 'docs/GTM.md', 'docs/CHAT-UI.md', 'docs/REMOTE.md', 'docs/ORCHESTRATOR.md', 'docs/IOS.md', 'docs/WORKTREE.md', 'docs/PLANS.md', 'docs/BROWSER.md']
+const roots = ['src', 'e2e', 'resources', 'scripts', '.github', 'cloud', 'website', 'ios', 'phone-site']
+const files = ['.dockerignore', 'release-please-config.json', '.release-please-manifest.json', 'CHANGELOG.md', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.gitignore', 'package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'tsconfig.web.json', 'eslint.config.mjs', 'vitest.config.ts', 'playwright.config.ts', 'vite.cloud.config.ts', 'vite.console.config.ts', 'vite.phone.config.ts', 'vite.phone-site.config.ts', 'render.yaml', 'build/icon.icns', 'build/icon.png', 'build/entitlements.mac.plist', 'build/entitlements.mac.inherit.plist', 'build/entitlements.mac.adhoc.plist', 'docs/RELEASING.md', 'docs/AUTHORING.md', 'docs/CONTRACT.md', 'docs/LIVE.md', 'docs/MEMORY.md', 'docs/SLACK.md', 'docs/slack-app-manifest.json', 'docs/MCP.md', 'docs/MCP-GATEWAY.md', 'docs/CLOUD.md', 'docs/GTM.md', 'docs/CHAT-UI.md', 'docs/REMOTE.md', 'docs/ORCHESTRATOR.md', 'docs/IOS.md', 'docs/WORKTREE.md', 'docs/PLANS.md', 'docs/BROWSER.md']
 const banned = /(?:^|\/)(?:node_modules|\.git|\.claude|\.codex|\.aws|\.hive-dev-data|out|dist|release)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite|sqlite3|db|log|pem|p12|pfx)$/i
 const secretPatterns = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]{10,}?-----END/],
@@ -29,6 +29,12 @@ const secretPatterns = [
 const fixtureHashes = new Set((await fs.readFile(path.join(root, 'scripts/public-release-fixtures.sha256'), 'utf8').catch(() => ''))
   .split('\n').map(line => line.replace(/#.*/, '').trim()).filter(Boolean))
 const reviewedFixture = value => fixtureHashes.has(createHash('sha256').update(value).digest('hex'))
+// .github/CODEOWNERS names the code owner by GitHub handle (the public repository's owner, already public): only the
+// `@handle` owner entries in that one file survive the export; every other occurrence is still replaced.
+const OWNER_SLOT = '\u0000code-owner\u0000'
+const keepCodeOwners = (relative, text, sanitize) => relative === '.github/CODEOWNERS'
+  ? sanitize(text.replace(new RegExp(`(^|\\s)@${privateAccount}(?=\\s|$)`, 'gm'), (_, pre) => pre + OWNER_SLOT)).replaceAll(OWNER_SLOT, `@${privateAccount}`)
+  : sanitize(text)
 const candidates = []
 async function walk(relative) {
   let stat
@@ -60,13 +66,13 @@ for (const relative of candidates) {
   await fs.mkdir(path.dirname(path.join(target, relative)), { recursive: true })
   const bytes = await fs.readFile(path.join(root, relative))
   if (bytes.includes(0)) await fs.writeFile(path.join(target, relative), bytes)
-  else await fs.writeFile(path.join(target, relative), bytes.toString('utf8')
+  else await fs.writeFile(path.join(target, relative), keepCodeOwners(relative, bytes.toString('utf8'), text => text
     .replaceAll(`/Users/${privateUser}/`, '/Users/example/')
     .replaceAll(privateAccount, 'example-user')
     .replaceAll(privateOrg, 'example-org')
     // the public repositories keep their real address (the README, compose and the Render button point at them)
     .replace(/https:\/\/(?:github\.com|raw\.githubusercontent\.com)\/example-org\/(?:principia|open-passport)(?:\.git)?(?=[/#?\s)'"<>\\]|$)/g, url => url.replace('example-org', privateOrg))
-    .replaceAll(privateProject, 'example-project'))
+    .replaceAll(privateProject, 'example-project')))
   // keep the permission bits: the fake CLIs the tests spawn (src/cloud/agent/__tests__/bin) must stay executable
   await fs.chmod(path.join(target, relative), (await fs.stat(path.join(root, relative))).mode & 0o777)
 }

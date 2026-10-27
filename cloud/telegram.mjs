@@ -44,7 +44,7 @@ export async function startTelegram({ token, users, chats, runner, workflows, si
           else if (cmd.action === 'jobs') response = runner.list().slice(0, 10).map(j => `${j.id} ${j.harness} ${j.status}`).join('\n') || 'No jobs'
           else if (cmd.action === 'cancel') response = runner.cancel(cmd.id) ? 'Cancellation requested' : 'Job not found or already finished'
           else if (cmd.action === 'job') { const job = runner.get(cmd.id); response = job ? `${job.id}: ${job.status}\n${job.output.slice(-3000)}` : 'Job not found' }
-          else response = '/run codex <task>\n/run claude <task>\n/jobs\n/job <id>\n/cancel <id>\n/workflows\n/workflow <id> {\"input\":\"value\"}\n/runs\n/runstatus <id>\n/stopworkflow <id>'
+          else response = '/run codex <task>\n/run claude <task>\n/jobs\n/job <id>\n/cancel <id>\n/workflows\n/workflow <id> {"input":"value"}\n/runs\n/runstatus <id>\n/stopworkflow <id>'
         } catch (e) { response = runner.redact(e.message) }
         await api('sendMessage', { chat_id: message.chat.id, text: response.slice(0, 4000) })
       }

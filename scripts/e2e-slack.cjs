@@ -77,7 +77,7 @@ function cleanTrust() {
   // interrupt and could otherwise land in the middle of a synchronous SQLite call
   const fake = (fn, arg) =>
     app.evaluate(
-      ({}, [src, a]) => new Promise((res, rej) => setImmediate(() => { try { res(new Function('f', 'a', `return (${src})(f, a)`)(globalThis.__hiveFakeSlack, a)) } catch (e) { rej(e) } })),
+      (_electron, [src, a]) => new Promise((res, rej) => setImmediate(() => { try { res(new Function('f', 'a', `return (${src})(f, a)`)(globalThis.__hiveFakeSlack, a)) } catch (e) { rej(e) } })),
       [fn.toString(), arg]
     )
   const posts = () => fake((f) => f.callsOf('chat.postMessage').map((c) => c.body))

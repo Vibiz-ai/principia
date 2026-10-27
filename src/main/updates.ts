@@ -15,7 +15,9 @@ import {
   plainUpdateError,
   restartBlockedBy,
   shouldCheck,
+  updateChannelPolicy,
   type RestartResult,
+  type UpdateFeed,
   type UpdateState,
   type WorkCounts
 } from '../shared/updates'
@@ -25,6 +27,11 @@ export interface Updater {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
   disableDifferentialDownload: boolean
+  /** RELEASING.md §4.1: the channel's manifest (latest-mac.yml / beta-mac.yml); setting it turns allowDowngrade on */
+  channel: string | null
+  allowPrerelease: boolean
+  allowDowngrade: boolean
+  setFeedURL(feed: UpdateFeed): void
   logger: unknown
   on(event: 'checking-for-update' | 'update-not-available', fn: () => void): unknown
   on(event: 'update-available' | 'update-downloaded', fn: (info: { version: string }) => void): unknown
@@ -50,6 +57,8 @@ export interface UpdateServiceOptions {
   quit?: (install: () => void) => Promise<void>
   /** electron-updater, loaded only when updates are on */
   load?: () => Promise<Updater>
+  /** Settings › About › "Get beta updates" (Settings.betaUpdates, off by default) */
+  beta?: () => boolean
   now?: () => Date
 }
 
@@ -96,6 +105,26 @@ export class UpdateService {
     return this.s
   }
 
+  /**
+   * Settings › About › "Get beta updates" changed: the next check reads the other channel. Checks right away, unless a
+   * check or download is in flight or an update is already waiting (that one still installs; the next check after it
+   * uses the new channel).
+   */
+  setBeta(on: boolean): void {
+    if (this.updater) this.applyChannel(this.updater, on)
+    if (this.s.phase !== 'off' && shouldCheck(this.s.phase)) void this.check()
+  }
+
+  private applyChannel(u: Updater, beta: boolean): void {
+    const p = updateChannelPolicy(beta)
+    u.setFeedURL(p.feed)
+    u.channel = p.channel
+    u.allowPrerelease = p.allowPrerelease
+    // after `channel`: electron-updater's channel setter turns allowDowngrade on. Leaving beta never downgrades.
+    u.allowDowngrade = p.allowDowngrade
+    this.o.log.info('update channel', { channel: p.channel })
+  }
+
   /** The toast's and Settings' Restart. Never while anything works. */
   restart(): RestartResult {
     if (this.s.phase !== 'ready' || !this.updater) return { restarting: false, reason: 'No update is ready to install.' }
@@ -134,6 +163,7 @@ export class UpdateService {
     // stable artifact names (Principia-arm64.zip in every release) would hand the differential download the new
     // blockmap twice; the zip is small enough to fetch whole
     u.disableDifferentialDownload = true
+    this.applyChannel(u, this.o.beta?.() ?? false)
     const log = this.o.log
     // one line each: electron-updater's errors carry stacks and the server's response headers
     const line = (m: unknown): string => `updater: ${String(m).split('\n')[0].slice(0, 300)}`

@@ -705,6 +705,8 @@ export class Hive {
         log.warn('setLoginItemSettings failed', { e: String(e) })
       }
     }
+    // RELEASING.md §4.1: "Get beta updates" switches the updater's channel and checks again
+    if (patch.betaUpdates !== undefined && patch.betaUpdates !== (before.betaUpdates === true)) this.updates?.setBeta(after.betaUpdates === true)
     if (patch.schedulesPaused !== undefined) {
       this.safe(() => this.engine.scheduler.setPaused(after.schedulesPaused), undefined)
       for (const sch of this.store.listSchedules()) emit('schedule:updated', sch)

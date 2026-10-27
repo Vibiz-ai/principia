@@ -195,6 +195,8 @@ const settingsPatch = z
     slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
     slackMirrorNeedsYou: z.boolean(),
     notifyNeedsYou: z.boolean(),
+    // RELEASING.md §4.1
+    betaUpdates: z.boolean(),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),

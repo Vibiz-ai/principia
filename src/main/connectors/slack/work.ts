@@ -186,7 +186,7 @@ export class SlackWork {
     try {
       this.d.continueSession(sessionId, text)
     } catch (e) {
-      throw new Error(`That session is not waiting for input (${e instanceof Error ? e.message : String(e)}). Say so in the thread; it reports back when its current turn ends.`)
+      throw new Error(`That session is not waiting for input (${e instanceof Error ? e.message : String(e)}). Say so in the thread; it reports back when its current turn ends.`, { cause: e })
     }
     this.d.sql.armWorkReport(sessionId, runId)
     this.working.add(sessionId)

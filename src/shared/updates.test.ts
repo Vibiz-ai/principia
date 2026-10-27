@@ -1,5 +1,20 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { initialUpdateState, plainUpdateError, restartBlockedBy, shouldAnnounce, shouldCheck, updateLine, updatesOffReason, type UpdateState } from './updates'
+import {
+  initialUpdateState,
+  isPrereleaseVersion,
+  plainUpdateError,
+  RELEASE_REPO_URL,
+  restartBlockedBy,
+  shouldAnnounce,
+  shouldCheck,
+  STABLE_FEED_URL,
+  updateChannelPolicy,
+  updateLine,
+  updatesOffReason,
+  type UpdateState
+} from './updates'
 
 const env = (e: Record<string, string> = {}) => e
 const ready = (next: string): UpdateState => ({ ...initialUpdateState('0.1.0', null), phase: 'ready', next, percent: 100 })
@@ -71,5 +86,38 @@ describe('updateLine', () => {
     expect(updateLine({ ...s, phase: 'downloading', next: '0.2.0', percent: 41.6 })).toBe('Downloading 0.2.0 (42%)…')
     expect(updateLine(ready('0.2.0'))).toBe('0.2.0 is ready. Restart to install it.')
     expect(updateLine({ ...s, phase: 'current' })).toBe('Principia is up to date.')
+  })
+})
+
+describe('updateChannelPolicy (Get beta updates)', () => {
+  it('off by default: the stable feed through releases/latest/download, no prereleases, never a downgrade', () => {
+    expect(updateChannelPolicy(false)).toEqual({
+      channel: 'latest',
+      allowPrerelease: false,
+      allowDowngrade: false,
+      feed: { provider: 'generic', url: `${RELEASE_REPO_URL}/releases/latest/download`, channel: 'latest' }
+    })
+  })
+
+  it('on: the repository release list (pre-releases included) and beta-mac.yml, still never a downgrade', () => {
+    expect(updateChannelPolicy(true)).toEqual({
+      channel: 'beta',
+      allowPrerelease: true,
+      allowDowngrade: false,
+      // the public export rewrites the organisation's name everywhere but in github.com links: derive it from the link
+      feed: { provider: 'github', owner: new URL(RELEASE_REPO_URL).pathname.split('/')[1], repo: 'principia', channel: 'beta' }
+    })
+    expect(RELEASE_REPO_URL).toMatch(/^https:\/\/github\.com\/[^/]+\/principia$/)
+  })
+
+  it('the stable feed is the one electron-builder.yml writes into the app (app-update.yml)', () => {
+    const yml = fs.readFileSync(path.join(__dirname, '../../electron-builder.yml'), 'utf8')
+    expect(/^\s+url:\s*(\S+)\s*$/m.exec(yml)?.[1]).toBe(STABLE_FEED_URL)
+  })
+
+  it('a prerelease version is a beta build', () => {
+    expect(isPrereleaseVersion('0.3.0-beta.1')).toBe(true)
+    expect(isPrereleaseVersion('1.0.0-rc.1')).toBe(true)
+    expect(isPrereleaseVersion('0.3.0')).toBe(false)
   })
 })

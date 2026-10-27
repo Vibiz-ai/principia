@@ -161,7 +161,7 @@ export function registerBoardHandlers(h: Hive & { dispatcher?: BoardDispatcher |
   h.company.setBoardEnabled(() => departmentsEnabled(h.settings().experimental))
   const onChange = (companyId: string) => {
     emit('data:changed', { domain: 'tasks' })
-    try { h.dispatcher?.pump?.(companyId) } catch (err) { log.warn('board: dispatcher pump failed', { companyId, error: String(err) }) }
+    try { void h.dispatcher?.pump?.(companyId) } catch (err) { log.warn('board: dispatcher pump failed', { companyId, error: String(err) }) }
   }
   const a = boardActions(h, onChange)
   handle('tasks:assign', a.assign)

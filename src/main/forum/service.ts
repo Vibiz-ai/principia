@@ -308,7 +308,7 @@ export class ForumService implements ForumBridge {
     }
   }
   async stop(): Promise<void> {
-    for (const set of this.waiters.values()) for (const w of set) (clearTimeout(w.timer), w.resolve(null))
+    for (const set of this.waiters.values()) for (const w of set) { clearTimeout(w.timer); w.resolve(null) }
     this.waiters.clear()
     for (const t of this.presenceTimers.values()) clearTimeout(t)
     await this.http.stop()

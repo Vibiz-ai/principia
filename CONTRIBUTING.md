@@ -23,8 +23,11 @@ Useful areas include terminal accessibility, provider compatibility, workflow er
 
 Explain the problem, the resulting behavior and how you verified it. Include a screenshot for visible UI changes. Keep unrelated changes in separate pull requests.
 
+Title the pull request (and so its squash commit) as a [Conventional Commit](https://www.conventionalcommits.org/): `feat: …`, `fix(phone): …`, `perf: …`, `deps: …`, `docs: …`, `chore: …`, `ci: …`. Release versions and `CHANGELOG.md` are made from these titles: `feat` and `fix` appear in the changelog and pick the next version, and a `!` after the type (`feat!: …`) marks a breaking change ([RELEASING.md](docs/RELEASING.md) §5.2).
+
 ```sh
 npm run typecheck
+npm run lint
 npm test
 npm run build
 ```
