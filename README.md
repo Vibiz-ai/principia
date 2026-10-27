@@ -77,7 +77,9 @@ Principia owns the connection; harness account logins remain separate. The gatew
 
 ## Run from your phone
 
-Deploy the worker on an always-on Linux server with Docker, persistent storage and agent CLIs authenticated in that environment. Telegram long polling receives your commands without exposing a public webhook.
+**iPhone app.** A native app watches your agents and keeps the work going from your phone: pair it with Principia on your Mac (Settings › App › Phone), or try a sample company without a Mac. Public TestFlight link: coming soon. <!-- TESTFLIGHT_LINK: replace "coming soon" with the public link (https://testflight.apple.com/join/…) once the first build is approved; docs/IOS.md, TestFlight --> Build it yourself: [docs/IOS.md](docs/IOS.md).
+
+**Self-hosted worker.** Deploy the worker on an always-on Linux server with Docker, persistent storage and agent CLIs authenticated in that environment. Telegram long polling receives your commands without exposing a public webhook.
 
 ```sh
 cp cloud/.env.example cloud/.env

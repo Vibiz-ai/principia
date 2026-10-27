@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · Principia</title>
+<meta name="description" content="What the Principia Mac app and iPhone app keep, where it stays, and what they never do.">
+<style>
+  @font-face { font-family: Cinzel; src: url('/fonts/Cinzel-Variable.woff2') format('woff2'); font-weight: 400 900; font-display: swap; }
+  :root { --page: #0b0d0e; --panel: #12161a; --ink: #edf1f2; --soft: #cdd4d6; --muted: #98a2a6; --line: rgba(255,255,255,.08); }
+  * { box-sizing: border-box; }
+  html { background: var(--page); color-scheme: dark; }
+  body { margin: 0; background: var(--page); color: var(--soft); font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 64px 16px 96px; }
+  a { color: var(--ink); text-underline-offset: 3px; }
+  .back { font-size: 14px; color: var(--muted); text-decoration: none; }
+  h1, h2 { font-family: Cinzel, Georgia, serif; color: var(--ink); font-weight: 600; letter-spacing: .02em; }
+  h1 { font-size: clamp(32px, 6vw, 46px); margin: 28px 0 8px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .lede { font-size: 18px; color: var(--ink); }
+  .meta { font-size: 13px; color: var(--muted); }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← Principia</a>
+  <h1>Privacy</h1>
+  <p class="meta">Principia (the Mac app, the iPhone app and this website) · Updated October 2026</p>
+  <p class="lede">Principia runs on your Mac. Your companies, chats, tasks and files stay there. We do not run a server that receives them, and we do not track you.</p>
+
+  <div class="card">
+    <strong>In short.</strong> No account with us. No analytics, ads or tracking in the apps or on this site. No data sold or shared. The iPhone app talks only to your own Mac.
+  </div>
+
+  <h2>The iPhone app</h2>
+  <p>The iPhone app is a remote for Principia on your Mac. You pair it by scanning a code your Mac shows.</p>
+  <ul>
+    <li><strong>On the phone:</strong> your Mac's address and the device key it issued, in the iOS Keychain (this device only), and a few settings (Face ID lock on or off, the last company you looked at). Disconnecting from the Mac deletes the address and key.</li>
+    <li><strong>Where it connects:</strong> only to your Mac, over HTTPS (or your local network). What you see in the app, such as chats, tasks and messages, is fetched from your Mac while the app is open and is not stored by us. When you share your Mac over the internet from Principia's Phone settings, the connection goes through a tunnel provider (a Cloudflare quick tunnel) to your Mac.</li>
+    <li><strong>Camera:</strong> used only to read the pairing code. No picture is kept or sent.</li>
+    <li><strong>Face ID:</strong> optional, handled by iOS. The app never sees your face data.</li>
+    <li><strong>Notifications:</strong> if you allow them, iOS gives the app a device token. Today it stays on the phone and is sent nowhere.</li>
+    <li><strong>Demo mode:</strong> "Try it without a Mac" shows a made-up company that exists only on the phone. Nothing is sent anywhere.</li>
+  </ul>
+  <p>Apple may collect crash reports and usage data for TestFlight and the App Store under its own privacy policy, only if you allow it in iOS settings.</p>
+
+  <h2>The Mac app</h2>
+  <ul>
+    <li>Everything Principia creates (companies, tasks, chats, memory, settings) is stored on your Mac, in its application data folder. Keys you add are kept in the macOS Keychain.</li>
+    <li>It runs the agent tools you install and sign in to (for example Claude Code or Codex) and the services you connect. Those send your prompts and files to their providers under the providers' own terms, because you chose them.</li>
+    <li>It checks GitHub for new versions of Principia. It sends no analytics or usage data to us.</li>
+    <li>The Phone feature is off until you turn it on. It lets only phones you paired in, and you can revoke any of them on the Mac.</li>
+  </ul>
+
+  <h2>This website</h2>
+  <p>No cookies, no analytics, no sign-up form. Our host may keep standard server logs (such as IP address and pages requested) for security and reliability.</p>
+
+  <h2>Children</h2>
+  <p>Principia is a work tool and is not directed at children.</p>
+
+  <h2>Changes and contact</h2>
+  <p>If this policy changes, this page changes, with a new date. Principia is open source: you can read exactly what the apps do at <a href="https://github.com/Vibiz-ai/principia">github.com/Vibiz-ai/principia</a>. Questions: open an issue there, or report a security problem through <a href="https://github.com/Vibiz-ai/principia/security">its security page</a>.</p>
+</main>
+</body>
+</html>

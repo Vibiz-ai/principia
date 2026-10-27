@@ -1,0 +1,93 @@
+# Uploads the iPhone app to TestFlight (docs/IOS.md, TestFlight): run it by hand (Actions › testflight › Run workflow)
+# or push a tag `ios-vX.Y.Z` (that version goes to App Store Connect; by hand it is project.yml's MARKETING_VERSION).
+# The build number is this workflow's run number. Approve the run in the `release` environment; its secrets are the
+# App Store Connect API key the Mac release uses (APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER) and
+# APPLE_TEAM_ID. scripts/ios-testflight.mjs archives with automatic signing (-allowProvisioningUpdates and the API key),
+# exports for app-store-connect and uploads with altool. The certificate Xcode fetches lives only in a temporary
+# keychain and the key only in the runner's temp folder; both are deleted at the end, whatever happened.
+name: testflight
+on:
+  workflow_dispatch:
+  push:
+    tags: ['ios-v*']
+permissions: {}
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+jobs:
+  upload:
+    name: iPhone app to TestFlight
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      # deployment target iOS 26: macos-15's default Xcode is 16.x (as in ios.yml)
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # nothing to install (the script uses Node's own modules), and no cache in a job that uploads a release
+          package-manager-cache: false
+      # before any secret is in the environment
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Create a temporary keychain for the signing certificate
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/principia-ios.keychain-db"
+          kc_pass="$(openssl rand -base64 32)"
+          echo "::add-mask::$kc_pass"
+          security create-keychain -p "$kc_pass" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$kc_pass" "$KEYCHAIN"
+          # Xcode keeps the certificate it fetches in the default keychain: this one, first in the search list
+          security default-keychain -d user -s "$KEYCHAIN"
+          security list-keychains -d user | xargs security list-keychains -d user -s "$KEYCHAIN"
+
+      - name: Write the App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_API_KEY_P8" ]; then
+            echo "::error::APPLE_API_KEY_P8 must be set in the release environment"
+            exit 1
+          fi
+          KEY_DIR="$RUNNER_TEMP/principia-asc"
+          umask 077
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$KEY_DIR/AuthKey.p8"
+          chmod 600 "$KEY_DIR/AuthKey.p8"
+          echo "APPLE_API_KEY=$KEY_DIR/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Archive, export and upload
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = "tag" ]; then
+            node scripts/ios-testflight.mjs --build-number "$BUILD_NUMBER" --version "${REF_NAME#ios-v}"
+          else
+            node scripts/ios-testflight.mjs --build-number "$BUILD_NUMBER"
+          fi
+
+      - name: Delete the temporary keychain and the API key
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/principia-ios.keychain-db"
+          security default-keychain -d user -s "$HOME/Library/Keychains/login.keychain-db" || true
+          if [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          rm -rf "$RUNNER_TEMP/principia-asc" ios/build/testflight/ExportOptions.plist

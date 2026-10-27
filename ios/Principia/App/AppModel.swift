@@ -68,9 +68,15 @@ final class AppModel {
     static let lastCompanyKey = "principia.lastCompany"
 
     // ---------- plumbing ----------
-    let api: APIClient
+    /// the Mac's API and live socket; in demo mode the demo company's (no network), else the real ones
+    private(set) var api: APIClient
     private let store: MacStore
-    private let connector: LiveConnector
+    private var connector: LiveConnector
+    private let realAPI: APIClient
+    private let realConnector: LiveConnector
+    /// demo mode ("Try it without a Mac"): the sample company in this process; nil when paired with a real Mac or not
+    private(set) var demo: DemoMac?
+    var inDemo: Bool { demo != nil }
     private var live: LiveSocket?
     private var toastTask: Task<Void, Never>?
     let chatLoader = ChatLoader()
@@ -80,6 +86,8 @@ final class AppModel {
         self.api = api
         self.store = store
         self.connector = connector
+        self.realAPI = api
+        self.realConnector = connector
         self.lockEnabled = UserDefaults.standard.bool(forKey: Self.lockKey)
         self.locked = lockEnabled
     }
@@ -110,7 +118,7 @@ final class AppModel {
 
     /// "paired with another Mac (<host>)" before pairing replaces it
     func replaces(_ link: PairLink) -> String? {
-        guard let p = paired, p.mac != link.mac else { return nil }
+        guard !inDemo, let p = paired, p.mac != link.mac else { return nil }
         return PairLink.host(p.mac)
     }
 
@@ -126,6 +134,7 @@ final class AppModel {
                 return
             }
             let p = PairedMac(mac: link.mac, site: link.site, token: token, deviceId: r.device.id, deviceName: r.device.name, pairedAt: clock())
+            if inDemo { leaveDemo() }
             store.save(p)
             paired = p
             api.target = APITarget(mac: p.mac, site: p.site, token: p.token)
@@ -136,6 +145,43 @@ final class AppModel {
         } catch {
             pairError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // ---------- demo mode ----------
+
+    /// "Try it without a Mac": the sample company, offline, behind the same API and socket seams as a real Mac. Nothing
+    /// is saved (no Keychain entry, no last company) and nothing goes over the network.
+    func startDemo(pace: Double = 1) async {
+        guard paired == nil || inDemo else { return }
+        let d = DemoMac(pace: pace, clock: clock)
+        demo = d
+        api = APIClient(transport: DemoTransport(mac: d), target: APITarget(mac: DemoMac.address, site: DemoMac.site, token: DemoMac.token))
+        connector = DemoLiveConnector(mac: d)
+        paired = PairedMac(mac: DemoMac.address, site: DemoMac.site, token: DemoMac.token, deviceId: "demo-device", deviceName: "This iPhone", pairedAt: clock())
+        companyId = nil
+        tab = .now
+        await loadMe()
+    }
+
+    /// Leave the demo: back to the real API and the pairing screen.
+    func exitDemo() {
+        guard inDemo else { return }
+        leaveDemo()
+        phase = .out(.unpaired)
+    }
+
+    /// the demo's state goes; the real plumbing comes back
+    private func leaveDemo() {
+        live?.stop()
+        live = nil
+        demo = nil
+        api = realAPI
+        connector = realConnector
+        paired = store.load()
+        companyId = nil
+        tab = .now
+        showSettings = false
+        clearViews()
     }
 
     func cancelPairing() {
@@ -206,6 +252,7 @@ final class AppModel {
 
     /// Forget this Mac: its address and token leave this phone.
     func forget() {
+        if inDemo { exitDemo(); return }
         live?.stop()
         live = nil
         store.forget()
@@ -218,11 +265,13 @@ final class AppModel {
 
     /// Sign out here and on the Mac (it removes this device).
     func signOut() async {
+        if inDemo { exitDemo(); return }
         try? await api.signOut()
         forget()
     }
 
     private func signedOut(_ reason: OutReason) {
+        if inDemo { exitDemo(); return }
         live?.stop()
         live = nil
         if reason != .gone {
@@ -244,7 +293,7 @@ final class AppModel {
         do {
             let m = try await api.me()
             me = m
-            let last = UserDefaults.standard.string(forKey: Self.lastCompanyKey)
+            let last = inDemo ? nil : UserDefaults.standard.string(forKey: Self.lastCompanyKey)
             if companyId == nil || !m.companies.contains(where: { $0.id == companyId }) {
                 companyId = m.companies.first(where: { $0.id == last })?.id ?? m.companies.first(where: { !$0.personal })?.id ?? m.companies.first?.id
             }
@@ -397,7 +446,7 @@ final class AppModel {
     func selectCompany(_ id: String) {
         guard id != companyId else { return }
         companyId = id
-        UserDefaults.standard.set(id, forKey: Self.lastCompanyKey)
+        if !inDemo { UserDefaults.standard.set(id, forKey: Self.lastCompanyKey) }
         now = nil; needs = nil; chats = nil; room = nil; chatPath = []; session = nil; replica = nil; agent = nil
         board = nil; boardTask = nil
         subscribe()
