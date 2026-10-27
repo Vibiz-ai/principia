@@ -84,7 +84,7 @@ jobs:
       id-token: write # Sigstore signing of the build-provenance attestation
       attestations: write # stores the attestation on the repository
     steps:
-      # the release scripts and entitlements only: nothing is installed in this job (no npm ci, no node_modules)
+      # the release scripts, entitlements and dmg layout only: nothing is installed in this job (no npm ci, no node_modules)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref }}

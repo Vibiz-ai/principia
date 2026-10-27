@@ -200,7 +200,8 @@ What it does, stopping at the first problem (nothing is published unless every s
    comes from the command, so `package.json` is not edited (release-please bumps it, §5.2).
 3. **Sign and package** (`scripts/mac-sign.mjs`, Apple's tools only): sign the app inside-out with the hardened
    runtime (§2); notarize it (`xcrun notarytool submit --wait`) and staple the ticket; zip the stapled app for the
-   updater (`ditto`); make the dmg (`hdiutil`, the app and an Applications link); sign, notarize and staple the dmg.
+   updater (`ditto`); make the dmg (`hdiutil`: the app, an Applications link and the install window of §5.5); sign,
+   notarize and staple the dmg.
    A rejected notarization prints Apple's log and stops.
 4. **Verify**: `codesign --verify --deep --strict` on the app and on the app inside the zip, hardened runtime, Team
    ID and entitlements; `spctl` must report `source=Notarized Developer ID` for the app and the dmg; `stapler
@@ -348,6 +349,37 @@ the run fails: then follow §8.1. It runs when a person publishes a release, and
 publishing (a release published with the workflow's `GITHUB_TOKEN` fires no `release` event). Run it by hand from
 Actions › **post-release** › Run workflow (empty tag: the latest release; untick *check-latest* to verify an older
 stable release).
+
+### 5.5 The dmg window and the app icon
+
+Opening the dmg shows the standard install window: Principia on the left, the Applications folder on the right, a
+white line-art arrow between them and "Drag Principia to Applications" on a near-black background; no toolbar,
+sidebar or status bar; a fixed size; the app icon as the volume icon. It lives in `build/dmg/`:
+
+| File | What it is | Made by |
+| --- | --- | --- |
+| `layout.json` | window position and size, icon size and positions, the text: the one place the numbers live | by hand |
+| `background.tiff` | the window art at 1x (660×400) and 2x (1320×800) | `npm run make:icons` (`scripts/make-icons.swift`) |
+| `DS_Store` | Finder's settings for the window, copied into the dmg as `.DS_Store` | `npm run make:dmg-layout` |
+
+`scripts/mac-sign.mjs` (`makeDmg`) copies the three into the dmg with `build/icon.icns` as `.VolumeIcon.icns`, makes
+it read-write (HFS+), mounts it without Finder seeing it (`-nobrowse`), writes the new volume's UUID into the
+background bookmark of `.DS_Store` (Finder finds the picture by that UUID, and every dmg gets a new one), marks the
+volume as having a custom icon (`xattr com.apple.FinderInfo`), detaches it and converts it to the compressed dmg
+that is then signed, notarized and stapled exactly as before. Before building it checks the template places
+`Principia.app` and `Applications` and was made for the volume name `Principia`; it stops otherwise.
+
+Why a committed `.DS_Store` instead of generating one at release time: the signing job installs nothing (§5.2), and
+dmgbuild (the tool that writes `.DS_Store` files) is Python from PyPI. The template is generated once, on a
+maintainer's Mac, by `scripts/dmg-layout/make-template.sh`: it installs dmgbuild, ds_store and mac_alias into a
+throwaway venv with `pip --require-hashes` (versions and SHA-256 in `scripts/dmg-layout/requirements.txt`), builds a
+scratch dmg, copies its `.DS_Store` out and points its background reference at `/Volumes/Principia`. No Finder or
+AppleScript automation is used anywhere. Regenerate it only when `layout.json` changes; `node --test
+scripts/mac-sign.test.mjs` fails when the two disagree.
+
+The app icon (`build/icon.icns`, `build/icon.png`) and the menu bar icon (`resources/trayTemplate*.png`) come from
+the same script, `npm run make:icons`: the temple mark of the website, white line art on a cool graphite body on
+Apple's macOS grid (824/1024 body, continuous corners), strokes snapped to the pixel grid below 128 px.
 
 ## 6. Dry run (no certificate needed)
 

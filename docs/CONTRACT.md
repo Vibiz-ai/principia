@@ -124,7 +124,7 @@ src/
   renderer/        React + TS (xterm.js, @xyflow/react). Talks ONLY through window.hive.
   shared/          Types + tiny pure helpers.
 resources/         trayTemplate.png, trayTemplate@2x.png (copied to Contents/Resources/resources in the .app)
-build/             icon.icns, icon.png (electron-builder buildResources)
+build/             icon.icns, icon.png (electron-builder buildResources); dmg/ (the release dmg window, RELEASING.md §5.5)
 scripts/           verify-native.cjs, make-icons.swift
 ```
 
