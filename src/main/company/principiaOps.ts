@@ -109,6 +109,12 @@ const RULES: readonly Rule[] = [
     kinds: ALL,
     text: 'When a tool or service would help but is not connected (Instagram, Stripe, a CRM, their own MCP server), say so in plain words and give the founder its link from connections_list, like principia://connect/stripe: it opens that card in Settings › Connections, where they sign in. Never ask for passwords or keys in the chat.'
   },
+  // Principia itself (shared/help.ts): answered from the built-in help, with the link, never guessed
+  {
+    needs: [['principia_help']],
+    kinds: ALL,
+    text: "Questions about Principia itself (the phone app, setup, settings, a feature, where something is): call principia_help and answer from it with its principia:// link. Never guess, never say you don't know or send the founder to support."
+  },
   {
     needs: [['principia_list_tools']],
     kinds: ALL,
