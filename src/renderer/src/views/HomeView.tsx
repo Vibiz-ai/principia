@@ -1,8 +1,10 @@
 /**
  * Home (five doors step 3, design §4.1): the 5-second answer. "Good morning, Maya. Northwind Coffee · 3 things need
  * you, 1 agent is working." Then, in this order:
- * 1. Ask your team… (AskBox): a real input that routes to an agent ("→ Marcus · Content Writer") and opens its desk.
- * 2. Needs you: everything that waits on you in this company, from the one live source (useNeeds): live asks and
+ * 1. New conversation (CHAT-UI.md §7, TeamComposer): To: Principia picks ▾ and a line that says who will answer before
+ *    you send ("→ Principia brings in Marcus"); Send opens the conversation in Chats, listed under Recent in the
+ *    sidebar. Shown in the first week too: that is when "where do I talk?" matters most.
+ * 2. Needs you (the top three, "+ N more"): everything that waits on you in this company, from the one live source (useNeeds): live asks and
  *    finished turns (with their buttons), drafts to approve, board tasks (Approve / Send back / Answer / Try again /
  *    Assign, all in place), cloud asks and leftover processes. It absorbs the old Agents hub and NeedsYouTasks.
  * 3. Working now: one row per working agent (useWorking), Open opens that exact chat, Pause this task (C9).
@@ -31,7 +33,7 @@ import { CloudNeedsYou } from '../components/cloud/NeedsYou'
 import { PrincipiaSuggestions, usePrincipiaSuggestions } from '../components/orchestrator/PrincipiaTeam'
 import { SetupChecklist } from '../components/home/SetupChecklist'
 import { ArchFrame } from '../components/roman'
-import { AskBox, DraftCard, pauseTask, useIsCode } from '../components/desk/Desk'
+import { DraftCard, pauseTask, useIsCode } from '../components/desk/Desk'
 import { Button, Kbd, SectionHeader, Toolbar, useTick } from '../components/ui'
 import { useScope, useScopedLive } from '../components/CompanyChip'
 import { AgentBust } from '../shell/DepartmentGroup'
@@ -56,6 +58,7 @@ import { NudgeCard } from '../components/home/NudgeCard'
 import '../styles/board.css'
 import '../styles/desk.css'
 import { plainLinks } from '../components/DeepLinkButton'
+import { openConversation, TeamComposer } from '../components/conversations/ConversationKit'
 
 export function HomeView(): React.JSX.Element {
   useTick()
@@ -90,36 +93,34 @@ export function HomeView(): React.JSX.Element {
   // design §6.7: a company just set up asks "Start the first week?" first; Needs you and Working now wait for the answer
   const firstWeek = useStore((s) => !!s.settings?.firstWeek?.[scope])
   const moved = useThingsMoved()
-
-  return (
-    <div className="view">
-      <Toolbar title="Home" sub={<span className="company-toolbar-meta">{name}</span>}>
-        {!personal &&
-          (pausedAt ? (
-            <Button variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
-              Resume {short}
-            </Button>
-          ) : (
-            <Button icon="pause" onClick={() => void setCompanyPaused(scope, true)} title={`Pause ${name} only. Other companies keep running.`}>
-              Pause {short}
-            </Button>
-          ))}
-      </Toolbar>
-      <div className="scroll view__body">
-        <div className="home home5">
-          <header className="home5__hero">
-            <ArchFrame className="home5__arch" opacity={0.1} />
-            <h1 className="home5__greet">{greeting(new Date(), userName)}</h1>
-            <p className="home5__line">{withAutopilot(homeHeadline({ company: name, needs: needsTotal, working: working.agents, chats: working.chats, paused: !!pausedAt, agents: personal ? 1 : agentCount }), personal || agentCount === 0 ? null : autopilot)}</p>
-          </header>
-
-          {firstWeek && <FirstWeekCard companyId={scope} />}
-          {moved && <ThingsMovedCard />}
-
-          {!firstWeek && <AskBox companyId={scope} />}
-
-          {!firstWeek && !personal && agentCount > 0 && <NudgeCard companyId={scope} />}
-
+  // CHAT-UI.md §7: Needs you shows its top three, so the composer and Working now stay in view
+  const [allNeeds, setAllNeeds] = useState(false)
+  const capped = !allNeeds && needsTotal > 3
+  const needsBlock = (
+    <>
+      <SectionHeader title="Needs you" count={needsTotal > 0 ? <span className="text-needs">{needsTotal}</span> : undefined}>
+        {needsTotal > 0 && (
+          <button type="button" className="link-btn text-tertiary home5__keys" onClick={goNextNeedsYou}>
+            <Kbd>⌘J</Kbd> next
+          </button>
+        )}
+      </SectionHeader>
+      {pausedAt && needsTotal > 0 && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
+      <div className={capped ? 'cx-cap' : undefined}>
+        <NeedsList scope={scope} code={code} drafts={drafts} empty={needsTotal === 0} paused={!!pausedAt} />
+      </div>
+      {needsTotal > 3 && (
+        <div className="cx-more">
+          <Button size="sm" variant="ghost" data-chatux="needs-more" onClick={() => setAllNeeds((v) => !v)}>
+            {allNeeds ? 'Show fewer' : `+ ${needsTotal - 3} more`}
+          </Button>
+        </div>
+      )}
+      <PrincipiaSuggestions items={sugs.items} onChanged={sugs.reload} />
+    </>
+  )
+  const banners = (
+    <>
           {pausedAt && (
             <div className="banner banner--bar home__paused" role="status">
               <span className="glyph" aria-hidden>
@@ -146,25 +147,56 @@ export function HomeView(): React.JSX.Element {
             </div>
           )}
 
-          {!firstWeek && <>
-          <SectionHeader title="Needs you" count={needsTotal > 0 ? <span className="text-needs">{needsTotal}</span> : undefined}>
-            {needsTotal > 0 && (
-              <button type="button" className="link-btn text-tertiary home5__keys" onClick={goNextNeedsYou}>
-                <Kbd>⌘J</Kbd> next
-              </button>
-            )}
-          </SectionHeader>
-          {pausedAt && needsTotal > 0 && <div className="home__waiting text-tertiary">‖ Waiting until you resume</div>}
-          <NeedsList scope={scope} code={code} drafts={drafts} empty={needsTotal === 0} paused={!!pausedAt} />
-          <PrincipiaSuggestions items={sugs.items} onChanged={sugs.reload} />
+    </>
+  )
+  const workingBlock = (
+    <>
+      <SectionHeader title="Working now" count={working.count || undefined}>
+        <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">
+          All live chats →
+        </Button>
+      </SectionHeader>
+      <WorkingList items={working.items} scope={scope} paused={!!pausedAt} code={code} noClaude={!!noClaude} />
+    </>
+  )
 
-          <SectionHeader title="Working now" count={working.count || undefined}>
-            <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'chats', filter: 'live' })} kbd="⇧⌘A">
-              All live chats →
+  return (
+    <div className="view">
+      <Toolbar title="Home" sub={<span className="company-toolbar-meta">{name}</span>}>
+        {!personal &&
+          (pausedAt ? (
+            <Button variant="primary" icon="play" onClick={() => void setCompanyPaused(scope, false)}>
+              Resume {short}
             </Button>
-          </SectionHeader>
-          <WorkingList items={working.items} scope={scope} paused={!!pausedAt} code={code} noClaude={!!noClaude} />
-          </>}
+          ) : (
+            <Button icon="pause" onClick={() => void setCompanyPaused(scope, true)} title={`Pause ${name} only. Other companies keep running.`}>
+              Pause {short}
+            </Button>
+          ))}
+      </Toolbar>
+      <div className="scroll view__body">
+        <div className="home home5">
+          <header className="home5__hero">
+            <ArchFrame className="home5__arch" opacity={0.1} />
+            <h1 className="home5__greet">{greeting(new Date(), userName)}</h1>
+            <p className="home5__line">{withAutopilot(homeHeadline({ company: name, needs: needsTotal, working: working.agents, chats: working.chats, paused: !!pausedAt, agents: personal ? 1 : agentCount }), personal || agentCount === 0 ? null : autopilot)}</p>
+          </header>
+
+          {firstWeek && <FirstWeekCard companyId={scope} />}
+          {moved && <ThingsMovedCard />}
+
+          <TeamComposer companyId={scope} onStarted={openConversation} />
+
+          {!firstWeek && !personal && agentCount > 0 && <NudgeCard companyId={scope} />}
+
+          {banners}
+
+          {!firstWeek && (
+            <>
+              {needsBlock}
+              {workingBlock}
+            </>
+          )}
 
           {!personal && agentCount > 0 && (
             <div className="home5__setup">

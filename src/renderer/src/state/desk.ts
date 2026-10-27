@@ -17,7 +17,10 @@ import { companyName, getState, openAgentSeat, toast, upsertSession, useStore, t
 export function deskAgentOf(a: CompanyAgent, s: State = getState()): DeskAgent {
   const on = personasOn(s.settings)
   const who = displayName(a, personasOf(s), on)
-  return { id: a.id, name: who.name, role: who.role || a.name, department: s.departments.find((d) => d.id === a.departmentId)?.name ?? null, paused: !!a.pausedAt }
+  const dep = s.departments.find((d) => d.id === a.departmentId)
+  // what the seat does, as the Team page shows it: routing reads the same words (CHAT-UI.md §7)
+  const about = [a.data?.capabilities, dep?.data?.charter?.does].filter(Boolean).join(' ')
+  return { id: a.id, name: who.name, role: who.role || a.name, department: dep?.name ?? null, paused: !!a.pausedAt, ...(about ? { about } : {}) }
 }
 /** deskAgentOf as a hook: memoised on the slices it reads (a selector returning a new object would loop). */
 export function useDeskWho(a: CompanyAgent): DeskAgent {

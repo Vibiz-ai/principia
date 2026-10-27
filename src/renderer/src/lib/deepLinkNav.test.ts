@@ -10,6 +10,8 @@ describe('principia:// links open a page, never an action', () => {
     expect(view('principia://connect/instagram')).toEqual({ name: 'settings', section: 'connections', connect: 'instagram', nonce: 7 })
     expect(view('principia://connect/mcp')).toEqual({ name: 'settings', section: 'connections', connect: 'mcp', nonce: 7 })
     expect(view('principia://settings/keys')).toEqual({ name: 'settings', section: 'keys', nonce: 7 })
+    expect(view('principia://settings/phone')).toEqual({ name: 'settings', section: 'phone', nonce: 7 })
+    expect(deepLinkLabel('principia://settings/phone')).toBe('Open Settings › Phone')
     expect(view('principia://board?task=NC-1', 'task_1')).toEqual({ name: 'tasks', taskId: 'task_1' })
     expect(view('principia://board?task=NC-404')).toEqual({ name: 'tasks' })
     // a prefilled quick create: the founder still presses Create

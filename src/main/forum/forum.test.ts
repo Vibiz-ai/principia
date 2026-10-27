@@ -629,6 +629,34 @@ describe('agents answer people and post their work (§6.4)', () => {
     expect(pick(s.store.systemPost(s.store.channelByName(CO, 'general')!.id, 'Marcus joined')!)).toEqual([])
   })
 
+  it('CHAT-UI.md §7: a conversation (private chat-… channel) wakes every agent in it; an @name wakes only them', () => {
+    const { s, owner, marcus, livia } = setup()
+    const pick = (m: Parameters<typeof pickResponders>[1]) => pickResponders(s.store, m, { seats }).map((x) => x.handle)
+    const conv = s.store.createChannel(owner.id, { name: 'chat-launch-plan-ab12', kind: 'private', purpose: 'Principia brought in Marcus and Livia.', memberIds: [marcus.id, livia.id] })
+    s.store.updateChannel(owner.id, conv.id, { topic: 'Launch plan' })
+    const say = (text: string) => s.store.post(owner.id, { channelId: conv.id, text, threadId: null })
+    expect(pick(say('we need a post and a fix')).sort()).toEqual(['livia', 'marcus'])
+    expect(pick(say('@livia only you'))).toEqual(['livia'])
+    // a private channel that is not a conversation keeps the room rule (nobody: no department, not #general)
+    const other = s.store.createChannel(owner.id, { name: 'secret-plans', kind: 'private', memberIds: [marcus.id] })
+    expect(pick(s.store.post(owner.id, { channelId: other.id, text: 'hello', threadId: null }))).toEqual([])
+    // the reply run is named by the conversation's title, never its slug
+    const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
+    responder(s, starts).onHumanPost(say('status?'))
+    // who and where: "Marcus replying in “Launch plan”" (the Live rows name the agent, never two identical rows)
+    expect(starts[0]?.prompt).toMatch(/^\S+ replying in “Launch plan”/)
+    expect(starts.map((x) => x.prompt.split('\n')[0]).sort()).toEqual([`${livia.name} replying in “Launch plan”`, `${marcus.name} replying in “Launch plan”`].sort())
+  })
+
+  it('CHAT-UI.md §7: a reply run is present IN its conversation, so only that conversation shows "answering…"', () => {
+    const { s, owner, marcus } = setup()
+    const conv = s.store.createChannel(owner.id, { name: 'chat-oat-milk-ab12', kind: 'private', purpose: '', memberIds: [marcus.id] })
+    // the run opened its Forum before the responder noted what it answers
+    s.setPresence(CO, marcus.id, 'working', null)
+    s.noteReplyRun('r_x', { memberId: marcus.id, channelId: conv.id, messageId: 'm_x' })
+    expect(s.presenceOf(CO).find((p) => p.memberId === marcus.id)?.channelId).toBe(conv.id)
+  })
+
   function responder(s: ForumService, starts: { agentId: string; prompt: string; reply: { messageId: string } }[], over: Partial<ResponderDeps> = {}) {
     let n = 0
     return new ForumResponder({

@@ -28,7 +28,7 @@ import { AuthorBroker } from './broker'
 import { ChatProposals } from '../company/chatProposals'
 import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
-import { CONNECTIONS_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
+import { CONNECTIONS_TOOL, HELP_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
 import { connectionsReport } from '../company/connectionsReport'
 import { AuthorDrafts, type DraftOwner, type DraftRecord } from './drafts'
 import { WorktreeManager, gitRunner, runRepoPaths } from '../worktrees'
@@ -496,8 +496,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       // permission prompt (capped and deduplicated by the board); off, company_file_task waits for the pane's prompt.
       // company_create_department always does (a second yes).
       const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
-      // connections_list is read-only (what is connected, and where the founder connects the rest)
-      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
+      // connections_list and principia_help are read-only (what is connected; how Principia itself works)
+      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, HELP_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
   }

@@ -47,16 +47,22 @@ beforeAll(async () => {
 })
 
 describe('Chats switches the sidebar', () => {
-  it('shows the conversations list in the sidebar itself, with Back, New chat, search and the filters, and no menu', async () => {
+  it('shows the conversations list in the sidebar itself, with Menu, Home/Team/Board, New conversation, search and the filters', async () => {
     const store = await import('../../state/store')
     // the direct chat is open, so Julia's unread answer keeps its dot
     store.setState({ view: { name: 'chats', filter: 'all', chat: 'session:sess_direct' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toContain('aria-label="Back to the menu"')
+    // CHAT-UI.md §7: Home, Team and Board stay one click away (the synthetic users lost their menu here)
+    for (const d of ['Home (⌘1)', 'Team (⌘2)', 'Board (⌘3)']) expect(html).toContain(`aria-label="${d}"`)
     expect(html).toContain('placeholder="Search chats"')
-    for (const f of ['Live', 'All', 'Agents', 'Direct']) expect(html).toContain(`>${f}<`)
-    expect(html).toContain('New chat in Acme')
+    for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
+    expect(html).toContain('>New conversation<')
+    expect(html).toContain('New conversation in Acme (⌥⌘N)')
+    // the groups say what each row is: the agent's own session, and Claude
+    expect(html).toContain('aria-label="Agent sessions"')
+    expect(html).toContain('aria-label="Claude"')
     // a bot-like row: bust, name, role, its last line and the unread dot
     expect(html).toContain(`chats5-row__name">${NAME}</span><span class="chats5-row__role">Content Writer<`)
     expect(html).toContain('The draft is in drafts/launch.md.')
@@ -66,13 +72,51 @@ describe('Chats switches the sidebar', () => {
     expect(html).not.toContain('Search or ask…')
     expect(html).not.toContain('aria-label="Main"')
   })
-  it('anywhere else the sidebar is the menu', async () => {
+  it('anywhere else the sidebar is the menu, with New conversation on top', async () => {
     const store = await import('../../state/store')
     store.setState({ view: { name: 'home' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toContain('Search or ask…')
     expect(html).not.toContain('Back to the menu')
+    expect(html.indexOf('>New conversation<')).toBeGreaterThan(-1)
+    expect(html.indexOf('>New conversation<')).toBeLessThan(html.indexOf('Search or ask…'))
+  })
+})
+
+describe('New conversation (CHAT-UI.md §7)', () => {
+  it('Chats with nothing picked in a company is New conversation: To: Principia picks, the route line, recents', async () => {
+    const { ChatsView } = await import('../../views/ChatsView')
+    const html = renderToStaticMarkup(createElement(ChatsView, {}))
+    expect(html).toContain('data-chatux="new-pane"')
+    expect(html).toContain('>New conversation</h2>')
+    expect(html).toMatch(/data-chatux="to-pill"[^>]*>.*Principia picks/)
+    expect(html).toContain('→ Principia brings in the right people · type @ to pick someone')
+    expect(html).toContain('Recent conversations')
+  })
+  it('Team › Message lands addressed to that person (one kind of one-on-one)', async () => {
+    const { ChatsView } = await import('../../views/ChatsView')
+    const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'new:agent:agt_julia' }))
+    expect(html).toContain(`${NAME} · Content Writer`)
+    expect(html).toContain(`placeholder="Message ${NAME}…"`)
+    expect(html).toContain(`→ ${NAME} directly · a private conversation, nobody else sees it`)
+  })
+  it('a company with no team talks to Claude, and says so', async () => {
+    const { TeamComposer } = await import('../conversations/ConversationKit')
+    const html = renderToStaticMarkup(createElement(TeamComposer, { companyId: 'co_personal', onStarted: () => {} }))
+    expect(html).toContain('Claude directly')
+    expect(html).toContain('placeholder="Ask Claude anything…"')
+    expect(html).toContain('→ A chat with Claude, outside the team · none of your agents see it')
+  })
+  it('the rows are grouped: With the team, One-on-one, Agent sessions, Claude, Working', async () => {
+    const { groupRows } = await import('./ChatList')
+    const conv = (id: string, priv: boolean) => ({ key: `conv:${id}`, kind: 'conv' as const, companyId: 'co_a', live: false, at: T, conv: { id, companyId: 'co_a', title: id, handoff: '', agentMemberIds: ['m'], agentIds: ['a'], who: ['Julia'], workingIds: [], lastAt: T, unread: 0, working: false, private: priv } })
+    const rows = [conv('team1', false), conv('dm1', true), { key: 'session:s', kind: 'session' as const, companyId: 'co_a', live: false, at: T, session: chat('s') }]
+    expect(groupRows(rows).map((g) => [g.label, g.rows.map((r) => r.key)])).toEqual([
+      ['With the team', ['conv:team1']],
+      ['One-on-one', ['conv:dm1']],
+      ['Claude', ['session:s']]
+    ])
   })
 })
 

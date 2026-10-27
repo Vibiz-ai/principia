@@ -1,22 +1,20 @@
 /**
  * Five doors step 3: the pieces Home, Team, the agent page and Chats share.
- * - AskBox: Home's "Ask your team…" (a real input). As you type it says who will get it ("→ Marcus · Content
- *   Writer"), from an @name or the request's words; the name is a menu to pick someone else. Enter sends it to that
- *   agent (state/desk.ts) and opens the agent's page.
+ * (Home's old Ask box became the New conversation composer: components/conversations, CHAT-UI.md §7.)
  * - AgentChat: the one conversation with an agent, the same on the agent page and in Chats: the agent's own live
  *   chat (AGENT CHAT), drawn by the Claude chat's ChatPane in the agent's name (AgentConversation lays it out with
  *   the agent's right panel). DraftCard: a draft waiting for your OK.
  * - useAgentStatus / AgentAction: the status sentence (design §2.6) and the one primary button of an agent.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CompanyAgent, CompanyTask } from '@shared/company'
 import type { Artifact, Id } from '@shared/types'
 import { Button } from '../ui'
 import { Icon } from '../Icon'
 import { ArtifactThumb } from '../ArtifactThumb'
 import { AgentBust } from '../../shell/DepartmentGroup'
-import { errorMessage, hive, nativeMenu } from '../../lib/hive'
-import { routeAsk, statusSentence, taskName, waitsOnOther, type DeskAgent, type StatusSentence } from '../../lib/desk'
+import { errorMessage, hive } from '../../lib/hive'
+import { statusSentence, taskName, waitsOnOther, type StatusSentence } from '../../lib/desk'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { seatState } from '../../lib/departments'
 import { openAskRuns } from '../../lib/departments'
@@ -25,12 +23,12 @@ import { useCompanyShortName } from '../../lib/company'
 import { firstLine } from '../../lib/format'
 import { age } from '../../lib/time'
 import { useWorking } from '../../state/live'
-import { agentAutonomy, type useAgentChat, useDeskWho, sendToAgent, useDeskAgents } from '../../state/desk'
+import { agentAutonomy, type useAgentChat, useDeskWho, sendToAgent } from '../../state/desk'
 import { ChatSurface } from '../chat/ChatSurface'
 import { Composer } from '../chat/Composer'
 import { EMPTY_CHAT_META } from '@shared/chat'
 import '../../styles/chat.css'
-import { attempt, companyName, getState, navigate, openAgentSeat, openBoard, openChat, refreshTasks, setAgentPaused, setCompanyPaused, toast, useStore } from '../../state/store'
+import { attempt, companyName, getState, navigate, openAgentSeat, openBoard, refreshTasks, setAgentPaused, setCompanyPaused, toast, useStore } from '../../state/store'
 import '../../styles/diagrams.css'
 import '../../styles/desk.css'
 
@@ -39,102 +37,6 @@ import '../../styles/desk.css'
 /** A code company has at least one repository (the sidebar's REPOSITORIES rule): task codes, Terminal and PRs show. */
 export function useIsCode(companyId: Id | null | undefined): boolean {
   return useStore((s) => !!companyId && reposOf(s.repos, companyId).length > 0)
-}
-
-// ---------- the Ask box ----------
-
-export function AskBox({ companyId, autoFocus = false }: { companyId: Id; autoFocus?: boolean }): React.JSX.Element {
-  const agents = useDeskAgents(companyId)
-  const [text, setText] = useState('')
-  const [picked, setPicked] = useState<Id | null>(null)
-  const [busy, setBusy] = useState(false)
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (autoFocus) ref.current?.focus()
-  }, [autoFocus])
-  const routed = useMemo(() => routeAsk(text, agents), [text, agents])
-  const target: DeskAgent | null = (picked && agents.find((a) => a.id === picked)) || routed?.agent || null
-  const code = useIsCode(companyId)
-  const example = useMemo(() => exampleAsk(agents, code), [agents, code])
-  const pick = async (): Promise<void> => {
-    if (!agents.length) return
-    const id = await nativeMenu(agents.map((a) => ({ id: a.id, label: `${a.name} · ${a.role}${a.paused ? ' (paused)' : ''}`, type: 'checkbox' as const, checked: a.id === target?.id })))
-    if (id) setPicked(id)
-    ref.current?.focus()
-  }
-  const send = async (): Promise<void> => {
-    const t = text.trim()
-    if (!t || busy) return
-    if (!target) {
-      // no team here (Personal, or no departments yet): a chat with Claude, the words on the clipboard to paste
-      try {
-        await navigator.clipboard.writeText(t)
-      } catch {
-        /* clipboard refused: the chat still opens */
-      }
-      void openChat(true, companyId)
-      toast('A new chat with Claude is open. Your words are copied: paste them with ⌘V.')
-      setText('')
-      return
-    }
-    setBusy(true)
-    const res = await sendToAgent(target.id, t, { open: true })
-    setBusy(false)
-    if (res) {
-      setText('')
-      setPicked(null)
-      toast(`Sent to ${target.name} · ${target.role}`)
-    }
-  }
-  return (
-    <form
-      className="ask-box"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void send()
-      }}
-    >
-      <Icon name="chat" size={15} />
-      <input
-        ref={ref}
-        className="ask-box__input"
-        value={text}
-        disabled={busy}
-        maxLength={8000}
-        aria-label="Ask your team"
-        placeholder={agents.length ? `Ask your team… e.g. ${example}` : 'Ask Claude anything…'}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            setText('')
-            setPicked(null)
-          }
-        }}
-      />
-      {text.trim() &&
-        (target ? (
-          <button type="button" className="ask-box__route" onClick={() => void pick()} title={routed?.unknown && !picked ? `Nobody called ${routed.unknown} works in ${companyName(companyId)}. Pick who gets it` : 'Pick who gets it'}>
-            {routed?.unknown && !picked && <span className="ask-box__unknown">No {routed.unknown} here ·</span>}→ {target.name} · {target.role}
-            <Icon name="chevronDown" size={10} />
-          </button>
-        ) : (
-          <span className="ask-box__route ask-box__route--plain">→ New chat with Claude</span>
-        ))}
-      <Button type="submit" size="sm" variant="primary" icon="send" disabled={busy || !text.trim()} title="Send (↵)" aria-label="Send" />
-    </form>
-  )
-}
-
-/** "@Marcus draft a holiday post" from the company's own team (never another company's names). */
-function exampleAsk(agents: DeskAgent[], code = false): string {
-  // a code company leads with its developer ("@Livia fix the failing test"), a shop with its writer
-  const dev = agents.find((a) => /develop|builder|engineer/i.test(a.role))
-  if (code && dev) return `@${dev.name} fix the failing test`
-  const writer = agents.find((a) => /writer|content|copy|brand|marketing/i.test(a.role))
-  if (writer) return `@${writer.name} draft a post about this week’s news`
-  if (dev) return `@${dev.name} fix the failing test`
-  const first = agents[0]
-  return first ? `@${first.name} what should we do this week?` : ''
 }
 
 // ---------- status ----------

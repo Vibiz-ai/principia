@@ -56,7 +56,7 @@ export const TOOL_NAMES: Record<string, string> = {
 }
 const SECTION_NAMES: Record<string, string> = {
   company: 'General', team: 'Team & autonomy', connections: 'Connections', repos: 'Repositories', keys: 'Keys & secrets', danger: 'Danger zone',
-  general: 'General', providers: 'AI providers', agents: 'AI providers', notifications: 'Notifications', cloud: 'Cloud sync', storage: 'Storage', data: 'Storage',
+  general: 'General', providers: 'AI providers', agents: 'AI providers', notifications: 'Notifications', cloud: 'Cloud sync', phone: 'Phone', storage: 'Storage', data: 'Storage',
   experimental: 'Experimental', about: 'About'
 }
 
