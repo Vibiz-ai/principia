@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/Vibiz-ai/principia/compare/v0.2.0...v0.3.0) (2026-10-27)
+
+
+### Features
+
+* **chat:** live task card in conversations; results come back to the chat ([17ec6ed](https://github.com/Vibiz-ai/principia/commit/17ec6ed0cc4e94fe656c2e436819ff69ee3c5db1))
+* **chat:** live task card in conversations; results come back to the chat ([4199d12](https://github.com/Vibiz-ai/principia/commit/4199d12b0e86b28978b7db8a64461119f33fa876))
+* **chat:** task cards for tasks a chat files with company_file_task / task_create ([dd818db](https://github.com/Vibiz-ai/principia/commit/dd818db143cb8ffd2741783d9419323bdddfadd5))
+
+
+### Bug Fixes
+
+* **mac:** temple app icon and a drag-to-Applications dmg window ([43df75b](https://github.com/Vibiz-ai/principia/commit/43df75b3962ac7d31d07598120e0ce091bbd8a2f))
+* **mac:** temple app icon and a drag-to-Applications dmg window ([1a3e12c](https://github.com/Vibiz-ai/principia/commit/1a3e12c2b050bb12edf960fc31b5a29674590a1a))
+
 ## [0.2.0](https://github.com/Vibiz-ai/principia/compare/v0.1.0...v0.2.0) (2026-10-27)
 
 
