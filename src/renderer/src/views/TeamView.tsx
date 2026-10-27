@@ -2,7 +2,7 @@
  * Team (five doors ⌘2, design §4.2): "who works for me and what are they doing?". One section per department (its
  * name in Cinzel and its charter line), each agent a card: bust, NAME, role, a status sentence in plain words (the
  * same one the agent page shows), the agent's ONE autonomy phrase (the same string as on its page and in onboarding),
- * and two buttons: Message (opens the agent's desk with the composer focused) and the one next action (Start, Pause
+ * and two buttons: Message (your private conversation with them in Chats, CHAT-UI.md §7) and the one next action (Start, Pause
  * this task, Resume, See what's needed). All companies mode groups by company; every card opens in its own company.
  */
 import { useMemo } from 'react'
@@ -17,6 +17,7 @@ import { agentsOf, departmentsOf } from '../lib/departments'
 import { companyLabel, isPersonal } from '../lib/company'
 import { useWorking } from '../state/live'
 import { agentAutonomy, useDeskWho } from '../state/desk'
+import { messageAgent } from '../state/conversations'
 import { addDepartmentMenu, departmentContextMenu, departmentsOn, enterCompany, navigate, openAgentSeat, openDepartment, openNewCompany, setCompanyPaused, updateSettings, useStore } from '../state/store'
 import '../styles/departments.css'
 import '../styles/desk.css'
@@ -186,7 +187,7 @@ export function AgentCard({ agent }: { agent: CompanyAgent }): React.JSX.Element
         {autonomy}
       </span>
       <div className="team5-card__acts" onClick={(e) => e.stopPropagation()}>
-        <Button size="sm" icon="chat" onClick={() => openAgentSeat(agent, { focus: true })}>
+        <Button size="sm" icon="chat" title={`Your private conversation with ${who.name}`} onClick={() => void messageAgent(agent.companyId, agent.id)}>
           Message
         </Button>
         <AgentAction agent={agent} status={status} />

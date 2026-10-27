@@ -255,6 +255,14 @@ export function parseSeqRef(ref: string, prefix: 'm' | 'c'): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null
 }
 
+/**
+ * CHAT-UI.md §7: a conversation started from the Home composer or "New conversation" is a private channel named
+ * `chat-…` with you and the agents Principia brought in. Its agents answer every message, like a group DM, and an
+ * @someone adds them. The UI calls it a conversation, never a channel (the Forum view does not list it).
+ */
+export const CONVERSATION_PREFIX = 'chat-'
+export const isConversationChannel = (c: Pick<ForumChannel, 'kind' | 'name'>): boolean => c.kind === 'private' && !!c.name?.startsWith(CONVERSATION_PREFIX)
+
 /** Channel slug: lowercase, [a-z0-9-], 2..40. */
 export const CHANNEL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,39}$/
 export function channelSlug(s: string): string {

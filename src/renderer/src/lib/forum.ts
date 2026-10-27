@@ -3,6 +3,7 @@
  * channel ordering). No store, no DOM: unit-tested in forum.test.ts.
  */
 import type { ForumChannel, ForumMember, ForumMessage, ForumPresence } from '@shared/forum'
+import { isConversationChannel } from '@shared/forum'
 
 const GROUP_GAP_MS = 5 * 60_000
 
@@ -146,7 +147,7 @@ export function suggest(
     return ranked(SLASH_COMMANDS.map((c, i) => ({ item: { key: c.name, insert: `/${c.name} `, label: `/${c.name}`, detail: c.args ? `${c.args} · ${c.detail}` : c.detail, kind: 'command' as const }, s: score(c.name), tie: i })))
   }
   if (trigger === '#') {
-    return ranked(src.channels.filter((c) => c.name && !c.archivedAt).map((c, i) => ({ item: { key: c.id, insert: `#${c.name} `, label: `#${c.name}`, detail: c.purpose, kind: 'channel' as const }, s: score(c.name!), tie: i }))).slice(0, 8)
+    return ranked(src.channels.filter((c) => c.name && !c.archivedAt && !isConversationChannel(c)).map((c, i) => ({ item: { key: c.id, insert: `#${c.name} `, label: `#${c.name}`, detail: c.purpose, kind: 'channel' as const }, s: score(c.name!), tie: i }))).slice(0, 8)
   }
   type Ranked = { item: Suggestion; s: number; tie: number }
   const people: Ranked[] = src.members
@@ -203,9 +204,12 @@ export function parseSlash(text: string): SlashCommand | null {
   }
 }
 
-/** Sidebar order: system channels first (#general), then by name; DMs by last activity. */
+/**
+ * Sidebar order: system channels first (#general), then by name; DMs by last activity. Conversations (CHAT-UI.md §7,
+ * private `chat-…` channels) live in Chats, never as #chat-… channels here.
+ */
 export function sortChannels(channels: ForumChannel[]): { channels: ForumChannel[]; dms: ForumChannel[] } {
-  const named = channels.filter((c) => c.name && !c.archivedAt && (c.joined || c.kind === 'public'))
+  const named = channels.filter((c) => c.name && !c.archivedAt && (c.joined || c.kind === 'public') && !isConversationChannel(c))
   const sys = (c: ForumChannel) => (c.system === 'general' ? 0 : c.system === 'proposals' ? 2 : 1)
   named.sort((a, b) => sys(a) - sys(b) || Number(b.joined) - Number(a.joined) || a.name!.localeCompare(b.name!))
   const dms = channels.filter((c) => !c.name && c.joined).sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt))
@@ -217,7 +221,8 @@ export function unreadTotals(channels: ForumChannel[]): { unread: number; mentio
   let mentions = 0
   let channelsWithUnread = 0
   for (const c of channels) {
-    if (!c.joined) continue
+    // a conversation's new answers show in Chats and Recent, not as Forum unread
+    if (!c.joined || isConversationChannel(c)) continue
     unread += c.unread
     mentions += c.mentions + (!c.name ? c.unread : 0)
     if (c.unread) channelsWithUnread++

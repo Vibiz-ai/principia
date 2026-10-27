@@ -951,10 +951,20 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
  */
 export function openNewChat(companyId?: Id): void {
   const co = companyId ?? scopeCompanyId() ?? PERSONAL_COMPANY_ID
+  // CHAT-UI.md §7: in a company, New conversation is a page in Chats (To: Principia picks, a person, Claude…), never a
+  // sheet; All companies (no company to talk to yet) keeps the sheet that asks where first
+  const target = companyId ?? scopeCompanyId()
+  if (target) return openChatsIn(target, 'new')
   const team = departmentsOn() && state.companyAgents.some((a) => a.companyId === co && !a.archivedAt)
   const code = state.repos.some((r) => r.companyId === co)
   if (!team && !code) return void openChat(true, co)
   setState((s) => ({ newChat: { companyId: co, nonce: (s.newChat?.nonce ?? 0) + 1 } }))
+}
+/** Chats in a company (entering it first when another one is focused), on `chat` ("new", "conv:<id>", …). */
+export function openChatsIn(companyId: Id, chat: string): void {
+  const view: ViewState = { name: 'chats', filter: 'all', chat }
+  if (activeCompany() === companyId || !multiCompany()) void navigate(view)
+  else void enterCompany(companyId, { view })
 }
 export function closeNewChat(): void {
   setState({ newChat: null })
