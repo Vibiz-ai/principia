@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog · Principia</title>
+<meta name="description" content="What changed in Principia, newest first.">
+<style>
+  @font-face { font-family: Cinzel; src: url('/fonts/Cinzel-Variable.woff2') format('woff2'); font-weight: 400 900; font-display: swap; }
+  :root { --page: #0b0d0e; --panel: #12161a; --ink: #edf1f2; --soft: #cdd4d6; --muted: #98a2a6; --line: rgba(255,255,255,.08); }
+  * { box-sizing: border-box; }
+  html { background: var(--page); color-scheme: dark; }
+  body { margin: 0; background: var(--page); color: var(--soft); font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 64px 16px 96px; }
+  a { color: var(--ink); text-underline-offset: 3px; }
+  .back { font-size: 14px; color: var(--muted); text-decoration: none; }
+  h1, h2 { font-family: Cinzel, Georgia, serif; color: var(--ink); font-weight: 600; letter-spacing: .02em; }
+  h1 { font-size: clamp(32px, 6vw, 46px); margin: 28px 0 8px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .lede { font-size: 18px; color: var(--ink); }
+  .meta { font-size: 13px; color: var(--muted); }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-top: 20px; }
+  .entry { display: grid; grid-template-columns: 1fr; gap: 2px; margin: 18px 0; }
+  .entry strong { color: var(--ink); font-weight: 600; }
+  .entry p { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← Principia</a>
+  <h1>Changelog</h1>
+  <p class="meta">What changed in Principia, newest first · <a href="https://github.com/Vibiz-ai/principia/releases">All releases on GitHub</a></p>
+
+  <h2>October 2026</h2>
+  <div class="entry"><strong>Mac preview download</strong><p>Download Principia for Apple Silicon Macs from useprincipia.com. It is an early, unsigned preview: macOS asks you to confirm the first open, and Principia tells you when a new version is out.</p></div>
+  <div class="entry"><strong>Token activity</strong><p>Usage counts every token across Claude Code, Codex and Principia’s own agents, once each, in a year-long activity grid with your streaks, peak day and longest task.</p></div>
+  <div class="entry"><strong>Sounds only for what matters</strong><p>Three short sounds: Done, Needs you, Problem. Quiet for routine work, and never for the thing you are already looking at.</p></div>
+  <div class="entry"><strong>Connect once, use everywhere</strong><p>One connection per service, by API key, sign-in or MCP. Dashboards, agents, Knowledge and Autopilot all see it, and anywhere it is missing offers Connect right there.</p></div>
+  <div class="entry"><strong>Autopilot routines</strong><p>Agents pick up the next task on their own, as many at once as you allow. Ready-made routines like a morning brief and a weekly review, and a chief of staff that suggests what is next.</p></div>
+  <div class="entry"><strong>Phone pairing</strong><p>Pair your phone with a QR code and use your company from it: chats, approvals, sessions and the board. The iPhone app is coming to TestFlight.</p></div>
+  <div class="entry"><strong>Worktree per task</strong><p>Starting a code task opens its own git worktree and branch, with an agent on it. The task follows the work until the PR merges.</p></div>
+  <div class="entry"><strong>The company browser</strong><p>Every company has its own browser beside the chat. Agents drive it while you watch, and Take over hands you the wheel.</p></div>
+  <div class="entry"><strong>Diagrams</strong><p>Agents answer with real, interactive diagrams wherever you read them.</p></div>
+</main>
+</body>
+</html>

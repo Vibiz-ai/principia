@@ -44,10 +44,11 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
-import { isBoardTool, isCompanyTool, isConnectionsTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
+import { isBoardTool, isCompanyTool, isConnectionsTool, isHelpTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
 import { isChatCompanyTool } from '../../shared/chatCompany'
+import { helpAnswer } from '../../shared/help'
 
 export const RATE_PER_MIN = 60
 export const MAX_PENDING_PER_OWNER = 5
@@ -116,6 +117,7 @@ export interface BrokerDeps {
    * company is refused. Absent = the tool is unknown.
    */
   connections?: { list(owner: LiveOwner, args: Record<string, unknown>, hints: { companyId: string | null }): Record<string, unknown> }
+  // `principia_help` needs no dependency: shared/help.ts, the same answer the servers give locally
   /** SLACK.md §9.5: `slack_trigger` on create/update/validate. Absent = the argument is refused. */
   slackTriggers?: {
     /** Resolves #name / @handle from the local mirror and validates (PO-S3c included). */
@@ -206,6 +208,12 @@ export class AuthorBroker {
       } catch (e) {
         return answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
       }
+    }
+    // principia_help: the servers answer it themselves; a line that still arrives gets the same data (any owner, pure)
+    if (isHelpTool(tool)) {
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const q = isObj(line.args) && typeof line.args.question === 'string' ? line.args.question.slice(0, 500) : ''
+      return answer(q.trim() ? { ok: true, result: helpAnswer(q) } : { ok: false, error: 'Pass `question`: what the founder asked about Principia.' })
     }
     // DEPARTMENTS.md §6: task tools (steps of task runs and sessions alike), §9 company tools (chat sessions); identity is
     // the owner, checked in taskCall

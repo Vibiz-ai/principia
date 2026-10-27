@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import { waitForAnswer } from '../live/hook'
 import type { CallContext } from '../memory/server/jsonrpc'
 import type { ToolDef, ToolResult } from '../memory/server/tools'
+import { helpAnswer } from '../../shared/help'
 
 /** PLANS.md §1: the brief tools ride on the same server (only where a task is held). */
 export const BRIEF_TOOLS = ['task_brief_edit', 'task_criterion', 'task_decide', 'task_attach_proof'] as const
@@ -242,6 +243,36 @@ export const CONNECTIONS_TOOL_DEF: ToolDef = {
 }
 export const CONNECTIONS_SERVER_INSTRUCTIONS =
   'Connections: when a tool or service you need is missing or not connected, say so plainly and give the founder its exact link, principia://connect/<tool> (it opens that card in Settings › Connections; principia://connect/mcp adds their own MCP server). connections_list shows what is connected and the link for each tool that is not. Never ask for passwords or keys in the chat.'
+
+// ---------- how to use Principia itself (shared/help.ts) ----------
+
+/**
+ * `principia_help`: the 1–3 entries of Principia's own curated help (shared/help.ts) that best match a question about
+ * Principia itself (the phone app, a setting, a feature, where something is), each with plain steps and the principia://
+ * links that open the page. Read-only and pure: the server answers it locally from the bundled knowledge base, without
+ * a mailbox line (the broker answers a line the same way). Listed beside `connections_list`, and on every interactive
+ * session's `hive` server.
+ */
+export const HELP_TOOL = 'principia_help' as const
+export type HelpTool = typeof HELP_TOOL
+export const isHelpTool = (name: string): name is HelpTool => name === HELP_TOOL
+export const HELP_TOOL_DEF: ToolDef = {
+  name: HELP_TOOL,
+  description:
+    "How to use Principia itself, from its built-in help: the phone app, starting a conversation, autopilot, connections, Slack, Linear, the browser, worktrees, harnesses, Knowledge, departments, routines, keys, Forum, usage, voice, cloud, updates, privacy. Pass the founder's question in plain words; returns the best 1–3 entries with steps and the principia:// links that open the page (or every topic title when nothing matches).",
+  inputSchema: { type: 'object', properties: { question: { type: 'string', minLength: 1, maxLength: 500, description: 'The question in plain words (use principia from my phone, start a new chat)' } }, required: ['question'], additionalProperties: false },
+  annotations: { readOnlyHint: true }
+}
+export const HELP_SERVER_INSTRUCTIONS =
+  "Principia help: for any question about Principia itself (the phone app, setup, settings, a feature, where something is), call principia_help and answer from what it returns, with its principia:// link. Never guess, never say you don't know, never send the founder to support."
+/** The tool's answer: data from shared/help.ts, never a mailbox line. */
+export function callHelpTool(args: unknown): ToolResult {
+  const raw = args && typeof args === 'object' ? (args as Record<string, unknown>).question : undefined
+  const q = typeof raw === 'string' ? raw.slice(0, 500) : ''
+  if (!q.trim()) return { content: [{ type: 'text', text: 'Pass `question`: what the founder asked about Principia, in plain words.' }], isError: true }
+  const answer = helpAnswer(q)
+  return { content: [{ type: 'text', text: JSON.stringify(answer).slice(0, TASK_MAX_OUTPUT) }], structuredContent: answer as unknown as Record<string, unknown> }
+}
 
 /** The passive wording (Settings → "Agents use Principia on their own" off): file only after a yes. */
 export const COMPANY_SERVER_INSTRUCTIONS =

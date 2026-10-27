@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { TokenActivity } from '../../shared/usage'
 import { activityGrid, activityStats, compactTokens, dayTotal, taskDuration } from '../../shared/tokenActivity'
 import { DEDUPE_DAYS, IDLE_GAP_MS, SYNC_BYTES, TokenActivityService, codexRoots, emptyCache, fold, loadCache, type PrincipiaRow } from './tokens'
@@ -242,6 +242,10 @@ describe('stats and grid', () => {
 
 describe('the incremental cache', () => {
   it('reads only appended bytes on the next scan, resumes from the saved cache, and starts a rewritten file over', async () => {
+    // the fixture days must stay inside DEDUPE_DAYS of "now", or they fold away and later lines are skipped
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-21T00:00:00Z'))
+    onTestFinished(() => { vi.useRealTimers() })
     const f = claudeFile('-work-a', `${ID1}.jsonl`, [asst('2026-10-20T10:00:00Z', 'msg_1', usage(1, 1))])
     const first = await run()
     expect(dayTotal(day(first, '2026-10-20')!)).toBe(2)

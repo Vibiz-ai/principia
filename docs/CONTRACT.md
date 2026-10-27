@@ -509,6 +509,8 @@ chunks should be human-readable text (assistant text / tool names), not raw JSON
 Changing a shared type or channel: edit `src/shared/*`, update this doc, run `npm run typecheck`, and mention it in the
 commit message (`contract:` prefix). Adding a channel = add to `InvokeMap` + `INVOKE_CHANNELS` (a compile-time check
 fails if they diverge) + a handler in main + a row here.
+A PR that adds, renames, moves or removes a user-facing feature (a page, a setting, a button, a shortcut, a principia://
+link) updates its entry in `src/shared/help.ts` in the same PR (see "Principia help" below).
 
 ## 11. Memory
 
@@ -1661,3 +1663,23 @@ Never exposed: setting `done`, another agent's in-flight task, department or age
 
 ### De.7 Ownership
 DEPARTMENTS.md §13 (D1-D11); file ownership is disjoint with COMPANY.md (C1-C7) and PASSPORT.md (P1-P8).
+
+## Principia help (`principia_help`, 2026-10-27)
+
+Agents know the founder's company, not Principia. Asked "how can I use Principia from my phone?", one answered that
+it did not know and sent the founder to support, while Settings › App › Phone pairs a phone by QR code.
+
+- **The knowledge base** is one curated module, `src/shared/help.ts` (`HELP_ENTRIES`): about 30 short entries, each a
+  title, a few plain sentences on how to do it in the current build, the words people ask it with, and the principia://
+  links that open the page. Written only from what the code and these docs say the build does; nothing planned.
+- **The tool** `principia_help {question}` (read-only, `src/main/company/taskToolDefs.ts` `HELP_TOOL_DEF`) returns the
+  best 1–3 entries (`searchHelp`: deterministic keyword, alias and phrase scoring with IDF), or every topic title when
+  nothing matches so the agent can ask again. It is listed wherever `connections_list` is (the `hive` server of company
+  sessions, plus every interactive session; a task run's hivemem server; the pre-allowed pane tools and the task
+  toolset) and is answered by the server process itself from the bundled module, with no mailbox line. The broker
+  answers a stray `principia_help` line with the same data.
+- **The rule** (`principiaOps.ts`, listed when the tool is attached): questions about Principia itself go to
+  principia_help and are answered with its link, never guessed and never sent to support.
+- **Upkeep.** `src/shared/help.test.ts` parses every principia:// link in the module with `parseDeepLink`, so a link
+  the parser no longer accepts fails the build. **A PR that changes a user-facing feature updates `src/shared/help.ts`**
+  (§10). `principia://settings/phone` opens Settings › App › Phone (added to `SETTINGS_SECTIONS` for this).

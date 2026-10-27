@@ -29,7 +29,7 @@ import { HiveError } from '../../shared/errors'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
-import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, CONNECTIONS_TOOL, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
+import { BRIEF_TOOL_LIMITS, COMPANY_LIMITS, CONNECTIONS_TOOL, HELP_TOOL, isCompanyTool, isSessionTaskTool, TASK_LIMITS, TASK_LIST_MAX, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_TOOLS, type BoardTool } from './taskToolDefs'
 import { CRITERION_STATES, EDITABLE_SECTIONS, PROOF_KINDS, briefOf, proofOf } from '../../shared/plans'
 import { BriefStore, briefReminder, checkProofRef, decide, editSection, setCriterion } from './brief'
 export { callTaskTool, isTaskTool, TASK_MAX_OUTPUT, TASK_MUTATIONS, TASK_NOTE, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS, type TaskTool } from './taskToolDefs'
@@ -218,8 +218,8 @@ export class TaskTools {
     let t: BoardTask
     try { t = this.c.task(req.taskId) } catch { return null }
     if (req.companyId && req.companyId !== t.companyId) return null
-    // connections_list rides on the same server: where the founder connects a tool this task needs
-    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS, CONNECTIONS_TOOL] }
+    // connections_list rides on the same server (where the founder connects a tool this task needs), and principia_help
+    return { env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: t.companyId }, toolNames: [...TASK_TOOLS, CONNECTIONS_TOOL, HELP_TOOL] }
   }
   /** EngineContext.onStepOutput (hive.stepOutputHooks): the fenced report of a passed step (§4.5). */
   harvest(e: HarvestStep): TaskReport | null {

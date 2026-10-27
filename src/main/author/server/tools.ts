@@ -13,7 +13,7 @@ import type { ToolDef, ToolResult } from '../../memory/server/tools'
 import { AUTHOR_SERVER_INSTRUCTIONS, AUTHOR_TOOLS, type AuthorTool } from '../../../shared/authoring'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackWorkTool } from '../../../shared/slack'
 import { CHAT_COMPANY_SERVER_INSTRUCTIONS, CHAT_COMPANY_TOOL, CHAT_COMPANY_TOOL_DEF, PROPOSAL_WAIT_S, type ChatCompanyTool } from '../../../shared/chatCompany'
-import { BRIEF_SERVER_INSTRUCTIONS, CONNECTIONS_SERVER_INSTRUCTIONS, CONNECTIONS_TOOL, CONNECTIONS_TOOL_DEF, isConnectionsTool, isBriefTool, callTaskTool, CHAT_TASK_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS_PROACTIVE, COMPANY_TOOL_DEFS, COMPANY_TOOLS, isBoardTool, SESSION_TASK_TOOLS, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS } from '../../company/taskToolDefs'
+import { BRIEF_SERVER_INSTRUCTIONS, callHelpTool, CONNECTIONS_SERVER_INSTRUCTIONS, CONNECTIONS_TOOL, CONNECTIONS_TOOL_DEF, HELP_SERVER_INSTRUCTIONS, HELP_TOOL, HELP_TOOL_DEF, isConnectionsTool, isHelpTool, isBriefTool, callTaskTool, CHAT_TASK_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS_PROACTIVE, COMPANY_TOOL_DEFS, COMPANY_TOOLS, isBoardTool, SESSION_TASK_TOOLS, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS } from '../../company/taskToolDefs'
 
 export const MAX_ARGS_BYTES = 256 * 1024
 export const DEFAULT_WAIT_S = 600
@@ -505,7 +505,9 @@ export function listedHiveTools(env: Record<string, string | undefined>): string
     ...(sets.has('company') ? COMPANY_TOOLS : []),
     ...(sets.has('newco') ? [CHAT_COMPANY_TOOL] : []),
     // where to connect a missing tool: every session of a company (principia://connect links)
-    ...(env.HIVE_COMPANY_ID?.trim() ? [CONNECTIONS_TOOL] : [])
+    ...(env.HIVE_COMPANY_ID?.trim() ? [CONNECTIONS_TOOL] : []),
+    // how Principia itself works (shared/help.ts): every company session, and every interactive one
+    ...(env.HIVE_COMPANY_ID?.trim() || sets.has('author') ? [HELP_TOOL] : [])
   ]
 }
 
@@ -526,18 +528,20 @@ export function buildAuthorHandlers(env: NodeJS.ProcessEnv): McpHandlers {
   // PROACTIVE.md §2: Settings → "Agents use Principia on their own" (absent = on)
   const proactive = env.HIVE_PROACTIVE !== '0'
   const names = listedHiveTools(env)
-  const defs = { ...AUTHOR_TOOL_DEFS, ...SLACK_TOOL_DEFS, ...SLACK_WORK_TOOL_DEFS, ...TASK_TOOL_DEFS, ...COMPANY_TOOL_DEFS, [CHAT_COMPANY_TOOL]: CHAT_COMPANY_TOOL_DEF as unknown as ToolDef, [CONNECTIONS_TOOL]: CONNECTIONS_TOOL_DEF } as Record<string, ToolDef>
+  const defs = { ...AUTHOR_TOOL_DEFS, ...SLACK_TOOL_DEFS, ...SLACK_WORK_TOOL_DEFS, ...TASK_TOOL_DEFS, ...COMPANY_TOOL_DEFS, [CHAT_COMPANY_TOOL]: CHAT_COMPANY_TOOL_DEF as unknown as ToolDef, [CONNECTIONS_TOOL]: CONNECTIONS_TOOL_DEF, [HELP_TOOL]: HELP_TOOL_DEF } as Record<string, ToolDef>
   return {
     serverInfo: { name: 'hive', version: '1' },
     instructions: () =>
       usable
-        ? [sets.has('author') ? AUTHOR_SERVER_INSTRUCTIONS : '', sets.has('author') && companyId ? AUTHOR_COMPANY_NOTE : '', sets.has('slack') ? SLACK_SERVER_INSTRUCTIONS : '', sets.has('work') ? SLACK_WORK_INSTRUCTIONS : '', sets.has('task') ? (taskId ? TASK_SERVER_INSTRUCTIONS : CHAT_TASK_SERVER_INSTRUCTIONS) : '', sets.has('task') && taskId ? BRIEF_SERVER_INSTRUCTIONS : '', sets.has('company') ? (proactive ? COMPANY_SERVER_INSTRUCTIONS_PROACTIVE : COMPANY_SERVER_INSTRUCTIONS) : '', sets.has('newco') ? CHAT_COMPANY_SERVER_INSTRUCTIONS : '', names.includes(CONNECTIONS_TOOL) ? CONNECTIONS_SERVER_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || 'No Hive tools are enabled here.'
+        ? [sets.has('author') ? AUTHOR_SERVER_INSTRUCTIONS : '', sets.has('author') && companyId ? AUTHOR_COMPANY_NOTE : '', sets.has('slack') ? SLACK_SERVER_INSTRUCTIONS : '', sets.has('work') ? SLACK_WORK_INSTRUCTIONS : '', sets.has('task') ? (taskId ? TASK_SERVER_INSTRUCTIONS : CHAT_TASK_SERVER_INSTRUCTIONS) : '', sets.has('task') && taskId ? BRIEF_SERVER_INSTRUCTIONS : '', sets.has('company') ? (proactive ? COMPANY_SERVER_INSTRUCTIONS_PROACTIVE : COMPANY_SERVER_INSTRUCTIONS) : '', sets.has('newco') ? CHAT_COMPANY_SERVER_INSTRUCTIONS : '', names.includes(CONNECTIONS_TOOL) ? CONNECTIONS_SERVER_INSTRUCTIONS : '', names.includes(HELP_TOOL) ? HELP_SERVER_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || 'No Hive tools are enabled here.'
         : 'Hive authoring is not available in this process.',
     listTools: () => (usable ? names.map((t) => defs[t]) : []),
     callTool: (name, args, ctx) => {
       if (!usable || !names.includes(name)) {
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }
       }
+      // principia_help is answered here (shared/help.ts is bundled with this server; no line, no wait)
+      if (isHelpTool(name)) return callHelpTool(args)
       if (isBoardTool(name) || isConnectionsTool(name)) return callTaskTool(dir, name, args, ctx, { companyId, taskId })
       return callHive(dir, name as HiveCallTool, args, ctx, waitForAnswer, companyId)
     }

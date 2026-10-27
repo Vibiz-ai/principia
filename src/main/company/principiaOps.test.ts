@@ -81,6 +81,19 @@ describe('principiaOps (PROACTIVE.md §1)', () => {
     expect(principiaOps({ kind: 'chat', tools: CHAT_TOOLS })).toContain('principia://board?task=NC-12')
   })
 
+  it('Principia itself: principia_help, with its link, never a guess or "ask support"', () => {
+    const chat = principiaOps({ kind: 'chat', tools: [...CHAT_TOOLS, 'mcp__hive__connections_list', 'mcp__hive__principia_help'] })
+    expect(chat).toContain('Questions about Principia itself')
+    expect(chat).toContain('call principia_help')
+    expect(chat).toContain('principia:// link')
+    expect(chat).toContain('send the founder to support')
+    expect(approxTokens(chat)).toBeLessThan(760)
+    for (const kind of ['session', 'task'] as const) expect(principiaOps({ kind, tools: [...TASK_TOOLS, 'hivemem.principia_help'] })).toContain('call principia_help')
+    // the tool alone is enough for the section; without it, no rule
+    expect(principiaOps({ kind: 'chat', tools: ['principia_help'] })).toContain('call principia_help')
+    expect(principiaOps({ kind: 'chat', tools: CHAT_TOOLS })).not.toContain('principia_help')
+  })
+
   it('the reminder repeats the rules', () => {
     const ops = principiaOps({ kind: 'chat', tools: CHAT_TOOLS })
     expect(principiaOpsReminder(ops)).toContain(ops)

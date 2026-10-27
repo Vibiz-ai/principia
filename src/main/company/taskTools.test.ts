@@ -229,8 +229,8 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     const b = board()
     const t = b.task()
     const req = { runId: 'r_1', taskId: t.id, agentId: b.writer.id, stepId: 's', adapter: 'claude' as const, companyId: b.co.id }
-    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, 'connections_list'] })
-    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, 'connections_list'])
+    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, 'connections_list', 'principia_help'] })
+    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, 'connections_list', 'principia_help'])
     // gemini: offered here; the executor attaches it only once MCP_VERIFIED.gemini (untested: not installed)
     expect(tools.toolset({ ...req, adapter: 'gemini' })).not.toBeNull()
     expect(tools.toolset({ ...req, adapter: 'cursor' })).toBeNull()

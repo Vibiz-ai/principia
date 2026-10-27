@@ -6,7 +6,8 @@
  *   principia://connect/<tool>[?purpose=<p>]   Settings › Connections, on that tool's card or sheet (tool ids below:
  *                                              every service in the registry, services.ts); `purpose` (dashboard,
  *                                              agentTools, …) only orders the connect sheet (a key first for a dashboard)
- *   principia://settings/<section>             a Settings section (connections, keys, team, providers, …)
+ *   principia://settings/<section>             a Settings section (connections, keys, team, providers, …;
+ *                                              phone: Settings › App › Phone, where a phone is paired by QR code)
  *   principia://board[?task=<id|NC-12>]        the Board, with that task open
  *   principia://board?new=<title>              the Board's quick create, prefilled (nothing is filed until you press it)
  *   principia://chats[/live|all|agents|direct] Chats
@@ -44,7 +45,7 @@ export const CONNECT_TOOL_IDS: readonly string[] = [...new Set<string>([...OWN_C
 /** Friendly aliases: what an agent is likely to type. */
 const CONNECT_ALIASES: Record<string, string> = { custom: 'mcp', 'mcp-server': 'mcp', ig: 'instagram', gh: 'github', 'google-business-profile': 'google-business', meta: 'meta-ads', gsc: 'google-search-console', 'search-console': 'google-search-console', twitter: 'x', 'fal-ai': 'fal' }
 
-export const SETTINGS_SECTIONS = ['company', 'team', 'connections', 'repos', 'keys', 'danger', 'general', 'providers', 'notifications', 'cloud', 'storage', 'experimental', 'about', 'agents', 'data'] as const
+export const SETTINGS_SECTIONS = ['company', 'team', 'connections', 'repos', 'keys', 'danger', 'general', 'providers', 'notifications', 'cloud', 'phone', 'storage', 'experimental', 'about', 'agents', 'data'] as const
 export type DeepLinkSettingsSection = (typeof SETTINGS_SECTIONS)[number]
 export const CHAT_FILTERS = ['live', 'all', 'agents', 'direct'] as const
 export type DeepLinkChatFilter = (typeof CHAT_FILTERS)[number]
