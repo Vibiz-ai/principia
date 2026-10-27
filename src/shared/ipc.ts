@@ -103,7 +103,7 @@ import type {
   HistoryListResult,
   NotifyResult
 } from './authoring'
-import type { RunBranch, RunWorktree } from './types'
+import type { ChimeKind, RunBranch, RunWorktree } from './types'
 import type { MarketInstallResult, MarketList, MarketPreview, MarketRef } from './marketplace'
 import type { DashboardConfig, DashboardInstallInput, DashboardKeyLookup, DashboardKind, DashboardSnapshot, InstalledDashboard } from './dashboards'
 import type { LinearConnectInput, LinearKeyCheck, LinearStatusView } from './linear'
@@ -633,7 +633,8 @@ export interface SendMap {
   'artifacts:startDrag': { id: Id } // call from dragstart; main calls webContents.startDrag
   'ui:ready': void // renderer mounted; main flushes pending ui:command (e.g. notification click)
   /** What the user is looking at: suppresses notifications for it and marks idle sessions seen (LIVE.md A3). */
-  'ui:visibleOwner': { sessionId?: Id | null; runId?: Id | null }
+  /** `board`: the company whose Board, Plans or department page is on screen ('all' in All mode); SOUNDS.md suppression */
+  'ui:visibleOwner': { sessionId?: Id | null; runId?: Id | null; board?: Id | 'all' | null }
 }
 
 /** main -> renderer events. Subscribe with window.hive.on(name, cb). */
@@ -651,6 +652,8 @@ export interface EventMap extends ChatEventMap, RemoteEventMap, BrowserEventMap,
   'status:changed': StatusSnapshot // drives status bar; same data as tray
   'providers:changed': ProviderInfo[]
   'settings:changed': Settings
+  /** SOUNDS.md: main decided a sound plays now (src/main/chime.ts); the renderer synthesizes it. */
+  'chime:play': { kind: ChimeKind; volume: number }
   /** Window focus / fullscreen, drives .is-inactive / .is-fullscreen on <html>. */
   'window:state': { focused: boolean; fullscreen: boolean }
   /** Coarse invalidation for lists without dedicated events. */
@@ -881,7 +884,7 @@ export const SEND_CHANNELS = ['sessions:write', 'sessions:resize', 'artifacts:st
 export const EVENT_NAMES = [
   'pty:data', 'pty:exit', 'session:updated', 'run:updated', 'run:step', 'run:output', 'artifact:added',
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
-  'settings:changed', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
+  'settings:changed', 'chime:play', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
   'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'chatCompany:updated', 'worktree:updated', 'history:changed',
   'activity:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',

@@ -78,6 +78,11 @@ export const DEFAULT_SETTINGS: Settings = {
   slackMirrorNeedsYou: false,
   // Settings › Notifications: "Tell me when something needs me" (a Mac notification per ask / finished turn)
   notifyNeedsYou: true,
+  // SOUNDS.md: Done, Needs you and Problem sounds on, at a modest volume ("Sounds" itself is notificationSound)
+  soundDone: true,
+  soundNeedsYou: true,
+  soundProblem: true,
+  soundVolume: 0.5,
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,

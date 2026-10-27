@@ -119,7 +119,9 @@ export function registerCompanyHandlers(h: Hive): void {
     if(!capReached(month.total.usd,co.monthlyCap)) return
     void pauseOne(co.id,true).then(()=>{
       log.info('company paused at its monthly cap',{companyId:co.id,cap:co.monthlyCap,usd:month.total.usd})
-      notify({title:`${co.name} paused at its monthly cap`,body:`This month's pay-as-you-go value reached $${co.monthlyCap}. Other companies keep running. Raise the cap or resume in Spend.`,sound:false})
+      // SOUNDS.md: the Problem sound, once per company per month
+      const sound=h.chime({kind:'problem',key:`cap:${co.id}:${new Date().toISOString().slice(0,7)}`})
+      notify({title:`${co.name} paused at its monthly cap`,body:`This month's pay-as-you-go value reached $${co.monthlyCap}. Other companies keep running. Raise the cap or resume in Spend.`,sound})
     },(e)=>log.warn('cap pause failed',{companyId:co.id,error:String(e)}))
   })
   const logos=logoStoreFor(h)

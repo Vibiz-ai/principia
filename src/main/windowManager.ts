@@ -177,6 +177,11 @@ export class WindowManager {
     } else win.hide()
   }
 
+  /** The renderer mounted its listeners (ui:ready) and the window still exists. */
+  isRendererReady(): boolean {
+    return this.rendererReady && !!this.get()
+  }
+
   /** Renderer mounted its listeners: flush queued commands. */
   markReady(): void {
     this.rendererReady = true

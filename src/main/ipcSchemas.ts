@@ -195,6 +195,11 @@ const settingsPatch = z
     slackAlertUserId: z.string().regex(/^[UW][A-Z0-9]{2,20}$/, 'Slack user id').nullable(),
     slackMirrorNeedsYou: z.boolean(),
     notifyNeedsYou: z.boolean(),
+    // SOUNDS.md
+    soundDone: z.boolean(),
+    soundNeedsYou: z.boolean(),
+    soundProblem: z.boolean(),
+    soundVolume: z.number().min(0).max(1),
     slackBackfillDays: z.number().int().min(0).max(90),
     slackTriggerCatchupMin: z.number().int().min(0).max(120),
     slackAutoPaused: z.boolean(),
@@ -1038,7 +1043,7 @@ export const SEND_SCHEMAS = {
   'sessions:resize': z.object({ id, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
   'artifacts:startDrag': z.object({ id }),
   'ui:ready': none,
-  'ui:visibleOwner': z.object({ sessionId: id.nullish(), runId: id.nullish() })
+  'ui:visibleOwner': z.object({ sessionId: id.nullish(), runId: id.nullish(), board: z.string().max(64).nullish() })
 }
 
 /** zod issues -> contract ValidationError[] */

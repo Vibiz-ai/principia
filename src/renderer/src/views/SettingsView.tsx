@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AdapterId, AgentProfile, AgentProfileInput, PermissionMode, SecretMeta, TrackTasks } from '@shared/types'
+import type { AdapterId, AgentProfile, AgentProfileInput, ChimeKind, PermissionMode, SecretMeta, TrackTasks } from '@shared/types'
 import { ADAPTER_IDS } from '@shared/types'
 import type { MemoryMode } from '@shared/memory'
 import { MEMORY_MODES } from '@shared/memory'
@@ -21,6 +21,7 @@ import type { AuthorRunGrant } from '@shared/authoring'
 import type { RunWorktree } from '@shared/types'
 import { worktreeState } from '../lib/authoring'
 import { tildify } from '../lib/format'
+import { playChime } from '../lib/chimeSound'
 import { slackCall } from '../lib/slackApi'
 import { acceptAlertSuggestion, isSetUp, useSlack } from '../state/slack'
 import { UserPicker } from '../components/slack/bits'
@@ -727,15 +728,71 @@ function Notifications(): React.JSX.Element {
         <SRow label="When a schedule was missed" desc="Always on. Schedules only run while Principia is open.">
           <Switch checked onChange={() => undefined} disabled label="When a schedule was missed" />
         </SRow>
-        <SRow label="Sound">
-          <Switch checked={s.notificationSound} onChange={(v) => void updateSettings({ notificationSound: v })} label="Sound" />
-        </SRow>
       </div>
+      <SoundRows />
       <div className="sgroup">
         <div className="sgroup__title">Also on Slack</div>
         <SlackAlertRows />
       </div>
     </>
+  )
+}
+
+/** SOUNDS.md: one row per sound, each with a preview. */
+const SOUND_ROWS: { kind: ChimeKind; key: 'soundDone' | 'soundNeedsYou' | 'soundProblem'; label: string; desc: string }[] = [
+  { kind: 'done', key: 'soundDone', label: 'Done', desc: 'A team task is ready for your review, a milestone or plan finished, or a long chat turn ended while you were elsewhere.' },
+  { kind: 'needs', key: 'soundNeedsYou', label: 'Needs you', desc: 'An agent asks a question or wants your OK. A burst of asks is one sound.' },
+  { kind: 'problem', key: 'soundProblem', label: 'Problem', desc: 'A job failed, an agent looks stalled, or a usage limit or monthly cap was hit.' }
+]
+
+/**
+ * SOUNDS.md: "Sounds" is notificationSound (old settings files keep working); the per-kind switches and the volume sit
+ * under it. Only important moments make a sound, never routine runs, and never what you are already looking at.
+ */
+export function SoundRows(): React.JSX.Element {
+  const s = useStore((st) => st.settings)!
+  const on = s.notificationSound !== false
+  const volume = typeof s.soundVolume === 'number' ? s.soundVolume : 0.5
+  // the slider moves freely; the setting is written once it settles
+  const [draft, setDraft] = useState<number | null>(null)
+  const shown = draft ?? volume
+  const commit = (): void => {
+    if (draft === null) return
+    void updateSettings({ soundVolume: draft })
+    playChime('done', draft)
+    setDraft(null)
+  }
+  return (
+    <div className="sgroup">
+      <div className="sgroup__title">Sounds</div>
+      <SRow label="Sounds" desc="A short sound for the moments that matter. Routine jobs stay quiet, and so does whatever you are looking at.">
+        <Switch checked={on} onChange={(v) => void updateSettings({ notificationSound: v })} label="Sounds" />
+      </SRow>
+      {SOUND_ROWS.map((r) => (
+        <SRow key={r.kind} label={r.label} desc={r.desc}>
+          <div className="sound-ctl">
+            <IconButton icon="play" label={`Play the ${r.label} sound`} onClick={() => playChime(r.kind, volume)} data-sound={r.kind} />
+            <Switch checked={on && s[r.key] !== false} disabled={!on} onChange={(v) => void updateSettings({ [r.key]: v })} label={`${r.label} sound`} />
+          </div>
+        </SRow>
+      ))}
+      <SRow label="Volume">
+        <input
+          className="sound-volume"
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={shown}
+          disabled={!on}
+          aria-label="Sound volume"
+          onChange={(e) => setDraft(Number(e.target.value))}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
+        />
+      </SRow>
+    </div>
   )
 }
 

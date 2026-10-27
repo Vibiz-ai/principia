@@ -227,13 +227,15 @@ function shownChatSession(s: ReturnType<typeof getState>): Id | null {
   }
   return null
 }
-function visibleOwner(): { sessionId: Id | null; runId: Id | null } {
+function visibleOwner(): { sessionId: Id | null; runId: Id | null; board?: Id | 'all' } {
   const s = getState()
   if (!s.window.focused) return { sessionId: null, runId: null }
   if (s.view.name === 'session') return { sessionId: s.focusedSession, runId: null }
   const shown = shownChatSession(s)
   if (shown) return { sessionId: shown, runId: null }
   if (s.view.name === 'run') return { sessionId: null, runId: s.view.runId }
+  // SOUNDS.md: a card moving on the Board you are looking at is seen, not heard
+  if (s.view.name === 'tasks' || s.view.name === 'plans' || s.view.name === 'department') return { sessionId: null, runId: null, board: scopeCompanyId(s) ?? 'all' }
   return { sessionId: null, runId: null }
 }
 /** The session the user is looking at (the same owner main is told about, so the badge and the tray agree). */

@@ -35,6 +35,9 @@ import type { LiveStore } from './db/liveStore'
 import type { SessionLiveHub } from './live/sessionLive'
 import type { LiveEmit } from './live/apply'
 import { NeedsYouNotifier } from './live/asks'
+import { Chimes, chimeSettings, planChimeKeys, taskChimeKey, type ChimeEvent } from './chime'
+import type { BoardTask, TaskStatus } from '../shared/company'
+import type { Plan } from '../shared/plans'
 import type { AgentNode, Ask } from '../shared/live'
 import { retryTime, type LimitHit } from './engine'
 import type { AuthorBroker } from './author/broker'
@@ -98,8 +101,17 @@ export class Hive {
   /** AGENT CHAT: each company agent's standing chat */
   agentChats?: import('./chat/agentChat').AgentChats
   notifier!: NeedsYouNotifier
-  /** What the renderer shows (ui:visibleOwner): suppresses notifications, marks idle sessions seen (A3). */
-  visibleOwner: { sessionId: Id | null; runId: Id | null } = { sessionId: null, runId: null }
+  /** SOUNDS.md: decides every sound; the renderer plays it (chime:play). */
+  readonly chimes = new Chimes({
+    settings: () => chimeSettings(this.settings()),
+    canPlay: () => !!this.windows?.get() && !!this.windows?.isRendererReady(),
+    play: (kind, volume) => emit('chime:play', { kind, volume })
+  })
+  /**
+   * What the renderer shows (ui:visibleOwner): suppresses notifications, marks idle sessions seen (A3). `board`: the
+   * company whose Board / Plans / department page is on screen ('all' in All mode), for the task and plan sounds.
+   */
+  visibleOwner: { sessionId: Id | null; runId: Id | null; board?: Id | 'all' | null } = { sessionId: null, runId: null }
   private lastBadge = ''
   /** Spawn tagging + reaper (CONTRACT §13), shared with the engine. */
   reaper: ProcessReaper | null = null
@@ -352,20 +364,57 @@ export class Hive {
   // ---------- live agents (LIVE.md §4.5, §9.4) ----------
   initLive(): void {
     this.notifier = new NeedsYouNotifier({
-      notify: (n) =>
+      notify: (n) => {
+        // SOUNDS.md: the sound plays even with the notification off; the notification never doubles it
+        const sound = n.chime ? this.chime(n.chime) : this.settings().notificationSound
         // Settings › Notifications › "Tell me when something needs me" (Needs you still lists it either way)
-        this.settings().notifyNeedsYou !== false &&
+        if (this.settings().notifyNeedsYou === false) return
         notify({
           title: n.title,
           body: n.body,
-          sound: this.settings().notificationSound,
+          sound,
           onClick: () => this.windows.command({ kind: 'focusAgent', agentId: n.agentId })
-        }),
+        })
+      },
+      chime: (e) => void this.chime(e),
       focused: () => this.safe(() => this.windows.isFocused(), false),
       visible: () => this.visibleOwner,
       rootTitle: (rootId) => this.rootTitle(rootId),
       isOpen: (askId) => this.live.getAsk(askId)?.status === 'open'
     })
+    // SOUNDS.md: a team task reaching review is the Done sound
+    this.safe(() => this.company.onTaskWrite((t, prev) => this.onTaskWritten(t, prev)), undefined)
+  }
+
+  // ---------- sounds (SOUNDS.md) ----------
+  /** Asks the chime service; true = the Mac notification for the same event keeps its own sound (no window to play in). */
+  chime(e: ChimeEvent): boolean {
+    return this.safe(() => this.chimes.notificationSound(e), false)
+  }
+
+  /** The run's view is on screen in a focused window. */
+  runVisible(runId: Id): boolean {
+    return this.visibleOwner.runId === runId && this.windowFocused()
+  }
+
+  /** The company's Board, Plans or department page is on screen in a focused window. */
+  boardVisible(companyId: Id): boolean {
+    const b = this.visibleOwner.board
+    return !!b && (b === 'all' || b === companyId) && this.windowFocused()
+  }
+
+  /** A team task reached review (chime.ts taskChimeKey): seen, not heard, on its Board or its run's view. */
+  private onTaskWritten(t: BoardTask, prev: { status: TaskStatus; runId: Id | null } | null): void {
+    const key = taskChimeKey(t, prev)
+    if (!key) return
+    const visible = this.boardVisible(t.companyId) || (!!prev?.runId && this.runVisible(prev.runId))
+    void this.chime({ kind: 'done', key, visible })
+  }
+
+  /** PlanStore.onSaved: a milestone passed, or the whole plan finished (a burst of both is one sound). */
+  onPlanSaved(prev: Plan | null, next: Plan): void {
+    const visible = this.boardVisible(next.companyId)
+    for (const key of planChimeKeys(prev, next)) void this.chime({ kind: 'done', key, visible })
   }
 
   /** "<session title>" or "<run title> › <node>". */
@@ -380,8 +429,8 @@ export class Hive {
   }
 
   /** Window focus or the visible owner changed. */
-  setVisibleOwner(v: { sessionId?: Id | null; runId?: Id | null } | null): void {
-    if (v) this.visibleOwner = { sessionId: v.sessionId ?? null, runId: v.runId ?? null }
+  setVisibleOwner(v: { sessionId?: Id | null; runId?: Id | null; board?: Id | 'all' | null } | null): void {
+    if (v) this.visibleOwner = { sessionId: v.sessionId ?? null, runId: v.runId ?? null, board: v.board ?? null }
     this.safe(() => this.sessionLive.visibilityChanged(), undefined)
   }
 
@@ -424,10 +473,11 @@ export class Hive {
     this.stallNotified.add(key)
     if (this.stallNotified.size > 500) this.stallNotified = new Set([...this.stallNotified].slice(-200))
     const mins = Math.max(1, Math.round((Date.now() - Date.parse(a.stalledSince)) / 60_000))
+    const looking = (!!a.sessionId && this.sessionVisible(a.sessionId)) || (!!a.runId && this.runVisible(a.runId))
     notify({
       title: `${this.rootTitle(a.id)} may be stalled`,
       body: `No output for ${mins} min. Hive won't stop it; open it to check.`,
-      sound: this.settings().notificationSound,
+      sound: this.chime({ kind: 'problem', key: `stall:${key}`, visible: looking }),
       onClick: () => this.windows.command({ kind: 'focusAgent', agentId: a.id })
     })
   }
@@ -439,7 +489,7 @@ export class Hive {
     notify({
       title: `${root.title} hit the usage limit`,
       body: hit.resetAt ? `Resets ${clockLabel(hit.resetAt)}. Retry at reset from Hive.` : hit.message,
-      sound: this.settings().notificationSound,
+      sound: this.chime({ kind: 'problem', key: `limit:${root.sessionId}:${Date.now()}`, visible: this.sessionVisible(root.sessionId) }),
       onClick: () => this.windows.command({ kind: 'focusAgent', agentId: root.id })
     })
   }
@@ -564,7 +614,7 @@ export class Hive {
     notify({
       title: a.title.startsWith('Run') ? 'Claude wants to run a workflow' : a.title.startsWith('Update') ? 'Claude wants to update a workflow' : 'Claude wants to create a workflow',
       body: (a.question ?? a.title).slice(0, 200),
-      sound: this.settings().notificationSound,
+      sound: this.chime({ kind: 'needs', key: `approval:${a.id}` }),
       onClick: () => this.windows.command({ kind: 'openApproval', draftId })
     })
   }
@@ -581,7 +631,7 @@ export class Hive {
     notify({
       title: a.title,
       body: (a.question ?? '').slice(0, 200),
-      sound: this.settings().notificationSound,
+      sound: this.chime({ kind: 'needs', key: `approval:${a.id}` }),
       onClick: () => this.windows.command({ kind: 'openSlackDraft', draftId })
     })
   }
@@ -797,12 +847,14 @@ export class Hive {
         this.unseenFailures++
         this.lastFailure = { runId: run.id, title: run.title, endedAt: run.endedAt ?? new Date().toISOString() }
       }
+      // SOUNDS.md: Problem, unless the run is on screen
+      const sound = this.chime({ kind: 'problem', key: `limit:run:${run.id}`, visible: this.runVisible(run.id) })
       if (s.notifyOnFailure) {
         const reset = run.resetAt ? `Resets ${clockLabel(run.resetAt)}` : 'Reset time unknown'
         notify({
           title: `${run.title} hit the usage limit`,
           body: run.retryAt ? `${reset} · retry scheduled ${clockLabel(run.retryAt)}` : `${reset}. Retry at reset from Hive.`,
-          sound: s.notificationSound,
+          sound,
           onClick: () => this.windows.command({ kind: 'openRun', runId: run.id })
         })
       }
@@ -817,6 +869,9 @@ export class Hive {
         }
       }
       const s = this.settings()
+      // SOUNDS.md: a failed run is a Problem sound (never "nothing to do", never one on screen); a passed run is routine
+      // and stays silent (its notification too)
+      const sound = run.status === 'failed' && run.outcome !== 'nothing_to_do' && this.chime({ kind: 'problem', key: `fail:${run.id}`, visible: this.runVisible(run.id) })
       if (shouldNotifyRun(run, s)) {
         notify({
           title: run.status === 'failed' ? `${run.title} failed` : `${run.title} passed`,
@@ -824,7 +879,7 @@ export class Hive {
             run.status === 'failed'
               ? (run.reason ?? 'The run failed.').slice(0, 200)
               : `${run.artifactCount ? `${run.artifactCount} artifact${run.artifactCount === 1 ? '' : 's'} · ` : ''}Finished ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-          sound: s.notificationSound,
+          sound,
           onClick: () => this.windows.command({ kind: 'openRun', runId: run.id })
         })
       }
@@ -834,7 +889,6 @@ export class Hive {
 
   private onScheduleEvent(kind: string, name: string, slotAt: string, runId: Id | null, message: string | null): void {
     if (kind !== 'missed' && kind !== 'caught_up' && kind !== 'skipped_overlap') return
-    const s = this.settings()
     const time = new Date(slotAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const title =
       kind === 'caught_up'
@@ -846,10 +900,11 @@ export class Hive {
       kind === 'caught_up'
         ? 'Hive was not running or the Mac was asleep at that time.'
         : message ?? (kind === 'skipped_overlap' ? 'The previous run was still going.' : 'Hive was not running or the Mac was asleep.')
+    // SOUNDS.md: missed / caught-up / skipped schedules are routine (and mostly at boot): no sound
     notify({
       title,
       body,
-      sound: s.notificationSound,
+      sound: false,
       onClick: () => this.windows.command(runId ? { kind: 'openRun', runId } : { kind: 'navigate', view: 'schedules' })
     })
   }

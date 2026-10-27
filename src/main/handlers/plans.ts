@@ -35,7 +35,7 @@ export function registerPlansHandlers(h: Hive): PlansWiring {
   const redact = (s: string) => h.vault.redact(s)
   const changed = () => { emit('data:changed', { domain: 'tasks' }); h.safe(() => h.statusChanged(), undefined) }
   const git = gitRunner(() => baseChildEnv())
-  const plans = new PlanStore({ company: () => h.company, redact })
+  const plans = new PlanStore({ company: () => h.company, redact, onSaved: (prev, next) => h.onPlanSaved(prev, next) })
   const briefs = new BriefStore(() => h.company)
   const work = h.taskWork
   const pilot = new PlanPilot({

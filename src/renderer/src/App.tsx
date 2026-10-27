@@ -85,7 +85,8 @@ export function App(): React.JSX.Element {
   const winFocused = useStore((s) => s.window.focused)
   useEffect(() => {
     if (ready) reportVisibleOwner()
-  }, [ready, view, focusedSession, grid, winFocused])
+    // SOUNDS.md: the Board on screen is per company (`active`)
+  }, [ready, view, focusedSession, grid, winFocused, active])
 
   if (firstRunFlow)
     return (
