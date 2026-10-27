@@ -117,7 +117,7 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
           <ChatServiceStarters companyId={companyId} onAsk={(t) => setText(t)} />
           <div className="newchat__hint">
             {withWho.kind === 'agent'
-              ? `It lands in ${agent?.name ?? 'the agent'}’s Queue; the answer comes back in your conversation with ${agent?.name ?? 'them'}.`
+              ? `Opens your conversation with ${agent?.name ?? 'them'}. If it needs real work, ${agent?.name ?? 'they'} files a task you can see on the Board.`
               : code
                 ? 'A Claude Code session: its terminal opens next to the conversation.'
                 : `The chat is saved in ${companyName(companyId)} only. ⌘↵ sends.`}

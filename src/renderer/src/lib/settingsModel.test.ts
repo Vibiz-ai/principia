@@ -16,6 +16,8 @@ describe('Settings in two scopes (design §2.4)', () => {
   it('a company page in All companies asks which company first, so keys never list across clients', () => {
     const all = { inCompany: false, personal: false, code: false }
     expect(resolveSection('keys', all)).toBe('pick')
+    // principia://settings/phone opens App › Phone from anywhere
+    expect(resolveSection('phone', all)).toBe('phone')
     expect(resolveSection('connections', all)).toBe('pick')
     expect(resolveSection(undefined, all)).toBe('general')
     expect(resolveSection('providers', all)).toBe('providers')

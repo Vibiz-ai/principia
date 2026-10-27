@@ -29,20 +29,28 @@ export interface DeskAgent {
   role: string
   department?: string | null
   paused?: boolean
+  /** what the seat does, in the owner's words: its capabilities plus its department's charter ("Writes posts, captions
+   *  and the newsletter"). Routing reads it, so the Team page and the router agree (CHAT-UI.md §7). */
+  about?: string
 }
 
 /** What a request is about, and which roles handle it. Every rule that matches adds to an agent's score. */
 const ROUTES: [RegExp, RegExp][] = [
-  [/\b(post|posts|instagram|caption|captions|blog|copy|newsletter|content|tweet|tiktok|social|headline|homepage|landing|brand voice|write|writing)\b/i, /content|writer|copy|social|brand|editor|blog/i],
+  [/\b(post|posts|instagram|caption|captions|blog|copy|newsletter|newsletters|content|tweet|tiktok|social|headline|homepage|landing|brand voice|write|writing|announce|announcement)\b/i, /content|writer|copy|social|brand|editor|blog/i],
   [/\b(ad|ads|campaign|campaigns|meta|google ads|audience|targeting|competitor|competitors)\b/i, /\bads?\b|advert|strategist|campaign|growth/i],
-  [/\b(refund|customer|customers|email|emails|reply|replies|support|order|orders|complaint|ticket|patient|patients|appointment|appointments|office|front desk|reception|approval|approvals|packet)\b/i, /support|customer|responder|office|liaison|reception/i],
+  // "customers" alone says who it is for, not that it is support work ("a newsletter for our customers" is the writer's)
+  [/\b(refund|refunds|email|emails|reply|replies|support|complaint|complaints|complain\w*|ticket|tickets|patient|patients|appointment|appointments|office|front desk|reception|approval|approvals|packet)\b/i, /support|customer|responder|office|liaison|reception/i],
   [/\b(bug|bugs|fix|code|test|tests|pr|branch|feature|field|deploy|api|crash|error|invoice pdf|refactor)\b/i, /develop|engineer|\bdev\b|builder|\bcode\b|coder|\bqa\b/i],
   [/\b(review|reviews)\b/i, /review/i],
-  [/\b(stock|inventory|plan|planning|checklist|report|reports|reporting|dashboard|metrics|numbers|priorit\w*|fulfil\w*|supplier|suppliers|schedule|ops|performance)\b/i, /ops|operation|planner|coordinator|report|analyst/i],
+  [/\b(stock|inventory|plan|planning|checklist|report|reports|reporting|dashboard|metrics|numbers|priorit\w*|fulfil\w*|supplier|suppliers|order|orders|schedule|ops|performance|staff|staffing|shift|shifts|rota|hiring|queue|queues|opening|closing)\b/i, /ops|operation|planner|coordinator|report|analyst/i],
+  [/\b(price|prices|pricing|margin|margins|cost|costs|budget|budgets|profit|revenue|cash|expenses?)\b/i, /ops|operation|finance|account|bookkeep|analyst|cfo/i],
   [/\b(seo|keyword|keywords|search|google|rank|ranking)\b/i, /seo|search|marketing|analyst/i]
 ]
 /** Words in a role that say nothing about the work ("Report Builder": "report" counts, "builder" does not). */
 const ROLE_GENERIC = new Set('analyst builder specialist agent assistant lead manager officer helper partner expert person team member'.split(' '))
+
+/** Words of a seat's description that say nothing about the work ("Does not publish without approval"). */
+const ABOUT_GENERIC = new Set('doe not never without approval each every our their client clients customer customers thing things work help'.split(' '))
 
 const MENTION = /(^|\s)@([\p{L}\p{N}_-]+)/u
 
@@ -67,25 +75,59 @@ export function routeAsk(text: string, agents: readonly DeskAgent[]): { agent: D
   if (at) return { agent: at, by: 'mention' }
   const named = text.match(MENTION)?.[2]
   const unknown = named ? { unknown: named } : {}
-  const words = stripMention(text)
-  if (words) {
-    const active = agents.filter((a) => !a.paused)
-    const pool = active.length ? active : agents
-    const asked = contentWords(words)
-    let best: { a: DeskAgent; score: number } | null = null
-    for (const a of pool) {
-      let score = 0
-      for (const [about, roles] of ROUTES) {
-        if (!about.test(words)) continue
-        if (roles.test(a.role)) score += 2
-        else if (a.department && roles.test(a.department)) score += 1
-      }
-      for (const w of contentWords(a.role)) if (!ROLE_GENERIC.has(w) && asked.has(w)) score += 3
-      if (score > 0 && (!best || score > best.score)) best = { a, score }
-    }
-    if (best) return { agent: best.a, by: 'words', ...unknown }
-  }
+  const best = scoreAgents(text, agents)[0]
+  if (best) return { agent: best.agent, by: 'words', ...unknown }
   return { agent: agents.find((a) => !a.paused) ?? agents[0]!, by: 'default', ...unknown }
+}
+
+/** One agent's score for a request's words, and the words that earned it ("post", "image"). */
+export interface AgentScore {
+  agent: DeskAgent
+  score: number
+  why: string[]
+}
+/**
+ * Every active agent (all of them when everyone is paused) that the request's words point at, best first; ties keep
+ * the company's order. A rule for its role scores 2, for its department 1, a word of its own role 3, a word of what it
+ * does (`about`: its capabilities and its department's charter) 2 each, at most 4. Pure and cheap: the composer
+ * scores as you type (CHAT-UI.md §7).
+ */
+export function scoreAgents(text: string, agents: readonly DeskAgent[]): AgentScore[] {
+  const words = stripMention(text)
+  if (!words) return []
+  const active = agents.filter((a) => !a.paused)
+  const pool = active.length ? active : agents
+  const asked = contentWords(words)
+  const out: AgentScore[] = []
+  for (const a of pool) {
+    let score = 0
+    const why = new Set<string>()
+    for (const [about, roles] of ROUTES) {
+      const hit = about.exec(words)
+      if (!hit) continue
+      if (roles.test(a.role)) score += 2
+      else if (a.department && roles.test(a.department)) score += 1
+      else continue
+      why.add(hit[0].toLowerCase())
+    }
+    for (const w of contentWords(a.role))
+      if (!ROLE_GENERIC.has(w) && asked.has(w)) {
+        score += 3
+        why.add(w)
+      }
+    if (a.about) {
+      let about = 0
+      for (const w of contentWords(a.about))
+        if (!ABOUT_GENERIC.has(w) && asked.has(w) && about < 4) {
+          about += 2
+          why.add(w)
+        }
+      score += about
+    }
+    if (score > 0) out.push({ agent: a, score, why: [...why] })
+  }
+  // stable: equal scores keep the pool order (the first analyst listed wins a tie, as before)
+  return out.map((x, i) => ({ x, i })).sort((p, q) => q.x.score - p.x.score || p.i - q.i).map((p) => p.x)
 }
 
 // ---------- paraphrase ----------

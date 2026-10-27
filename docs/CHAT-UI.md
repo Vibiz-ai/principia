@@ -276,3 +276,87 @@ Verified live on a separate instance (CDP 9491) against claude 2.1.310.
 - **Smaller fixes**: `/model` opens the picker. Sent images show thumbnails, and ordered lists keep their numbers. Chat mode no longer draws the diagram strip.
 
 Deferred: chats come back asleep after an app restart, which needs SessionManager to revive chat rows at boot (today an exited chat reads "Resting" and the next message resumes it). Also deferred: "Your turn" counting as Needs you (an app-wide rule shared with terminal sessions), the raw-markdown preview on Home's idle row and the "Kill" wording (both in views being rebuilt on another branch). The status bar's "Idle" and the 10–20 s stale Needs-you card did not reproduce with a visible window. The renderer merges live updates on requestAnimationFrame, which a hidden window throttles.
+
+---
+
+## 7. Where you talk: New conversation, Recent, and who answers (2026-10-27)
+
+The founder, on Home: "I should be able to just talk and automatically get in the chat the right agents. When I'm
+here it's like I'm not sure where to go." The old Ask box sent to ONE agent picked by keywords (or silently the first
+agent), opened that agent's page, and the conversation had no name or place of its own. Chats was a roster of agents.
+
+### Decision: Claude-style (concept B), with the best of A and C
+
+Three switchable prototypes were built (commit 9cb727b) and tested by three synthetic users (a non-technical solo
+owner, a keyboard-first owner of three companies with eight agents each, a returning user). All three ranked B first
+(8, 8, 8), A second (7, 6, 7) and C last (6, 6.5, 6). B was the only concept where every task went without a wrong
+click: a labelled **New conversation** button, a **Recent** list visible from every page ("I can't lose a thread"),
+and **To: › Talk to one person**. A's inline thread hid the composer when you came back to Home; C's composer had too
+many controls ("To, team, routes, likely joining, new, continue… I just want to say write the newsletter") and its
+dock left nothing to find a closed conversation by. Taken from A: the line under the composer that says, before you
+send, who will answer; the composer in the first week too; drafts kept. Taken from C: the To: pill on every composer.
+
+### What you see
+
+- **Sidebar**: *New conversation ⌥⌘N* on top, then Search, the five doors, **RECENT** (the last five conversations,
+  each with who is in it: "Marcus, Cato", "Private · Seneca", "Marcus answering…"), LIVE (an agent answering in a
+  conversation reads "Marcus · Answering in “Launch plan”" and opens the conversation).
+- **Home**: the composer first: *To: Principia picks ▾*, "New conversation… say what you need", and the route line
+  ("→ Principia brings in Marcus"). Send opens the conversation in Chats (one destination, never the agent's page).
+  Needs you shows its top three and "+ N more".
+- **To ▾** (↑ ↓, type to filter, ↵): Principia picks · Everyone on the team · *Talk to one person* (each agent and
+  role) · *Outside the team*: Claude directly ("Plain Claude, not one of your agents"), Claude in <repository>.
+- **@ picker**: typing @ in any composer or reply lists @all and the team with roles (↑ ↓, ↵ or Tab).
+- **Chats**: opens on New conversation until you pick one. The list keeps "‹ Menu" plus Home, Team and Board one
+  click away, then New conversation, search (title, who is in it, why), Everything / Live only, and groups: *With the
+  team*, *One-on-one*, *Agent sessions* (an agent's own work session from its page), *Claude*, *Working*.
+- **A conversation**: title (click to rename), "Private" when it is you and one agent, who is in it, Principia's
+  handoff line ("Principia brought in Marcus (Content Writer): the request mentions “newsletter”."), the messages,
+  "Marcus is working…", a reply box where @name or @all adds people.
+- **⌘K** finds conversations by title, person or topic, and its footer row is "New conversation: …" (routed the same).
+
+### Who answers (lib/conversations.ts routeTeam; Principia owns it, never a CLI harness)
+
+1. To: Everyone, or @all / @team / @everyone: the whole active team (at most eight, the responder's conversation cap).
+2. @names (or To: a person): exactly them. One person is a **private conversation**; picking them again (or Team ›
+   Message) continues it, so there is one thread per person ("New topic" starts another).
+3. Else the words, scored against each seat's role, department and **what it does** (its capabilities and its
+   department's charter, the words the Team page shows): the best match plus anyone close, at most three.
+   "Customers" alone no longer means support; pricing, margins and staffing go to operations.
+4. Else "No clear fit · Principia starts with Marcus (first on the team) · @someone to change".
+
+A model triage (coordinator) is the next step; the rules keep it instant and offline.
+
+### How it works
+
+A conversation is a private Forum channel named `chat-…` (shared/forum.ts `isConversationChannel`): topic = title,
+purpose = handoff line. The responder (main/forum/responder.ts) treats it like a group DM: every agent in it answers
+each message, an @name wakes only them. Reply runs are titled "Marcus replying in “Launch plan”", and the run's Forum
+presence carries the conversation's channel, so "answering…" shows on that conversation only, never on every
+conversation the same agent is in. The Forum view and its unread badge leave conversations out.
+
+**REPOSITORIES**: with a team, the sidebar section folds into conversations: "Claude in <repository>" is a To:
+destination, its sessions are rows under Chats › Claude, and ⌘O still adds a repository. It was a second, unlabelled
+"new chat" button with different rules (terminal, no agents). Without a team (Personal, a pure code workspace) it
+stays, because there it is the only way in. The keyboard-first developer persona did not miss it.
+
+### Follow-ups
+
+- iPhone / web phone app: the same To: (Principia picks / a person), New conversation and Recent (ChatsView.swift,
+  remote/views.ts `phoneChats`), and a route over the conversation's channel.
+- A model triage for routing; a cheap rename of the title after the first answers.
+- A conversation that turns into work already becomes a Board task when the agent files it; show that link in the thread.
+- The agent page's composer is the agent's work session (model, permissions); it is listed as Agent sessions.
+
+### Running it on demo data
+
+```sh
+HIVE_USER_DATA=<fresh dir> node scripts/seed-demo.mjs <fresh dir>
+HIVE_USER_DATA=<dir> HIVE_NO_SCHEDULER=1 HIVE_CLAUDE_BIN=$PWD/scripts/fake-claude.cjs npx electron-vite dev --outDir <out>
+```
+
+`HIVE_CLAUDE_BIN` (dev only, `electron-vite dev`) points agent turns at a stand-in that answers in role after 2.5 s
+("Demo reply: no model ran."); routing, reply runs, presence and posts are real. CDP selectors: `data-chatux` =
+`new-conversation`, `composer-input`, `composer-send`, `route-line`, `to-pill`, `to-option[data-value=team|everyone|
+agent:<Name>|claude|repo:<name>]`, `mention-option`, `new-topic`, `thread`, `handoff`, `thread-msg`,
+`thread-pending`, `thread-input`, `private`, `recent-row`, `chat-row`, `new-pane`, `needs-more`.

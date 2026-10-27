@@ -86,7 +86,8 @@ describe('hive server mailbox', () => {
     expect(init.result.serverInfo.name).toBe('hive')
     expect(init.result.instructions).toMatch(/hive_workflow_schema/)
     const list = (await dispatch(h, { jsonrpc: '2.0', id: 2, method: 'tools/list' })) as { result: { tools: { name: string }[] } }
-    expect(list.result.tools.map((t) => t.name)).toEqual([...AUTHOR_TOOLS])
+    // plus principia_help (read-only, answered locally from shared/help.ts) on every interactive session
+    expect(list.result.tools.map((t) => t.name)).toEqual([...AUTHOR_TOOLS, 'principia_help'])
     expect(buildAuthorHandlers({}).listTools()).toEqual([])
     const unknown = (await dispatch(h, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'hive_settings_update', arguments: {} } })) as { result: { isError: boolean } }
     expect(unknown.result.isError).toBe(true)
