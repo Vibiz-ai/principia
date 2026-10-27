@@ -21,7 +21,7 @@ const source = `${repo}#desktop-quick-start`
 //   'signed':  the newest signed, notarized release: releases/latest/download/Principia-arm64.dmg (same name every release)
 //   'none':    no download, the source install only
 // After the first signed release: set RELEASE = 'signed'. Nothing else changes.
-const RELEASE = 'preview' as 'none' | 'preview' | 'signed'
+const RELEASE = 'signed' as 'none' | 'preview' | 'signed'
 const PREVIEW = { tag: 'v0.1.0-preview.1', file: 'Principia-0.1.0-preview.1-arm64.dmg' }
 const dmg = RELEASE === 'signed' ? `${repo}/releases/latest/download/Principia-arm64.dmg` : RELEASE === 'preview' ? `${repo}/releases/download/${PREVIEW.tag}/${PREVIEW.file}` : null
 const releaseNotes = RELEASE === 'preview' ? `${repo}/releases/tag/${PREVIEW.tag}` : `${repo}/releases/latest`
@@ -46,7 +46,7 @@ const faqs = [
   ['Can I use my Claude or Codex subscription?', 'Principia uses your installed harnesses. Sign in through their supported CLI flows. API credentials use separate provider billing. Cloud harnesses must be authenticated separately.'],
   ['Does it run locally?', 'Yes. The desktop workspace runs on your Mac. Model requests and connected tools still communicate with their respective services. You control the repositories and connections you add.'],
   ['Is there a cloud version?', 'Coming soon: an always-on Principia that keeps working while your laptop is closed, a hosted workspace in the browser, and Telegram control. Today Principia runs on your Mac. An experimental self-hosted Docker runner is in the repository for people who want to try it early.'],
-  ['Why does macOS say “Principia” Not Opened?', 'The download is an early preview that is not yet signed with an Apple Developer ID or notarized. Open it once through System Settings › Privacy & Security › Open Anyway. The preview also cannot update itself: when a new version is out, Principia tells you and you download it here. Signed, auto-updating builds come soon.'],
+  ['Is the Mac app signed?', 'Yes. Principia is signed with our Apple Developer ID and notarized by Apple, so it opens like any other Mac app. It updates itself: when a new version is ready, Principia asks you to restart, and never restarts while an agent is working.'],
   ['Is there an iPhone app?', 'Phone is in the desktop app today: pair your phone with a QR code and use your company from its browser. The native iPhone app is coming soon to TestFlight.'],
   ['How can I contribute?', 'Read CONTRIBUTING.md, try a real workflow, report a reproducible issue, or propose a focused improvement in GitHub Discussions. Installation, integrations, and documentation are useful places to start.'],
 ]
