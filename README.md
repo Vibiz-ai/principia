@@ -8,7 +8,7 @@
 
 # Principia
 
-[Website](https://principia-vibiz-deployments.vercel.app) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
+[Website](https://useprincipia.com) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Vibiz-ai/principia/badge)](https://scorecard.dev/viewer/?uri=github.com/Vibiz-ai/principia)
 
@@ -47,7 +47,9 @@ The broader company toolbox is intended to cover databases, image generation, we
 
 ## Desktop quick start
 
-Requirements: Apple Silicon macOS, Node.js 24 and at least one installed agent CLI. Authenticate that CLI separately with your account. Workflows using GitHub CLI also need `gh auth login`.
+**Download:** [Principia for Mac, preview](https://github.com/Vibiz-ai/principia/releases/download/v0.1.0-preview.1/Principia-0.1.0-preview.1-arm64.dmg) (Apple Silicon, macOS 13 or later; [release notes and checksums](https://github.com/Vibiz-ai/principia/releases/tag/v0.1.0-preview.1)). It is not yet signed with an Apple Developer ID: the first time, open it through System Settings › Privacy & Security › **Open Anyway**. It cannot update itself; Principia says when a new version is out. Signed, auto-updating builds come soon.
+
+Or build from source. Requirements: Apple Silicon macOS, Node.js 24 and at least one installed agent CLI. Authenticate that CLI separately with your account. Workflows using GitHub CLI also need `gh auth login`.
 
 ```sh
 npm ci

@@ -179,7 +179,7 @@ export function ConnectionsPage({ company, open: openFirst, purpose }: { company
   return (
     <div className="s5">
       <h2 className="s5__title">Connections</h2>
-      <p className="s5__lede">Services {company.name} uses. Connect one once, with a key or a sign-in, and its dashboards, agents, autopilots and chats all use it. A connection you make here belongs to {company.name} only, unless you choose “Also use in…”.</p>
+      <p className="s5__lede">Services {company.name} uses. Connect a service once, with a key or a sign-in, and its dashboards, agents, autopilots and chats all use it. A connection you make here belongs to {company.name} only, unless you choose “Also use in…”.</p>
       <label className="s5-search">
         <Icon name="search" size={14} />
         <input className="input" type="search" aria-label="Search connections" placeholder={code ? 'Search: GitHub, Linear, Sentry…' : 'Search: Instagram, Stripe, Slack…'} value={query} onChange={(e) => setQuery(e.target.value)} />

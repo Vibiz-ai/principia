@@ -19,12 +19,25 @@ Global styles and Tailwind v4 theme are in `src/styles.css`; Tailwind is install
 
 The halftone wordmark footer lives in `src/components/ui/halftone-wordmark-footer.tsx`. It needs React and browser canvas APIs only; no provider, state library or image dependency. The page passes Principia copy, GitHub/documentation links, matching colours and responsive height. Pointer and click animation pauses offscreen and respects reduced motion.
 
-Installation uses source commands because no downloadable release is published yet. Replace that primary path with a verified release only when one exists. The Roman headquarters reference is an editorial explanation of the name. No analytics, sign-up form, fake testimonials, or tracking cookies are included.
+The Roman headquarters reference is an editorial explanation of the name. No analytics, sign-up form, fake testimonials, or tracking cookies are included.
+
+## Download
+
+`RELEASE` at the top of `src/main.tsx` picks what **Download for Mac** serves:
+
+| `RELEASE` | Button | Link |
+| --- | --- | --- |
+| `'preview'` (now) | Download for Mac · Preview, with the macOS **Open Anyway** steps under it | the preview pre-release's exact asset, `releases/download/<PREVIEW.tag>/<PREVIEW.file>` (`releases/latest` never serves a pre-release) |
+| `'signed'` | Download for Mac | `releases/latest/download/Principia-arm64.dmg`, always the newest signed, notarized release |
+| `'none'` | Get started (source install only) | none |
+
+After the first signed release (principia `docs/RELEASING.md` §7), change that one line to `RELEASE = 'signed'` and deploy. For a newer preview, update `PREVIEW` (tag and file name). Building from source stays the secondary path either way. Cloud (runner, hosted workspace, browser workspace, Telegram) and the iPhone app are shown as coming soon.
 
 ## Production hosting
 
-The public website is deployed on Vercel under **vibiz-deployments / principia**:
-https://principia-vibiz-deployments.vercel.app
+The public website is https://useprincipia.com (`www.useprincipia.com` redirects to it), deployed on Vercel under the
+**vibiz-deployments / principia** project. The privacy policy is `public/privacy/index.html`, served at
+https://useprincipia.com/privacy/.
 
 The Vercel project receives this directory as its deployment root. `vercel.json` specifies the Vite build, `npm ci`, and `dist` output. It does not deploy the Electron app or cloud runner. To publish an update with the Vercel CLI from this directory:
 

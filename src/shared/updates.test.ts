@@ -7,6 +7,7 @@ import {
   plainUpdateError,
   RELEASE_REPO_URL,
   restartBlockedBy,
+  cannotSelfUpdate,
   shouldAnnounce,
   shouldCheck,
   STABLE_FEED_URL,
@@ -68,6 +69,10 @@ describe('shouldAnnounce', () => {
     expect(shouldAnnounce(ready('0.3.0'), '0.2.0')).toBe(true)
     expect(shouldAnnounce({ ...ready('0.2.0'), phase: 'downloading' }, null)).toBe(false)
   })
+  it('also toasts once when a build that cannot update itself learns a new version is out', () => {
+    expect(shouldAnnounce({ ...ready('0.2.0'), phase: 'available' }, null)).toBe(true)
+    expect(shouldAnnounce({ ...ready('0.2.0'), phase: 'available' }, '0.2.0')).toBe(false)
+  })
 })
 
 describe('plainUpdateError', () => {
@@ -76,6 +81,18 @@ describe('plainUpdateError', () => {
     expect(plainUpdateError('net::ERR_INTERNET_DISCONNECTED getaddrinfo ENOTFOUND github.com')).toBe('Could not reach the update server. Principia tries again later.')
     expect(plainUpdateError('Code signature at URL file:///... did not pass validation')).toBe('The update did not pass the signature check, so it was not installed.')
     expect(plainUpdateError('something else at ~/someone/secret')).toBe('The update check failed. Principia tries again later.')
+  })
+})
+
+describe('cannotSelfUpdate', () => {
+  it('ad-hoc or unsigned: no Developer ID, Squirrel.Mac could not install an update', () => {
+    expect(cannotSelfUpdate('Signature=adhoc\nTeamIdentifier=not set')).toBe(true)
+    expect(cannotSelfUpdate('/x/P.app: code object is not signed at all')).toBe(true)
+    expect(cannotSelfUpdate('Authority=Developer ID Application: Someone (ABCDE12345)\nTeamIdentifier=ABCDE12345')).toBe(false)
+  })
+  it('a version that is out but not installable here: download it from the website', () => {
+    expect(updateLine({ ...initialUpdateState('0.1.0-preview.1', null), phase: 'available', next: '0.1.0' })).toBe('A new version is out (0.1.0): download it from useprincipia.com.')
+    expect(shouldCheck('available')).toBe(true)
   })
 })
 

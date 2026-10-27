@@ -7,9 +7,12 @@
  * update otherwise installs on a normal quit (autoInstallOnAppQuit), and that quit already asks before stopping work.
  * The policy (when to check, when Restart is allowed, the words) is in shared/updates.ts.
  */
+import { execFile } from 'node:child_process'
+import path from 'node:path'
 import type { EngineLogger } from '../shared/engine'
 import {
   CHECK_EVERY_MS,
+  cannotSelfUpdate,
   FIRST_CHECK_DELAY_MS,
   initialUpdateState,
   plainUpdateError,
@@ -57,14 +60,36 @@ export interface UpdateServiceOptions {
   quit?: (install: () => void) => Promise<void>
   /** electron-updater, loaded only when updates are on */
   load?: () => Promise<Updater>
+  /**
+   * True when this build cannot install updates itself (an ad-hoc signed preview, shared/updates.ts cannotSelfUpdate):
+   * checks still run, but a newer version is only announced (phase 'available', download it from the website) and
+   * never downloaded. Asked once, when the updater loads.
+   */
+  manualInstall?: () => Promise<boolean>
   /** Settings › About › "Get beta updates" (Settings.betaUpdates, off by default) */
   beta?: () => boolean
   now?: () => Date
 }
 
+/**
+ * Whether the running app is signed without a Developer ID (an ad-hoc preview build), from `codesign -dv` of the .app
+ * that contains `execPath` (…/Principia.app/Contents/MacOS/Principia). codesign failing to answer = assume it can.
+ */
+export function appCannotSelfUpdate(execPath: string, run: typeof execFile = execFile): Promise<boolean> {
+  const bundle = path.resolve(execPath, '..', '..', '..')
+  return new Promise((resolve) => {
+    run('/usr/bin/codesign', ['-dv', '--verbose=2', bundle], { timeout: 10_000 }, (err, stdout, stderr) => {
+      const info = `${String(stdout ?? '')}\n${String(stderr ?? '')}`
+      // "code object is not signed at all" comes with a non-zero exit; any other failure answers false
+      resolve(cannotSelfUpdate(info) || (!!err && /not signed at all/.test(String(err.message))))
+    })
+  })
+}
+
 export class UpdateService {
   private s: UpdateState
   private updater: Updater | null = null
+  private manual = false
   private loading: Promise<Updater | null> | null = null
   private timers: NodeJS.Timeout[] = []
 
@@ -141,9 +166,10 @@ export class UpdateService {
   private async ensure(): Promise<Updater | null> {
     if (this.updater) return this.updater
     if (!this.o.load) return null
-    this.loading ??= this.o.load().then(
-      (u) => {
-        this.wire(u)
+    const load = this.o.load
+    this.loading ??= Promise.all([load(), this.o.manualInstall?.().catch(() => false) ?? false]).then(
+      ([u, manual]) => {
+        this.wire(u, manual)
         this.updater = u
         return u
       },
@@ -157,9 +183,12 @@ export class UpdateService {
     return this.loading
   }
 
-  private wire(u: Updater): void {
-    u.autoDownload = true
-    u.autoInstallOnAppQuit = true
+  private wire(u: Updater, manual = false): void {
+    this.manual = manual
+    // a build that cannot install updates never downloads one: it says a new version is out (phase 'available')
+    u.autoDownload = !manual
+    u.autoInstallOnAppQuit = !manual
+    if (manual) this.o.log.info('updates: this build cannot install updates itself; new versions are announced only')
     // stable artifact names (Principia-arm64.zip in every release) would hand the differential download the new
     // blockmap twice; the zip is small enough to fetch whole
     u.disableDifferentialDownload = true
@@ -175,7 +204,9 @@ export class UpdateService {
     }
     u.on('checking-for-update', () => this.set({ phase: 'checking', error: null }))
     u.on('update-not-available', () => this.set({ phase: 'current', next: null, percent: null, checkedAt: this.now() }))
-    u.on('update-available', (info) => this.set({ phase: 'downloading', next: info.version, percent: 0, checkedAt: this.now() }))
+    u.on('update-available', (info) =>
+      this.set(this.manual ? { phase: 'available', next: info.version, percent: null, checkedAt: this.now() } : { phase: 'downloading', next: info.version, percent: 0, checkedAt: this.now() })
+    )
     u.on('download-progress', (p) => {
       if (this.s.phase === 'downloading') this.set({ percent: p.percent })
     })

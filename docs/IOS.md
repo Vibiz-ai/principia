@@ -179,7 +179,7 @@ What is ready in the repository:
   `release` environment (it waits for approval), with pinned actions, read-only permissions, a temporary keychain for
   the certificate Xcode fetches and the key in the runner's temp folder, both deleted at the end.
 - The privacy policy for the app record: `website/public/privacy/index.html`, served at
-  `https://principia-vibiz-deployments.vercel.app/privacy/` once the website is deployed (website/README.md).
+  `https://useprincipia.com/privacy/` (website/README.md).
 
 ### One time: the Apple side
 
@@ -192,7 +192,7 @@ What is ready in the repository:
    Platforms iOS, Name `Principia` (if taken, something like `Principia: Company Agents`), Primary Language English
    (U.S.), Bundle ID `ai.principia.phone`, SKU `principia-ios`, User Access Full Access › Create.
 4. **Privacy.** In the app › App Privacy: Privacy Policy URL
-   `https://principia-vibiz-deployments.vercel.app/privacy/` (deploy the website first so it answers). Data Collection
+   `https://useprincipia.com/privacy/`. Data Collection
    › Get Started › **No, we do not collect data from this app** › Save › Publish.
 5. **The API key.** App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys (the first
    time, the Account Holder clicks Request Access) › **+** (Generate API Key): name `Principia CI`, access **App
@@ -228,7 +228,7 @@ App Store Connect › the app › TestFlight shows the build as Processing for 5
 
 1. TestFlight › **Test Information** (left column): Beta App Description (for example "Principia's iPhone app: watch
    your agents and keep the work going from your phone. Try it without a Mac from the first screen."), Feedback Email,
-   Marketing URL `https://principia-vibiz-deployments.vercel.app`, Privacy Policy URL (as above).
+   Marketing URL `https://useprincipia.com`, Privacy Policy URL (as above).
 2. Same page, **Beta App Review Information**: the contact's first and last name, phone and email (the founder's), and
    **Sign-in required: off**. Review Notes:
 

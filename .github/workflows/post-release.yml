@@ -32,6 +32,8 @@ concurrency:
 jobs:
   verify:
     name: verify the published download
+    # an unsigned preview (v*-preview.*, docs/RELEASING.md §6.2) is not notarized and has no update manifest: not verified
+    if: ${{ !contains(github.event.release.tag_name || inputs.tag || '', '-preview.') }}
     runs-on: macos-15
     timeout-minutes: 20
     permissions:

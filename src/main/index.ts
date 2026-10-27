@@ -51,7 +51,7 @@ import { wireLinearSync } from './company/sync/wire'
 import { startOrchestrator } from './orchestrator/wire'
 import { SlackService } from './connectors/slack/service'
 import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } from './deepLinks'
-import { UpdateService, type Updater } from './updates'
+import { UpdateService, appCannotSelfUpdate, type Updater } from './updates'
 import { updatesOffReason } from '../shared/updates'
 
 applyUserDataOverride()
@@ -572,6 +572,8 @@ if (!app.requestSingleInstanceLock()) {
       log,
       quit: (install) => h.requestQuit(install),
       beta: () => store.getSettings().betaUpdates === true,
+      // an ad-hoc signed preview cannot install updates (Squirrel.Mac wants the same Developer ID): announce only
+      manualInstall: () => appCannotSelfUpdate(process.execPath),
       load: async () => {
         // the getter-defined `autoUpdater` export is only on the CommonJS default when the bundle keeps import()
         const m = (await import('electron-updater')) as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }

@@ -245,7 +245,7 @@ function AgentDetails({ agent, session }: { agent: CompanyAgent; session: Sessio
       {/* CONNECTIONS.md §4.3 S17: every service connected for the company reaches its agents (MCP tools or the key) */}
       <Section title={`Tools ${who.name} can use`}>
         <ConnectedServiceChips companyId={agent.companyId} onMore={() => void navigate({ name: 'settings', section: 'connections', companyId: agent.companyId })} />
-        <div className="desk-opt desk-opt--muted">Connected for {short}: {who.name} gets them from its next session. Connect one once and every agent here has it.</div>
+        <div className="desk-opt desk-opt--muted">Connected for {short}: {who.name} gets them from its next session. Connect a service once and every agent here has it.</div>
       </Section>
       {agent.kind === 'profile' && (
         <Section title="Runs on">
