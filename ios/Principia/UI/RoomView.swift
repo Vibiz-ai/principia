@@ -122,7 +122,9 @@ struct RoomView: View {
     }
 
     @ViewBuilder private func message(_ m: PhoneRoomMessage, by: [String: PhoneRoomMember], me: String?) -> some View {
-        if m.kind == "system" {
+        if let t = m.task {
+            TaskCardRow(card: t)
+        } else if m.kind == "system" {
             Text(m.text).font(.caption).foregroundStyle(Theme.faint).frame(maxWidth: .infinity)
         } else if m.authorId == me {
             VStack(alignment: .trailing, spacing: 4) {
@@ -149,5 +151,45 @@ struct RoomView: View {
             .padding(.leading, m.threadId != nil ? 22 : 0)
             .padding(.trailing, 24)
         }
+    }
+}
+
+/// CHAT-UI.md §8: a task started from this conversation, as a compact card: its identifier and title, the state with
+/// its tile, and the one-line result once it came back. White line art; the tile is the only colour.
+struct TaskCardRow: View {
+    let card: PhoneTaskCard
+
+    private var tile: Color {
+        switch card.state {
+        case "working": return Theme.run
+        case "needs_you": return Theme.ink
+        case "in_review", "done": return Theme.ok
+        case "failed": return Theme.fail
+        default: return Theme.faint
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2).fill(tile).frame(width: 8, height: 8)
+                Text(card.identifier).font(.caption.weight(.semibold)).foregroundStyle(Theme.ink)
+                Text(card.title).font(.subheadline).foregroundStyle(Theme.ink).lineLimit(1)
+            }
+            Text("\(card.label) · \(Words.ago(card.finishedAt ?? card.startedAt))").font(.caption).foregroundStyle(Theme.faint)
+            if let r = card.result, !r.isEmpty {
+                Text(r).font(.subheadline).foregroundStyle(Theme.ink)
+            }
+            if let pr = card.prUrl, let url = URL(string: pr) {
+                Link("Pull request", destination: url).font(.caption)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .padding(.leading, 22)
+        .padding(.trailing, 24)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(card.identifier), \(card.title), \(card.label)")
     }
 }

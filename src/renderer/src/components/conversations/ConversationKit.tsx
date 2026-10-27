@@ -25,6 +25,7 @@ import { useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, whoLine } from '../../state/conversations'
 import { navigate, startSession, useStore } from '../../state/store'
+import { TaskCard, WorkingStrip } from './TaskCard'
 import '../../styles/conversations.css'
 
 /** Opens a conversation in Chats (the one destination after Send, from Home, ⌘K or New conversation). */
@@ -492,6 +493,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           ))}
         </span>
       </header>
+      <WorkingStrip msgs={msgs} />
       <div className="cx-thread__body scroll">
         {channel?.purpose && (
           <div className="cx-handoff" data-chatux="handoff">
@@ -548,7 +550,8 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
         {mentions.menu}
         <div className="cx-composer__foot">
           <span className="cx-routeline cx-routeline--static" data-chatux="thread-route">
-            {adds.length ? `→ Adds ${names(adds)} to this conversation` : said.found.length ? `→ ${names(said.found)} answers` : `→ ${names(whoNames)} ${whoNames.length === 1 ? 'answers' : 'answer'}`}
+            {adds.length ? `→ Adds ${names(adds)} to this conversation` : said.found.length ? `→ ${names(said.found)} answers here` : `→ ${names(whoNames)} ${whoNames.length === 1 ? 'answers' : 'answer'} here`}
+            {!adds.length && ' · work they start reports back here'}
           </span>
           <span className="flex1" />
           <Button type="submit" size="sm" variant="primary" icon="send" data-chatux="thread-send" disabled={busy || !text.trim()} aria-label="Send" />
@@ -576,6 +579,8 @@ function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<stri
 }
 
 function MessageBubble({ m, mine, head, display }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay> }): React.JSX.Element {
+  // CHAT-UI.md §8: a task started here is a live card, not a grey line
+  if (m.kind === 'system' && m.task) return <TaskCard m={m} />
   if (m.kind === 'system')
     return (
       <div className="cx-handoff cx-handoff--small" data-chatux="thread-msg" data-kind="system">

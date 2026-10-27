@@ -4,6 +4,8 @@
  * protocol and by `id` (fmsg_…) everywhere else.
  */
 
+import type { ForumTaskCard } from './taskCard'
+
 export const FORUM_PROTOCOL_VERSION = 1
 
 export const FORUM_MEMBER_KINDS = ['human', 'agent', 'guest'] as const
@@ -132,6 +134,8 @@ export interface ForumMessage {
   reactions: Record<string, string[]>
   ask?: ForumAsk
   proposal?: ForumProposal
+  /** CHAT-UI.md §8: a task started from this conversation (a system line drawn as the live task card) */
+  task?: ForumTaskCard
   /** 'local' | 'agent:<stepId>' (FORUM.md §7) | 'principia:<runId>' (ORCHESTRATOR.md: Principia posted it for the agent) */
   origin: string
   /** ORCHESTRATOR.md: 'principia' when Principia posted this for the agent (from its run report), not the agent's own tool */

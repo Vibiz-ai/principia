@@ -485,6 +485,35 @@ describe('agent API (§4)', () => {
     expect(created.tasks).toEqual(['write the launch email'])
   })
 
+  it('make task posts a live task card, and its result comes back into the channel once (CHAT-UI.md §8)', () => {
+    const s = service()
+    s.store.sync(CO)
+    const owner = s.store.owner(CO)
+    const ch = s.store.channelByName(CO, 'marketing')!.id
+    const m = s.store.post(owner.id, { channelId: ch, text: '@marcus write the launch email' })
+    tasks.set('task_1', { id: 'task_1', companyId: CO, identifier: 'PRN-1', status: 'todo', blockReason: null, runId: null, ask: null, report: null, agentId: 'agt_marcus' })
+    s.toTask(m.id, owner.id)
+    const card = s.store.thread(m.id).replies.find((r) => r.task)!
+    expect(card.kind).toBe('system')
+    expect(card.text).toBe('Lautaro started PRN-1: write the launch email')
+    expect(card.task).toMatchObject({ taskId: 'task_1', identifier: 'PRN-1', state: 'queued', agentId: 'agt_marcus', messageId: m.id })
+    // nothing came back yet: no post
+    expect(s.reconcileTaskCards(CO, { post: true })).toBe(0)
+    // the run ended in review with no post of its own: Principia posts the result as Marcus, once
+    Object.assign(tasks.get('task_1')!, { status: 'in_review', runId: 'run_9', report: { summary: 'Drafted the email\nmore lines' }, prUrl: 'https://github.com/acme/site/pull/7', updatedAt: clock.toISOString() })
+    expect(s.reconcileTaskCards(CO, { post: true })).toBe(1)
+    expect(s.reconcileTaskCards(CO, { post: true })).toBe(0)
+    const back = s.store.messages(ch).filter((x) => x.origin === 'principia:run_9')
+    expect(back.map((x) => x.text)).toEqual(['PRN-1 is ready for your review: Drafted the email\nPull request: https://github.com/acme/site/pull/7'])
+    expect(back[0]!.authorId).toBe(s.store.memberForAgent('agt_marcus')!.id)
+    expect(s.store.message(card.id).task).toMatchObject({ state: 'in_review', result: 'Drafted the email', prUrl: 'https://github.com/acme/site/pull/7', resultFor: 'run_9' })
+    // done for good: final, and no longer followed
+    tasks.get('task_1')!.status = 'done'
+    s.reconcileTaskCards(CO, { post: true })
+    expect(s.store.message(card.id).task).toMatchObject({ state: 'done', final: true })
+    expect(s.store.taskCards(CO, { open: true })).toEqual([])
+  })
+
   it('forum_reply task: a person asked, so the agent files it once, for itself; an agent message never becomes a task', async () => {
     const s = service()
     s.store.sync(CO)
@@ -494,7 +523,7 @@ describe('agent API (§4)', () => {
     const c = callerFor(s, 'agt_marcus')
     expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'On the Board now.', task: { title: 'Short changelog post' } })).toMatch(/ · filed PRN-1$/)
     expect(created.tasks).toEqual(['Short changelog post'])
-    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'Again', task: { title: 'Short changelog post' } })).toMatch(/ · already on the Board$/)
+    expect(await s.api.call(c, 'forum_reply', { to: m.ref, text: 'Again', task: { title: 'Short changelog post' } })).toMatch(/ · already filed as PRN-1: not filed again/)
     expect(created.tasks).toHaveLength(1)
     const mine = s.store.thread(m.id).replies.find((x) => x.text === 'On the Board now.')!
     expect(await s.api.call(c, 'forum_reply', { to: mine.ref, text: 'x', task: { title: 'Self made' } })).toMatch(/only a person’s request becomes a task/)

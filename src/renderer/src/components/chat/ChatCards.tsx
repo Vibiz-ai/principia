@@ -12,6 +12,8 @@ import { Icon } from '../Icon'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
 import { blockKey, stampLabel } from '../../lib/agentChatView'
+import { chatTaskCard } from '@shared/taskCard'
+import { TaskCardView } from '../conversations/TaskCard'
 
 const ICON: Record<ToolIcon, string> = {
   file: 'file',
@@ -597,7 +599,12 @@ export function Blocks({ blocks, live, actions, onNotice, stamps }: { blocks: Ch
 function block(b: ChatBlock, live: boolean, actions: CardActions | null, onNotice?: (a: 'retry' | 'openTerminal') => void): React.JSX.Element | undefined {
   if (b.t === 'group') return <ToolGroupRow key={b.id} tools={b.tools} live={live} />
   if (b.t === 'todo') return <TodoCard key={b.item.id} item={b.item} latest={b.latest} live={live} />
-  if (b.t === 'tool') return <ToolCard key={b.item.id} item={b.item} live={live} children={b.children} />
+  if (b.t === 'tool') {
+    // CHAT-UI.md §8: a task this chat filed (company_file_task, task_create) is its live card, not a tool row
+    const card = chatTaskCard(b.item)
+    if (card) return <TaskCardView key={b.item.id} card={card} />
+    return <ToolCard key={b.item.id} item={b.item} live={live} children={b.children} />
+  }
   const it = b.item
   switch (it.kind) {
     case 'user':

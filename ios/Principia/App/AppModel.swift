@@ -700,9 +700,14 @@ final class AppModel {
         return ok
     }
 
-    /// A new message in place: a thread reply goes after its root's last reply; anything else at the end.
+    /// A new message in place: a thread reply goes after its root's last reply; anything else at the end. A message
+    /// already there is replaced where it is (a task card the Mac patched: CHAT-UI.md §8).
     nonisolated static func place(_ list: [PhoneRoomMessage], _ m: PhoneRoomMessage) -> [PhoneRoomMessage] {
-        if list.contains(where: { $0.id == m.id }) { return list }
+        if let i = list.firstIndex(where: { $0.id == m.id }) {
+            var out = list
+            out[i] = m
+            return out
+        }
         guard let t = m.threadId else { return list + [m] }
         guard let at = list.lastIndex(where: { $0.id == t || $0.threadId == t }) else { return list + [m] }
         var out = list

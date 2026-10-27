@@ -48,7 +48,7 @@ describe('a person asks an agent for work in the Forum', () => {
     expect(t.description).toContain('a request in the Forum')
     expect(t.description).toContain('autumn sale on the board')
     const lines = (w.db.prepare('SELECT text FROM forum_messages WHERE channel_id=?').all(room.id) as { text: string }[]).map((m) => m.text)
-    expect(lines.some((l) => l.includes(`made ${t.identifier} from this message`))).toBe(true)
+    expect(lines.some((l) => l.includes(`started ${t.identifier}: ${t.title}`))).toBe(true)
     // the reply never sends the founder to Make task
     expect(lines.join(' ')).not.toMatch(/Make task/)
   })

@@ -473,6 +473,22 @@ export interface PhoneRoomMessage {
   kind: 'text' | 'ask' | 'proposal' | 'system'
   text: string
   at: string
+  /** CHAT-UI.md §8: a task started from this conversation, shown as a compact card with its state */
+  task?: PhoneTaskCard
+}
+/** The phone's compact task card: main's stored state (the Mac follows the task and patches it in place). */
+export interface PhoneTaskCard {
+  identifier: string
+  title: string
+  /** queued | working | needs_you | in_review | done | failed */
+  state: string
+  /** "Working", "Needs you", "Done"… */
+  label: string
+  /** the one-line result once it came back */
+  result: string | null
+  prUrl: string | null
+  startedAt: string
+  finishedAt: string | null
 }
 export interface PhoneRoom {
   companyId: Id

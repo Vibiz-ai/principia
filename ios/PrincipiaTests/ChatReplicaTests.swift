@@ -47,6 +47,10 @@ final class ChatReplicaTests: XCTestCase {
         XCTAssertEqual(AppModel.place(list, m("reply", "r")).map(\.id), ["r", "reply", "x"])
         XCTAssertEqual(AppModel.place(list, m("y", nil)).map(\.id), ["r", "x", "y"])
         XCTAssertEqual(AppModel.place(list, m("x", nil)).map(\.id), ["r", "x"])
+        // CHAT-UI.md §8: a task card the Mac patched replaces itself where it is
+        var card = m("x", nil)
+        card.task = PhoneTaskCard(identifier: "VO-9", title: "Lift UGC conversion", state: "done", label: "Done", result: "Rewrote the hero", prUrl: nil, startedAt: "", finishedAt: nil)
+        XCTAssertEqual(AppModel.place(list, card).map { $0.task?.label ?? "" }, ["", "Done"])
     }
 
     func testWords() {

@@ -10,6 +10,7 @@ import { HiveError } from '../../shared/errors'
 import { emit, handle } from '../ipc'
 import { claudeDataDir } from '../claudeTrust'
 import { ChatHub, type ChatHubDeps } from './chatHub'
+import { ChatTaskNotes } from './taskNotes'
 import { chatTitle, isDefaultTitle } from '../../shared/chatTitle'
 
 export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' | 'redact' | 'killGroup' | 'log'> & { baseEnv(): Record<string, string | undefined> }): ChatHub {
@@ -81,6 +82,13 @@ export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' 
     onTitle: (sid, text) => titleChat(h, sid, text),
     claudeDir: () => claudeDataDir(o.baseEnv())
   })
+  // CHAT-UI.md §8: a task this chat filed reports back here when it comes back
+  const notes = new ChatTaskNotes({ isSession: (id) => !!h.store.getSession(id), note: (sid, text) => hub.note(sid, text) })
+  try {
+    h.company.onTaskWrite((t) => void notes.onTaskWrite(t))
+  } catch {
+    /* no board in this build: nothing to report */
+  }
   return hub
 }
 

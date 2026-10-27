@@ -14,6 +14,7 @@ import { isDeepLinkUrl } from '@shared/deepLink'
 import { DeepLinkButton } from '../DeepLinkButton'
 import { useStore } from '../../state/store'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
+import { TaskCard } from '../conversations/TaskCard'
 
 /** DIAGRAMS.md: a principia-graph block in a post is drawn in place; the prose around it renders as before. */
 export function RichText({ text, from }: { text: string; from?: ForumMessage }): React.JSX.Element {
@@ -321,6 +322,8 @@ export function ProposalCard({ m }: { m: ForumMessage }): React.JSX.Element | nu
 export function MessageRow({ m, head, inThread = false, highlight = false }: { m: ForumMessage; head: boolean; inThread?: boolean; highlight?: boolean }): React.JSX.Element {
   const ctx = useForumCtx()
   const d = ctx.display(m.authorId)
+  // CHAT-UI.md §8: the live task card (the same component as Chats)
+  if (m.kind === 'system' && m.task) return <TaskCard m={m} />
   if (m.kind === 'system') {
     return (
       <div className={`fm-system ${m.via === 'principia' ? 'fm-system--principia' : ''}`} id={`fm-${m.id}`}>

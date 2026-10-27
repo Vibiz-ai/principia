@@ -391,8 +391,13 @@ function onLive(m: PhoneServerMsg): void {
     }
     case 'room': {
       const room = st.room
-      if (!room || room.channelId !== m.message.channelId || room.messages.some((x) => x.id === m.message.id)) return
-      st.room = { ...room, messages: placeMessage(room.messages, m.message as PhoneRoomMessage) }
+      if (!room || room.channelId !== m.message.channelId) return
+      const msg = m.message as PhoneRoomMessage
+      // CHAT-UI.md §8: a task card is patched in place on the Mac; the phone replaces it where it is
+      if (room.messages.some((x) => x.id === msg.id)) {
+        if (!msg.task) return
+        st.room = { ...room, messages: room.messages.map((x) => (x.id === msg.id ? msg : x)) }
+      } else st.room = { ...room, messages: placeMessage(room.messages, msg) }
       render({ live: true })
       return
     }
