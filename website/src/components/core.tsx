@@ -109,22 +109,3 @@ export function Core() {
     </div>
   </section>
 }
-
-// the small stuff: one line each, newest first
-const changelog = [
-  ['Oct 2026', 'Mac preview download on useprincipia.com'],
-  ['Oct 2026', 'Token activity: every token across Claude Code, Codex and Principia in one year-long grid'],
-  ['Oct 2026', 'Sounds only for what matters: Done, Needs you, Problem'],
-  ['Oct 2026', 'Connect a service once and every agent, dashboard and routine uses it'],
-  ['Oct 2026', 'Autopilot routines: morning brief, weekly review, a chief of staff that suggests what is next'],
-  ['Oct 2026', 'Phone pairing with a QR code'],
-] as const
-
-export function Changelog({ releases }: { releases: string }) {
-  return <section className="shell pb-16" id="changelog">
-    <div className="mx-auto max-w-[760px] border-t border-white/[.07] pt-10">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><h2 className="display text-[clamp(20px,2.2vw,26px)]">Changelog</h2><a href={releases} className="border-b border-white/20 text-[13px] text-soft">All releases</a></div>
-      <ul className="space-y-2.5">{changelog.map(([when, what]) => <li key={what} className="flex gap-5 text-[13.5px] leading-relaxed"><span className="w-[64px] shrink-0 font-mono text-[11px] leading-[1.9] text-muted">{when}</span><span className="text-soft">{what}</span></li>)}</ul>
-    </div>
-  </section>
-}
