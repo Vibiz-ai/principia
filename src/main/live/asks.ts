@@ -6,9 +6,12 @@
  * - at most one notification per root per 30 s; several asks opened in a burst become "n things need you";
  * - expired / auto-denied asks are grouped into one notification per run;
  * - idle ("your turn") notifies only while the window is unfocused and the turn took >= 20 s, <= 1 per session per 60 s.
+ * SOUNDS.md: a batched ask carries the Needs you sound, a long turn the Done sound; a long turn that ends while the
+ * window is focused on something else gets the sound alone (no notification), never while its chat is on screen.
  */
 import type { Id } from '../../shared/types'
 import type { Ask } from '../../shared/live'
+import type { ChimeEvent } from '../chime'
 
 export const GRACE_MS = 3000
 export const ROOT_COOLDOWN_MS = 30_000
@@ -21,10 +24,14 @@ export interface NotifyRequest {
   body: string
   /** Click target. */
   agentId: Id
+  /** SOUNDS.md: the sound this notification stands for (absent = the plain notification sound setting). */
+  chime?: ChimeEvent
 }
 
 export interface NeedsYouNotifierDeps {
   notify(n: NotifyRequest): void
+  /** SOUNDS.md: a sound with no notification (a long turn ended while the window is focused elsewhere). */
+  chime?(e: ChimeEvent): void
   /** Whether the window is focused right now. */
   focused(): boolean
   /** What the renderer reports as visible (ui:visibleOwner). */
@@ -89,7 +96,7 @@ export class NeedsYouNotifier {
     this.lastRootNotify.set(rootId, this.now())
     const title = `${this.d.rootTitle(rootId)} needs you`
     const body = open.length === 1 ? open[0].title : `${open.length} things need you`
-    this.d.notify({ title, body, agentId: open[0].agentId })
+    this.d.notify({ title, body, agentId: open[0].agentId, chime: { kind: 'needs', key: `ask:${open[0].id}` } })
   }
 
   /** Called on every ask update; expired / auto-denied asks are grouped per run (or root). */
@@ -121,13 +128,17 @@ export class NeedsYouNotifier {
 
   /** Idle "your turn" for a session root. turnMs = how long the turn ran. */
   idle(root: { id: Id; sessionId: Id | null; title: string }, turnMs: number): void {
-    if (this.d.focused()) return
+    const focused = this.d.focused()
+    // a focused window only ever gets the sound, and only when the chat is not the one on screen
+    if (focused && (!this.d.chime || this.ownerVisible({ sessionId: root.sessionId, runId: null }))) return
     if (turnMs < IDLE_MIN_TURN_MS) return
     const key = root.sessionId ?? root.id
     const last = this.lastIdleNotify.get(key) ?? -Infinity
     if (this.now() - last < IDLE_COOLDOWN_MS) return
     this.lastIdleNotify.set(key, this.now())
-    this.d.notify({ title: `${root.title} needs you`, body: 'Your turn', agentId: root.id })
+    const chime: ChimeEvent = { kind: 'done', key: `turn:${key}:${this.now()}` }
+    if (focused) this.d.chime?.(chime)
+    else this.d.notify({ title: `${root.title} needs you`, body: 'Your turn', agentId: root.id, chime })
   }
 
   dispose(): void {

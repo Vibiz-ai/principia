@@ -271,7 +271,7 @@ export interface WorkflowDraft {
 export interface WorkflowOrigin {
   kind: 'agent'
   adapter: AdapterId
-  ownerLabel: string // "example-project · Claude"
+  ownerLabel: string // "vibiz-04 · Claude"
   ownerKey: string
   sessionId: Id | null
   runId: Id | null
@@ -543,11 +543,13 @@ export interface Artifact extends CompanyStamped {
 }
 
 // ---------- settings ----------
+/** SOUNDS.md: the three sounds (main decides, src/main/chime.ts; the renderer plays, lib/chimeSound.ts). */
+export type ChimeKind = 'done' | 'needs' | 'problem'
 export interface Settings {
   launchAtLogin: boolean // default false (mirrors app.getLoginItemSettings)
   notifyOnSuccess: 'never' | 'scheduled' | 'always' // default 'scheduled'
   notifyOnFailure: boolean // default true
-  notificationSound: boolean // default true
+  notificationSound: boolean // default true; Settings › Notifications › "Sounds" (SOUNDS.md), every sound off when false
   keepAwake: boolean // default true
   concurrency: number // default 4, 1..16 (engine node cap)
   defaultAdapter: AdapterId // provider switcher, default 'claude'
@@ -572,8 +574,11 @@ export interface Settings {
   slackMirrorNeedsYou?: boolean
   /** Settings › Notifications: a Mac notification when something needs you (an ask, a finished turn). Absent = true. */
   notifyNeedsYou?: boolean
-  /** RELEASING.md §4.1: Settings › About › "Get beta updates": prereleases too (beta-mac.yml). Absent = false. */
-  betaUpdates?: boolean
+  /** SOUNDS.md: per-kind sound switches (absent = on) and the sound volume 0..1 (absent = 0.5). */
+  soundDone?: boolean
+  soundNeedsYou?: boolean
+  soundProblem?: boolean
+  soundVolume?: number
   /** SLACK.md §6.2: backfill window in days. Default 7, 0..90. */
   slackBackfillDays?: number
   /** SLACK.md §6.3: gap-filled messages newer than this still trigger. Default 10, 0..120. */

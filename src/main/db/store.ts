@@ -78,8 +78,11 @@ export const DEFAULT_SETTINGS: Settings = {
   slackMirrorNeedsYou: false,
   // Settings › Notifications: "Tell me when something needs me" (a Mac notification per ask / finished turn)
   notifyNeedsYou: true,
-  // RELEASING.md §4.1: stable releases only unless the founder opts in
-  betaUpdates: false,
+  // SOUNDS.md: Done, Needs you and Problem sounds on, at a modest volume ("Sounds" itself is notificationSound)
+  soundDone: true,
+  soundNeedsYou: true,
+  soundProblem: true,
+  soundVolume: 0.5,
   slackBackfillDays: 7,
   slackTriggerCatchupMin: 10,
   slackAutoPaused: false,
@@ -136,7 +139,7 @@ export const ADAPTER_LABELS: Record<AdapterId, string> = {
   gemini: 'Gemini CLI',
   shell: 'Shell'
 }
-/** Short label used in session titles ("example-project · Claude"). */
+/** Short label used in session titles ("vibiz-04 · Claude"). */
 export const ADAPTER_SHORT: Record<AdapterId, string> = {
   claude: 'Claude',
   codex: 'Codex',

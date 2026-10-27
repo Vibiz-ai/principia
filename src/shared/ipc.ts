@@ -1,4 +1,4 @@
-import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, UsageRange, UsageSummary } from './usage'
+import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, TokenActivity, UsageRange, UsageSummary } from './usage'
 import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
 import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
 import type { CollabState, RunConversation } from './collab'
@@ -103,7 +103,7 @@ import type {
   HistoryListResult,
   NotifyResult
 } from './authoring'
-import type { RunBranch, RunWorktree } from './types'
+import type { ChimeKind, RunBranch, RunWorktree } from './types'
 import type { MarketInstallResult, MarketList, MarketPreview, MarketRef } from './marketplace'
 import type { DashboardConfig, DashboardInstallInput, DashboardKeyLookup, DashboardKind, DashboardSnapshot, InstalledDashboard } from './dashboards'
 import type { LinearConnectInput, LinearKeyCheck, LinearStatusView } from './linear'
@@ -524,6 +524,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'usage:disk': [{ fresh?: boolean } | V, DiskUsage]
   'usage:cleanupList': [V, CleanupItem[]]
   'usage:cleanup': [{ ids: string[] }, CleanupResult]
+  'usage:tokens': [V, TokenActivity]
   /** Starts (or renews, every minute) the read-only watcher of outside Claude sessions; returns the snapshot. */
   'activity:open': [V, ActivitySnapshot]
   'activity:close': [V, V]
@@ -638,7 +639,7 @@ export interface NativeMenuItem {
   submenu?: NativeMenuItem[]
 }
 export interface ConfirmRequest {
-  message: string // "Kill Claude in example-project?"
+  message: string // "Kill Claude in vibiz-04?"
   detail?: string
   confirmLabel: string // verb: "Kill Session", "Delete Key"
   destructive?: boolean
@@ -655,7 +656,8 @@ export interface SendMap {
   'artifacts:startDrag': { id: Id } // call from dragstart; main calls webContents.startDrag
   'ui:ready': void // renderer mounted; main flushes pending ui:command (e.g. notification click)
   /** What the user is looking at: suppresses notifications for it and marks idle sessions seen (LIVE.md A3). */
-  'ui:visibleOwner': { sessionId?: Id | null; runId?: Id | null }
+  /** `board`: the company whose Board, Plans or department page is on screen ('all' in All mode); SOUNDS.md suppression */
+  'ui:visibleOwner': { sessionId?: Id | null; runId?: Id | null; board?: Id | 'all' | null }
 }
 
 /** main -> renderer events. Subscribe with window.hive.on(name, cb). */
@@ -673,6 +675,8 @@ export interface EventMap extends ChatEventMap, RemoteEventMap, BrowserEventMap,
   'status:changed': StatusSnapshot // drives status bar; same data as tray
   'providers:changed': ProviderInfo[]
   'settings:changed': Settings
+  /** SOUNDS.md: main decided a sound plays now (src/main/chime.ts); the renderer synthesizes it. */
+  'chime:play': { kind: ChimeKind; volume: number }
   /** Window focus / fullscreen, drives .is-inactive / .is-fullscreen on <html>. */
   'window:state': { focused: boolean; fullscreen: boolean }
   /** Coarse invalidation for lists without dedicated events. */
@@ -873,7 +877,7 @@ export const INVOKE_CHANNELS = [
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
   'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
   'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
-  'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'activity:open', 'activity:close',
+  'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'usage:tokens', 'activity:open', 'activity:close',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
   'slack:backfill', 'slack:askAgent', 'slack:drafts', 'slack:draftGet', 'slack:draftDecide', 'slack:testAlert',
@@ -906,7 +910,7 @@ export const SEND_CHANNELS = ['sessions:write', 'sessions:resize', 'artifacts:st
 export const EVENT_NAMES = [
   'pty:data', 'pty:exit', 'session:updated', 'run:updated', 'run:step', 'run:output', 'artifact:added',
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
-  'settings:changed', 'window:state', 'data:changed', 'connections:changed', 'ui:command', 'memory:changed', 'agent:updated',
+  'settings:changed', 'chime:play', 'window:state', 'data:changed', 'connections:changed', 'ui:command', 'memory:changed', 'agent:updated',
   'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'chatCompany:updated', 'worktree:updated', 'history:changed',
   'activity:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',

@@ -51,6 +51,7 @@ import { isPinned, prefsFor, prefsKey, resolveView, togglePin, viewFor, type Nav
 import { parseDeepLink } from '@shared/deepLink'
 import { deepLinkView, resolveTaskRef } from '../lib/deepLinkNav'
 import { DEEP_LINK_EVENT } from '../lib/inAppLink'
+import { playChime } from '../lib/chimeSound'
 import { companyLabel, companyOf, effectiveCompany, isMultiCompany, isPersonal, pauseToastText, reorderIds, reposOf, sortCompanies, switchTarget, withPersonal, listedRows, workflowsTargetingRepo, type ActiveCompany } from '../lib/companyModel'
 
 export interface ScheduleSeed {
@@ -507,6 +508,8 @@ function wireEvents(): void {
     }))
   })
   hive.on('status:changed', (status) => setState({ status }))
+  // SOUNDS.md: main already decided (cooldowns, focus, boot); this only plays it
+  hive.on('chime:play', ({ kind, volume }) => void playChime(kind, volume))
   hive.on('providers:changed', (providers) => setState({ providers }))
   hive.on('settings:changed', (settings) => {
     const was = departmentsOn()

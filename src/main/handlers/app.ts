@@ -179,6 +179,8 @@ export function registerAppHandlers(h: Hive): void {
 
   onSend('ui:ready', () => {
     h.windows.markReady()
+    // SOUNDS.md: sounds start a little after the first renderer is up (never boot recovery or catch-up)
+    h.chimes.arm()
     const w = h.windows.get()
     if (w) emit('window:state', { focused: w.isFocused(), fullscreen: w.isFullScreen() })
   })
