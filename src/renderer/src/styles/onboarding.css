@@ -82,7 +82,8 @@
   background: transparent;
   color: var(--text-tertiary);
   font-size: var(--text-lg);
-  z-index: 1;
+  /* above .ob-progress/.ob-body/.ob-foot (z-index 1, later in the DOM): at 1 the body covered it and ate the click */
+  z-index: 2;
   -webkit-app-region: no-drag;
 }
 .ob-close:hover { background: var(--row-hover); color: var(--text-primary); }
