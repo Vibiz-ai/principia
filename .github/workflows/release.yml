@@ -24,7 +24,8 @@
 name: release
 on:
   push:
-    tags: ['v*']
+    # v*-preview.* tags are unsigned previews published by hand (docs/RELEASING.md §6.2): nothing to build or sign
+    tags: ['v*', '!v*-preview.*']
   workflow_dispatch:
 permissions:
   contents: read

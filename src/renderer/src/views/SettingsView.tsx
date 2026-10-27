@@ -34,7 +34,7 @@ import { DiskSection } from '../components/usage/DiskSection'
 import { PrincipiaRunsTeam } from '../components/orchestrator/PrincipiaTeam'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
 import { checkForUpdates, restartForUpdate, useUpdates } from '../state/updates'
-import { updateLine } from '@shared/updates'
+import { DOWNLOAD_PAGE_URL, updateLine } from '@shared/updates'
 import { CompanyAvatar } from '../shell/CompanyRail'
 import { PassportView } from './PassportView'
 import { KeysView } from './KeysView'
@@ -1238,6 +1238,8 @@ function About(): React.JSX.Element {
         <SRow label="Updates" desc={<span aria-live="polite">{updateLine(upd)}</span>}>
           {upd.phase === 'ready' ? (
             <Button size="sm" variant="primary" onClick={() => void restartForUpdate()}>Restart to install</Button>
+          ) : upd.phase === 'available' ? (
+            <Button size="sm" variant="primary" onClick={() => void hive.app.openExternal({ url: DOWNLOAD_PAGE_URL })}>Download</Button>
           ) : upd.phase !== 'off' ? (
             <Button
               size="sm"

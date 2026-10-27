@@ -136,7 +136,10 @@ It never restarts by itself. **Restart** is refused while an agent session or a 
 working, and says so. A downloaded update also installs when Principia quits normally.
 
 macOS installs an update only when it is signed by the same Developer ID as the running app, so updates work from
-the first signed release on. Updates are off in development builds and in test instances (`HIVE_USER_DATA`,
+the first signed release on. A build without a Developer ID (an ad-hoc preview, §6.2, or `npm run dist`) never downloads
+updates it could not install: the updater asks `codesign` once (`appCannotSelfUpdate`), still checks, and on a newer
+version says **A new version is out: download it from useprincipia.com** (phase `available`, a toast and Settings ›
+About with **Download**). Updates are off in development builds and in test instances (`HIVE_USER_DATA`,
 `HIVE_SMOKE`); `HIVE_NO_UPDATES=1` turns them off on a Mac.
 
 ### 4.1 Beta channel
@@ -385,12 +388,28 @@ CI (`.github/workflows/smoke.yml`, macOS) runs it nightly on `main`, and from Ch
 that touch `src/main`, `src/preload`, `build/`, `electron-builder.yml`, `electron.vite.config.ts`, `package.json`,
 `package-lock.json` or the test itself. `all-green` counts it when it ran.
 
+### 6.2 Unsigned preview (before the Developer ID exists)
+
+A preview is the dry-run build (ad-hoc signature, hardened runtime, `build/entitlements.mac.adhoc.plist`) at a
+`X.Y.Z-preview.N` version, published by hand as a GitHub **pre-release** so `releases/latest` never serves it:
+
+- build: the §6 steps with `-c.extraMetadata.version=X.Y.Z-preview.N` (package.json is not changed, so release-please
+  is unaffected), then `packageRelease` from `scripts/mac-sign.mjs` with identity `-` and the adhoc entitlements;
+- assets: `Principia-X.Y.Z-preview.N-arm64.dmg`, the zip and `SHA256SUMS.txt`, never `latest-mac.yml` /
+  `beta-mac.yml` (the app cannot update itself, §4);
+- check it first: `npm run smoke:packaged` with `PRINCIPIA_APP`, and Gatekeeper on a quarantined copy (it is rejected:
+  people open it once through System Settings › Privacy & Security › **Open Anyway**);
+- `gh release create vX.Y.Z-preview.N --draft --prerelease ...`, check the assets' digests, then publish it with
+  `make_latest=false`. `release.yml` and `cloud-images.yml` ignore `v*-preview.*` tags and `post-release.yml` skips them.
+
+The website links the preview's exact asset (website README, "Download").
+
 ## 7. The website
 
-The site's **Download for Mac** button is hidden until the first release exists, so the site never links to a
-missing file. After the first `npm run release:mac` succeeds, set `RELEASE_PUBLISHED = true` in the website and
-deploy it. Later releases need nothing on the site: the button always points at
-`releases/latest/download/Principia-arm64.dmg`.
+The site (https://useprincipia.com) serves the build named by `RELEASE` in `website/src/main.tsx`: `'preview'` (the
+unsigned preview's exact asset, with the Open Anyway steps), `'signed'` or `'none'`. After the first
+`npm run release:mac` succeeds, set `RELEASE = 'signed'` and deploy. Later releases need nothing on the site: the
+button then always points at `releases/latest/download/Principia-arm64.dmg`.
 
 ## 8. If something fails
 

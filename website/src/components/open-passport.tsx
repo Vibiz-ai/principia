@@ -1,7 +1,6 @@
-import { ArrowUpRight, Building2, Route, FileCode2 } from 'lucide-react'
+import { Building2, Route, FileCode2 } from 'lucide-react'
 
-// Placeholder until the domain is bought. Must match OP_DOMAIN in open-passport/deploy/config.env.
-export const OPEN_PASSPORT_URL = 'https://openpassport.example'
+// The section links nowhere until Open Passport has its own public page (it is in research): no placeholder URL.
 
 const apps = ['ChatGPT', 'Claude', 'Cursor', 'VS Code', 'Codex', 'Any MCP client']
 
@@ -14,7 +13,7 @@ const tiers = [
 const points = [
   { title: 'Every company has one.', body: 'Each Principia company keeps a Passport: who it is, its departments and people, what it decided, and its taste: what its people like and dislike.', icon: Building2 },
   { title: 'It travels with you.', body: 'Connect the same Passport to ChatGPT, Claude, Cursor and other AI apps. Each app sees only the scopes you grant, and its writes arrive as proposals for you to review.', icon: Route },
-  { title: 'An open standard.', body: 'Open Passport is an open spec: plain markdown notes plus a manifest. Self-host it, keep it local, or use the hosted service. No lock-in.', icon: FileCode2 },
+  { title: 'An open standard.', body: 'Open Passport is an open spec: plain markdown notes plus a manifest. Keep it local or self-host it; a hosted service is coming soon. No lock-in.', icon: FileCode2 },
 ]
 
 export function OpenPassport() {
@@ -35,6 +34,6 @@ export function OpenPassport() {
       </div>
       <div className="flex min-w-0 flex-col gap-1.5">{points.map(({ title, body, icon: Icon }) => <article key={title} className="flex-1 rounded-[18px] bg-panel p-6"><Icon size={20} strokeWidth={1.3} aria-hidden="true" className="mb-5 text-soft"/><h3 className="font-serif text-[23px] leading-[1.2] tracking-[-.02em]">{title}</h3><p className="mt-2 text-[13.5px] leading-relaxed text-muted">{body}</p></article>)}</div>
     </div>
-    <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3"><a className="button button-light" href={OPEN_PASSPORT_URL}>Learn about Open Passport <ArrowUpRight size={14} aria-hidden="true"/></a><span className="text-xs text-muted">Open spec · self-host or hosted · plain markdown you own</span></div>
+    <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3"><span className="rounded-md border border-white/15 px-2.5 py-1.5 font-mono text-[10px] tracking-wider text-soft">IN RESEARCH · COMING SOON</span><span className="text-xs text-muted">Open spec · local or self-hosted, hosted soon · plain markdown you own</span></div>
   </section>
 }

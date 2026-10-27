@@ -4,7 +4,7 @@
  * decision: it refuses while agents work and says why.
  */
 import { useSyncExternalStore } from 'react'
-import { shouldAnnounce, type UpdateState } from '@shared/updates'
+import { DOWNLOAD_PAGE_URL, shouldAnnounce, type UpdateState } from '@shared/updates'
 import { hive } from '../lib/hive'
 import { attempt, toast } from './store'
 
@@ -17,7 +17,9 @@ function apply(s: UpdateState): void {
   for (const l of listeners) l()
   if (shouldAnnounce(s, announced)) {
     announced = s.next
-    toast('Update ready - restart to install', 'info', { action: { label: 'Restart', run: () => void restartForUpdate() } })
+    if (s.phase === 'available')
+      toast('A new version is out: download it from useprincipia.com', 'info', { action: { label: 'Download', run: () => void hive.app.openExternal({ url: DOWNLOAD_PAGE_URL }).catch(() => undefined) } })
+    else toast('Update ready - restart to install', 'info', { action: { label: 'Restart', run: () => void restartForUpdate() } })
   }
 }
 

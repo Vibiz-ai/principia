@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { UpdateService, type Updater } from './updates'
+import { UpdateService, appCannotSelfUpdate, type Updater } from './updates'
 import { CHECK_EVERY_MS, FIRST_CHECK_DELAY_MS, updateChannelPolicy, type UpdateState, type WorkCounts } from '../shared/updates'
 
 type Handler = (...a: unknown[]) => void
@@ -35,11 +35,11 @@ function fakeUpdater() {
 const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined }
 const idle: WorkCounts = { runningSessions: 0, runningRuns: 0, queuedRuns: 0 }
 
-function service(o: { offReason?: string | null; work?: () => WorkCounts; beta?: () => boolean } = {}) {
+function service(o: { offReason?: string | null; work?: () => WorkCounts; beta?: () => boolean; manualInstall?: () => Promise<boolean> } = {}) {
   const f = fakeUpdater()
   const emitted: UpdateState[] = []
   const load = vi.fn(async () => f.u)
-  const s = new UpdateService({ current: '0.1.0', offReason: o.offReason ?? null, work: o.work ?? (() => idle), emit: (x) => emitted.push(x), log: quiet, load, beta: o.beta })
+  const s = new UpdateService({ current: '0.1.0', offReason: o.offReason ?? null, work: o.work ?? (() => idle), emit: (x) => emitted.push(x), log: quiet, load, beta: o.beta, manualInstall: o.manualInstall })
   return { s, f, emitted, load }
 }
 
@@ -85,6 +85,46 @@ describe('UpdateService', () => {
     expect(emitted.at(-1)?.phase).toBe('ready')
     await s.check()
     expect(f.u.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('a build that cannot install updates (ad-hoc preview) never downloads: it says a new version is out', async () => {
+    const { s, f, emitted } = service({ manualInstall: async () => true })
+    await s.check()
+    expect(f.u.autoDownload).toBe(false)
+    expect(f.u.autoInstallOnAppQuit).toBe(false)
+    f.fire('update-available', { version: '0.2.0' })
+    expect(s.state()).toMatchObject({ phase: 'available', next: '0.2.0', percent: null })
+    expect(emitted.at(-1)?.phase).toBe('available')
+    // nothing to restart into, and later checks still run (a newer version may come out)
+    expect(s.restart()).toEqual({ restarting: false, reason: 'No update is ready to install.' })
+    await s.check()
+    expect(f.u.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(f.u.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('a signed build still downloads in the background; a failing signature probe counts as signed', async () => {
+    const { s, f } = service({ manualInstall: async () => Promise.reject(new Error('codesign missing')) })
+    await s.check()
+    expect(f.u.autoDownload).toBe(true)
+    f.fire('update-available', { version: '0.2.0' })
+    expect(s.state().phase).toBe('downloading')
+  })
+
+  it('appCannotSelfUpdate reads codesign of the .app around the executable', async () => {
+    const answer = (stderr: string, err: Error | null = null) => {
+      const calls: string[][] = []
+      const run = ((_file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string, errOut: string) => void) => {
+        calls.push(args)
+        cb(err, '', stderr)
+      }) as unknown as Parameters<typeof appCannotSelfUpdate>[1]
+      return { run, calls }
+    }
+    const adhoc = answer('Executable=/A/Principia.app/Contents/MacOS/Principia\nSignature=adhoc\nTeamIdentifier=not set')
+    expect(await appCannotSelfUpdate('/A/Principia.app/Contents/MacOS/Principia', adhoc.run)).toBe(true)
+    expect(adhoc.calls[0].at(-1)).toBe('/A/Principia.app')
+    expect(await appCannotSelfUpdate('/A/P.app/Contents/MacOS/P', answer('Authority=Developer ID Application: X\nTeamIdentifier=ABCDE12345').run)).toBe(false)
+    expect(await appCannotSelfUpdate('/A/P.app/Contents/MacOS/P', answer('', new Error('/A/P.app: code object is not signed at all')).run)).toBe(true)
+    expect(await appCannotSelfUpdate('/A/P.app/Contents/MacOS/P', answer('', new Error('spawn ENOENT')).run)).toBe(false)
   })
 
   it('Squirrel failing to stage the downloaded update clears ready, says so plainly and lets the next check retry', async () => {

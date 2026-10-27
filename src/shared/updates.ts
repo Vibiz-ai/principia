@@ -4,7 +4,11 @@
  * the founder presses Restart, and Restart is refused while agents are working. A ready update also installs on a
  * normal quit (the quit already asks before stopping running work). Pure: the policy main and the renderer share.
  */
-export type UpdatePhase = 'off' | 'idle' | 'checking' | 'downloading' | 'ready' | 'current' | 'error'
+/**
+ * 'available': a newer version is out, but this build cannot install it itself (an ad-hoc signed preview: Squirrel.Mac
+ * only installs updates signed by the same Developer ID), so the founder downloads it from the website instead.
+ */
+export type UpdatePhase = 'off' | 'idle' | 'checking' | 'downloading' | 'ready' | 'available' | 'current' | 'error'
 
 export interface UpdateState {
   phase: UpdatePhase
@@ -45,6 +49,8 @@ export const UPDATES_EVENTS = ['updates:changed'] as const satisfies readonly (k
  */
 export const RELEASE_REPO_URL = 'https://github.com/Vibiz-ai/principia'
 export const STABLE_FEED_URL = `${RELEASE_REPO_URL}/releases/latest/download`
+/** Where a build that cannot update itself (phase 'available') sends the founder for the new version. */
+export const DOWNLOAD_PAGE_URL = 'https://useprincipia.com/#install'
 
 export type UpdateFeed = { provider: 'generic'; url: string; channel: 'latest' } | { provider: 'github'; owner: string; repo: string; channel: 'beta' }
 
@@ -99,7 +105,16 @@ export function initialUpdateState(current: string, offReason: string | null): U
 
 /** A timed or manual check starts only when nothing is in flight and no update is waiting to install. */
 export function shouldCheck(phase: UpdatePhase): boolean {
-  return phase === 'idle' || phase === 'current' || phase === 'error'
+  return phase === 'idle' || phase === 'current' || phase === 'error' || phase === 'available'
+}
+
+/**
+ * `codesign -dv` of the running app (its stderr): true when the signature has no Developer ID behind it (ad-hoc, or
+ * not signed at all), so Squirrel.Mac could never install a downloaded update over it. Such a build only says that
+ * a new version is out (phase 'available') and never downloads one.
+ */
+export function cannotSelfUpdate(codesignInfo: string): boolean {
+  return /Signature=adhoc|not signed at all|TeamIdentifier=not set/.test(codesignInfo)
 }
 
 export interface WorkCounts {
@@ -122,9 +137,9 @@ export function restartBlockedBy(w: WorkCounts): string | null {
   return `${parts.join(' and ')} ${verb} still working. The update installs when they finish and you restart or quit.`
 }
 
-/** The "Update ready" toast shows once per version, never again for a version already offered. */
+/** The "Update ready" (or "new version out") toast shows once per version, never again for a version already offered. */
 export function shouldAnnounce(s: UpdateState, announced: string | null): boolean {
-  return s.phase === 'ready' && !!s.next && s.next !== announced
+  return (s.phase === 'ready' || s.phase === 'available') && !!s.next && s.next !== announced
 }
 
 /** Errors in plain words: no release yet, offline, anything else. Never a stack or a URL with a token. */
@@ -149,6 +164,8 @@ export function updateLine(s: UpdateState): string {
       return `Downloading ${s.next ?? 'the update'}${s.percent != null ? ` (${Math.round(s.percent)}%)` : ''}…`
     case 'ready':
       return `${s.next ?? 'An update'} is ready. Restart to install it.`
+    case 'available':
+      return `A new version is out${s.next ? ` (${s.next})` : ''}: download it from useprincipia.com.`
     case 'current':
       return 'Principia is up to date.'
     case 'error':
