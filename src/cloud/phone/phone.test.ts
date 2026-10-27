@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import { EMPTY_CHAT_META } from '../../shared/chat'
-import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
+import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskCard, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
 import { ago, placeMessage, ChatLoad, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
 import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
@@ -191,6 +191,24 @@ describe('screens', () => {
     expect(textOf(open)).toContain('Ads')
     expect(textOf(open)).toContain('@pliny')
     expect(textOf(renderRoom({ ...baseView(), tab: 'room', room: { ...room, members: [room.members[0]!], answering: [] } }, noop))).toContain('No agents in this company yet')
+  })
+  it('a task started in a conversation shows as a compact card with its state (CHAT-UI.md §8)', () => {
+    const card = (state: string, label: string, extra: Partial<PhoneTaskCard> = {}): PhoneTaskCard => ({ identifier: 'VO-9', title: 'Lift UGC conversion', state, label, result: null, prUrl: null, startedAt: T, finishedAt: null, ...extra })
+    const msg = (task: PhoneTaskCard) => ({ id: 'c1', seq: 2, channelId: 'ch', threadId: 'r', authorId: 'm1', kind: 'system' as const, text: 'Julia started VO-9: Lift UGC conversion', at: T, task })
+    const room = { companyId: 'co_a', enabled: true, message: null, me: 'm1', channelId: 'ch', channels: [{ id: 'ch', label: '#chat-ugc' }], members: [], answering: [] }
+    const now = Date.parse(T) + 2 * 60_000
+    const working = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('working', 'Working'))] } }, noop, now)
+    const node = findAll(working, (n) => n.attrs?.class === 'tcard is-working')
+    expect(node).toHaveLength(1)
+    expect(textOf(node[0]!)).toContain('VO-9')
+    expect(textOf(node[0]!)).toContain('Working · 2m')
+    expect(findAll(working, (n) => n.attrs?.class === 'tes tes--run')).toHaveLength(1)
+    const done = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('done', 'Done', { result: 'Rewrote the hero', prUrl: 'https://github.com/a/b/pull/7', finishedAt: '2026-10-25T10:05:00.000Z' }))] } }, noop, now + 3_600_000)
+    expect(textOf(done)).toContain('Done · 5m')
+    expect(textOf(done)).toContain('Rewrote the hero')
+    expect(findAll(done, (n) => n.tag === 'a' && n.attrs?.href === 'https://github.com/a/b/pull/7')).toHaveLength(1)
+    // the plain line is not repeated next to the card
+    expect(textOf(done)).not.toContain('Julia started VO-9')
   })
   it('a queued message offers Send now', () => {
     const r = new ChatReplica({ ...snap(), turn: 'working', queue: [{ id: 'q1', text: 'Change of plan', images: 0 }] } as ChatSnapshot)

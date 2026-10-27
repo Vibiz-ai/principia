@@ -57,7 +57,7 @@ export interface ForumAgentDeps {
   /** AGENT-COLLAB.md §3: team_activity, team_usage, team_board */
   team?: TeamTools | null
   /** forum_reply `task`: files a person's message as a Board task for the replying agent (null when already filed) */
-  fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string } | null
+  fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string; existing?: { by: string | null }; card?: () => void } | null
   now?: () => Date
 }
 
@@ -264,18 +264,26 @@ export class ForumAgentApi {
     this.checkRate(c, me, origin)
     const seq = parseSeqRef(a.to, 'm') ?? refuse('Bad message ref')
     const t = this.safeThread(c, me, seq!)
-    const m = this.s.post(me.id, { channelId: t.root.channelId, threadId: t.root.id, text: a.text, refs: a.refs, origin, opKey })
+    // the task first, so "I started {task}" can name it; its card goes under the reply (CHAT-UI.md §8)
+    const filing = this.fileFromReply(c, me, t, seq!, a.task?.title)
+    const text = filing.identifier ? fillTask(a.text, filing.identifier, filing.already) : a.text
+    const m = this.s.post(me.id, { channelId: t.root.channelId, threadId: t.root.id, text, refs: a.refs, origin, opKey })
+    try {
+      filing.card?.()
+    } catch {
+      /* the card is a courtesy: the task is filed */
+    }
     this.d.presence?.(c, 'working', null)
     // a woken agent that writes in the thread it was woken for has answered (AGENT-COLLAB.md §2)
     try {
-      this.d.collab?.noteReplied(me.id, t.root.seq, a.text)
+      this.d.collab?.noteReplied(me.id, t.root.seq, text)
     } catch {
       /* bookkeeping only */
     }
-    const woke = this.wakeMentions(c, me, m) + this.fileFromReply(c, me, t, seq!, a.task?.title)
+    const woke = this.wakeMentions(c, me, m) + filing.note
     if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
       try {
-        this.d.answerAsk(t.root.id, me.id, a.text, m.id)
+        this.d.answerAsk(t.root.id, me.id, text, m.id)
         return `ok ${m.ref} ↳${t.root.ref} · answered the ask${woke}`
       } catch {
         /* it stays a reply */
@@ -285,17 +293,20 @@ export class ForumAgentApi {
   }
 
   /** forum_reply `task`: only a person's message becomes a task, once, assigned to the agent who replied. */
-  private fileFromReply(c: ForumCaller, me: ForumMember, t: { root: ForumMessage; replies: ForumMessage[] }, seq: number, title: string | undefined): string {
-    if (!title) return ''
-    if (!this.d.fileTask) return ' · no Board here: the task was not filed'
+  private fileFromReply(c: ForumCaller, me: ForumMember, t: { root: ForumMessage; replies: ForumMessage[] }, seq: number, title: string | undefined): { note: string; identifier?: string; card?: () => void; already?: string } {
+    if (!title) return { note: '' }
+    if (!this.d.fileTask) return { note: ' · no Board here: the task was not filed' }
     const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
     const author = from ? this.s.member(from.authorId) : null
-    if (!from || author?.kind !== 'human') return ' · only a person’s request becomes a task: not filed'
+    if (!from || author?.kind !== 'human') return { note: ' · only a person’s request becomes a task: not filed' }
     try {
       const made = this.d.fileTask(c, me, from, title)
-      return made ? ` · filed ${made.identifier}` : ' · already on the Board'
+      if (!made) return { note: ' · already filed for this message: do not file another' }
+      // CHAT-UI.md §8: never a second task for the same request (two agents in one conversation)
+      if (made.existing) return { identifier: made.identifier, already: made.existing.by && made.existing.by !== me.name ? made.existing.by : 'A teammate', note: ` · already filed as ${made.identifier}${made.existing.by && made.existing.by !== me.name ? ` by ${made.existing.by}` : ''}: not filed again. Say who is on it; do not start the same work` }
+      return { identifier: made.identifier, card: made.card, note: ` · filed ${made.identifier}` }
     } catch (e) {
-      return ` · task not filed: ${clip(e instanceof Error ? e.message : String(e), 160)}`
+      return { note: ` · task not filed: ${clip(e instanceof Error ? e.message : String(e), 160)}` }
     }
   }
 
@@ -604,3 +615,13 @@ function withRootRef(s: ForumStore, m: ForumMessage): ForumMessage & { rootRef?:
     return m
   }
 }
+
+/**
+ * CHAT-UI.md §8: `{task}` in a forum_reply becomes the task's identifier. When a teammate had already filed it, the
+ * reply must not claim the work: "I started {task}" reads "Julia already started VO-9".
+ */
+export function fillTask(text: string, identifier: string, alreadyBy?: string): string {
+  const named = alreadyBy ? text.replace(/\bI(?:'ve|’ve| have)? started \{task\}/gi, `${alreadyBy} already started ${identifier}`).replace(/\bI'll post the result here\.?/gi, `${alreadyBy} will post the result here.`) : text
+  return named.replace(/\{task\}/g, identifier)
+}
+

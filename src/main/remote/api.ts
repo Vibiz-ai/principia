@@ -11,6 +11,7 @@ import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc'
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
+import { TASK_CARD_LABEL } from '../../shared/taskCard'
 import type { ChatSnapshot } from '../../shared/chat'
 import type { AgentNode } from '../../shared/live'
 import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
@@ -715,7 +716,11 @@ export function terminalMessage(raw: string): string {
 }
 
 export function roomMessage(m: ForumMessage): PhoneRoomMessage {
-  return { id: m.id, seq: m.seq, channelId: m.channelId, threadId: m.threadId, authorId: m.authorId, kind: m.kind, text: m.text, at: m.createdAt }
+  const t = m.task
+  return {
+    id: m.id, seq: m.seq, channelId: m.channelId, threadId: m.threadId, authorId: m.authorId, kind: m.kind, text: m.text, at: m.createdAt,
+    ...(t ? { task: { identifier: t.identifier, title: t.title, state: t.state, label: TASK_CARD_LABEL[t.state] ?? t.state, result: t.result ?? null, prUrl: t.prUrl ?? null, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null } } : {})
+  }
 }
 
 export { agentStatus, whoResolver }

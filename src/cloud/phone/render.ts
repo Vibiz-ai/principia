@@ -6,7 +6,7 @@
  */
 import { h, type VNode } from '../console/dom'
 import { bust } from '../console/render'
-import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
+import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskCard, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
 import { md } from './markdown'
 import { ago, chatLines, headline, type ChatLine, type ChatReplica, type Tab } from './model'
 
@@ -463,9 +463,25 @@ export function renderRoom(v: View, a: Actions, now = Date.now()): VNode {
     h(
       'div',
       { class: 'msgs', 'data-scroll': 'chat' },
-      ...(r.messages.length ? r.messages.map((m) => roomMsg(m.authorId, m.text, m.at, m.kind, by, r.me, now, !!m.threadId)) : [h('p', { class: 'sub center' }, 'Say hello. @mention an agent and it answers here.')]),
+      ...(r.messages.length ? r.messages.map((m) => (m.task ? roomTaskCard(m.task, now) : roomMsg(m.authorId, m.text, m.at, m.kind, by, r.me, now, !!m.threadId))) : [h('p', { class: 'sub center' }, 'Say hello. @mention an agent and it answers here.')]),
       ...(r.answering ?? []).map((n) => h('div', { class: 'typing' }, h('i', { class: 'dot', 'aria-hidden': 'true' }), `${n} is replying…`))
     )
+  )
+}
+const CARD_TILE: Record<string, 'ok' | 'needs' | 'fail' | 'run' | 'q'> = { queued: 'q', working: 'run', needs_you: 'needs', in_review: 'ok', done: 'ok', failed: 'fail' }
+/** CHAT-UI.md §8: a task started from this conversation, as a compact card with its state (the Mac keeps it current). */
+export function roomTaskCard(t: PhoneTaskCard, now = Date.now()): VNode {
+  const since = Date.parse(t.startedAt)
+  const end = t.finishedAt ? Date.parse(t.finishedAt) : now
+  const mins = Number.isFinite(since) ? Math.max(0, Math.round((end - since) / 60_000)) : null
+  const age = mins === null ? '' : mins < 1 ? 'just now' : mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`
+  return h(
+    'div',
+    { class: `tcard is-${t.state}`, 'data-task': t.identifier, 'data-state': t.state },
+    h('div', { class: 'tcard__h' }, h('span', { class: `tes tes--${CARD_TILE[t.state] ?? 'q'}`, 'aria-hidden': 'true' }), h('b', null, t.identifier), h('span', { class: 'tcard__t' }, t.title)),
+    h('div', { class: 'tcard__s' }, `${t.label}${age ? ` · ${age}` : ''}`),
+    t.result ? h('p', { class: 'tcard__r' }, t.result) : null,
+    t.prUrl ? h('a', { class: 'tcard__pr', href: t.prUrl, target: '_blank', rel: 'noopener' }, 'Pull request') : null
   )
 }
 function roomMsg(author: string, text: string, at: string, kind: string, by: Map<string, PhoneRoomMember>, me: string | null, now: number, reply = false): VNode {

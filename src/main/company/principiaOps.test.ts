@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { approxTokens, bareTool, OPS_TITLE, principiaOps, principiaOpsReminder } from './principiaOps'
+import { approxTokens, bareTool, OPS_TITLE, principiaOps, principiaOpsReminder, TASK_STARTED_RULE } from './principiaOps'
+import { buildReplyPrompt } from '../forum/responder'
 
 const CHAT_TOOLS = [
   'mcp__hive__task_get', 'mcp__hive__task_list', 'mcp__hive__task_comment', 'mcp__hive__task_report', 'mcp__hive__task_ask', 'mcp__hive__task_create', 'mcp__hive__task_handoff',
@@ -92,6 +93,22 @@ describe('principiaOps (PROACTIVE.md §1)', () => {
     // the tool alone is enough for the section; without it, no rule
     expect(principiaOps({ kind: 'chat', tools: ['principia_help'] })).toContain('call principia_help')
     expect(principiaOps({ kind: 'chat', tools: CHAT_TOOLS })).not.toContain('principia_help')
+  })
+
+  it('a task filed from a chat is said plainly, never "on the Board", and never filed twice (CHAT-UI.md §8)', () => {
+    const chat = principiaOps({ kind: 'chat', tools: CHAT_TOOLS })
+    expect(chat).toContain(`say "I started VO-9: <title>. I'll post the result here."`)
+    expect(chat).toContain(`never "It's on the Board"`)
+    expect(chat).toContain('task_list {scope:"open"} first and never file a duplicate (even one a teammate just filed)')
+    expect(TASK_STARTED_RULE).toContain("I'll post the result here")
+    // only where a task can be filed
+    expect(principiaOps({ kind: 'chat', tools: ['hivemem.memory_search'] })).not.toContain('I started')
+    // the Forum reply rules (a teammate's reply run) say the same
+    const reply = buildReplyPrompt({ seat: { name: 'Growth Analyst', instructions: '' }, department: 'Marketing', me: 'julia', channel: '#chat-ugc', messages: [{ ref: 'm1', author: 'you', text: 'get more conversion' }], thread: [], replyTo: 'm1' })
+    expect(reply).toContain(TASK_STARTED_RULE)
+    expect(reply).toContain('"text":"I started {task}: <title>. I\'ll post the result here."')
+    expect(reply).toContain('do not file another: say who is on it')
+    expect(reply).not.toMatch(/say (in your reply )?that it is on the Board/)
   })
 
   it('the reminder repeats the rules', () => {

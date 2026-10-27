@@ -51,7 +51,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   const view = (id: string): ForumTaskView | null => {
     try {
       const t = c().task(id)
-      return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report }
+      return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report, title: t.title, agentId: t.agentId, doneNote: t.doneNote, prUrl: t.work?.pr?.url ?? null, updatedAt: t.updatedAt }
     } catch {
       return null
     }
@@ -170,6 +170,26 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         log.warn('forum: ask reconcile failed', { runId: run.id, error: String(e) })
       }
     })
+  })
+  // CHAT-UI.md §8: the live task cards follow their tasks; a task that came back posts its result into the
+  // conversation it was started from. A short delay lets Principia's run report post first (it says more).
+  const cardTimers = new Map<string, NodeJS.Timeout>()
+  const followCards = (companyId: string | null | undefined, ms = 2500): void => {
+    if (!companyId || !service.enabled() || cardTimers.has(companyId)) return
+    const timer = setTimeout(() => {
+      cardTimers.delete(companyId)
+      try {
+        service.reconcileTaskCards(companyId, { post: true })
+      } catch (e) {
+        log.warn('forum: task cards failed', { companyId, error: String(e) })
+      }
+    }, ms)
+    timer.unref?.()
+    cardTimers.set(companyId, timer)
+  }
+  h.safe(() => c().onTaskWrite((t) => followCards(t.companyId)), undefined)
+  h.runHooks.push((run) => {
+    if (TERMINAL.has(run.status)) followCards(run.companyId, 4000)
   })
   // §6.4: a human's post wakes the agents it is for (one short seat run each, no board task)
   const responder = new ForumResponder({

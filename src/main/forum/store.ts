@@ -27,6 +27,7 @@ import {
   type ForumRole
 } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
+import type { ForumTaskCard } from '../../shared/taskCard'
 import { ensureForumSchema } from './schema'
 import { findTeammate, type Teammate } from './roster'
 import { parseRefArg, parseText } from './refs'
@@ -77,7 +78,7 @@ export interface ForumStoreDeps {
 interface MemberRow { id: string; company_id: string; kind: string; role: string; agent_id: string | null; handle: string; name: string; status: string; created_at: string; data: string }
 interface ChannelRow { id: string; company_id: string; kind: string; name: string | null; topic: string; purpose: string; department_id: string | null; system: string | null; dm_key: string | null; created_by: string | null; created_at: string; archived_at: string | null; data: string }
 interface MessageRow { seq: number; id: string; company_id: string; channel_id: string; thread_seq: number | null; author_id: string; kind: string; text: string; reply_count: number; last_reply_at: string | null; created_at: string; edited_at: string | null; deleted_at: string | null; origin: string; data: string }
-interface MessageData { mentions?: string[]; mentionDepartments?: string[]; refs?: ForumRef[]; reactions?: Record<string, string[]>; ask?: ForumAsk; proposal?: ForumProposal; repliers?: string[]; opKey?: string }
+interface MessageData { mentions?: string[]; mentionDepartments?: string[]; refs?: ForumRef[]; reactions?: Record<string, string[]>; ask?: ForumAsk; proposal?: ForumProposal; task?: ForumTaskCard; repliers?: string[]; opKey?: string }
 
 export interface PostInput {
   channelId: string
@@ -147,6 +148,7 @@ export class ForumStore {
       reactions: d.reactions ?? {},
       ...(d.ask ? { ask: d.ask } : {}),
       ...(d.proposal ? { proposal: d.proposal } : {}),
+      ...(d.task ? { task: d.task } : {}),
       origin: r.origin,
       ...(r.origin.startsWith('principia:') ? { via: 'principia' as const } : {})
     }
@@ -627,7 +629,7 @@ export class ForumStore {
    * A system line ("Marcus joined #growth") authored by the company owner, kind 'system'. ORCHESTRATOR.md §5: with an
    * `origin` of `principia:…` it reads as Principia's own line (the chief of staff's digest); `opKey` makes it idempotent.
    */
-  systemPost(channelId: string, text: string, threadSeq?: number, opts: { origin?: string; opKey?: string } = {}): ForumMessage | null {
+  systemPost(channelId: string, text: string, threadSeq?: number, opts: { origin?: string; opKey?: string; task?: ForumTaskCard } = {}): ForumMessage | null {
     const r = this.channelRow(channelId)
     const owner = this.db.prepare("SELECT id FROM forum_members WHERE company_id=? AND role='owner' LIMIT 1").get(r.company_id) as { id: string } | undefined
     if (!owner) return null
@@ -639,10 +641,26 @@ export class ForumStore {
     const at = this.iso()
     const info = this.db
       .prepare("INSERT INTO forum_messages(id,company_id,channel_id,thread_seq,author_id,kind,text,created_at,origin,data) VALUES (?,?,?,?,?,'system',?,?,?,?)")
-      .run(id, r.company_id, r.id, threadSeq ?? null, owner.id, this.redact(text).slice(0, 1000), at, opts.origin ?? 'local', JSON.stringify(opts.opKey ? { opKey: opts.opKey } : {}))
+      .run(id, r.company_id, r.id, threadSeq ?? null, owner.id, this.redact(text).slice(0, 1000), at, opts.origin ?? 'local', JSON.stringify({ ...(opts.opKey ? { opKey: opts.opKey } : {}), ...(opts.task ? { task: opts.task } : {}) }))
     const msg = this.message(Number(info.lastInsertRowid))
     this.emit({ kind: 'message', companyId: r.company_id, message: msg })
     return msg
+  }
+
+  /**
+   * CHAT-UI.md §8: the task cards of a company (system lines with a `task` payload), oldest first. `open` leaves out
+   * the ones whose task is done or canceled for good; `taskId` narrows to one task's cards.
+   */
+  taskCards(companyId: string, opts: { taskId?: string; open?: boolean; limit?: number } = {}): ForumMessage[] {
+    const where = ["company_id=?", "kind='system'", "json_extract(data,'$.task.taskId') IS NOT NULL"]
+    const args: unknown[] = [companyId]
+    if (opts.taskId) {
+      where.push("json_extract(data,'$.task.taskId')=?")
+      args.push(opts.taskId)
+    }
+    if (opts.open) where.push("COALESCE(json_extract(data,'$.task.final'),0)=0")
+    const rows = this.db.prepare(`SELECT * FROM forum_messages WHERE ${where.join(' AND ')} ORDER BY seq DESC LIMIT ?`).all(...args, Math.min(Math.max(opts.limit ?? 200, 1), 500)) as MessageRow[]
+    return rows.reverse().map((r) => this.toMessage(r))
   }
 
   /** Top-level messages of a channel, oldest first: the page ending before `beforeSeq` (default: the newest). */
@@ -717,8 +735,9 @@ export class ForumStore {
   }
 
   /** Replaces the ask / proposal payload of a message (service-side state changes). */
-  patchPayload(messageId: string, patch: { ask?: ForumAsk; proposal?: ForumProposal }): ForumMessage {
+  patchPayload(messageId: string, patch: { ask?: ForumAsk; proposal?: ForumProposal; task?: ForumTaskCard }): ForumMessage {
     const r = this.messageRow(messageId)
+    if (patch.task) this.db.prepare("UPDATE forum_messages SET data=json_set(data,'$.task',json(?)) WHERE seq=?").run(JSON.stringify(patch.task), r.seq)
     if (patch.ask) this.db.prepare("UPDATE forum_messages SET data=json_set(data,'$.ask',json(?)) WHERE seq=?").run(JSON.stringify(patch.ask), r.seq)
     if (patch.proposal) this.db.prepare("UPDATE forum_messages SET data=json_set(data,'$.proposal',json(?)) WHERE seq=?").run(JSON.stringify(patch.proposal), r.seq)
     const msg = this.message(r.seq)

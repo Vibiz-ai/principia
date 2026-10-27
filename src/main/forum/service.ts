@@ -20,6 +20,7 @@ import { formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
+import { isFinishedCard, taskCardLine, taskCardResult, taskCardState, type ForumTaskCard } from '../../shared/taskCard'
 import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
 const fail = (m: string): never => {
@@ -28,7 +29,11 @@ const fail = (m: string): never => {
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 /** A board task as the Forum needs it. */
-export interface ForumTaskView { id: string; companyId: string; identifier: string; status: string; blockReason: string | null; runId: string | null; ask: { prompt: string; answer?: string } | null; report: unknown }
+export interface ForumTaskView {
+  id: string; companyId: string; identifier: string; status: string; blockReason: string | null; runId: string | null; ask: { prompt: string; answer?: string } | null; report: unknown
+  /** CHAT-UI.md §8 (the task card): optional, older callers leave them out */
+  title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string
+}
 
 export interface ForumServiceDeps {
   db: Database.Database
@@ -533,7 +538,7 @@ export class ForumService implements ForumBridge {
       departmentId: ch.departmentId,
       agentId: agentId ?? mentionedSeat
     })
-    this.store.systemPost(msg.channelId, `${by.name} made ${t.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
+    this.postCard(msg, { ...t, title: clip(first, 120), agentId: agentId ?? mentionedSeat }, by)
     return t
   }
 
@@ -547,20 +552,27 @@ export class ForumService implements ForumBridge {
    * ORCHESTRATOR.md §1.3: Principia filed a reply run's follow-up for the person's message (the agent had no Forum
    * tools, or put it in its report): one task per message, and the thread says so like Make task does.
    */
-  noteFiledFromReply(messageId: string, task: { id: string; identifier: string }, agentName: string): void {
+  noteFiledFromReply(messageId: string, task: { id: string; identifier: string; title?: string; agentId?: string | null }, agentName: string): void {
     if (this.filed.has(messageId)) return
     this.filed.set(messageId, task.id)
     try {
       const msg = this.store.message(messageId)
-      this.store.systemPost(msg.channelId, `${agentName} made ${task.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
+      const by = task.agentId ? this.store.memberForAgent(task.agentId) : null
+      this.postCard(msg, { id: task.id, identifier: task.identifier, title: task.title ?? task.identifier, agentId: task.agentId ?? null }, by ?? { id: null, name: agentName })
     } catch {
-      /* the line is a courtesy */
+      /* the card is a courtesy */
     }
   }
   /** forum_reply `task`: the person's message as a Board task for the agent who replied (like Make task). */
-  private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string } | null {
+  private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string; existing?: { by: string | null }; card?: () => void } | null {
     if (msg.companyId !== companyId || me.companyId !== companyId) fail('That message is not in your company')
-    if (this.filed.has(msg.id)) return null
+    // one task per message, whoever files it: a second agent in the same conversation hears who is already on it
+    const prior = this.cardFor(msg.id)
+    if (prior?.task) return { id: prior.task.taskId, identifier: prior.task.identifier, existing: { by: prior.task.filedBy ? (this.store.member(prior.task.filedBy)?.name ?? null) : null } }
+    if (this.filed.has(msg.id)) {
+      const t = this.d.tasks?.get(this.filed.get(msg.id)!)
+      return t ? { id: t.id, identifier: t.identifier, existing: { by: null } } : null
+    }
     const tasks = this.d.tasks ?? fail('The board is not available')
     const ch = this.store.channel(msg.channelId)
     const where = ch.name ? `#${ch.name}` : 'a direct message'
@@ -574,8 +586,127 @@ export class ForumService implements ForumBridge {
     })
     this.filed.set(msg.id, t.id)
     if (this.filed.size > 2000) for (const k of [...this.filed.keys()].slice(0, 1000)) this.filed.delete(k)
-    this.store.systemPost(msg.channelId, `${me.name} made ${t.identifier} from this message.`, msg.threadId ? this.store.message(msg.threadId).seq : msg.seq)
-    return t
+    // the caller posts the agent's reply first, then the card under it
+    return { ...t, card: () => void this.postCard(msg, { ...t, title: clip(title.trim(), 120), agentId: me.agentId ?? null }, me) }
+  }
+
+  // ---------- the live task card (CHAT-UI.md §8) ----------
+
+  /**
+   * The card for a task filed from `msg`: one system line with a `task` payload, in the message's thread (a
+   * conversation folds threads in, so it sits right under the request). Main patches it in place as the task moves.
+   */
+  private postCard(msg: ForumMessage, task: { id: string; identifier: string; title: string; agentId: string | null }, by: { id: string | null; name: string }): ForumMessage | null {
+    const card: ForumTaskCard = {
+      taskId: task.id,
+      identifier: task.identifier,
+      title: task.title,
+      agentId: task.agentId,
+      filedBy: by.id,
+      messageId: msg.id,
+      state: 'queued',
+      runId: null,
+      result: null,
+      prUrl: null,
+      startedAt: this.now().toISOString(),
+      finishedAt: null,
+      final: false
+    }
+    const t = this.d.tasks?.get(task.id)
+    if (t) {
+      card.state = taskCardState(t)
+      card.runId = t.runId ?? null
+    }
+    return this.store.systemPost(msg.channelId, taskCardLine(by.name, task.identifier, task.title), msg.threadId ? this.store.message(msg.threadId).seq : msg.seq, { task: card, opKey: `card:${task.id}:${msg.id}` })
+  }
+
+  /** The card already posted for a person's message (any agent's, any path), if any. */
+  cardFor(messageId: string): ForumMessage | null {
+    const row = this.d.db.prepare("SELECT seq FROM forum_messages WHERE kind='system' AND json_extract(data,'$.task.messageId')=? ORDER BY seq LIMIT 1").get(messageId) as { seq: number } | undefined
+    return row ? this.store.message(row.seq) : null
+  }
+
+  /** The conversation (or channel) a task was started from: where its result goes. Null = none. */
+  conversationOfTask(taskId: string): string | null {
+    const row = this.d.db.prepare("SELECT channel_id FROM forum_messages WHERE kind='system' AND json_extract(data,'$.task.taskId')=? ORDER BY seq DESC LIMIT 1").get(taskId) as { channel_id: string } | undefined
+    return row?.channel_id ?? null
+  }
+
+  /** opKey of the result Principia posts back for one run of a carded task. */
+  static resultKey(taskId: string, runId: string): string {
+    return `card:${taskId}:${runId}:result`
+  }
+  /** Something already came back into the task's conversation for this run (Principia's update, or the agent's own). */
+  resultPosted(taskId: string, runId: string): boolean {
+    const ch = this.conversationOfTask(taskId)
+    if (!ch) return false
+    const byKey = this.d.db.prepare("SELECT 1 FROM forum_messages WHERE json_extract(data,'$.opKey')=? LIMIT 1").get(ForumService.resultKey(taskId, runId))
+    if (byKey) return true
+    if (this.d.db.prepare("SELECT 1 FROM forum_messages WHERE channel_id=? AND origin=? AND kind!='system' LIMIT 1").get(ch, `principia:${runId}`)) return true
+    return this.postsOfRun(runId).some((m) => m.channelId === ch)
+  }
+
+  /**
+   * Follows every open card of a company: its stored state, result line and PR (the phone reads them; the desktop
+   * recomputes live), each card patched in place. With `post`, a task that came back (in review, done, failed) gets
+   * its result posted into the conversation it was started from, once per run, unless the agent or Principia's run
+   * report already posted there. Never throws. Returns the number of cards changed.
+   */
+  reconcileTaskCards(companyId: string, opts: { post?: boolean; taskId?: string } = {}): number {
+    if (!this.d.tasks) return 0
+    let changed = 0
+    let cards: ForumMessage[] = []
+    try {
+      cards = this.store.taskCards(companyId, { open: true, ...(opts.taskId ? { taskId: opts.taskId } : {}) })
+    } catch {
+      return 0
+    }
+    for (const m of cards) {
+      try {
+        const card = m.task!
+        const t = this.d.tasks.get(card.taskId)
+        if (!t) continue
+        const state = taskCardState(t)
+        const finished = isFinishedCard(state)
+        const next: ForumTaskCard = {
+          ...card,
+          state,
+          runId: t.runId ?? card.runId ?? null,
+          agentId: t.agentId !== undefined ? t.agentId : card.agentId,
+          result: finished ? (taskCardResult({ report: t.report as { summary?: string } | null, doneNote: t.doneNote }) ?? card.result ?? null) : (card.result ?? null),
+          prUrl: t.prUrl ?? card.prUrl ?? null,
+          finishedAt: finished ? (card.state === state && card.finishedAt ? card.finishedAt : (t.updatedAt ?? this.now().toISOString())) : null
+        }
+        if (opts.post && finished && t.runId && card.resultFor !== t.runId) {
+          if (!this.resultPosted(t.id, t.runId)) this.postResult(m, next, t)
+          next.resultFor = t.runId
+        }
+        // done for good: stop following it once its result is back (or it never ran)
+        next.final = (t.status === 'done' || t.status === 'canceled') && (!t.runId || next.resultFor === t.runId)
+        if (JSON.stringify(next) !== JSON.stringify(card)) {
+          this.store.patchPayload(m.id, { task: next })
+          changed++
+        }
+      } catch (err) {
+        this.d.log?.warn('forum: task card reconcile failed', { messageId: m.id, error: String(err) })
+      }
+    }
+    return changed
+  }
+
+  /** The result, posted into the conversation as the agent on it (Principia on its behalf), else as a system line. */
+  private postResult(m: ForumMessage, card: ForumTaskCard, t: ForumTaskView): void {
+    const res = card.result ? `: ${card.result}` : '.'
+    const head =
+      card.state === 'failed'
+        ? `${card.identifier} ${t.status === 'canceled' ? 'was canceled' : 'stopped before it was finished'}${res}`
+        : card.state === 'in_review'
+          ? `${card.identifier} is ready for your review${res}`
+          : `${card.identifier} is done${res}`
+    const text = `${head}${card.prUrl ? `\nPull request: ${card.prUrl}` : ''}`
+    const opKey = ForumService.resultKey(card.taskId, t.runId!)
+    const posted = card.agentId ? this.postAsAgent({ companyId: m.companyId, agentId: card.agentId, runId: t.runId!, text, channelId: m.channelId, opKey }) : null
+    if (!posted) this.store.systemPost(m.channelId, text, undefined, { opKey })
   }
 
   // ---------- fenced harvest (§4.1.4) ----------
@@ -645,7 +776,9 @@ export class ForumService implements ForumBridge {
         return
       }
       if (!taskId) return
-      const home = this.homeChannel(member.companyId, member.id)
+      // CHAT-UI.md §8: a task started from a conversation answers there, where the person is waiting
+      const conv = this.conversationOfTask(taskId)
+      const home = conv ? { id: conv } : this.homeChannel(member.companyId, member.id)
       if (!home) return
       const t = this.d.tasks?.get(taskId)
       const head = t ? `${t.identifier}: ` : ''
@@ -719,6 +852,7 @@ export class ForumService implements ForumBridge {
     this.assertEnabled()
     this.store.sync(companyId)
     this.reconcileAsks(companyId)
+    this.reconcileTaskCards(companyId)
     const me = this.store.owner(companyId)
     const channels = this.store.channels(companyId, me.id)
     return {

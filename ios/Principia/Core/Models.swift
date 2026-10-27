@@ -260,6 +260,20 @@ struct PhoneRoomMessage: Codable, Hashable, Identifiable, Sendable {
     var kind: String
     var text: String
     var at: String
+    /// CHAT-UI.md §8: a task started from this conversation (a compact card with its state)
+    var task: PhoneTaskCard? = nil
+}
+
+/// The compact task card the Mac keeps current (queued | working | needs_you | in_review | done | failed).
+struct PhoneTaskCard: Codable, Hashable, Sendable {
+    var identifier: String
+    var title: String
+    var state: String
+    var label: String
+    var result: String?
+    var prUrl: String?
+    var startedAt: String
+    var finishedAt: String?
 }
 
 struct PhoneRoom: Codable, Sendable {

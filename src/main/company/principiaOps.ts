@@ -41,13 +41,19 @@ interface Rule {
 const CHATS: readonly OpsKind[] = ['chat', 'session']
 const ALL: readonly OpsKind[] = ['chat', 'session', 'task']
 
+/**
+ * CHAT-UI.md §8: what an agent says when it starts a task from a chat. The founder read "It's on the Board" as "wait
+ * here" while the work ran somewhere else: say plainly that it started and that the result comes back here.
+ */
+export const TASK_STARTED_RULE = 'say "I started VO-9: <title>. I\'ll post the result here.", never "It\'s on the Board"'
+
 const RULES: readonly Rule[] = [
   // tracking the chat's own work (task_create from a session holding no task tracks it; task_update moves it)
   {
     needs: [['task_create'], ['task_update']],
     kinds: CHATS,
     track: ['auto'],
-    text: 'When one message asks for two or more separate things (fixes, features, changes) or for multi-step work, before working open one task per thing with task_create (parent groups them), then task_update each: in_progress when you start it, in_review once built and checked (note: what you did, how you checked). Never for questions, a quick ask, or when the founder says "just do it" or "no tasks".'
+    text: 'When one message asks for two or more separate things or for multi-step work, before working open one task per thing with task_create (parent groups them), then task_update each: in_progress when you start it, in_review once built and checked (note: what you did, how you checked). Never for questions, a quick ask, or when the founder says "just do it" or "no tasks".'
   },
   {
     needs: [['task_create'], ['task_update']],
@@ -59,12 +65,12 @@ const RULES: readonly Rule[] = [
     needs: [['task_update'], ['task_comment']],
     kinds: CHATS,
     track: ['auto', 'always'],
-    text: 'Keep your tasks true: task_comment each decision with the why; tick "- [x]" criteria and, before ending a turn that changed things, rewrite the handoff notes (task_update description: where it stands, what is left, gotchas).'
+    text: 'Keep your tasks true: task_comment each decision with the why; tick "- [x]" criteria and, before ending a turn that changed things, rewrite the handoff notes (task_update description: status, what is left, gotchas).'
   },
   {
     needs: [['company_file_task']],
     kinds: CHATS,
-    text: 'When work belongs to another department, its agents, or later: task_list {scope:"open"} first and never file a duplicate, then company_file_task to the department whose charter fits (company_departments), instead of only suggesting it. New detail on it later: task_comment {id}.'
+    text: `When work belongs to another department, its agents, or later: task_list {scope:"open"} first and never file a duplicate (even one a teammate just filed), then company_file_task to the department whose charter fits (company_departments); then ${TASK_STARTED_RULE}. New detail later: task_comment {id}.`
   },
   // headless task turns
   {
@@ -107,7 +113,7 @@ const RULES: readonly Rule[] = [
   {
     needs: [['connections_list']],
     kinds: ALL,
-    text: 'When a tool or service would help but is not connected (Instagram, Stripe, a CRM, their own MCP server), say so in plain words and give the founder its link from connections_list, like principia://connect/stripe: it opens that card in Settings › Connections, where they sign in. Never ask for passwords or keys in the chat.'
+    text: 'When a tool or service would help but is not connected (Instagram, Stripe, their own MCP server), say so plainly and give the founder its link from connections_list, like principia://connect/stripe: it opens its card in Settings › Connections to sign in. Never ask for passwords or keys in the chat.'
   },
   // Principia itself (shared/help.ts): answered from the built-in help, with the link, never guessed
   {
@@ -143,7 +149,7 @@ const TAIL = [
   'To point the founder at a page, write its principia:// link (principia://board?task=NC-12, principia://settings/keys); it opens there in Principia.',
   'Ask the founder first before anything that costs money, publishes or sends outside the company, deletes data, or creates a company or department.'
 ]
-const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier (like NC-12) in your answer. The founder\'s explicit wishes override these defaults.'
+const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier. The founder\'s explicit wishes override these defaults.'
 
 /** The section for one spawn, or '' when none of Principia's tools are attached. */
 export function principiaOps(input: OpsInput): string {

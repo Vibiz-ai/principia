@@ -123,7 +123,7 @@ export class OrchWorld {
         get: (id) => {
           try {
             const t = c().task(id)
-            return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report }
+            return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report, title: t.title, agentId: t.agentId, doneNote: t.doneNote, prUrl: t.work?.pr?.url ?? null, updatedAt: t.updatedAt }
           } catch {
             return null
           }

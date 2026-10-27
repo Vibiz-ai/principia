@@ -345,7 +345,7 @@ stays, because there it is the only way in. The keyboard-first developer persona
 - iPhone / web phone app: the same To: (Principia picks / a person), New conversation and Recent (ChatsView.swift,
   remote/views.ts `phoneChats`), and a route over the conversation's channel.
 - A model triage for routing; a cheap rename of the title after the first answers.
-- A conversation that turns into work already becomes a Board task when the agent files it; show that link in the thread.
+- A conversation that turns into work already becomes a Board task when the agent files it; show that link in the thread. Done in §8: the live task card.
 - The agent page's composer is the agent's work session (model, permissions); it is listed as Agent sessions.
 
 ### Running it on demo data
@@ -360,3 +360,86 @@ HIVE_USER_DATA=<dir> HIVE_NO_SCHEDULER=1 HIVE_CLAUDE_BIN=$PWD/scripts/fake-claud
 `new-conversation`, `composer-input`, `composer-send`, `route-line`, `to-pill`, `to-option[data-value=team|everyone|
 agent:<Name>|claude|repo:<name>]`, `mention-option`, `new-topic`, `thread`, `handoff`, `thread-msg`,
 `thread-pending`, `thread-input`, `private`, `recent-row`, `chat-row`, `new-pane`, `needs-more`.
+
+## 8. Work started from a conversation: the live task card (2026-10-27)
+
+The founder wrote in a team conversation "we need to get more conversion in vibiz ugc… check posthog". Julia and
+Junia each answered "It's on the Board" and each filed a task (VO-8, VO-9); the only trace in the conversation was a
+grey system line, "Julia made VO-9 from this message.", and the work then ran somewhere else. His words: "it did a
+task to do the work and i didnt understand, it should be clear that its making a task… i was waiting there was nothing
+to wait… it should show the task within the thing while its doing it so i can see that its doing the task".
+
+### What you see
+
+- **The task card** replaces the grey line, wherever a task is filed from a message: Chats conversations and Forum
+  channels share it (`components/conversations/TaskCard.tsx`, used by `ConversationKit.MessageBubble` and
+  `forum/Message.MessageRow`). It reads:
+  - the identifier and title, and who is on it (agent face and name);
+  - its state, one of six (`shared/taskCard.ts taskCardState`): **Queued** (todo, backlog, triage, or blocked on
+    other tasks), **Working** (in progress; the label and the activity line shimmer), **Needs you** (an unanswered
+    board ask, an open live ask on its run, or a block that waits on a person), **In review**, **Done**, **Failed**
+    (canceled, or blocked because the run failed, was interrupted, gave no report or hit a limit);
+  - the latest activity line of its run (the run's root agent, `plainActivity`, so a company without code reads
+    "Working on it", not "Bash"), live; elapsed time since it started, frozen when it came back;
+  - actions: **Watch** (the run's live view), **Open task** (the Board drawer), and when it needs you the answer in
+    place (the ask's options as buttons, or a one-line answer box), **Answer it** for a live permission ask (opens the
+    run), **Approve** when it is in review;
+  - once it came back: **Done** (or In review / Failed) with the one-line result and the **Pull request** when the task
+    has one.
+- **The card is one message**, updated in place: a `system` Forum message with a `task` payload
+  (`ForumMessage.task: ForumTaskCard`). Main follows open cards and patches the payload (state, run, result, PR,
+  finish time); the desktop recomputes the state live from `state.tasks`, `state.agents` and `state.asks` between
+  patches, so the card moves the moment the task does. Its text ("Julia started VO-9: Lift UGC conversion") is what
+  search, notifications and older clients show.
+- **"Working on it"**: one line under the conversation's header while a task started from it is open
+  (`WorkingStrip`, `shared/taskCard.ts workingStrip`): "Julia is working on VO-9 · 2m · Watch", "VO-9 needs you ·
+  Julia is waiting · 4m", "VO-9 is queued for Julia · 1m". With more, "2 tasks running · 1 needs you"; a click lists
+  them, each with Watch. In review, done and failed tasks leave the strip (the card says it).
+- **The composer** says where answers and results go: "→ Junia and Julia answer here · work they start reports back
+  here".
+
+### The result comes back to the conversation
+
+Before this, a task run's update went to the agent's department channel (`postAsAgent`'s default), never to the
+conversation the founder was waiting in. Now:
+
+1. Principia's run-report post (`orchestrator/apply.ts`, step 1) goes to the task's conversation when it has a card
+   (`ForumService.conversationOfTask`), and the Forum's automatic post of a task step's answer (`autoPost`) does too.
+2. `ForumService.reconcileTaskCards(companyId, { post: true })` runs a moment after every board write and run end
+   (`forum/wire.ts`, 2.5–4 s, so Principia's richer post lands first). For a task that came back (in review, done,
+   failed) it posts the result once per run, as the agent on it, via Principia ("VO-9 is ready for your review:
+   <summary>", plus the pull request), unless the agent or Principia already posted in that conversation for this run
+   (`resultPosted`). The opKey `card:<task>:<run>:result` keeps it idempotent across restarts.
+3. A card whose task is done or canceled, with its result back, is `final`: main stops following it.
+   `ForumService.state()` also reconciles (without posting), so the phone reads a current state.
+
+### What agents say, and one task per request
+
+- `company/principiaOps.ts` `TASK_STARTED_RULE`, in the chat rule for filing work: say "I started VO-9: <title>. I'll
+  post the result here.", never "It's on the Board"; `task_list {scope:"open"}` first and never file a duplicate, even
+  one a teammate just filed. The Forum reply rules (`forum/responder.ts`) say the same; `forum_reply` text may carry
+  `{task}`, which becomes the identifier it just filed, so the reply can name it.
+- Server side, one task per person's message whoever files it (`ForumService.cardFor`, by the card's `messageId`, and
+  the per-message map): a second agent's `forum_reply` task gets "already filed as VO-9 by Julia: not filed again. Say
+  who is on it", and nothing is filed.
+- The task is filed before the reply is posted (so `{task}` resolves), and its card goes under the reply.
+
+### The phone
+
+`PhoneRoomMessage.task` (`shared/remote.ts PhoneTaskCard`: identifier, title, state, label, result, PR, times) is
+mapped by `remote/api.ts roomMessage` from main's stored payload. The web phone app (`cloud/phone/render.ts
+roomTaskCard`) and the iPhone (`ios/Principia/UI/RoomView.swift TaskCardRow`) draw it as a compact card with its state
+tile, the elapsed time, the result and the PR link; a patched card replaces itself in place (`AppModel.place`, the web
+app's `room` message). No Watch, answer or activity line on the phone yet: the Mac keeps those.
+
+### Tests
+
+`shared/taskCard.test.ts` (state mapping, result, clock, strip), `renderer/src/lib/taskCardView.test.ts` (live view,
+activity, needs, done), `orchestrator/taskCard.test.ts` (one card and one task with two agents, the result back in the
+conversation and not the department, the card patched in place, the fallback without a run report),
+`forum/forum.test.ts` (Make task card, the result posted once as the agent with the PR), `principiaOps.test.ts` (the
+wording rule in the chat rules and the reply prompt), `cloud/phone/phone.test.ts` and `ChatReplicaTests.swift` (the
+phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `data-task`), `task-state`,
+`task-activity`, `task-needs`, `task-result`, `task-watch`, `task-open`, `task-approve`, `task-option`, `task-answer`,
+`task-pr`, `working-strip`, `working-strip-line`, `working-strip-watch`.
+

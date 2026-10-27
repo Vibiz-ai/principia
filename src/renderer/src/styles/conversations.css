@@ -103,3 +103,40 @@
 
 .cx-newtopic { flex: none; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; background: none; color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer; }
 .cx-newtopic:hover, .cx-newtopic[aria-pressed='true'] { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+/* ---------- CHAT-UI.md §8: the live task card and the "Working on it" strip ---------- */
+/* white line art on the dark surface; colour only on the small state mark (status tokens, never warm) */
+.cx-task { display: flex; flex-direction: column; gap: 6px; max-width: 640px; margin: 8px 0 8px 36px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 8px); background: var(--surface-1); }
+.cx-task.is-working { border-color: var(--edge); }
+.cx-task.is-needs_you { border-color: var(--status-needs); box-shadow: 0 0 0 3px var(--status-needs-soft); }
+.cx-task__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cx-task__face { flex: none; display: inline-flex; }
+.cx-task__id { flex: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-xs); color: var(--text-secondary); padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 4px; }
+.cx-task__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); font-weight: 600; color: var(--text-primary); }
+.cx-task__state { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.cx-task__mark, .cx-strip__mark { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--text-tertiary); }
+.is-queued > .cx-task__mark, .cx-strip__mark.is-queued { border-color: var(--status-idle); }
+.is-working > .cx-task__mark, .cx-strip__mark.is-working { border-color: var(--status-running); background: var(--status-running); }
+.is-needs_you > .cx-task__mark, .cx-strip__mark.is-needs_you { border-color: var(--status-needs); background: var(--status-needs); }
+.is-in_review > .cx-task__mark { border-color: var(--status-scheduled); background: var(--status-scheduled-soft); }
+.is-done > .cx-task__mark { border-color: var(--status-success); background: var(--status-success); }
+.is-failed > .cx-task__mark { border-color: var(--status-failed); background: var(--status-failed); }
+.cx-task__line { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding-left: 30px; font-size: var(--text-sm); color: var(--text-secondary); }
+.cx-task__who { flex: none; color: var(--text-primary); }
+.cx-task__sep { flex: none; color: var(--text-tertiary); }
+.cx-task__activity { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-task__result { color: var(--text-primary); white-space: normal; }
+.cx-task__age { flex: none; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.cx-task__answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 30px; }
+.cx-task__input { flex: 1; min-width: 160px; }
+.cx-task__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 24px; }
+
+.cx-strip { position: relative; z-index: 1; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface-1); font-size: var(--text-sm); }
+.cx-strip.is-needs { box-shadow: inset 2px 0 0 var(--status-needs); }
+.cx-strip__row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cx-strip__line { min-width: 0; padding: 0; border: 0; background: none; color: var(--text-primary); font-size: var(--text-sm); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cx-strip__line:disabled { cursor: default; }
+.cx-strip__chev { color: var(--text-tertiary); }
+.cx-strip__list { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: flex; flex-direction: column; gap: 4px; }
+.cx-strip__item { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
+.cx-strip__id { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-xs); color: var(--text-primary); }

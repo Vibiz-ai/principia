@@ -110,7 +110,7 @@ After the run ended (the last run hook):
   follow-up** (a person wrote to the agent in the Forum and the agent put the work in its report, e.g. without Forum
   tools) is that person's request: it goes to the replying agent unless it names someone, to To do, with the message
   quoted, once per message (skipped when the agent already filed it with `forum_reply`'s task field), and the thread
-  gets "Marcus made NC-12 from this message.". The reply rules (`forum/responder.ts`) tell every harness to put asked
+  gets the live task card "Marcus started NC-12: …" (CHAT-UI.md §8), and the task's result comes back there. The reply rules (`forum/responder.ts`) tell every harness to put asked
   work on the Board itself and never to send the person to Make task.
 - **Questions to teammates:** the mailbox (§2).
 - **Answers:** a reply in the ask's thread (via Principia) that answers it.
