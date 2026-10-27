@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
 import type { ForumTaskCard } from '@shared/taskCard'
-import { conversationStripTasks, openAskOfRun, rootOfRun, taskCardView } from './taskCardView'
+import { cardsOfMessages, openAskOfRun, rootOfRun, stripTasks, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -53,7 +53,7 @@ describe('live sources', () => {
     const msgs = [msg(undefined, 'm1'), msg(card(), 'm2'), msg(card({ taskId: 't8', identifier: 'VO-8', agentId: 'agt_junia' }), 'm3'), msg(card({ state: 'working' }), 'm4')]
     const tasks = [{ id: 't9', status: 'in_progress' as const, runId: 'r1', updatedAt: T0, agentId: 'agt_julia' }, { id: 't8', status: 'done' as const, runId: null, updatedAt: T0, agentId: 'agt_junia' }]
     const names: Record<string, string> = { agt_julia: 'Julia', agt_junia: 'Junia' }
-    const items = conversationStripTasks(msgs, tasks, (id) => (id ? names[id]! : null), new Set(['r1']))
+    const items = stripTasks(cardsOfMessages(msgs), tasks, (id) => (id ? names[id]! : null), new Set(['r1']))
     expect(items.map((i) => [i.identifier, i.who, i.state])).toEqual([['VO-9', 'Julia', 'needs_you'], ['VO-8', 'Junia', 'done']])
   })
 })

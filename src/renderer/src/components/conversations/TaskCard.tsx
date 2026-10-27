@@ -8,10 +8,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
-import { workingStrip, type StripTask } from '@shared/taskCard'
+import { workingStrip, type ForumTaskCard, type StripTask } from '@shared/taskCard'
 import { Button } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
-import { conversationStripTasks, openAskOfRun, rootOfRun, taskCardView } from '../../lib/taskCardView'
+import { cardsOfMessages, openAskOfRun, rootOfRun, stripTasks, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
 import { hive } from '../../lib/hive'
@@ -34,13 +34,20 @@ function watch(runId: string | null): void {
   if (runId) void navigate({ name: 'run', runId })
 }
 
+/** A Forum message's card (Chats conversations, Forum channels). */
 export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
-  const card = m.task
+  return m.task ? <TaskCardView card={m.task} companyId={m.companyId} /> : null
+}
+
+/** The live card for one task: a conversation's card message, or a chat's company_file_task / task_create call. */
+export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard; companyId?: Id | null }): React.JSX.Element | null {
+  const card: ForumTaskCard | undefined = stored
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
   const root = useStore((s) => (runId ? rootOfRun(Object.values(s.agents), runId) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
-  const code = useStore((s) => reposOf(s.repos, m.companyId).length > 0)
+  const co = companyId ?? task?.companyId ?? null
+  const code = useStore((s) => (co ? reposOf(s.repos, co).length > 0 : true))
   const seat = useStore((s) => (card ? s.companyAgents.find((a) => a.id === (task?.agentId ?? card.agentId)) : undefined))
   const display = useAgentDisplay()(seat)
   const [answer, setAnswer] = useState('')
@@ -142,7 +149,7 @@ export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
           </Button>
         )}
         {v.onBoard && (
-          <Button size="sm" variant="ghost" data-chatux="task-open" onClick={() => openBoard(m.companyId, { taskId: card.taskId })}>
+          <Button size="sm" variant="ghost" data-chatux="task-open" onClick={() => co && openBoard(co, { taskId: card.taskId })}>
             Open task
           </Button>
         )}
@@ -155,7 +162,7 @@ export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
  * "Working on it": one line under the conversation's header while a task it started is still open ("Julia is
  * working on VO-9 · 2m · Watch", "2 tasks running"). Click the line to list them.
  */
-export function WorkingStrip({ msgs }: { msgs: readonly ForumMessage[] }): React.JSX.Element | null {
+export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; cards?: readonly ForumTaskCard[] }): React.JSX.Element | null {
   const tasks = useStore((s) => s.tasks)
   const asks = useStore((s) => s.asks)
   const seats = useStore((s) => s.companyAgents)
@@ -166,8 +173,8 @@ export function WorkingStrip({ msgs }: { msgs: readonly ForumMessage[] }): React
       const seat = agentId ? seats.find((a) => a.id === agentId) : undefined
       return seat ? (agentDisplay(seat)?.name ?? seat.name) : null
     }
-    return conversationStripTasks(msgs, tasks, who, openAskRuns(asks))
-  }, [msgs, tasks, seats, agentDisplay, asks])
+    return stripTasks(cards ?? cardsOfMessages(msgs ?? []), tasks, who, openAskRuns(asks))
+  }, [msgs, cards, tasks, seats, agentDisplay, asks])
   const anyOpen = items.some((t) => t.state === 'queued' || t.state === 'working' || t.state === 'needs_you')
   const now = useNow(anyOpen)
   const strip = workingStrip(items, now)

@@ -293,6 +293,13 @@ export class ChatHub {
     )
   }
 
+  /** CHAT-UI.md §8: a notice in a live chat; false when it is not running. */
+  note(id: Id, text: string): boolean {
+    const s = this.sessions.get(id)
+    if (!s) return false
+    s.principiaNote(text)
+    return true
+  }
   send(id: Id, text: string, images?: ChatImage[]): Promise<void> {
     return this.need(id).send(text, images ?? [])
   }

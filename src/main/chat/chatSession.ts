@@ -259,6 +259,11 @@ export class ChatSession implements PtyLike {
     this.emit([{ op: 'queue', queue: this.queue.map((q) => ({ ...q })) }])
   }
 
+  /** CHAT-UI.md §8: a line from Principia in this chat (a task it filed came back). Not sent to the model. */
+  principiaNote(text: string): void {
+    this.emit(this.reducer.notice(text, 'info'))
+  }
+
   snapshot(seq: number): Omit<ChatSnapshot, 'sessionId'> {
     return {
       mode: this.mode,

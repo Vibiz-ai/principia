@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { elapsedLabel, isFinishedCard, isOpenCard, taskCardResult, taskCardState, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
+import { chatTaskCard, chatTaskCards, elapsedLabel, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
+import { buildBlocks } from './chatView'
 
 describe('taskCardState (CHAT-UI.md §8)', () => {
   it('maps every board status to one of six card states', () => {
@@ -69,5 +70,39 @@ describe('workingStrip: "Working on it" under the header', () => {
     expect(s.tasks.map((t) => t.identifier)).toEqual(['VO-8', 'VO-9'])
     expect(s.focus.identifier).toBe('VO-8')
     expect(workingStrip([task({}), task({ taskId: 't8', identifier: 'VO-8' })], now)!.line).toBe('2 tasks running')
+  })
+})
+
+describe('chat-filed tasks (company_file_task, task_create)', () => {
+  const summary = { id: 'task_1', identifier: 'PC-9', title: 'Lift UGC conversion', status: 'todo', agent: { id: 'agt_m', name: 'Copywriter' } }
+  const item = (name: string, resultText: string, status = 'ok') => ({ kind: 'tool', id: `i_${name}`, parent: null, toolUseId: 'tu', name, input: {}, inputPartial: '', status, resultText, resultTruncated: false, startedAt: Date.parse('2026-10-27T10:00:00.000Z'), ms: 1 })
+  it('reads the card from the tool result, bare or MCP-wrapped, from either tool', () => {
+    for (const name of ['company_file_task', 'mcp__hive__company_file_task', 'mcp__hive__task_create']) {
+      const c = chatTaskCard(item(name, JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, task: summary }) }])))
+      expect(c).toMatchObject({ taskId: 'task_1', identifier: 'PC-9', title: 'Lift UGC conversion', agentId: 'agt_m', state: 'queued', startedAt: '2026-10-27T10:00:00.000Z' })
+    }
+    expect(chatTaskCard(item('task_create', `Result: ${JSON.stringify({ ok: true, task: { ...summary, status: 'in_progress' } })}`))!.state).toBe('working')
+  })
+  it('no card for another tool, a failed call, a repeat or a replay', () => {
+    const ok = JSON.stringify({ ok: true, task: summary })
+    expect(chatTaskCard(item('task_list', ok))).toBeNull()
+    expect(chatTaskCard(item('task_create', ok, 'error'))).toBeNull()
+    expect(chatTaskCard(item('task_create', JSON.stringify({ ok: true, task: summary, already: true })))).toBeNull()
+    expect(chatTaskCard(item('task_create', JSON.stringify({ ok: true, task: summary, replayed: true })))).toBeNull()
+    expect(chatTaskCard(item('task_create', 'not json'))).toBeNull()
+    expect(chatTaskCards([item('task_create', ok), { kind: 'text' }, item('company_file_task', ok)])).toHaveLength(1)
+  })
+  it('stays a tool block of its own (never folded into a group of reads), so the chat draws the card', () => {
+    const blocks = buildBlocks([item('mcp__hive__company_file_task', JSON.stringify({ ok: true, task: summary })) as never])
+    expect(blocks.map((b) => b.t)).toEqual(['tool'])
+  })
+  it('the result line and the same-request test', () => {
+    expect(taskResultLine({ identifier: 'PC-9', state: 'in_review', result: 'Rewrote the hero' })).toBe('PC-9 is ready for your review: Rewrote the hero')
+    expect(taskResultLine({ identifier: 'PC-9', state: 'done', prUrl: 'https://x/pull/1' })).toBe('PC-9 is done.\nPull request: https://x/pull/1')
+    expect(taskResultLine({ identifier: 'PC-9', state: 'failed' }, true)).toBe('PC-9 was canceled.')
+    expect(sameRequest('Lift UGC conversion', 'lift ugc conversion!')).toBe(true)
+    expect(sameRequest('Lift UGC conversion', 'Lift UGC conversion from PostHog')).toBe(true)
+    expect(sameRequest('Fix', 'Fix the checkout')).toBe(false)
+    expect(sameRequest('Write the newsletter', 'Lift UGC conversion')).toBe(false)
   })
 })

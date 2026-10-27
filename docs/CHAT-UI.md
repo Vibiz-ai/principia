@@ -424,6 +424,26 @@ conversation the founder was waiting in. Now:
   who is on it", and nothing is filed.
 - The task is filed before the reply is posted (so `{task}` resolves), and its card goes under the reply.
 
+### Tasks a chat session files (company_file_task, task_create)
+
+A chat session (an agent's own chat, a company or department chat) files work with the board tools, not with
+`forum_reply`. Those tools are chat tools only: headless reply runs in a conversation do not get them. Their tasks
+follow the same rules:
+
+- **The card is the tool call.** A successful `company_file_task` or `task_create` call in the chat draws as the live
+  task card instead of a tool row (`shared/taskCard.ts chatTaskCard` reads the task from the tool's JSON result;
+  `ChatCards.block` renders `TaskCardView`). It moves with the task like a conversation's card. The transcript keeps the
+  call, so the card comes back when the chat is reopened.
+- **The strip** sits above the chat (`ChatPane`, `WorkingStrip cards={chatTaskCards(items)}`).
+- **The result comes back** as a notice in that chat (`main/chat/taskNotes.ts ChatTaskNotes`, on every board write).
+  The task's `externalId` names the session that filed it (`<session>:<call>`, or `track:<session>:<call>` for the
+  chat's own work). The notice is posted once per task and run, while the chat is open, through
+  `ChatHub.note → principiaNote`, and it is never sent to the model.
+- **One task per request** (`TaskTools.alreadyFiled`): a chat filing what is already open from the last hour gets the
+  first task back, marked `already`, with "Already filed as PC-9 (Copywriter is on it): not filed again". This covers
+  the same chat's second call for the same message, another chat, and an agent in a conversation; matches use
+  `sameRequest` (equal titles, or a long title inside the other). The repeat is not drawn as a second card.
+
 ### The phone
 
 `PhoneRoomMessage.task` (`shared/remote.ts PhoneTaskCard`: identifier, title, state, label, result, PR, times) is
@@ -437,7 +457,7 @@ app's `room` message). No Watch, answer or activity line on the phone yet: the M
 `shared/taskCard.test.ts` (state mapping, result, clock, strip), `renderer/src/lib/taskCardView.test.ts` (live view,
 activity, needs, done), `orchestrator/taskCard.test.ts` (one card and one task with two agents, the result back in the
 conversation and not the department, the card patched in place, the fallback without a run report),
-`forum/forum.test.ts` (Make task card, the result posted once as the agent with the PR), `principiaOps.test.ts` (the
+`forum/forum.test.ts` (Make task card, the result posted once as the agent with the PR), `chat/chatTasks.test.ts` (company_file_task and task_create from a chat: card, strip, one task per request, the result back in that chat), `principiaOps.test.ts` (the
 wording rule in the chat rules and the reply prompt), `cloud/phone/phone.test.ts` and `ChatReplicaTests.swift` (the
 phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `data-task`), `task-state`,
 `task-activity`, `task-needs`, `task-result`, `task-watch`, `task-open`, `task-approve`, `task-option`, `task-answer`,

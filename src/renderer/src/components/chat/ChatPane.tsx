@@ -17,6 +17,8 @@ import { Blocks, ChatWho } from './ChatCards'
 import { Composer } from './Composer'
 import { countMessages, newPillLabel, stampsFor } from '../../lib/agentChatView'
 import '../../styles/chat.css'
+import { chatTaskCards } from '@shared/taskCard'
+import { WorkingStrip } from '../conversations/TaskCard'
 
 const SHOW = 300
 
@@ -41,6 +43,8 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
   const seenCount = useRef<number | null>(null)
   const [showAll, setShowAll] = useState(false)
   const blocks = useMemo(() => buildBlocks(v.items), [v.items])
+  // CHAT-UI.md §8: tasks this chat filed, for the "Working on it" strip
+  const taskCards = useMemo(() => chatTaskCards(v.items), [v.items])
   const shown = showAll || blocks.length <= SHOW ? blocks : blocks.slice(-SHOW)
   const stamps = useMemo(() => stampsFor(shown), [shown])
   const msgCount = useMemo(() => countMessages(v.items), [v.items])
@@ -141,6 +145,7 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
           <span>Drop to attach: images go to {name}, other files are mentioned by their path</span>
         </div>
       )}
+      <WorkingStrip cards={taskCards} />
       <div
         className="chat-scroll"
         ref={scroller}

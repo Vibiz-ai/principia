@@ -157,3 +157,75 @@ export function workingStrip(cards: readonly StripTask[], now: number = Date.now
 export function taskCardLine(byName: string, identifier: string, title: string): string {
   return `${byName} started ${identifier}: ${title}`
 }
+
+/** The line a task's result comes back as (in a conversation, or a chat's notice). */
+export function taskResultLine(c: { identifier: string; state: TaskCardState; result?: string | null; prUrl?: string | null }, canceled = false): string {
+  const res = c.result ? `: ${c.result}` : '.'
+  const head =
+    c.state === 'failed'
+      ? `${c.identifier} ${canceled ? 'was canceled' : 'stopped before it was finished'}${res}`
+      : c.state === 'in_review'
+        ? `${c.identifier} is ready for your review${res}`
+        : `${c.identifier} is done${res}`
+  return `${head}${c.prUrl ? `\nPull request: ${c.prUrl}` : ''}`
+}
+
+/** Lowercase words only: "Lift UGC conversion!" → "lift ugc conversion". */
+export const normTaskTitle = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+/** The same request, said twice: equal titles, or one long enough title inside the other. */
+export function sameRequest(a: string, b: string): boolean {
+  const x = normTaskTitle(a)
+  const y = normTaskTitle(b)
+  if (!x || !y) return false
+  return x === y || (x.length >= 12 && y.includes(x)) || (y.length >= 12 && x.includes(y))
+}
+
+// ---------- tasks filed from a chat session (company_file_task, task_create) ----------
+
+/** The board tools a chat files a task with (`mcp__hive__company_file_task`, bare or prefixed). */
+const CHAT_TASK_TOOL = /(?:^|__|\.)(company_file_task|task_create)$/
+interface ToolLike { name: string; status: string; resultText: string; startedAt: number | null }
+
+/** The task a chat's company_file_task / task_create call filed, as a card; null for any other call or a repeat. */
+export function chatTaskCard(item: ToolLike): ForumTaskCard | null {
+  if (!CHAT_TASK_TOOL.test(item.name) || item.status !== 'ok' || !item.resultText) return null
+  const r = parseToolJson(item.resultText)
+  const t = r?.task as { id?: unknown; identifier?: unknown; title?: unknown; status?: unknown; agent?: { id?: unknown } | null } | undefined
+  if (!r || r.ok !== true || !t || typeof t.id !== 'string' || typeof t.identifier !== 'string') return null
+  // a repeat (already filed, a replayed call) points at the first card instead of drawing a second
+  if (r.already || r.replayed) return null
+  return {
+    taskId: t.id,
+    identifier: t.identifier,
+    title: typeof t.title === 'string' ? t.title : t.identifier,
+    agentId: t.agent && typeof t.agent.id === 'string' ? t.agent.id : null,
+    filedBy: null,
+    state: taskCardState({ status: typeof t.status === 'string' ? t.status : 'todo' }),
+    runId: null,
+    startedAt: new Date(item.startedAt ?? Date.now()).toISOString()
+  }
+}
+/** Every task a chat filed, once each, in order. */
+export function chatTaskCards(items: readonly { kind: string }[]): ForumTaskCard[] {
+  const out: ForumTaskCard[] = []
+  for (const it of items) {
+    if (it.kind !== 'tool') continue
+    const c = chatTaskCard(it as unknown as ToolLike)
+    if (c && !out.some((x) => x.taskId === c.taskId)) out.push(c)
+  }
+  return out
+}
+function parseToolJson(text: string): Record<string, unknown> | null {
+  const tries = [text, text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)]
+  for (const s of tries) {
+    try {
+      const v = JSON.parse(s) as unknown
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+      // MCP content array: [{ type: 'text', text: '{…}' }]
+      if (Array.isArray(v)) for (const c of v) if (c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string') return parseToolJson((c as { text: string }).text)
+    } catch {
+      /* next */
+    }
+  }
+  return null
+}

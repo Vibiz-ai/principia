@@ -20,7 +20,7 @@ import { formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
-import { isFinishedCard, taskCardLine, taskCardResult, taskCardState, type ForumTaskCard } from '../../shared/taskCard'
+import { isFinishedCard, taskCardLine, taskCardResult, taskCardState, taskResultLine, type ForumTaskCard } from '../../shared/taskCard'
 import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
 const fail = (m: string): never => {
@@ -696,14 +696,7 @@ export class ForumService implements ForumBridge {
 
   /** The result, posted into the conversation as the agent on it (Principia on its behalf), else as a system line. */
   private postResult(m: ForumMessage, card: ForumTaskCard, t: ForumTaskView): void {
-    const res = card.result ? `: ${card.result}` : '.'
-    const head =
-      card.state === 'failed'
-        ? `${card.identifier} ${t.status === 'canceled' ? 'was canceled' : 'stopped before it was finished'}${res}`
-        : card.state === 'in_review'
-          ? `${card.identifier} is ready for your review${res}`
-          : `${card.identifier} is done${res}`
-    const text = `${head}${card.prUrl ? `\nPull request: ${card.prUrl}` : ''}`
+    const text = taskResultLine(card, t.status === 'canceled')
     const opKey = ForumService.resultKey(card.taskId, t.runId!)
     const posted = card.agentId ? this.postAsAgent({ companyId: m.companyId, agentId: card.agentId, runId: t.runId!, text, channelId: m.channelId, opKey }) : null
     if (!posted) this.store.systemPost(m.channelId, text, undefined, { opKey })

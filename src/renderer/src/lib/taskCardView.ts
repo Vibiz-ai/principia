@@ -64,16 +64,20 @@ export function taskCardView(card: ForumTaskCard, task: LiveTask | null | undefi
   return { state, label: TASK_CARD_LABEL[state], activity, elapsed: elapsedLabel(card.startedAt, end, now), result, prUrl, runId, needs, onBoard: !!task }
 }
 
-/** The open tasks a conversation started, for the "Working on it" strip (one per task, its newest card). */
-export function conversationStripTasks(msgs: readonly ForumMessage[], tasks: readonly LiveTaskWithId[], who: (agentId: string | null) => string | null, openRuns: ReadonlySet<string> = new Set()): StripTask[] {
+/** The task cards of a conversation's messages, newest card per task, in order. */
+export function cardsOfMessages(msgs: readonly ForumMessage[]): ForumTaskCard[] {
   const byTask = new Map<string, ForumTaskCard>()
   for (const m of msgs) if (m.task) byTask.set(m.task.taskId, m.task)
-  const out: StripTask[] = []
-  for (const card of byTask.values()) {
+  return [...byTask.values()]
+}
+
+/** The "Working on it" strip's tasks from cards (a conversation's, or a chat's), with the live state. */
+export function stripTasks(cards: readonly ForumTaskCard[], tasks: readonly LiveTaskWithId[], who: (agentId: string | null) => string | null, openRuns: ReadonlySet<string> = new Set()): StripTask[] {
+  return cards.map((card) => {
     const t = tasks.find((x) => x.id === card.taskId)
     const state = t ? taskCardState({ status: t.status, blockReason: t.blockReason ?? null, ask: t.ask ?? null, runId: t.runId }, { openAsk: !!t.runId && openRuns.has(t.runId) }) : card.state
-    out.push({ taskId: card.taskId, identifier: card.identifier, who: who(t?.agentId ?? card.agentId), state, startedAt: card.startedAt })
-  }
-  return out
+    return { taskId: card.taskId, identifier: card.identifier, who: who(t?.agentId ?? card.agentId), state, startedAt: card.startedAt }
+  })
 }
+
 type LiveTaskWithId = LiveTask & Pick<CompanyTask, 'id'> & Partial<Pick<CompanyTask, 'agentId'>>

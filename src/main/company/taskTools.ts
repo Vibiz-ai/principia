@@ -26,6 +26,7 @@ import { MAX_HANDOFFS, TASK_ASK_KINDS, TRACK_PREFIX, trackedBy, type BlockReason
 import type { LiveOwner, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import type { Run } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
+import { sameRequest } from '../../shared/taskCard'
 import { assertTransition, type CompanyStore } from './index'
 import { queueCountsFrom, route } from './router'
 import { ReportHarvester, type HarvestStep } from './reportHarvest'
@@ -489,6 +490,8 @@ export class TaskTools {
     const externalId = `${TRACK_PREFIX}${caller.holderId}:${callId ? clip(callId, 120) : randomBytes(8).toString('hex')}`
     const replay = callId ? db.prepare('SELECT id FROM company_tasks WHERE company_id=? AND source_key=?').get(caller.companyId, `agent:external:${externalId}`) as { id: string } | undefined : undefined
     if (replay) return { ok: true, task: this.summary(this.c.task(replay.id)), replayed: true }
+    const dup = this.alreadyFiled(caller, a.title)
+    if (dup) return dup
     const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
     const n = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.externalId') LIKE ? AND json_extract(data,'$.createdAt')>=?").get(caller.companyId, `${TRACK_PREFIX}${caller.holderId}:%`, since) as { n: number }).n
     if (n >= TASK_CREATE_CAPS.trackedPerSessionPerHour) fail(`This chat opened ${n} tasks in the last hour (limit ${TASK_CREATE_CAPS.trackedPerSessionPerHour}). Group the rest under one task.`)
@@ -587,6 +590,8 @@ export class TaskTools {
     const externalId = `${caller.holderId}:${callId ? clip(callId, 120) : randomBytes(8).toString('hex')}`
     const replay = callId ? db.prepare('SELECT id FROM company_tasks WHERE company_id=? AND source_key=?').get(caller.companyId, `agent:external:${externalId}`) as { id: string } | undefined : undefined
     if (replay) return { ok: true, task: this.summary(this.c.task(replay.id)), replayed: true }
+    const dup = this.alreadyFiled(caller, a.title)
+    if (dup) return dup
     const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
     const hour = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND json_extract(data,'$.source')='agent' AND json_extract(data,'$.createdAt')>=? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(caller.companyId, since) as { n: number }).n
     if (hour >= TASK_CREATE_CAPS.perCompanyPerHour) fail(`Agents filed ${hour} tasks in this company in the last hour (limit ${TASK_CREATE_CAPS.perCompanyPerHour}). Ask the user to add it on the Board.`)
@@ -616,6 +621,20 @@ export class TaskTools {
     const t = this.c.task(created.id)
     this.changed(caller.companyId)
     return { ok: true, task: this.summary(t), detail: `Filed ${t.identifier} in ${dep!.name}${t.agentId ? ` for ${this.agentRow(t.agentId)?.name ?? 'its agent'}` : ' (waiting for you to assign an agent)'}. Tell the user.` }
+  }
+
+  /**
+   * CHAT-UI.md §8: one task per request. A chat that files what is already open on the board from the last hour (its
+   * own earlier call for the same message, another chat, or an agent in a conversation) gets that task back, marked
+   * `already`, and nothing is filed.
+   */
+  private alreadyFiled(caller: TaskCaller, title: string): Record<string, unknown> | null {
+    if (caller.kind !== 'session') return null
+    const since = new Date(this.now().getTime() - HOUR_MS).toISOString()
+    const t = this.c.listTasks(caller.companyId).find((x) => x.status !== 'done' && x.status !== 'canceled' && x.createdAt >= since && sameRequest(x.title, this.redact(title)))
+    if (!t) return null
+    const who = t.agentId ? (this.agentRow(t.agentId)?.name ?? null) : null
+    return { ok: true, task: this.summary(t), already: true, detail: `Already filed as ${t.identifier}${who ? ` (${who} is on it)` : ''}: not filed again. Say who is on it; do not file another or start the same work.` }
   }
 
   /** blocksCurrent: the in-flight task gains a dependency (no CompanyStore method writes a task in flight). */
