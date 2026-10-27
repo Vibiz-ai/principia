@@ -12,6 +12,8 @@ describe('principia:// deep links', () => {
     expect(parseDeepLink('principia://connect/Custom')).toEqual({ kind: 'connect', tool: 'mcp' })
     expect(parseDeepLink('principia://connect/GH')).toEqual({ kind: 'connect', tool: 'github' })
     expect(parseDeepLink('principia://settings/keys')).toEqual({ kind: 'settings', section: 'keys' })
+    // Settings › App › Phone (pair a phone by QR code): what principia_help links to
+    expect(parseDeepLink('principia://settings/phone')).toEqual({ kind: 'settings', section: 'phone' })
     expect(parseDeepLink('principia://settings/connections/linear')).toEqual({ kind: 'connect', tool: 'linear' })
     expect(parseDeepLink('principia://settings')).toEqual({ kind: 'settings', section: 'company' })
     expect(parseDeepLink('principia://board')).toEqual({ kind: 'board' })

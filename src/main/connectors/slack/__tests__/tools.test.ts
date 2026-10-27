@@ -237,7 +237,7 @@ describe('hive MCP server toolsets (SLACK.md §11.1)', () => {
     const step = buildAuthorHandlers({ HIVE_LIVE_DIR: dir, HIVE_TOOLSETS: 'slack' })
     expect(step.listTools().map((t) => t.name)).toEqual(['slack_list_channels', 'slack_read_thread', 'slack_search', 'slack_draft_reply', 'slack_post'])
     const both = buildAuthorHandlers({ HIVE_LIVE_DIR: dir, HIVE_TOOLSETS: 'author,slack' })
-    expect(both.listTools().length).toBe(16) // 11 author + 5 slack
+    expect(both.listTools().length).toBe(17) // 11 author + 5 slack + principia_help
   })
 })
 
