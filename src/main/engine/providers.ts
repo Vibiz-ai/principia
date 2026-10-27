@@ -6,10 +6,22 @@ import { memoryTransport } from './memory'
 import { capture } from './process'
 import { which } from './util'
 
-/** Resolves an adapter's binary on the (login) PATH. Shell = $SHELL or /bin/zsh. */
+/**
+ * Resolves an adapter's binary on the (login) PATH. Shell = $SHELL or /bin/zsh. HIVE_CLAUDE_BIN points a dev or test
+ * instance (never a packaged app) at a stand-in claude, like HIVE_GH_BIN: scripts/fake-claude.cjs answers agent turns
+ * without a model, so chat and routing flows can be clicked through on seeded data.
+ */
 export function resolveBin(adapter: Adapter, env: Record<string, string>): string | null {
+  const stand = adapter.id === 'claude' ? devClaudeBin() : null
+  if (stand) return stand
   if (adapter.id === 'shell') return which(env.SHELL || '/bin/zsh', env.PATH) ?? which('/bin/zsh', env.PATH)
   return which(adapter.bin, env.PATH)
+}
+
+/** HIVE_CLAUDE_BIN, honoured only under `electron-vite dev` (ELECTRON_RENDERER_URL is set there, never when packaged). */
+function devClaudeBin(): string | null {
+  const v = process.env.HIVE_CLAUDE_BIN?.trim()
+  return v && process.env.ELECTRON_RENDERER_URL ? v : null
 }
 
 const firstVersion = (s: string): string | null => {

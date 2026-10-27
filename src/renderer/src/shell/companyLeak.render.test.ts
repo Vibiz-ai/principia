@@ -89,7 +89,8 @@ beforeAll(async () => {
     ['Palette (⌘K)', async () => (store.setState({ palette: { open: true, mode: 'all', nonce: 1 } }), el((await import('./CommandPalette')).CommandPalette, {}))],
     ['Chats › Live', async () => el((await import('../views/ChatsView')).ChatsView, { filter: 'live' })],
     ['Chats › All', async () => el((await import('../views/ChatsView')).ChatsView, { filter: 'all' })],
-    ['Chats › Agents', async () => el((await import('../views/ChatsView')).ChatsView, { filter: 'agents' })],
+    // Chats with nothing picked is New conversation (CHAT-UI.md §7): the agent's row is opened by its key
+    ['Chats › Agents', async () => el((await import('../views/ChatsView')).ChatsView, { filter: 'agents', chat: `agent:agt_${CO.find((c) => c.id === store.getState().activeCompanyId)!.marker}` })],
     ['Chats › Direct', async () => el((await import('../views/ChatsView')).ChatsView, { filter: 'direct' })],
     ['Home', async () => el((await import('../views/HomeView')).HomeView, {})],
     // the agent desk of this company's own agent (status sentence, queue, conversation shell, composer)

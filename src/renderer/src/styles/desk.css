@@ -45,12 +45,6 @@
 .setup-chip__next { font-size: var(--text-sm); color: var(--text-secondary); margin-top: 2px; }
 
 /* ---------- the Ask box ---------- */
-.ask-box { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; padding: 8px 8px 8px 14px; background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); color: var(--text-tertiary); }
-.ask-box:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
-.ask-box__input { flex: 1; min-width: 0; height: 30px; border: 0; outline: 0; background: none; color: var(--text-primary); font: inherit; font-size: var(--text-md); }
-.ask-box__input::placeholder { color: var(--text-tertiary); }
-.ask-box__route { display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 42%; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--accent-soft); color: var(--text-primary); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ask-box__route--plain { background: none; color: var(--text-secondary); }
 
 /* ---------- status sentence ---------- */
 .desk-status { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; color: var(--text-primary); }
@@ -138,6 +132,7 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .desk-composer { display: flex; align-items: center; gap: 10px; margin: 10px 24px 16px; padding: 8px 12px; background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); color: var(--text-tertiary); }
 .desk-composer:focus-within { border-color: var(--border-focus); }
 .desk-composer__input { flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: none; color: var(--text-primary); font: inherit; font-size: var(--text-md); line-height: 1.4; padding: 4px 0; max-height: 120px; }
+.desk-composer__input:focus, .desk-composer__input:focus-visible { box-shadow: none; outline: none; border-radius: 0; }
 .desk-composer__hint { flex: none; font-size: var(--text-xs); padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 
 .draft-card { margin-top: 12px; padding: 12px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-md); white-space: normal; }
@@ -202,9 +197,7 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .link-btn.home5__keys { color: var(--text-tertiary); }
 
 /* step 3 QA fixes: one focus ring (the box's), not a second one on the field inside it */
-.ask-box__input:focus, .ask-box__input:focus-visible, .desk-composer__input:focus, .desk-composer__input:focus-visible { box-shadow: none; outline: none; border-radius: 0; }
 .desk-composer:focus-within { box-shadow: 0 0 0 3px var(--accent-soft); }
-.ask-box__unknown { color: var(--text-tertiary); margin-right: 4px; }
 /* what the agent produced, inside the draft card: you approve what you can read */
 .draft-card__work { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-1); max-height: 360px; overflow: auto; }
 .draft-card__work.is-clipped { max-height: none; }
@@ -353,6 +346,7 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .side-chats__back { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); }
 .side-chats__back:hover { background: var(--sidebar-hover, var(--row-hover)); color: var(--text-primary); }
 .side-chats__back:focus-visible { outline: none; box-shadow: var(--focus); }
+.side-chats__doors { display: inline-flex; gap: 2px; }
 .side-chats__title { font-weight: var(--weight-semibold); font-size: var(--text-sm); color: var(--text-primary); margin-left: 2px; }
 .side-chats__search { display: flex; align-items: center; gap: 8px; height: 30px; margin: 0 8px 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.02); color: var(--text-tertiary); }
 .side-chats__search:focus-within { border-color: var(--border-focus); }

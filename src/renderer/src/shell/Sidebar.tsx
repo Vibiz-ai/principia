@@ -1,8 +1,11 @@
 /**
  * Five doors (design.md §2-3, pm-review step 1). One fixed order, the same in every mode:
- * CompanyHeader → Search or ask (⌘K) → Home · Team · Board · Chats · Knowledge (⌘1-⌘5) → More (popover with pins)
- * → LIVE (working agents, two lines, up to 4, each opens that exact chat) → REPOSITORIES + (code companies and
- * Personal) → PINNED (the user's own, per company in settings.sidebarNav) → Settings.
+ * CompanyHeader → New conversation (⌥⌘N, CHAT-UI.md §7) → Search or ask (⌘K) → Home · Team · Board · Chats ·
+ * Knowledge (⌘1-⌘5) → More (popover with pins) → RECENT (your last five conversations, who is in each) → LIVE
+ * (working agents, two lines, up to 4, each opens that exact chat; an agent answering in a conversation opens the
+ * conversation) → REPOSITORIES + (only where there is no team: Personal, a code workspace; with a team a repository is
+ * "Claude in <repository>" in New conversation's To:) → PINNED (the user's own, per company in settings.sidebarNav)
+ * → Settings.
  * The CHAT, DEPARTMENTS, FORUM channel, NEEDS YOU and OTHER COMPANIES sections and the All-mode company trees are
  * gone: their contents live behind the doors (Chats, Team, Forum in More, Home, the rail).
  */
@@ -60,6 +63,7 @@ import {
   departmentContextMenu,
   openDepartment,
   updateSidebarPrefs,
+  openNewChat,
   companyName
 } from '../state/store'
 import { DepartmentIcon, agentNameNow } from './DepartmentGroup'
@@ -70,6 +74,9 @@ import { useCloudBadge } from '../state/cloud'
 import { plansEnabled } from '@shared/plans'
 import { nativeMenu } from '../lib/hive'
 import { ChatsSidebar } from '../components/chats/ChatsSidebar'
+import { openConversation, RecentConversations } from '../components/conversations/ConversationKit'
+import { useConversations } from '../state/conversations'
+import { conversationOfRunTitle } from '../lib/conversations'
 
 /** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
 export const REPO_DRAG_TYPE = 'application/x-principia-repository'
@@ -225,7 +232,13 @@ export function Sidebar(): React.JSX.Element {
   const current = navKeyOf(view)
   // code companies (any repository) get REPOSITORIES; a shop, and a new user with no folders yet, never see it
   // (design §2.1: 7 rows). ⌘O, ⌘K "repo", New ▾ and dropping a folder on the sidebar still add the first one.
-  const showRepos = mode !== 'all' && repos.length > 0
+  // CHAT-UI.md §7: with a team, REPOSITORIES folds into conversations: "Claude in <repository>" is a destination of New
+  // conversation's To:, and repository sessions are rows in Chats › Claude (⌘O still adds a repository). Without a team
+  // (Personal, a code workspace) it stays: there it is the only way in.
+  const company = active !== 'all' ? active : null
+  const convs = useConversations(company && departments ? company : null)
+  const hasTeam = !!company && departments && liveSeats.some((a) => a.companyId === company && !a.archivedAt)
+  const showRepos = mode !== 'all' && repos.length > 0 && !hasTeam
 
   // ---------- pins and More (settings.sidebarNav, per company) ----------
   const prefs = prefsFor(navPrefs, active, multi)
@@ -322,17 +335,20 @@ export function Sidebar(): React.JSX.Element {
    * board task's run reads as its agent ("Pliny", then what it is doing) and opens that agent's thread in Chats; a
    * company with no code never sees a task code (C7).
    */
-  const liveWho = (it: LiveItem): { name: string; detail: string | null; agentId: Id | null } => {
+  const liveWho = (it: LiveItem): { name: string; detail: string | null; agentId: Id | null; convId?: Id | null } => {
     const t = allTasks.find((x) => x.status === 'in_progress' && !!x.runId && (x.runId === it.runId || x.runId === it.sessionId))
     const a = t?.agentId ? liveSeats.find((x) => x.id === t.agentId && x.companyId === t.companyId) : undefined
     const code = allRepos.some((r) => r.companyId === it.companyId)
     if (a && t) return { name: agentNameNow(a).name, detail: it.detail ?? t.title, agentId: a.id }
+    // an agent answering in a conversation: "Marcus" over "Answering in “Launch plan”", and the row opens the conversation
+    const reply = conversationOfRunTitle(it.title, convs)
+    if (reply) return { name: reply.who ?? 'Someone', detail: `Answering in “${reply.conv?.title ?? it.title.replace(/^.*?replying in “|”$/gi, '')}”`, agentId: null, convId: reply.conv?.id ?? null }
     return { name: code ? it.title : it.title.replace(/^[A-Z][A-Z0-9]{0,5}-\d+ · /, ''), detail: it.detail, agentId: null }
   }
   const liveRow = (it: LiveItem): React.JSX.Element => {
     const w = liveWho(it)
     return (
-    <button key={it.key} type="button" className="live-row is-shimmering" title={`${w.name}${w.detail ? `\n${w.detail}` : ''}`} onClick={() => void (w.agentId ? navigate({ name: 'chats', filter: 'live', chat: `agent:${w.agentId}` }) : openLiveItem(it))}>
+    <button key={it.key} type="button" className="live-row is-shimmering" title={`${w.name}${w.detail ? `\n${w.detail}` : ''}`} onClick={() => void (w.convId ? openConversation(w.convId) : w.agentId ? navigate({ name: 'chats', filter: 'live', chat: `agent:${w.agentId}` }) : openLiveItem(it))}>
       <span className="live-row__dot" aria-hidden />
       <span className="live-row__text">
         <span className="live-row__l1">
@@ -547,6 +563,13 @@ export function Sidebar(): React.JSX.Element {
         />
       ) : (
       <div className={`side-menu ${chatsBack ? 'is-back' : ''}`}>
+      {company && (
+        <button type="button" className="cx-side-new" data-chatux="new-conversation" onClick={() => openNewChat(company)} title="New conversation (⌥⌘N): Principia brings in the right people, or pick someone">
+          <Icon name="edit" size={14} />
+          <span>New conversation</span>
+          <Kbd>⌥⌘N</Kbd>
+        </button>
+      )}
       <button type="button" className="side-search" onClick={() => openPalette('all')} title="Search pages, agents, chats and commands (⌘K)">
         <Icon name="search" size={14} />
         <span className="side-search__text">Search or ask…</span>
@@ -587,6 +610,17 @@ export function Sidebar(): React.JSX.Element {
           void nativeMenu([{ id: 'customize', label: 'Customize Sidebar…' }]).then((id) => id === 'customize' && openCustomizeSidebar())
         }}
       >
+        {company && convs.length > 0 && (
+          <section className="side-sec" aria-label="Recent">
+            <div className="sidebar__section">
+              <span>Recent</span>
+            </div>
+            <RecentConversations companyId={company} compact limit={5} selected={view.name === 'chats' && view.chat?.startsWith('conv:') ? view.chat.slice(5) : null} onOpen={openConversation} />
+            <button type="button" className="cx-side-all" onClick={() => void navigate({ name: 'chats', filter: 'all' })}>
+              All chats →
+            </button>
+          </section>
+        )}
         {working.length > 0 && (
           <section className="side-sec" aria-label="Live">
             <div className="sidebar__section">

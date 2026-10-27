@@ -224,7 +224,8 @@ export class ForumService implements ForumBridge {
         transport: mcp ? 'mcp' : 'inject',
         ...(mcp ? {} : { digest: this.api.preview(caller, FORUM_LIMITS.injectBriefMax - 500) })
       })
-      this.setPresence(req.companyId, member.id, 'working', null)
+      // CHAT-UI.md §7: a reply run works IN its conversation, so only that conversation shows "answering…"
+      this.setPresence(req.companyId, member.id, 'working', this.replyRuns.get(req.runId)?.channelId ?? null)
       return { env, binDir, server, toolNames: mcp ? [...FORUM_TOOLS] : [], prompt }
     } catch (e) {
       this.d.log?.warn('forum: open failed; step runs without the Forum', { stepId: req.stepId, error: String(e) })
@@ -241,6 +242,9 @@ export class ForumService implements ForumBridge {
   /** responder.ts: this run answers `reply`; its final answer is posted there when it does not reply itself. */
   noteReplyRun(runId: string, reply: ForumReplyRun): void {
     this.replyRuns.set(runId, reply)
+    // the run may have opened its Forum before this note: its presence moves into the channel it answers
+    const p = this.presence.get(reply.memberId)
+    if (p && p.state !== 'idle' && !p.channelId) this.setPresence(p.companyId, reply.memberId, p.state, reply.channelId)
   }
   replyRunOf(runId: string): ForumReplyRun | null {
     return this.replyRuns.get(runId) ?? null
@@ -326,7 +330,7 @@ export class ForumService implements ForumBridge {
     // reading/composing fade back to working after 90 s
     if (state === 'reading' || state === 'composing') {
       const timer = setTimeout(() => {
-        if (this.presence.get(memberId)?.at === p.at) this.setPresence(companyId, memberId, 'working', null)
+        if (this.presence.get(memberId)?.at === p.at) this.setPresence(companyId, memberId, 'working', p.channelId)
       }, 90_000)
       timer.unref?.()
       this.presenceTimers.set(memberId, timer)
