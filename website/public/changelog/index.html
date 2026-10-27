@@ -4,45 +4,278 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog · Principia</title>
-<meta name="description" content="What changed in Principia, newest first.">
+<meta name="description" content="New features, improvements and fixes in Principia, newest first.">
+<meta property="og:title" content="Changelog · Principia">
+<meta property="og:description" content="New features, improvements and fixes in Principia, newest first.">
+<meta property="og:image" content="https://useprincipia.com/og.jpg">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="alternate" type="application/atom+xml" title="Principia releases" href="https://github.com/Vibiz-ai/principia/releases.atom">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
 <style>
   @font-face { font-family: Cinzel; src: url('/fonts/Cinzel-Variable.woff2') format('woff2'); font-weight: 400 900; font-display: swap; }
-  :root { --page: #0b0d0e; --panel: #12161a; --ink: #edf1f2; --soft: #cdd4d6; --muted: #98a2a6; --line: rgba(255,255,255,.08); }
+  :root { --page: #0f1213; --panel: #161a1c; --raised: #1d2225; --ink: #edf1f2; --soft: #cdd4d6; --muted: #98a2a6; --line: rgba(255,255,255,.08); color-scheme: dark; }
   * { box-sizing: border-box; }
-  html { background: var(--page); color-scheme: dark; }
-  body { margin: 0; background: var(--page); color: var(--soft); font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 64px 16px 96px; }
-  a { color: var(--ink); text-underline-offset: 3px; }
-  .back { font-size: 14px; color: var(--muted); text-decoration: none; }
-  h1, h2 { font-family: Cinzel, Georgia, serif; color: var(--ink); font-weight: 600; letter-spacing: .02em; }
-  h1 { font-size: clamp(32px, 6vw, 46px); margin: 28px 0 8px; }
-  h2 { font-size: 20px; margin: 44px 0 10px; padding-top: 22px; border-top: 1px solid var(--line); }
-  .lede { font-size: 18px; color: var(--ink); }
-  .meta { font-size: 13px; color: var(--muted); }
-  ul { padding-left: 20px; }
-  li { margin: 6px 0; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-top: 20px; }
-  .entry { display: grid; grid-template-columns: 1fr; gap: 2px; margin: 18px 0; }
-  .entry strong { color: var(--ink); font-weight: 600; }
-  .entry p { margin: 0; }
+  html { background: var(--page); scroll-padding-top: 24px; }
+  body { margin: 0; background: var(--page); color: var(--soft); font: 15.5px/1.7 Figtree, Inter, -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: rgba(237,241,242,.35); }
+  a:hover { text-decoration-color: var(--ink); }
+  ::selection { background: #c3cbce; color: #0f1213; }
+
+  .top { width: min(1080px, calc(100% - 32px)); margin: 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-family: Cinzel, Georgia, serif; font-weight: 600; letter-spacing: .12em; font-size: 14px; color: var(--ink); text-decoration: none; }
+  .top nav { display: flex; gap: 22px; font-size: 14px; }
+  .top nav a { color: var(--muted); text-decoration: none; }
+  .top nav a:hover { color: var(--ink); }
+
+  header.intro { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding: 72px 0 40px; border-bottom: 1px solid var(--line); }
+  header.intro h1 { font-family: Cinzel, Georgia, serif; font-weight: 500; font-size: clamp(38px, 6vw, 60px); line-height: 1.1; letter-spacing: .01em; color: var(--ink); margin: 0; }
+  header.intro p { margin: 14px 0 0; color: var(--muted); max-width: 560px; }
+
+  .log { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding-bottom: 120px; }
+  article { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 40px; padding: 72px 0; border-bottom: 1px solid var(--line); }
+  article:last-of-type { border-bottom: 0; }
+  .when { position: sticky; top: 28px; align-self: start; font-size: 13.5px; color: var(--muted); }
+  .when time { display: block; color: var(--soft); }
+  .when .ver { display: inline-block; margin-top: 8px; font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; color: var(--muted); }
+  .body { max-width: 700px; }
+  .body h2 { font-family: Newsreader, Georgia, serif; font-weight: 500; font-size: clamp(28px, 3.4vw, 38px); line-height: 1.15; letter-spacing: -.02em; color: var(--ink); margin: 0 0 22px; }
+  .body h2 a { text-decoration: none; }
+  .hero { background: var(--panel); border-radius: 18px; margin: 0 0 30px; overflow: hidden; }
+  .hero svg { display: block; width: 100%; height: auto; }
+  .body p { margin: 0 0 16px; }
+  .body h3 { font-size: 17px; font-weight: 600; color: var(--ink); margin: 36px 0 8px; letter-spacing: -.005em; }
+  .body strong { color: var(--ink); font-weight: 600; }
+  kbd { font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--line); background: var(--raised); border-radius: 5px; padding: 3px 6px; color: var(--ink); }
+  code { overflow-wrap: anywhere; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); background: var(--raised); border-radius: 5px; padding: 2px 5px; }
+
+  .group { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .group + .group { margin-top: 28px; }
+  .group h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .group ul { list-style: none; margin: 0; padding: 0; }
+  .group li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; padding: 7px 0; font-size: 14.5px; line-height: 1.6; }
+  .group li span:first-child { color: var(--ink); font-weight: 500; }
+
+  footer { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 12px 24px; justify-content: space-between; font-size: 13.5px; color: var(--muted); }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    header.intro { padding: 48px 0 28px; }
+    article { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 48px 0; }
+    .when { position: static; display: flex; align-items: center; gap: 10px; }
+    .when .ver { margin-top: 0; }
+    .group li { grid-template-columns: 1fr; gap: 0; }
+    .top nav a.hide-sm { display: none; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <a class="back" href="/">← Principia</a>
-  <h1>Changelog</h1>
-  <p class="meta">What changed in Principia, newest first · <a href="https://github.com/Vibiz-ai/principia/releases">All releases on GitHub</a></p>
+<div class="top">
+  <a class="brand" href="/">PRINCIPIA</a>
+  <nav><a class="hide-sm" href="/#product">Product</a><a href="https://github.com/Vibiz-ai/principia">GitHub</a><a href="/">Download</a></nav>
+</div>
 
-  <h2>October 2026</h2>
-  <div class="entry"><strong>Mac preview download</strong><p>Download Principia for Apple Silicon Macs from useprincipia.com. It is an early, unsigned preview: macOS asks you to confirm the first open, and Principia tells you when a new version is out.</p></div>
-  <div class="entry"><strong>Token activity</strong><p>Usage counts every token across Claude Code, Codex and Principia’s own agents, once each, in a year-long activity grid with your streaks, peak day and longest task.</p></div>
-  <div class="entry"><strong>Sounds only for what matters</strong><p>Three short sounds: Done, Needs you, Problem. Quiet for routine work, and never for the thing you are already looking at.</p></div>
-  <div class="entry"><strong>Connect once, use everywhere</strong><p>One connection per service, by API key, sign-in or MCP. Dashboards, agents, Knowledge and Autopilot all see it, and anywhere it is missing offers Connect right there.</p></div>
-  <div class="entry"><strong>Autopilot routines</strong><p>Agents pick up the next task on their own, as many at once as you allow. Ready-made routines like a morning brief and a weekly review, and a chief of staff that suggests what is next.</p></div>
-  <div class="entry"><strong>Phone pairing</strong><p>Pair your phone with a QR code and use your company from it: chats, approvals, sessions and the board. The iPhone app is coming to TestFlight.</p></div>
-  <div class="entry"><strong>Worktree per task</strong><p>Starting a code task opens its own git worktree and branch, with an agent on it. The task follows the work until the PR merges.</p></div>
-  <div class="entry"><strong>The company browser</strong><p>Every company has its own browser beside the chat. Agents drive it while you watch, and Take over hands you the wheel.</p></div>
-  <div class="entry"><strong>Diagrams</strong><p>Agents answer with real, interactive diagrams wherever you read them.</p></div>
+<header class="intro">
+  <h1>Changelog</h1>
+  <p>New features, improvements and fixes in Principia, newest first. Every release is also on <a href="https://github.com/Vibiz-ai/principia/releases">GitHub</a> (<a href="https://github.com/Vibiz-ai/principia/releases.atom">RSS</a>).</p>
+</header>
+
+<main class="log">
+
+<!-- ───────────── Oct 27 ───────────── -->
+<article id="new-conversation">
+  <div class="when"><time datetime="2026-10-27">October 27, 2026</time></div>
+  <div class="body">
+    <h2><a href="#new-conversation">Start a conversation. Principia brings in the right people.</a></h2>
+    <div class="hero">
+      <svg viewBox="0 0 700 300" fill="none" stroke="#edf1f2" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="120" y="150" width="460" height="96" rx="18" stroke-opacity=".75"/>
+        <rect x="140" y="166" width="132" height="24" rx="12" stroke-opacity=".9"/>
+        <path d="M152 178h72M256 174l6 6 6-6" stroke-opacity=".7"/>
+        <path d="M144 214h236M144 228h150" stroke-opacity=".3"/>
+        <circle cx="548" cy="220" r="14" stroke-opacity=".9"/><path d="M542 220h12M549 215l5 5-5 5" stroke-opacity=".9"/>
+        <path d="M206 150c0-40 40-58 80-62M350 150V96M494 150c0-40-40-58-80-62" stroke-opacity=".28" stroke-dasharray="3 5"/>
+        <circle cx="300" cy="74" r="20" stroke-opacity=".8"/><path d="M290 70a10 10 0 0 1 20 0M292 84c3-4 13-4 16 0" stroke-opacity=".6"/>
+        <circle cx="350" cy="64" r="22" stroke-opacity=".95"/><path d="M339 60a11 11 0 0 1 22 0M341 75c3-4 15-4 18 0" stroke-opacity=".7"/>
+        <circle cx="400" cy="74" r="20" stroke-opacity=".8"/><path d="M390 70a10 10 0 0 1 20 0M392 84c3-4 13-4 16 0" stroke-opacity=".6"/>
+      </svg>
+    </div>
+    <p>Chats start in one place now. Press <strong>New conversation</strong> at the top of the sidebar (<kbd>⌥⌘N</kbd>), write what you need, and send. Principia reads each agent’s role and department, brings in the people the question is for, and tells you who joined and why. Your last five conversations sit right under it in <strong>Recent</strong>.</p>
+
+    <h3>One To: menu</h3>
+    <p>Leave it on <strong>Principia picks</strong>, or choose <strong>Everyone</strong>, one person, Claude directly, or Claude inside one of your repositories. Type <code>@</code> anywhere to add someone; <code>@all</code> brings in up to eight agents. Each person also has one private thread with you, and <strong>New topic</strong> starts a fresh one when the subject changes.</p>
+
+    <h3>Agents know Principia</h3>
+    <p>Ask any agent how to do something in Principia, like using it from your phone, connecting Stripe or turning on Autopilot, and it answers from a built-in guide with a link that opens the right page. No more “check their support team”.</p>
+
+    <h3>Chats, grouped</h3>
+    <p>Chats are sorted into <strong>With the team</strong>, <strong>One-on-one</strong>, <strong>Agent sessions</strong>, <strong>Claude</strong> and <strong>Working</strong>, so a live session is never lost under old threads.</p>
+
+    <div class="group"><h4>Improvements</h4><ul>
+      <li><span>Home</span><span>Needs you shows the three most urgent items; the rest wait one click away.</span></li>
+      <li><span>Links</span><span><code>principia://settings/phone</code> opens phone pairing directly.</span></li>
+      <li><span>Website</span><span>A new product page and this changelog.</span></li>
+    </ul></div>
+    <div class="group"><h4>Fixes</h4><ul>
+      <li><span>Onboarding</span><span>The ✕ on New business closes the sheet again.</span></li>
+      <li><span>README</span><span>The OpenSSF Scorecard badge points at the right repository.</span></li>
+    </ul></div>
+  </div>
+</article>
+
+<!-- ───────────── Oct 26 (evening) ───────────── -->
+<article id="phone-live">
+  <div class="when"><time datetime="2026-10-26">October 26, 2026</time></div>
+  <div class="body">
+    <h2><a href="#phone-live">Your sessions, live on your phone</a></h2>
+    <div class="hero">
+      <svg viewBox="0 0 700 300" fill="none" stroke="#edf1f2" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="110" y="40" width="300" height="200" rx="14" stroke-opacity=".6"/>
+        <path d="M110 66h300" stroke-opacity=".3"/>
+        <circle cx="128" cy="53" r="3.5" stroke-opacity=".4"/><circle cx="142" cy="53" r="3.5" stroke-opacity=".4"/><circle cx="156" cy="53" r="3.5" stroke-opacity=".4"/>
+        <path d="M132 92h8M150 92h120M132 112h8M150 112h170M132 132h8M150 132h90M132 152h8M150 152h140" stroke-opacity=".4"/>
+        <rect x="150" y="170" width="10" height="14" stroke-opacity=".9"/>
+        <path d="M420 140c30 0 40-20 62-20" stroke-opacity=".3" stroke-dasharray="3 5"/>
+        <rect x="490" y="36" width="124" height="232" rx="24" stroke-opacity=".8"/>
+        <rect x="532" y="46" width="40" height="9" rx="4.5" stroke-opacity=".35"/>
+        <rect x="504" y="74" width="72" height="22" rx="9" stroke-opacity=".45"/>
+        <rect x="526" y="104" width="76" height="16" rx="8" stroke-opacity=".7"/>
+        <rect x="504" y="128" width="88" height="36" rx="9" stroke-opacity=".45"/>
+        <path d="M514 140h50M514 152h30" stroke-opacity=".4"/>
+        <rect x="504" y="228" width="96" height="22" rx="11" stroke-opacity=".8"/>
+        <circle cx="588" cy="239" r="6" stroke-opacity=".9"/>
+      </svg>
+    </div>
+    <p>A Claude Code or Codex session you open from the phone now reads as a live chat, not a “runs in a terminal on your Mac” card. Reply while it works, and pick an ended Claude Code session back up with <strong>Continue</strong>. When the agent shows a question or a menu, the phone waits for you to answer it instead of typing over it.</p>
+
+    <h3>Connect once, use everywhere</h3>
+    <p>One connection per service for each company, by API key, sign-in or MCP. Dashboards, agents, Knowledge and Autopilot all see it, and anywhere a service is missing you get <strong>Connect</strong> right there.</p>
+
+    <h3>Sounds only for what matters</h3>
+    <p>Three short sounds: <strong>Done</strong>, <strong>Needs you</strong> and <strong>Problem</strong>. Quiet for routine work, and never for the thing you are already looking at.</p>
+
+    <h3>Token activity</h3>
+    <p>Spend counts every token on this Mac across Claude Code, Codex and Principia’s own agents, once each, in a year-long activity grid with your streaks, peak day and longest task.</p>
+
+    <h3>Mac downloads with in-app updates</h3>
+    <p>Principia checks for a new version in the background and shows one quiet <strong>Update ready</strong> toast. It never restarts on its own, and won’t restart while an agent is working. Settings › About has a beta channel for early builds.</p>
+
+    <div class="group"><h4>Improvements</h4><ul>
+      <li><span>Phone</span><span>Chats open at the newest message, stay live, and recover after the app was in the background, on iPhone and on the web.</span></li>
+      <li><span>iPhone</span><span>The app finds your Mac at its new address, Disconnect is within reach, and the Board is on the phone.</span></li>
+      <li><span>Security</span><span>Releases are built and signed in separate jobs, every CI action is pinned, and pull requests run dependency review.</span></li>
+    </ul></div>
+    <div class="group"><h4>Fixes</h4><ul>
+      <li><span>Phone</span><span>A Claude session that runs <code>/clear</code> keeps showing on the phone.</span></li>
+      <li><span>Phone</span><span>Answering a Codex menu on the Mac updates every paired phone right away.</span></li>
+      <li><span>Updates</span><span>Restart to update quits Principia properly instead of only hiding the window.</span></li>
+    </ul></div>
+  </div>
+</article>
+
+<!-- ───────────── Oct 26 (morning) ───────────── -->
+<article id="any-harness">
+  <div class="when"><time datetime="2026-10-26">October 26, 2026</time></div>
+  <div class="body">
+    <h2><a href="#any-harness">Any harness, a branch per task, and a calmer app</a></h2>
+    <div class="hero">
+      <svg viewBox="0 0 700 300" fill="none" stroke="#edf1f2" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M60 210h580" stroke-opacity=".7"/>
+        <path d="M150 210c30 0 30-90 70-90h220c40 0 40 90 70 90" stroke-opacity=".5"/>
+        <path d="M250 210c26 0 26-50 60-50h80c34 0 34 50 60 50" stroke-opacity=".35"/>
+        <circle cx="150" cy="210" r="6" fill="#161a1c" stroke-opacity=".9"/><circle cx="510" cy="210" r="6" fill="#161a1c" stroke-opacity=".9"/>
+        <circle cx="250" cy="210" r="6" fill="#161a1c" stroke-opacity=".9"/><circle cx="450" cy="210" r="6" fill="#161a1c" stroke-opacity=".9"/>
+        <circle cx="300" cy="120" r="5" fill="#161a1c" stroke-opacity=".6"/><circle cx="380" cy="120" r="5" fill="#161a1c" stroke-opacity=".6"/>
+        <circle cx="340" cy="160" r="5" fill="#161a1c" stroke-opacity=".5"/>
+        <rect x="150" y="54" width="92" height="28" rx="8" stroke-opacity=".45"/><rect x="254" y="54" width="62" height="28" rx="8" stroke-opacity=".45"/>
+        <rect x="328" y="54" width="102" height="28" rx="8" stroke-opacity=".45"/><rect x="442" y="54" width="92" height="28" rx="8" stroke-opacity=".45"/>
+      </svg>
+    </div>
+    <p>Principia runs your team on the coding agent you already pay for: <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Cursor Agent</strong> or <strong>Gemini CLI</strong>. When one hits its limit, hand the work to another with its context.</p>
+
+    <h3>A worktree per task</h3>
+    <p>Starting a code task opens its own git worktree and branch, with an agent on it. Your checkout is never touched, and the task follows the work until the pull request merges.</p>
+
+    <h3>Plans that end in a pull request</h3>
+    <p>Give Principia a goal and its head agent drafts a plan of milestones and tasks. Nothing reaches the Board until you approve it, and each milestone gets one agent and one worktree, ending in a pull request you review.</p>
+
+    <h3>Agents that work together</h3>
+    <p>Agents ask each other questions, hand work over with its context, and suggest what comes next. Diagrams come back as real, interactive drawings, and Linear stays in sync both ways if you use it.</p>
+
+    <h3>Principia for iPhone</h3>
+    <p>A native iPhone app joins the phone web app: follow and continue agent work, approve requests and check the Board. It is on its way to TestFlight.</p>
+
+    <div class="group"><h4>Improvements</h4><ul>
+      <li><span>Navigation</span><span>A sidebar with five doors: Home, Team, Board, Chats and Knowledge (<kbd>⌘1</kbd> to <kbd>⌘5</kbd>). Every company can be paused on its own.</span></li>
+      <li><span>Chats</span><span>Claude chats read as a real chat, with the terminal one click away.</span></li>
+      <li><span>Agents</span><span>Working agents shimmer, so you can see who is on it.</span></li>
+      <li><span>Spend</span><span>Usage and an activity canvas for every agent.</span></li>
+    </ul></div>
+  </div>
+</article>
+
+<!-- ───────────── Oct 23 ───────────── -->
+<article id="companies">
+  <div class="when"><time datetime="2026-10-23">October 23, 2026</time></div>
+  <div class="body">
+    <h2><a href="#companies">Companies, the Forum and Open Passport</a></h2>
+    <div class="hero">
+      <svg viewBox="0 0 700 300" fill="none" stroke="#edf1f2" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M220 236h260M232 236V116M468 236V116M214 116h272M350 52l136 64H214z" stroke-opacity=".7"/>
+        <path d="M272 228V128M314 228V128M386 228V128M428 228V128" stroke-opacity=".45"/>
+        <path d="M226 248h248M210 260h280" stroke-opacity=".35"/>
+        <circle cx="350" cy="94" r="10" stroke-opacity=".6"/>
+        <rect x="70" y="150" width="96" height="70" rx="10" stroke-opacity=".35"/><path d="M84 172h60M84 188h40" stroke-opacity=".3"/>
+        <rect x="534" y="150" width="96" height="70" rx="10" stroke-opacity=".35"/><path d="M548 172h60M548 188h40" stroke-opacity=".3"/>
+      </svg>
+    </div>
+    <p>Every business you run is its own company in Principia, kept apart from the others: its own departments, task board, memory and browser sign-ins. Start one from a short, business-first onboarding that shows the plan before anything launches.</p>
+
+    <h3>The Forum</h3>
+    <p>Your company’s own Slack: channels, DMs and threads where people and agents talk, ask and propose. Your real Slack comes into the same place.</p>
+
+    <h3>Open Passport</h3>
+    <p>The company’s memory: decisions, conventions, house style and what your people like, open to review and edit, stored as plain files on your Mac. Import it, export it, or connect it to ChatGPT, Claude and Cursor.</p>
+
+    <h3>Principia Cloud, self-hosted</h3>
+    <p>Keep your companies running while the Mac sleeps: a cloud runner and web console you host yourself and pair with a link. A hosted version is coming.</p>
+  </div>
+</article>
+
+<!-- ───────────── Oct 19 ───────────── -->
+<article id="open-source">
+  <div class="when"><time datetime="2026-10-19">October 19, 2026</time></div>
+  <div class="body">
+    <h2><a href="#open-source">Principia is open source</a></h2>
+    <div class="hero">
+      <svg viewBox="0 0 700 300" fill="none" stroke="#edf1f2" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M230 250V132a120 120 0 0 1 240 0v118" stroke-opacity=".75"/>
+        <path d="M270 250V136a80 80 0 0 1 160 0v114" stroke-opacity=".4"/>
+        <path d="M190 250h320M206 262h288" stroke-opacity=".5"/>
+        <path d="M330 30h40v22h-40zM350 52v-22" stroke-opacity=".35"/>
+      </svg>
+    </div>
+    <p>The first public build of Principia: a Mac app that runs your company with AI agents, with its source on GitHub.</p>
+
+    <h3>One gateway for every tool</h3>
+    <p>Connect a service once and every agent in the company can use it through Principia’s shared MCP gateway. Guided connections sign you in through the browser, and credentials never appear in a chat.</p>
+
+    <h3>See your agents at work</h3>
+    <p>An agent canvas shows every agent with its harness, role and status, and the subagents it started nested underneath.</p>
+
+    <div class="group"><h4>Improvements</h4><ul>
+      <li><span>Add-ons</span><span>A marketplace for company workflows and skills.</span></li>
+      <li><span>Sidebar</span><span>Reorder folders by dragging.</span></li>
+    </ul></div>
+  </div>
+</article>
+
 </main>
+
+<footer>
+  <span>Principia · open source</span>
+  <span><a href="/">Home</a> · <a href="/privacy/">Privacy</a> · <a href="https://github.com/Vibiz-ai/principia/releases">All releases</a></span>
+</footer>
 </body>
 </html>
