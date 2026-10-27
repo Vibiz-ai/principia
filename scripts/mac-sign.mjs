@@ -10,6 +10,8 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dmgWindowLayout, withBookmarkVolumeUuid } from './ds-store.mjs'
 
 // Mach-O and universal (fat) binaries, either byte order
 const MACHO_MAGIC = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca])
@@ -132,18 +134,102 @@ export function makeZip({ app, zip, exec = defaultExec }) {
   must(exec('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, zip]), `ditto ${path.basename(zip)}`)
 }
 
-/** A compressed, read-only dmg holding the app and an Applications link to drag it to. */
-export function makeDmg({ app, dmg, volname, exec = defaultExec }) {
+/**
+ * The dmg window (docs/RELEASING.md §5.5): Principia on the left, an Applications link on the right, an arrow and
+ * "Drag Principia to Applications" on a dark background, no toolbar, sidebar or status bar, the app icon as the
+ * volume icon. build/dmg/ holds the layout:
+ *   DS_Store         the window's Finder settings, written once by dmgbuild (scripts/dmg-layout/make-template.sh)
+ *   background.tiff  the art at 1x and 2x (scripts/make-icons.swift), found through a bookmark in DS_Store
+ *   layout.json      the numbers both were made from
+ *
+ * Why a committed .DS_Store instead of running dmgbuild here: this runs in the release job next to the Developer ID
+ * certificate, which installs nothing (RELEASING.md §5.2). Running dmgbuild would put Python packages from PyPI in
+ * that job, even pinned by hash; the template needs none. What the template depends on is checked before anything is
+ * built (dmgTemplate): the volume name and file names it was made for. One value differs in every dmg: Finder finds
+ * the background through the bookmark's volume UUID (tried on macOS 15: with the template's UUID the window shows no
+ * background, with the new volume's it does), so makeDmg writes the new volume's UUID into the copy, same length, in
+ * place. Finder automation (AppleScript) is not used: it needs a logged-in Finder and an Automation permission.
+ */
+export const DMG_LAYOUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'build', 'dmg')
+export const DMG_BACKGROUND = '.background.tiff'
+// com.apple.FinderInfo of the volume's root folder with kHasCustomIcon (0x0400) set: use /.VolumeIcon.icns
+const FINDER_INFO_CUSTOM_ICON = `${'00'.repeat(8)}0400${'00'.repeat(22)}`
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * The template in `dir`, checked against this dmg: it must place `appName` and Applications, and its background
+ * alias must name volume `volname` and the file copied as DMG_BACKGROUND. Returns the files to copy into the dmg.
+ */
+export function dmgTemplate({ dir = DMG_LAYOUT_DIR, volname, appName, icon }) {
+  const dsStore = path.join(dir, 'DS_Store')
+  const background = path.join(dir, 'background.tiff')
+  for (const f of [dsStore, background, icon]) if (!f || !fs.existsSync(f)) throw new Error(`dmg layout: ${f ?? 'the volume icon'} is missing (npm run make:icons / make:dmg-layout)`)
+  const layout = dmgWindowLayout(fs.readFileSync(dsStore))
+  const problems = []
+  for (const name of [appName, 'Applications']) if (!layout.icons[name]) problems.push(`no position for ${name}`)
+  if (!layout.background) problems.push('no background picture')
+  else {
+    if (layout.background.volume !== volname) problems.push(`its background is on volume "${layout.background.volume}", the dmg is "${volname}"`)
+    if (layout.background.posixPath !== `/${DMG_BACKGROUND}`) problems.push(`its background is ${layout.background.posixPath}, not /${DMG_BACKGROUND}`)
+  }
+  if (problems.length) throw new Error(`dmg layout ${dsStore}: ${problems.join('; ')} (regenerate it: npm run make:dmg-layout)`)
+  return { dsStore, background, icon, layout }
+}
+
+/**
+ * A compressed, read-only dmg holding the app and an Applications link to drag it to, laid out by the build/dmg
+ * template (layout null: a plain window). Made read-write first, so the volume's root can be marked as having a
+ * custom icon (hdiutil does not copy that flag from the source folder), then converted to compressed UDZO. HFS+, as
+ * the template's background alias was made on.
+ */
+export function makeDmg({ app, dmg, volname, layout = { dir: DMG_LAYOUT_DIR, icon: path.join(DMG_LAYOUT_DIR, '..', 'icon.icns') }, exec = defaultExec, sleep = sleepMs }) {
+  const tpl = layout ? dmgTemplate({ dir: layout.dir, volname, appName: path.basename(app), icon: layout.icon }) : null
   const stage = `${dmg}.root`
-  fs.rmSync(stage, { recursive: true, force: true })
+  const rw = `${dmg}.rw.dmg`
+  const mnt = `${dmg}.mnt`
+  const clean = () => {
+    fs.rmSync(stage, { recursive: true, force: true })
+    fs.rmSync(rw, { force: true })
+    fs.rmSync(mnt, { recursive: true, force: true })
+  }
+  clean()
   fs.mkdirSync(stage, { recursive: true })
   try {
     must(exec('ditto', [app, path.join(stage, path.basename(app))], { quiet: true }), 'ditto (dmg contents)')
     fs.symlinkSync('/Applications', path.join(stage, 'Applications'))
+    if (tpl) {
+      fs.copyFileSync(tpl.dsStore, path.join(stage, '.DS_Store'))
+      fs.copyFileSync(tpl.background, path.join(stage, DMG_BACKGROUND))
+      fs.copyFileSync(tpl.icon, path.join(stage, '.VolumeIcon.icns'))
+    }
     fs.rmSync(dmg, { force: true })
-    must(exec('hdiutil', ['create', '-volname', volname, '-srcfolder', stage, '-ov', '-format', 'UDZO', '-imagekey', 'zlib-level=9', dmg]), `hdiutil create ${path.basename(dmg)}`)
+    must(exec('hdiutil', ['create', '-volname', volname, '-srcfolder', stage, '-fs', 'HFS+', '-format', 'UDRW', '-ov', rw]), `hdiutil create ${path.basename(rw)}`)
+    if (tpl) {
+      fs.mkdirSync(mnt, { recursive: true })
+      must(exec('hdiutil', ['attach', rw, '-nobrowse', '-noautoopen', '-noverify', '-mountpoint', mnt], { quiet: true }), 'hdiutil attach (dmg layout)')
+      try {
+        // the background bookmark names this volume (see above)
+        const info = must(exec('diskutil', ['info', '-plist', mnt], { quiet: true }), 'diskutil info (dmg volume)')
+        const uuid = /<key>VolumeUUID<\/key>\s*<string>([0-9A-Fa-f-]{36})<\/string>/.exec(info.out)?.[1]
+        if (!uuid) throw new Error('diskutil info: the dmg volume has no VolumeUUID')
+        const dsStore = path.join(mnt, '.DS_Store')
+        fs.writeFileSync(dsStore, withBookmarkVolumeUuid(fs.readFileSync(dsStore), uuid))
+        must(exec('xattr', ['-wx', 'com.apple.FinderInfo', FINDER_INFO_CUSTOM_ICON, mnt], { quiet: true }), 'xattr (volume icon)')
+        // hidden even when Finder shows dot files
+        must(exec('chflags', ['hidden', path.join(mnt, DMG_BACKGROUND), path.join(mnt, '.VolumeIcon.icns')], { quiet: true }), 'chflags (dmg layout)')
+      } finally {
+        // a busy volume (Spotlight, fseventsd) usually lets go within a second or two
+        let r = exec('hdiutil', ['detach', mnt], { quiet: true })
+        for (let i = 0; !r.ok && i < 5; i++) {
+          sleep(1000)
+          r = exec('hdiutil', ['detach', mnt, ...(i >= 3 ? ['-force'] : [])], { quiet: true })
+        }
+        must(r, 'hdiutil detach (dmg layout)')
+      }
+    }
+    must(exec('hdiutil', ['convert', rw, '-format', 'UDZO', '-imagekey', 'zlib-level=9', '-ov', '-o', dmg]), `hdiutil convert ${path.basename(dmg)}`)
   } finally {
-    fs.rmSync(stage, { recursive: true, force: true })
+    clean()
   }
 }
 
@@ -152,7 +238,7 @@ export function makeDmg({ app, dmg, volname, exec = defaultExec }) {
  *   sign the app → notarize + staple it → updater zip (of the stapled app) → dmg → sign the dmg → notarize + staple it.
  * notaryArgs null = no notarization (dry run, ad-hoc identity).
  */
-export function packageRelease({ app, zip, dmg, volname, identity, keychain = null, entitlements, entitlementsInherit, notaryArgs = null, exec = defaultExec }) {
+export function packageRelease({ app, zip, dmg, volname, identity, keychain = null, entitlements, entitlementsInherit, notaryArgs = null, dmgLayout, exec = defaultExec }) {
   signApp({ app, identity, keychain, entitlements, entitlementsInherit, exec })
   must(exec('codesign', ['--verify', '--deep', '--strict', app], { quiet: true }), 'codesign --verify (app, before notarizing)')
   if (notaryArgs) {
@@ -167,7 +253,7 @@ export function packageRelease({ app, zip, dmg, volname, identity, keychain = nu
     staple({ target: app, exec })
   }
   makeZip({ app, zip, exec })
-  makeDmg({ app, dmg, volname, exec })
+  makeDmg({ app, dmg, volname, ...(dmgLayout !== undefined ? { layout: dmgLayout } : {}), exec })
   // a dmg is signed without the runtime option or entitlements (they are for executables)
   must(exec('codesign', codesignArgs({ target: dmg, identity, keychain, runtime: false })), `codesign ${path.basename(dmg)}`)
   if (notaryArgs) {

@@ -1,0 +1,12 @@
+{
+  "volumeName": "Principia",
+  "window": { "x": 400, "y": 400, "width": 660, "height": 400, "titleBar": 28, "textY": 330 },
+  "iconSize": 128,
+  "textSize": 13,
+  "icons": {
+    "Principia.app": { "x": 170, "y": 180 },
+    "Applications": { "x": 490, "y": 180 }
+  },
+  "labelPlate": { "width": 116, "height": 24, "dy": 83 },
+  "text": "Drag Principia to Applications"
+}
