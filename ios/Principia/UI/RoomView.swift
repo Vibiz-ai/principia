@@ -56,13 +56,29 @@ struct RoomView: View {
         let agents = r.members.filter { $0.kind == "agent" }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
+                if r.messages.isEmpty {
+                    Text("Say hello. @mention an agent and it answers here.").font(.subheadline).foregroundStyle(Theme.faint).frame(maxWidth: .infinity).padding(.vertical, 30)
+                }
+                ForEach(r.messages) { m in message(m, by: by, me: r.me) }
+                ForEach(r.answering ?? [], id: \.self) { n in
+                    HStack(spacing: 8) { Tile(kind: .run); Text("\(n) is replying…").font(.footnote).foregroundStyle(Theme.muted) }
+                }
+            }
+            .padding(.horizontal, 14).padding(.bottom, 8)
+        }
+        .defaultScrollAnchor(.bottom)
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { await app.refresh([.room]) }
+        // the channel and who's who stay right under the top bar; the messages scroll beneath them, never through them
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     if r.channels.count > 1 {
                         Menu {
                             ForEach(r.channels) { c in Button(c.label) { Task { await app.setChannel(c.id) } } }
                         } label: {
                             HStack(spacing: 6) {
-                                Text(label(r)).font(Theme.display(15, semibold: true))
+                                Text(label(r)).font(Theme.display(15, semibold: true)).lineLimit(1).minimumScaleFactor(0.6)
                                 Image(systemName: "chevron.down").font(.caption2)
                             }
                             .padding(.horizontal, 4)
@@ -74,7 +90,7 @@ struct RoomView: View {
                     Spacer()
                     if !agents.isEmpty {
                         Button { withAnimation(.smooth) { whoOpen.toggle() } } label: {
-                            Text("\(agents.count) agent\(agents.count == 1 ? "" : "s") · who's who").font(.footnote)
+                            Text("\(agents.count) agent\(agents.count == 1 ? "" : "s") · who's who").font(.footnote).lineLimit(1).minimumScaleFactor(0.7)
                         }
                         .buttonStyle(.glass)
                     }
@@ -99,19 +115,10 @@ struct RoomView: View {
                     .padding(.horizontal, 14)
                     .glassEffect(.regular, in: .rect(cornerRadius: 18))
                 }
-                if r.messages.isEmpty {
-                    Text("Say hello. @mention an agent and it answers here.").font(.subheadline).foregroundStyle(Theme.faint).frame(maxWidth: .infinity).padding(.vertical, 30)
-                }
-                ForEach(r.messages) { m in message(m, by: by, me: r.me) }
-                ForEach(r.answering ?? [], id: \.self) { n in
-                    HStack(spacing: 8) { Tile(kind: .run); Text("\(n) is replying…").font(.footnote).foregroundStyle(Theme.muted) }
-                }
             }
             .padding(.horizontal, 14).padding(.bottom, 8)
+            .background(Theme.page.opacity(0.94).ignoresSafeArea(edges: .top))
         }
-        .defaultScrollAnchor(.bottom)
-        .scrollDismissesKeyboard(.interactively)
-        .refreshable { await app.refresh([.room]) }
     }
 
     @ViewBuilder private func message(_ m: PhoneRoomMessage, by: [String: PhoneRoomMember], me: String?) -> some View {

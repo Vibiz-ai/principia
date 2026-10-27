@@ -14,7 +14,7 @@ import { ApiError, createApi, MacGone, NotPaired } from './api'
 import { checkMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
-import { ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
+import { ChatLoad, ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
 import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type View } from './render'
 
 declare const __PHONE_HOSTED__: boolean
@@ -267,10 +267,20 @@ async function reloadBoard(): Promise<void> {
   if (st.route.tab !== 'tasks') return
   await Promise.all([loadTasks(), st.route.task ? loadTask(st.route.task) : Promise.resolve()])
 }
-async function loadSession(id: string): Promise<void> {
-  const s = await api.call<PhoneSession>('session', { params: { ...cid(), sessionId: id } })
-  st.session = s
-  st.replica = s.chat ? new ChatReplica(s.chat as ChatSnapshot) : null
+/**
+ * The open chat's snapshot. One fetch at a time: a second ask while one is out (a gap, the socket's ack) runs once more
+ * after it, so an older snapshot never lands over a newer one. Ops that arrive meanwhile wait and go on top of it.
+ */
+const chatLoad = new ChatLoad()
+function loadSession(id: string): Promise<void> {
+  return chatLoad.run(id, async () => {
+    const s = await api.call<PhoneSession>('session', { params: { ...cid(), sessionId: id } })
+    if (st.route.open?.kind !== 'session' || st.route.open.id !== id) return null
+    st.session = s
+    const r = s.chat ? new ChatReplica(s.chat as ChatSnapshot) : null
+    st.replica = r
+    return r
+  })
 }
 async function loadAgent(id: string): Promise<void> {
   st.agent = await api.call<PhoneAgent>('agent', { params: { ...cid(), agentId: id } })
@@ -326,6 +336,8 @@ async function onRoute(): Promise<void> {
   }
   render()
   const n = ++routeSeq
+  // subscribed first: ops from here on reach this phone (and wait for the snapshot); none fall between the two
+  subscribe()
   try {
     await loadScreen()
     if (n !== routeSeq) return
@@ -349,13 +361,24 @@ function onLive(m: PhoneServerMsg): void {
       if (!refetch) refetch = setTimeout(flushLive, 150)
       return
     case 'chat': {
+      const openId = st.route.open?.kind === 'session' ? st.route.open.id : null
+      // its snapshot is on the way: these go on top of it
+      if (openId === m.sessionId && chatLoad.hold(m.sessionId, m.seq, m.ops as ChatOp[])) return
       const r = st.replica
-      const act = chatMessageAction({ openId: st.route.open?.kind === 'session' ? st.route.open.id : null, session: st.session, hasReplica: !!r }, m.sessionId)
-      if (act === 'reload') void loadSession(m.sessionId).then(() => render({ live: true }), () => undefined)
+      const act = chatMessageAction({ openId, session: st.session, hasReplica: !!r }, m.sessionId)
+      if (act === 'reload') void reloadChat(m.sessionId)
       if (act !== 'apply' || !r) return
       const res = r.apply(m.seq, m.ops as ChatOp[])
-      if (res === 'gap') void loadSession(m.sessionId).then(() => render({ live: true }), () => undefined)
+      if (res === 'gap') void reloadChat(m.sessionId)
       else if (res === 'ok') render({ live: true })
+      return
+    }
+    case 'subbed': {
+      // the Mac numbers this chat up to m.seq: a replica behind it missed ops before the subscription took effect
+      const openId = st.route.open?.kind === 'session' ? st.route.open.id : null
+      if (!m.sessionId || openId !== m.sessionId) return
+      if (chatLoad.acked(m.sessionId, m.seq)) return
+      if (st.replica && st.replica.snap.sessionId === m.sessionId && m.seq > st.replica.snap.seq) void reloadChat(m.sessionId)
       return
     }
     case 'screen': {
@@ -378,6 +401,9 @@ function onLive(m: PhoneServerMsg): void {
     default:
       return
   }
+}
+function reloadChat(id: string): Promise<void> {
+  return loadSession(id).then(() => render({ live: true }), () => undefined)
 }
 async function flushLive(): Promise<void> {
   refetch = null
@@ -683,7 +709,6 @@ function render(o: { live?: boolean } = {}): void {
   }
   const v = view()
   const chat = !!st.route.open || st.route.tab === 'room'
-  const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120
   const y = window.scrollY
   const focusKey = active && main.contains(active) ? active.getAttribute('data-k') : null
   const sel = focusKey && active && 'selectionStart' in active ? [(active as HTMLTextAreaElement).selectionStart, (active as HTMLTextAreaElement).selectionEnd] : null
@@ -701,21 +726,35 @@ function render(o: { live?: boolean } = {}): void {
   }
   document.body.classList.toggle('is-chat', chat)
   dock(dockSpec())
-  if (chat && (stick || atBottom)) {
+  if (chat && (stick || pinned)) {
     toBottom()
     if (st.session || st.agent || st.room) stick = false
   } else window.scrollTo(0, y)
   renderToast()
 }
-/** to the newest message, now and again once layout settles (fonts, the dock's height, the keyboard) */
+/**
+ * The reader is at the newest message: live updates keep them there. Scrolled up (their own scroll, read from the
+ * scroll events), updates keep their place until they come back down (PQ-05).
+ */
+let pinned = true
+window.addEventListener('scroll', () => (pinned = atBottom()), { passive: true })
+function atBottom(): boolean {
+  return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120
+}
+/** to the newest message, now and again once layout settles (fonts, the dock's height, the keyboard), unless the
+ *  reader scrolled away in between */
 function toBottom(): void {
   const go = (): void => {
     const el = document.scrollingElement ?? document.documentElement
     el.scrollTop = el.scrollHeight
   }
+  pinned = true
   go()
-  requestAnimationFrame(go)
-  setTimeout(go, 120)
+  const later = (): void => {
+    if (pinned) go()
+  }
+  requestAnimationFrame(later)
+  setTimeout(later, 120)
 }
 function renderToast(): void {
   const t = $('toast')
@@ -954,7 +993,7 @@ async function start(): Promise<void> {
     onReconnect: () => {
       pendingWhat = new Set(['companies', 'needs', 'now', 'chats'])
       // a chat may have missed ops while the socket was down
-      if (st.route.open?.kind === 'session') void loadSession(st.route.open.id).then(() => render({ live: true }), () => undefined)
+      if (st.route.open?.kind === 'session') void reloadChat(st.route.open.id)
       if (st.route.tab === 'room' && !st.route.open) void loadRoom().then(() => render({ live: true }), () => undefined)
       void flushLive()
     }

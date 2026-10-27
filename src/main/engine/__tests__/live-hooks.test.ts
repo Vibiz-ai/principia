@@ -306,6 +306,15 @@ describe('PTY prompts and reply keys (A9)', () => {
     expect(detectPtyPrompt('gemini', "Shell npm test\nAllow execution of: 'npm'?\n● 1. Allow once\n  2. Allow for this session\n  3. No, suggest changes (esc)\n~/code/api   gemini-2.5-pro (99% context left)")).toMatchObject({ kind: 'permission' })
     expect(detectPtyPrompt('cursor', '$ npm test\nRun this command?\n → Run (once) (y)\n   Skip & tell the agent what to do instead (esc or n)')).toMatchObject({ title: 'Run this command?' })
   })
+  it('Claude Code\'s Create file dialog, words placed with cursor columns, is a permission prompt (PQ-07)', () => {
+    // as Claude Code 2.x draws it: each word at its own column (ESC[nG), bold file name, numbered options
+    const raw =
+      '\x1b[2GDo\x1b[5Gyou\x1b[9Gwant\x1b[14Gto\x1b[17Gcreate\x1b[24G\x1b[1mqa-notes.txt\x1b[22m?\r\r\n' +
+      '\x1b[2G\x1b[38;2;87;105;247m❯\x1b[4G\x1b[38;2;102;102;102m1.\x1b[7G\x1b[38;2;87;105;247mYes\x1b[39m\r\r\n' +
+      '\x1b[4G\x1b[38;2;102;102;102m2.\x1b[7G\x1b[39mYes,\x1b[12Gand\x1b[16Gswitch\r\r\n\x1b[4G3.\x1b[7GNo\r\r\n'
+    expect(detectPtyPrompt('claude', raw)).toMatchObject({ kind: 'permission', title: 'Do you want to create qa-notes.txt?' })
+    expect(detectPtyPrompt('claude', 'Do you want to create a.txt?\n  (menu gone)')).toBeNull()
+  })
   it('detects per provider and returns guarded keys; never "always", trust = none', () => {
     const c = detectPtyPrompt('claude', 'Bash command\n\n  curl -s https://example.com\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don\'t ask again\n  3. No')
     expect(c).toMatchObject({ kind: 'permission', title: 'Do you want to proceed?' })

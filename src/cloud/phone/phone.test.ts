@@ -4,7 +4,7 @@ import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import { EMPTY_CHAT_META } from '../../shared/chat'
 import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
-import { ago, placeMessage, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
+import { ago, placeMessage, ChatLoad, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
 import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
 
 const T = '2026-10-25T10:00:00.000Z'
@@ -211,6 +211,16 @@ describe('screens', () => {
     const screenOnly = renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 't', who: null, chat: snap([], 0), terminal: { ...term, source: 'screen' as const, screen: 'Reading footer.html', asks: [] } }, replica: new ChatReplica(snap([], 0)) } as View, noop)
     expect(findAll(screenOnly, (n) => n.tag === 'pre').map((p) => textOf(p))).toEqual(['Reading footer.html'])
   })
+  it('an ask inside its own conversation reads as a plain question, with no face and no link to itself (PQ-13)', () => {
+    const r = new ChatReplica({ ...snap([]), mode: 'terminal', available: false, turn: 'needs' } as ChatSnapshot)
+    const askOne = { id: 'ask_1', title: 'Bash F=/var/tmp/x/scr', heading: 'Run a command?', question: null, detail: 'F=/var/tmp/x/scr ls', who: { name: 'QA term C', role: 'Your chat with Claude', bust: null }, options: [{ id: 'allow', label: 'Allow', kind: 'allow' as const }], text: false, at: T, open: { kind: 'session' as const, id: 'se_1' } }
+    const term = { activity: null, canReply: false, ended: false, canType: false, held: 'It is asking you something.', source: 'transcript' as const, screen: null, asks: [askOne], canContinue: false }
+    const words = textOf(renderSession({ ...baseView(), session: { ref: { kind: 'session', id: 'se_1' }, title: 'QA term C', who: null, chat: r.snap, terminal: term }, replica: r } as View, noop))
+    expect(words).toContain('Run a command?')
+    expect(words).not.toContain('Bash F=')
+    expect(words).not.toContain('Your chat with Claude')
+    expect(words).not.toContain('Open the conversation')
+  })
   it('a terminal opened before its transcript reloads on the Mac’s empty chat ops; a chat applies them', () => {
     const term = { activity: null, canReply: false, ended: false, canType: true, held: null, source: 'screen' as const, screen: 'Reading', asks: [], canContinue: false }
     const session = { ref: { kind: 'session' as const, id: 'se_1' }, title: 't', who: null, chat: null, terminal: term }
@@ -246,5 +256,86 @@ describe('team room order', () => {
     expect(placeMessage(l, { id: 'a2', threadId: 'a' }).map((m) => m.id)).toEqual(['a', 'a1', 'a2', 'b'])
     expect(placeMessage(l, { id: 'c', threadId: null }).map((m) => m.id)).toEqual(['a', 'a1', 'b', 'c'])
     expect(placeMessage(l, { id: 'b', threadId: null })).toHaveLength(3)
+  })
+})
+
+describe('opening a chat while it streams (PQ-02, PQ-06)', () => {
+  const text = (id: string, md: string): ChatItem => ({ id, parent: null, kind: 'text', md, streaming: false }) as ChatItem
+  const later = (): { p: Promise<void>; go: () => void } => {
+    let go!: () => void
+    const p = new Promise<void>((r) => (go = r))
+    return { p, go }
+  }
+  it('ops that arrive while the snapshot is on the way go on top of it; ones it has are skipped', async () => {
+    const load = new ChatLoad()
+    const gate = later()
+    let r: ChatReplica | null = null
+    const done = load.run('se_1', async () => {
+      await gate.p
+      r = new ChatReplica(snap([text('t1', 'draws its shapes')], 762))
+      return r
+    })
+    expect(load.hold('se_1', 762, [{ op: 'append', id: 't1', field: 'md', text: ' twice' }])).toBe(true)
+    expect(load.hold('se_1', 763, [{ op: 'append', id: 't1', field: 'md', text: ' from science' }])).toBe(true)
+    expect(load.hold('se_1', 764, [{ op: 'state', turn: 'idle' }])).toBe(true)
+    expect(load.hold('se_2', 9, [])).toBe(false)
+    gate.go()
+    await done
+    expect(r!.snap.seq).toBe(764)
+    expect((r!.items[0] as { md: string }).md).toBe('draws its shapes from science')
+    expect(r!.snap.turn).toBe('idle')
+    expect(load.hold('se_1', 765, [])).toBe(false)
+  })
+  it('an ack ahead of the snapshot fetches once more (the ops fell between the two)', async () => {
+    const load = new ChatLoad()
+    const seqs = [762, 764]
+    let fetches = 0
+    const gate = later()
+    const done = load.run('se_1', async () => {
+      if (fetches === 0) await gate.p
+      return new ChatReplica(snap([], seqs[fetches++]))
+    })
+    expect(load.acked('se_1', 764)).toBe(true)
+    gate.go()
+    await done
+    expect(fetches).toBe(2)
+  })
+  it('asks while one fetch is out run once more after it, never in parallel, so an older answer never lands last', async () => {
+    const load = new ChatLoad()
+    let inFlight = 0
+    let most = 0
+    let fetches = 0
+    const gates = [later(), later()]
+    const f = async (): Promise<ChatReplica> => {
+      inFlight++
+      most = Math.max(most, inFlight)
+      await gates[fetches]!.p
+      fetches++
+      inFlight--
+      return new ChatReplica(snap([], 10 + fetches))
+    }
+    const a = load.run('se_1', f)
+    const b = load.run('se_1', f)
+    const c = load.run('se_1', f)
+    expect(a).toBe(b)
+    expect(b).toBe(c)
+    gates[0]!.go()
+    gates[1]!.go()
+    await a
+    expect(fetches).toBe(2)
+    expect(most).toBe(1)
+  })
+  it('a gap among the held ops fetches again', async () => {
+    const load = new ChatLoad()
+    let fetches = 0
+    const gate = later()
+    const done = load.run('se_1', async () => {
+      if (fetches++ === 0) await gate.p
+      return new ChatReplica(snap([], 5))
+    })
+    load.hold('se_1', 8, [])
+    gate.go()
+    await done
+    expect(fetches).toBe(2)
   })
 })

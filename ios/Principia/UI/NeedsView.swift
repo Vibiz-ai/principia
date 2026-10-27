@@ -42,13 +42,15 @@ struct CardHead: View {
 struct AskCard: View {
     @Environment(AppModel.self) private var app
     let ask: PhoneAsk
+    /// inside that very conversation: it reads like the chat's own permission card (no face, no link to itself)
+    var inChat = false
     @State private var text = ""
 
     var body: some View {
         let busy = app.busy.contains("ask:\(ask.id)")
         VStack(alignment: .leading, spacing: 12) {
-            CardHead(who: ask.who, fallback: "Agent", at: ask.at)
-            Text(ask.question ?? ask.title).font(.body).foregroundStyle(Theme.ink)
+            if !inChat { CardHead(who: ask.who, fallback: "Agent", at: ask.at) }
+            Text(ask.question ?? ask.heading ?? ask.title).font(.body).foregroundStyle(Theme.ink)
             if let d = ask.detail, d != ask.question {
                 Text(d).font(.system(.footnote, design: .monospaced)).foregroundStyle(Theme.soft)
                     .lineLimit(8)
@@ -76,14 +78,14 @@ struct AskCard: View {
                     Task { await app.answerAsk(ask, optionId: nil, text: t); text = "" }
                 }
             }
-            if ask.options.isEmpty && !ask.text && ask.open == nil {
+            if ask.options.isEmpty && !ask.text && (ask.open == nil || inChat) {
                 Text("Answer this on your Mac.").font(.footnote).foregroundStyle(Theme.faint)
             }
-            if let r = ask.open {
+            if let r = ask.open, !inChat {
                 Button("Open the conversation") { app.openChat(r) }.font(.subheadline).foregroundStyle(Theme.soft)
             }
         }
-        .glassCard()
+        .glassCard(radius: inChat ? 18 : 22)
     }
 }
 

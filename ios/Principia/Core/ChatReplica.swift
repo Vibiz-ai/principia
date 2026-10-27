@@ -288,7 +288,8 @@ enum ChatLines {
     static func permissionTitle(_ tool: String, _ input: JSONValue) -> String {
         switch tool {
         case "Bash": return "Run a command?"
-        case "Edit", "MultiEdit", "Write", "NotebookEdit": return "Change \(base(input["file_path"]?.string ?? input["notebook_path"]?.string))?"
+        case "Write": return "Create \(base(input["file_path"]?.string))?"
+        case "Edit", "MultiEdit", "NotebookEdit": return "Change \(base(input["file_path"]?.string ?? input["notebook_path"]?.string))?"
         case "WebFetch": return "Open \(URLComponents(string: input["url"]?.string ?? "")?.host ?? "a page")?"
         case "Read": return "Read \(base(input["file_path"]?.string))?"
         default: return "Use \(tool)?"

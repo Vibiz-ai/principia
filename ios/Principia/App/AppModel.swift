@@ -29,6 +29,15 @@ final class AppModel {
     var session: PhoneSession?
     var replica: ChatReplica?
     var agent: PhoneAgent?
+    /// the open conversation could not be read (gone, a timeout): the screen says so with Try again, never an endless
+    /// skeleton
+    var loadFailed: PhoneChatRef?
+    var loadFailure: String?
+    /// bumped when you send into the open conversation: it goes back to the newest message
+    var sentTick = 0
+    /// bumped each time a snapshot of the open chat lands (opened, back from the background, after a gap): its rows
+    /// lay out again, and a reader at the bottom is put back at the newest message once they did
+    var snapshotTick = 0
     /// the board (read only, from Now) and the task open on it
     var board: PhoneTasks?
     var boardTask: PhoneTaskDetail?
@@ -64,6 +73,7 @@ final class AppModel {
     private let connector: LiveConnector
     private var live: LiveSocket?
     private var toastTask: Task<Void, Never>?
+    let chatLoader = ChatLoader()
     var clock: () -> Date = Date.init
 
     init(api: APIClient = APIClient(), store: MacStore = KeychainMacStore(), connector: LiveConnector = URLSessionLiveConnector()) {
@@ -324,6 +334,8 @@ final class AppModel {
             if boardOpen && (views.contains(.now) || views.contains(.needs)) { Task { await reloadBoard() } }
             if openRef?.kind == .agent { Task { await reloadOpen() } }
         case .chat(let sid, let seq, let ops):
+            // its snapshot is on the way: these go on top of it
+            if chatPath.last == PhoneChatRef(kind: .session, id: sid), chatLoader.hold(sid, seq: seq, ops: ops) { return }
             if Self.reloadsOnChat(sid, replica: replica, session: session) { Task { await reloadOpen() }; return }
             guard sid == replica?.sessionId, var r = replica else { return }
             switch r.apply(seq: seq, ops: ops) {
@@ -331,6 +343,11 @@ final class AppModel {
             case .old: break
             case .gap: Task { await reloadOpen() }
             }
+        case .subbed(let sid, let seq):
+            // the Mac numbers this chat up to seq: a replica behind it missed ops before the subscription took effect
+            guard let sid, chatPath.last == PhoneChatRef(kind: .session, id: sid) else { return }
+            if chatLoader.acked(sid, seq: seq) { return }
+            if let r = replica, r.sessionId == sid, seq > r.seq { Task { await reloadOpen() } }
         case .screen(let sid, let text):
             // a terminal with no transcript yet: its last lines, live
             guard var s = session, s.ref.id == sid, var t = s.terminal else { return }
@@ -467,25 +484,79 @@ final class AppModel {
 
     func load(_ ref: PhoneChatRef) async {
         guard let co = companyId else { return }
+        if loadFailed == ref { loadFailed = nil; loadFailure = nil }
         do {
             switch ref.kind {
             case .session:
                 if session?.ref.id != ref.id { session = nil; replica = nil }
-                let s = try await api.session(co, ref.id)
-                session = s
-                replica = s.chat.map(ChatReplica.init)
+                // subscribed first: ops from here on reach this phone and wait for the snapshot; none fall between
+                subscribe()
+                try await chatLoader.run(ref.id, fetch: { [weak self] in
+                    guard let self else { return .stale }
+                    let s = try await self.api.session(co, ref.id)
+                    guard self.chatPath.last == ref, self.companyId == co else { return .stale }
+                    self.session = s
+                    guard let c = s.chat else { self.replica = nil; return .noChat }
+                    return .chat(ChatReplica(c))
+                }, put: { [weak self] r in
+                    self?.replica = r
+                    self?.snapshotTick += 1
+                })
             case .agent:
                 if agent?.ref.id != ref.id { agent = nil }
-                agent = try await api.agent(co, ref.id)
+                let g = try await api.agent(co, ref.id)
+                guard chatPath.last == ref else { return }
+                // AGENT CHAT: the agent's conversation is its own chat; its screen becomes that chat (Back: the list)
+                if let sid = g.chatSessionId {
+                    chatPath = [PhoneChatRef(kind: .session, id: sid)]
+                    return
+                }
+                agent = g
             }
             subscribe()
         } catch {
-            fail(error)
+            if error is CancellationError { return }
+            if case .server(404, _)? = error as? APIError, await openElsewhere(ref) { return }
+            guard chatPath.last == ref else { return }
+            switch error as? APIError {
+            case .server(404, _)?:
+                loadFailed = ref
+                loadFailure = ref.kind == .agent ? "This agent is not in this company any more." : "This chat is not on your Mac any more."
+            case .server(_, let m)?:
+                loadFailed = ref
+                loadFailure = m
+            default:
+                loadFailed = ref
+                loadFailure = "It did not load. Check that your Mac is on, then try again."
+                fail(error)
+            }
         }
     }
 
+    /// A chat link names no company (a notification, a link from another company's screen): find the company that has
+    /// it and go there.
+    private func openElsewhere(_ ref: PhoneChatRef) async -> Bool {
+        guard let me, let here = companyId else { return false }
+        for c in me.companies where c.id != here {
+            let found: Bool
+            switch ref.kind {
+            case .session: found = (try? await api.session(c.id, ref.id)) != nil
+            case .agent: found = (try? await api.agent(c.id, ref.id)) != nil
+            }
+            guard found else { continue }
+            guard chatPath.last == ref, companyId == here else { return true }
+            selectCompany(c.id)
+            openChat(ref)
+            say("In \(c.name)")
+            // the same screen stays open (same chat): it loads again here, in its company
+            await load(ref)
+            return true
+        }
+        return false
+    }
+
     func closedChat() {
-        session = nil; replica = nil; agent = nil
+        session = nil; replica = nil; agent = nil; loadFailed = nil; loadFailure = nil
         subscribe()
     }
 
@@ -513,12 +584,24 @@ final class AppModel {
                     // a terminal on the Mac: typed in now, or read right after its current step
                     try await self.api.sessionSend(co, ref.id, text: t)
                     self.say(self.replica?.busy == true ? "Sent. It reads it right after this step." : "Sent")
-                } else if self.replica != nil { try await self.api.sessionSend(co, ref.id, text: t) } else { try await self.api.sessionReply(co, ref.id, text: t); await self.reloadOpen() }
+                } else if self.replica != nil {
+                    // an agent's ended chat reopens in a new session (same conversation): follow it there
+                    if let next = try await self.api.sessionSend(co, ref.id, text: t), next != ref.id, self.chatPath.last == ref {
+                        self.chatPath = [PhoneChatRef(kind: .session, id: next)]
+                    } else if self.replica?.turn == "ended" {
+                        await self.reloadOpen()
+                    }
+                } else { try await self.api.sessionReply(co, ref.id, text: t); await self.reloadOpen() }
             case .agent:
-                try await self.api.agentSend(co, ref.id, text: t)
-                await self.reloadOpen()
+                // it answers in its own chat: follow it there
+                if let sid = try await self.api.agentSend(co, ref.id, text: t), self.chatPath.last == ref {
+                    self.chatPath = [PhoneChatRef(kind: .session, id: sid)]
+                } else {
+                    await self.reloadOpen()
+                }
             }
             ok = true
+            self.sentTick += 1
         }
         return ok
     }

@@ -35,6 +35,7 @@ const FLUSH_MS = 80
 const GRACE_MS = 30_000
 const TICK_MS = 1000
 const SCREEN_MAX = 6000
+const FEED_ID_PREFIX = 'm'
 
 /** The root of a terminal session as a chat turn (the header's "Working", "Your turn"). */
 export function terminalTurn(root: Pick<AgentNode, 'status' | 'needs'> | null | undefined, ended: boolean): ChatTurn {
@@ -47,7 +48,9 @@ export function terminalTurn(root: Pick<AgentNode, 'status' | 'needs'> | null | 
 
 /** The chat items of a transcript, read once (an ended session's history). */
 export function transcriptItems(ref: TranscriptRef, redact: (s: string) => string): ChatItem[] {
-  const r = new ChatReducer({ idPrefix: 'h' })
+  // the live feed's prefix: the same transcript folds to the same ids, so a chat that ends keeps its rows (and the
+  // phone's scroll position and typed answers) instead of rebuilding every one
+  const r = new ChatReducer({ idPrefix: FEED_ID_PREFIX })
   const codex = ref.format === 'codex' ? new CodexTranscript() : null
   const t = new JsonlTailer(ref.file, { backlog: BACKLOG, onLine: (l) => (codex ? codex.records(l) : [l]).forEach((x) => r.line(x)) })
   t.start()
@@ -131,6 +134,11 @@ export class TerminalFeeds {
     return this.feeds.has(sessionId)
   }
 
+  /** the last op number this feed sent */
+  seqOf(sessionId: Id): number {
+    return this.feeds.get(sessionId)?.seq ?? 0
+  }
+
   /** The root changed (working, your turn, waiting on you): the phone's header follows. */
   state(sessionId: Id, turn: ChatTurn, activity: string | null): void {
     const f = this.feeds.get(sessionId)
@@ -192,7 +200,7 @@ export class TerminalFeeds {
   private attach(f: Feed, known?: TranscriptRef): void {
     const ref = known ?? this.lookup(f)
     if (!ref) return
-    const reducer = new ChatReducer({ idPrefix: 'm' })
+    const reducer = new ChatReducer({ idPrefix: FEED_ID_PREFIX })
     const codex = ref.format === 'codex' ? new CodexTranscript() : null
     let loading = true
     const tailer = new JsonlTailer(ref.file, {

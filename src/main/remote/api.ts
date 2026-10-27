@@ -97,6 +97,10 @@ interface Sub {
   pending: Set<PhoneLiveView>
   pendingCo: Id | null | undefined
   timer: NodeJS.Timeout | null
+  /** this socket (the subscription's ack) */
+  send?: (m: PhoneServerMsg) => void
+  /** the newest sub message: an older one that finishes its checks later never overwrites it */
+  gen?: number
 }
 
 export class PhoneApi implements RemoteApi {
@@ -107,6 +111,10 @@ export class PhoneApi implements RemoteApi {
   private sending = false
   /** live terminal sessions shown as chats (only while a phone looks at one) */
   readonly feeds: TerminalFeeds | null
+  /** each chat's last op number seen here (the subscription's ack says it, so a phone can tell it missed some) */
+  private chatSeq = new Map<Id, number>()
+  /** when each session's current turn began (Now's "working for"), from its chat state ops or its root going to work */
+  private turnSince = new Map<Id, string>()
 
   constructor(private readonly h: PhoneHost, o: { feedTickMs?: number | null } = {}) {
     this.off = h.onEvent((e, p) => this.onEvent(e, p))
@@ -319,7 +327,7 @@ export class PhoneApi implements RemoteApi {
     const done = dash?.done ?? []
     const seats = new Map<Id, Id>()
     for (const r of [...runs, ...done.map((c) => c.run)]) if (r.agentId && (r.companyId || PERSONAL_COMPANY_ID) === companyId) seats.set(r.id, r.agentId)
-    return phoneNow(d, companyId, done, seats)
+    return phoneNow(d, companyId, done, seats, this.turnSince)
   }
 
   private me(d: PhoneData, device: StoredDevice): Omit<PhoneMe, 'csrf'> {
@@ -503,11 +511,11 @@ export class PhoneApi implements RemoteApi {
   // ---------- live ----------
 
   socket(ws: WebSocket, device: StoredDevice): void {
-    const sub: Sub = { device: device.id, companyId: null, sessionId: null, channelId: null, pending: new Set(), pendingCo: undefined, timer: null }
-    this.subs.set(ws, sub)
     const send = (m: PhoneServerMsg): void => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m))
     }
+    const sub: Sub = { device: device.id, companyId: null, sessionId: null, channelId: null, pending: new Set(), pendingCo: undefined, timer: null, send, gen: 0 }
+    this.subs.set(ws, sub)
     send({ t: 'hello' })
     ws.on('message', (raw) => {
       let m: PhoneClientMsg
@@ -527,6 +535,7 @@ export class PhoneApi implements RemoteApi {
 
   /** A subscription names a company and, inside it, at most one chat and one room channel; each is checked. */
   async subscribe(sub: Sub, m: Extract<PhoneClientMsg, { t: 'sub' }>): Promise<void> {
+    const gen = (sub.gen = (sub.gen ?? 0) + 1)
     try {
       const d = await this.load()
       const companyId = this.company(d, typeof m.companyId === 'string' ? m.companyId : undefined)
@@ -537,14 +546,29 @@ export class PhoneApi implements RemoteApi {
         const room = await this.room(companyId, m.channelId)
         channelId = room.channelId
       }
+      // a newer sub came while this one was checked: that one wins
+      if (gen !== sub.gen) return
       sub.companyId = companyId
       sub.sessionId = sessionId
       sub.channelId = channelId
+      // in the same tick as the switch: every op after this number reaches this socket
+      sub.send?.({ t: 'subbed', sessionId, seq: sessionId ? this.seqOf(sessionId) : 0 })
     } catch {
+      if (gen !== sub.gen) return
       sub.companyId = null
       sub.sessionId = null
       sub.channelId = null
     }
+  }
+
+  private turnStarted(sessionId: Id, at: number | null): void {
+    if (at === null) this.turnSince.delete(sessionId)
+    else this.turnSince.set(sessionId, new Date(at).toISOString())
+  }
+
+  /** the last op number a chat sent (a terminal shown as a chat numbers its own) */
+  private seqOf(sessionId: Id): number {
+    return this.feeds?.has(sessionId) ? this.feeds.seqOf(sessionId) : (this.chatSeq.get(sessionId) ?? 0)
   }
 
   /** for tests */
@@ -583,6 +607,8 @@ export class PhoneApi implements RemoteApi {
           if (p.ops.some((o) => o.op === 'mode' && o.mode === 'chat')) this.feeds.ended(p.sessionId)
           return
         }
+        this.chatSeq.set(p.sessionId, p.seq)
+        for (const o of p.ops) if (o.op === 'state' && o.turnStartedAt !== undefined) this.turnStarted(p.sessionId, o.turnStartedAt)
         this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops: p.ops })
         return
       }
@@ -624,6 +650,12 @@ export class PhoneApi implements RemoteApi {
 
   /** A terminal session's root changed: its chat header follows (working, your turn, waiting on you). */
   private rootChanged(a: AgentNode): void {
+    if (a.kind === 'session' && a.parentId === null && a.sessionId) {
+      // a terminal's turn: from the moment its root went to work (a chat's own state op says it exactly)
+      if (a.status === 'working' || a.status === 'starting') {
+        if (!this.turnSince.has(a.sessionId)) this.turnSince.set(a.sessionId, a.updatedAt)
+      } else this.turnSince.delete(a.sessionId)
+    }
     if (!this.feeds || a.kind !== 'session' || a.parentId !== null || !a.sessionId || !this.feeds.has(a.sessionId)) return
     this.feeds.state(a.sessionId, terminalTurn(a, false), plainActivity(a.activity, { code: !!a.repoId }))
   }
