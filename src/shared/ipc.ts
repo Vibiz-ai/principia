@@ -1,4 +1,4 @@
-import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, UsageRange, UsageSummary } from './usage'
+import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, TokenActivity, UsageRange, UsageSummary } from './usage'
 import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
 import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
 import type { CollabState, RunConversation } from './collab'
@@ -502,6 +502,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'usage:disk': [{ fresh?: boolean } | V, DiskUsage]
   'usage:cleanupList': [V, CleanupItem[]]
   'usage:cleanup': [{ ids: string[] }, CleanupResult]
+  'usage:tokens': [V, TokenActivity]
   /** Starts (or renews, every minute) the read-only watcher of outside Claude sessions; returns the snapshot. */
   'activity:open': [V, ActivitySnapshot]
   'activity:close': [V, V]
@@ -848,7 +849,7 @@ export const INVOKE_CHANNELS = [
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
   'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
   'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
-  'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'activity:open', 'activity:close',
+  'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'usage:tokens', 'activity:open', 'activity:close',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
   'slack:backfill', 'slack:askAgent', 'slack:drafts', 'slack:draftGet', 'slack:draftDecide', 'slack:testAlert',

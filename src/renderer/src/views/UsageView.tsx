@@ -4,6 +4,7 @@
  * for a Claude sign-in that bills per use). Every run is counted, your own chats included; each table ends in a total
  * row and the line under it is that same total. Plan limits are said honestly: Claude doesn't report them yet, so no
  * percentage is ever made up. Disk moved to Settings › Storage. In All companies the table lists every company.
+ * Token activity (USAGE.md §5) sits on top: every token on this Mac, whatever company is in scope.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { UsageBucket, UsageRow, UsageSummary } from '@shared/usage'
@@ -13,6 +14,7 @@ import { Button, ErrorState, Loading, Segmented, Switch, Toolbar } from '../comp
 import { Icon } from '../components/Icon'
 import { useScope } from '../components/CompanyChip'
 import { CompanyAvatar } from '../shell/CompanyRail'
+import { TokenActivity } from '../components/usage/TokenActivity'
 import { tokenLabel } from '../lib/usage'
 import { errorMessage, hive, useHiveEvent } from '../lib/hive'
 import { absolute } from '../lib/time'
@@ -113,6 +115,7 @@ export function UsageView({ cap: capAsk }: { cap?: number } = {}): React.JSX.Ele
       </Toolbar>
       <div className="scroll view__body">
         <div className="spend5">
+          <TokenActivity />
           {error && !data ? (
             <ErrorState error={error} onRetry={load} />
           ) : !data || !month ? (

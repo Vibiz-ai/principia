@@ -1,7 +1,73 @@
 /*
  * USAGE.md: the Usage page and the portfolio Activity canvas. White line art on dark (VOICE.md §5): hairline white
- * strokes, greys for text, no colour. No warm colours.
+ * strokes, greys for text, no colour. No warm colours. The one exception is Token activity (§5): its dots are a cool
+ * blue scale, dark navy to light blue, as the founder asked.
  */
+
+/* ---------- Token activity (USAGE.md §5) ---------- */
+.tact {
+  --tact-0: rgba(255, 255, 255, .07);
+  --tact-1: #1d3561;
+  --tact-2: #24589f;
+  --tact-3: #3a82dc;
+  --tact-4: #8fc2ff;
+  display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; min-width: 0; container-type: inline-size;
+}
+.tact-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid rgba(255, 255, 255, .1); border-radius: var(--radius-lg); background: var(--surface-1); }
+.tact-stat { padding: 16px 18px 14px; min-width: 0; border-left: 1px solid rgba(255, 255, 255, .08); }
+.tact-stat:first-child { border-left: 0; }
+.tact-stat__v { font-size: 24px; font-weight: var(--weight-semibold); color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tact-stat__l { margin-top: 4px; font-size: var(--text-sm); color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tact-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 0 2px; }
+.tact-title { font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text-primary); }
+.tact-modes { display: inline-flex; align-items: baseline; font-size: var(--text-md); }
+.tact-modes__item { display: inline-flex; align-items: baseline; }
+.tact-modes__sep { color: var(--text-disabled); padding: 0 6px; }
+.tact-modes__btn { background: none; border: 0; padding: 2px 0; font: inherit; color: var(--text-tertiary); cursor: pointer; }
+.tact-modes__btn:hover { color: var(--text-secondary); }
+.tact-modes__btn.is-on { color: var(--text-primary); font-weight: var(--weight-medium); }
+.tact-modes__btn:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--radius-xs); }
+.tact-card { border: 1px solid rgba(255, 255, 255, .08); border-radius: var(--radius-lg); background: rgba(255, 255, 255, .012); padding: 14px 14px 10px; min-width: 0; }
+.tact-grid { position: relative; min-width: 0; }
+.tact-grid__scroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.tact-grid__scroll svg { display: block; }
+.tact-dot { fill: var(--tact-0); }
+.tact-dot--1 { fill: var(--tact-1); }
+.tact-dot--2 { fill: var(--tact-2); }
+.tact-dot--3 { fill: var(--tact-3); }
+.tact-dot--4 { fill: var(--tact-4); }
+.tact-dot.is-hover { stroke: rgba(255, 255, 255, .85); stroke-width: 1.5; }
+.tact-month { font-size: 10.5px; fill: var(--text-tertiary); }
+.tact-tip { bottom: auto; transform: translateX(-50%); min-width: 200px; max-width: 280px; font-size: 11px; }
+.tact-tip .chart__tip-row { gap: 12px; line-height: 1.5; }
+.tact-tip .chart__tip-label { max-width: 190px; }
+.tact-tip__total .chart__tip-val { font-weight: var(--weight-semibold); }
+.tact-tip__sect { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.tact-tip__parts { margin-top: 4px; font-size: 10.5px; white-space: normal; line-height: 1.4; }
+.tact-progress { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: var(--text-sm); color: var(--text-secondary); }
+.tact-progress__bar { width: 140px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.tact-progress__bar i { display: block; height: 100%; background: var(--tact-3); transition: width .3s; }
+.tact-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 8px; }
+.tact-foot__text { margin: 0; font-size: 11px; line-height: 1.5; min-width: 0; }
+.tact-legend { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding-top: 1px; }
+.tact-legend .tact-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--tact-0); }
+.tact-legend .tact-dot--1 { background: var(--tact-1); }
+.tact-legend .tact-dot--2 { background: var(--tact-2); }
+.tact-legend .tact-dot--3 { background: var(--tact-3); }
+.tact-legend .tact-dot--4 { background: var(--tact-4); }
+.tact-note { font-size: var(--text-sm); padding: 8px 2px; }
+@container (max-width: 680px) {
+  .tact-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tact-stat:nth-child(4) { border-left: 0; }
+  .tact-stat:nth-child(n + 4) { border-top: 1px solid rgba(255, 255, 255, .08); }
+  .tact-foot { flex-direction: column; gap: 6px; }
+}
+@container (max-width: 420px) {
+  .tact-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tact-stat:nth-child(4) { border-left: 1px solid rgba(255, 255, 255, .08); }
+  .tact-stat:nth-child(odd) { border-left: 0; }
+  .tact-stat:nth-child(n + 3) { border-top: 1px solid rgba(255, 255, 255, .08); }
+}
 
 /* ---------- Usage ---------- */
 .usage { max-width: 1100px; margin: 0 auto; padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px; }

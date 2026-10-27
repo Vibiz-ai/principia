@@ -1015,6 +1015,7 @@ export const REQUEST_SCHEMAS = {
   'usage:disk': optObj({ fresh: z.boolean().optional() }),
   'usage:cleanupList': none,
   'usage:cleanup': z.object({ ids: z.array(z.string().regex(/^(wt|tw|log):[a-z]+_[0-9a-z]+$/, 'invalid item')).min(1).max(500) }),
+  'usage:tokens': none,
   'activity:open': none,
   'activity:close': none,
   // CLOUD.md §13.1: the cloud:* channels
