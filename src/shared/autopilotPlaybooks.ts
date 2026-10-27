@@ -92,6 +92,8 @@ export interface PlaybookDef {
    * and turning it on waits, paused, until the connection is there (it never runs only to say it sees nothing).
    */
   needs?: { connections: RegExp; label: string; connectId: string }
+  /** QP-13: a registry service it works better with but can run without (release notes read GitHub): shown as its slot */
+  uses?: string
   /** a count limit checked in code (posts a week, messages a day), on top of `maxChanges` per run */
   caps?: { kinds: readonly PlaybookActionKind[]; max: number; days: number; line: string }
   signals: {
@@ -221,6 +223,7 @@ export const PLAYBOOKS: readonly PlaybookDef[] = [
     cost: 'One run a week on your agent plan.',
     because: 'Pull requests were merged',
     topic: 'releases',
+    uses: 'github',
     signals: {
       tools: /merge_?pull_?request|pr_?merge|gh pr merge|pulls?\.merge/i,
       connections: /^(github|gitlab)$/i,

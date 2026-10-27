@@ -7,6 +7,7 @@
  * Always one company: the focused one, a chooser in All mode, Personal for a Personal-only user. While the vault is
  * off (`experimental.vault`), the Passport channels answer not_implemented and the v1 Memory page stands in.
  */
+import { KnowledgeSources } from '../components/passport/KnowledgeSources'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Id } from '@shared/types'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
@@ -519,6 +520,7 @@ function CompanyPassport({ companyId, view }: { companyId: Id; view: PassportVie
                     <Icon name="passport" size={28} />
                     <div className="pview__empty-title">This vault is empty</div>
                     <div className="text-secondary">Agents add notes as they learn about the company. You can write one yourself, or open the folder in Obsidian.</div>
+                    <KnowledgeSources companyId={companyId} n="" />
                     <div className="pview__empty-actions">
                       <Button variant="primary" icon="plus" disabled={readOnly} onClick={() => setCreating({ title: '', type: 'note' })}>
                         New note
@@ -529,7 +531,11 @@ function CompanyPassport({ companyId, view }: { companyId: Id; view: PassportVie
                     </div>
                   </div>
                 ) : (
-                  <span className="text-tertiary">Pick a note</span>
+                  <div className="pview__pick">
+                    <span className="text-tertiary">Pick a note</span>
+                    {/* QA-13: Knowledge's outside sources live in Knowledge itself (connected once, used everywhere) */}
+                    <KnowledgeSources companyId={companyId} n="" />
+                  </div>
                 )}
               </div>
             )}
@@ -775,7 +781,7 @@ function NotePane({
   const lastChange = useRef(change.key)
 
   const toggleRight = (k: string): void => {
-    const next = { ...right, [k]: !right[k] }
+    const next = { ...right, [k]: !(right[k] ?? k === 'sources') }
     setRight(next)
     saveJson('hive.passport.right', next)
   }
@@ -1082,6 +1088,10 @@ function NotePane({
             onCreateGhost={onCreateNote}
             onExpand={onGraph}
           />
+        </Side>
+        {/* QA-13: Knowledge's outside sources, beside every note (connected once for the company, used everywhere) */}
+        <Side title="Sources" open={right.sources ?? true} onToggle={() => toggleRight('sources')}>
+          <KnowledgeSources companyId={companyId} compact />
         </Side>
         <Side title="History" count={history.length} open={right.history} onToggle={() => toggleRight('history')}>
           {history.length === 0 ? (

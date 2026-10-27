@@ -106,9 +106,12 @@ export interface GetJsonOpts {
 /** One request; a non-2xx status throws a DashboardFetchError with a safe message. */
 export async function getJson<T = unknown>(http: HttpFn, req: HttpReq, opts: GetJsonOpts): Promise<T> {
   const res = await http(req)
-  const code = codeForStatus(res.status)
+  let code = codeForStatus(res.status)
   if (!code) return res.body as T
   const quoted = providerMessage(res.body, opts.secrets)
+  // a 403 that says the key itself is no good (PostHog: "Personal API key … is invalid") is a turned-down key, not a
+  // missing permission: the key is off for everything, not only for this dashboard
+  if (code === 'forbidden' && quoted && /\b(key|token)\b[^.]{0,80}\b(invalid|not valid|revoked|expired)\b|\b(invalid|revoked|expired)\b[^.]{0,20}\b(key|token)\b/i.test(quoted)) code = 'invalid_key'
   const base: Record<DashboardErrorCode, string> = {
     invalid_key: `${opts.provider} rejected the key. Check that it was copied whole and has not been revoked.`,
     forbidden: `${opts.provider} accepted the key but it is missing a permission.`,

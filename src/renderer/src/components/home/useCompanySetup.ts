@@ -14,6 +14,7 @@ import { connectionReaches, socialStatuses, type SocialStatus } from '@shared/so
 import type { AutopilotContext, CompanyAutopilots } from '@shared/autopilot'
 import { hive, useHiveEvent } from '../../lib/hive'
 import { reposOf } from '../../lib/companyModel'
+import { useConnections, useConnectionsAvailable } from '../../state/connections'
 import { checklistItems, type ChecklistItem, type SlackSetup, type VibizState } from '../../lib/checklist'
 import { departmentsOn, useStore } from '../../state/store'
 import { isConnected, isSetUp, useSlack } from '../../state/slack'
@@ -123,6 +124,10 @@ export function useCompanySetup(companyId: Id): CompanySetup {
     return () => clearInterval(t)
   }, [polling, loadConnections])
   const vibiz = vibizState(connections, companyId)
+  // CONNECTIONS.md §4.3 S9: one status per service, live (null while loading; undefined when main doesn't serve it)
+  const servicesList = useConnections(companyId)
+  const connAvailable = useConnectionsAvailable()
+  const services = connAvailable === false ? undefined : servicesList
   useEffect(() => {
     if (polling && vibiz === 'connected') setPolling(false)
   }, [polling, vibiz])
@@ -148,10 +153,11 @@ export function useCompanySetup(companyId: Id): CompanySetup {
             slack,
             scheduleCount: schedules ? schedules.length : null,
             autopilots,
+            services,
             typed: true
           })
         : [],
-    [company, logo, repoCount, depsOn, departments, agents, dashboards, socials, vibiz, slack, schedules, autopilots]
+    [company, logo, repoCount, depsOn, departments, agents, dashboards, socials, vibiz, slack, schedules, autopilots, services]
   )
 
   const ctx = useMemo<AutopilotContext | null>(

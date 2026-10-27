@@ -7,6 +7,7 @@
  * renderer only ever sees key *names* and whether they are present.
  */
 import type { DepartmentPresetKey } from './company'
+import { keyField, type ServiceKeyField } from './services'
 
 export type DashboardKind = 'gsc' | 'geo' | 'plausible' | 'posthog' | 'stripe' | 'github'
 export const DASHBOARD_KINDS: readonly DashboardKind[] = ['gsc', 'geo', 'plausible', 'posthog', 'stripe', 'github']
@@ -19,19 +20,8 @@ export type MetricFormat = 'number' | 'currency' | 'percent' | 'position' | 'dur
 /** Which direction of change is good news (drives the delta colour). */
 export type GoodWhen = 'up' | 'down' | 'neutral'
 
-export interface DashboardKeyField {
-  /** Stored under this name in the company's keys (UPPER_SNAKE_CASE, the Keys page shows it). */
-  name: string
-  label: string
-  required: boolean
-  /** One line: what to create and which permissions to give it. */
-  hint: string
-  link: string
-  linkLabel: string
-  placeholder?: string
-  /** A pasted JSON file (service account) rather than a one-line token. */
-  multiline?: boolean
-}
+/** A key a dashboard reads: the registry's key field (services.ts), so a key has one name everywhere. */
+export type DashboardKeyField = ServiceKeyField
 
 export interface DashboardConfigField {
   key: string
@@ -55,6 +45,8 @@ export interface DashboardDef {
   name: string
   /** The service behind it, for the logo and "Powered by". */
   provider: string
+  /** CONNECTIONS.md §5: the registry services it reads (its keys come from their key forms; names never change). */
+  services: string[]
   category: DashboardCategory
   tagline: string
   description: string
@@ -67,6 +59,11 @@ export interface DashboardDef {
   refreshMinutes: number
   /** Shown when the dashboard can run with no key at all (GEO on the installed Claude CLI, GitHub on `gh`). */
   keylessNote?: string
+  /**
+   * CONNECTIONS.md §4.3: with no key saved, it can also read through the company's sign-in to this service (its MCP
+   * connection). `config`: the fields a sign-in makes unnecessary (the sign-in already picked the project).
+   */
+  viaSignIn?: { service: string; config: string[] }
 }
 
 const PERIOD = 'Last 28 days vs the 28 before'
@@ -76,31 +73,12 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'gsc',
     name: 'SEO · Search Console',
     provider: 'Google Search Console',
+    services: ['google-search-console'],
     category: 'SEO',
     tagline: 'Clicks, impressions, CTR and rank from Google Search.',
     description: 'Search performance straight from Google Search Console: how often you show up, how often people click, your average position, and the queries and pages that bring traffic. Adds a PageSpeed score for your home page.',
     departments: ['marketing'],
-    keys: [
-      {
-        name: 'GSC_SERVICE_ACCOUNT_JSON',
-        label: 'Service account JSON',
-        required: true,
-        multiline: true,
-        hint: 'Google Cloud → IAM → Service accounts → create one → Keys → Add key → JSON. Turn on the Search Console API, then add the account’s email as a Restricted user of your property in Search Console.',
-        link: 'https://developers.google.com/webmaster-tools/v1/how-tos/authorizing',
-        linkLabel: 'Search Console API access',
-        placeholder: '{ "type": "service_account", "client_email": "…", "private_key": "…" }'
-      },
-      {
-        name: 'PAGESPEED_API_KEY',
-        label: 'PageSpeed API key',
-        required: false,
-        hint: 'Optional. Without it PageSpeed still runs, with a lower daily quota. Google Cloud → APIs & Services → Credentials → API key.',
-        link: 'https://developers.google.com/speed/docs/insights/v5/get-started#APIKey',
-        linkLabel: 'Get a PageSpeed key',
-        placeholder: 'AIza…'
-      }
-    ],
+    keys: [keyField('google-search-console', 'GSC_SERVICE_ACCOUNT_JSON'), keyField('google-search-console', 'PAGESPEED_API_KEY')],
     config: [
       { key: 'siteUrl', label: 'Property', required: true, kind: 'text', placeholder: 'sc-domain:example.com or https://example.com/', hint: 'Exactly as it appears in Search Console’s property picker.' },
       { key: 'pageSpeedUrl', label: 'PageSpeed page', required: false, kind: 'text', placeholder: 'https://example.com/', hint: 'Defaults to the property’s home page.' }
@@ -122,13 +100,14 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'geo',
     name: 'GEO · AI visibility',
     provider: 'AI answer engines',
+    services: ['openai', 'perplexity'],
     category: 'AI visibility',
     tagline: 'How often ChatGPT, Perplexity and Claude name you, and who they name instead.',
     description: 'Asks the questions your buyers ask (“best tool for …”) to the AI answer engines you connect, then measures how often your brand is mentioned, where it ranks among competitors, whether your site is cited, and your share of voice. Runs once a day so you can watch the trend.',
     departments: ['marketing'],
     keys: [
-      { name: 'OPENAI_API_KEY', label: 'OpenAI key', required: false, hint: 'Optional. Asks ChatGPT’s model. platform.openai.com → API keys → Create (a project key with Model capabilities is enough).', link: 'https://platform.openai.com/api-keys', linkLabel: 'OpenAI API keys', placeholder: 'sk-…' },
-      { name: 'PERPLEXITY_API_KEY', label: 'Perplexity key', required: false, hint: 'Optional, recommended: Perplexity searches the web and returns its citations, so you see whether your site is the source.', link: 'https://www.perplexity.ai/account/api/keys', linkLabel: 'Perplexity API keys', placeholder: 'pplx-…' }
+      keyField('openai', 'OPENAI_API_KEY', { required: false, hint: 'Optional. Asks ChatGPT’s model. platform.openai.com → API keys → Create (a project key with Model capabilities is enough).' }),
+      keyField('perplexity', 'PERPLEXITY_API_KEY', { required: false, hint: 'Optional, recommended: Perplexity searches the web and returns its citations, so you see whether your site is the source.' })
     ],
     config: [
       { key: 'brand', label: 'Brand', required: true, kind: 'text', placeholder: 'Acme', hint: 'The name people would write in an answer.' },
@@ -153,13 +132,12 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'plausible',
     name: 'Web analytics · Plausible',
     provider: 'Plausible',
+    services: ['plausible'],
     category: 'Web analytics',
     tagline: 'Visitors, pageviews, bounce rate and where traffic comes from.',
     description: 'Your site’s traffic from Plausible: unique visitors, pageviews, bounce rate and visit duration against the previous period, with the top pages and sources.',
     departments: ['marketing'],
-    keys: [
-      { name: 'PLAUSIBLE_API_KEY', label: 'Stats API key', required: true, hint: 'Plausible → Account settings → API keys → New API key → Stats API.', link: 'https://plausible.io/docs/stats-api', linkLabel: 'Plausible Stats API', placeholder: 'Paste the key' }
-    ],
+    keys: [keyField('plausible', 'PLAUSIBLE_API_KEY')],
     config: [
       { key: 'siteId', label: 'Site', required: true, kind: 'text', placeholder: 'example.com', hint: 'The domain exactly as it is listed in Plausible.' },
       { key: 'host', label: 'Host', required: false, kind: 'text', placeholder: 'https://plausible.io', hint: 'Only for self-hosted Plausible.' }
@@ -179,17 +157,17 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'posthog',
     name: 'Product analytics · PostHog',
     provider: 'PostHog',
+    services: ['posthog'],
     category: 'Web analytics',
     tagline: 'Users, pageviews, top pages and referrers from PostHog.',
     description: 'Daily users and pageviews from your PostHog project, against the previous period, with the pages people visit most and the sites that send them.',
     departments: ['marketing', 'development'],
-    keys: [
-      { name: 'POSTHOG_PERSONAL_API_KEY', label: 'Personal API key', required: true, hint: 'PostHog → Settings → Personal API keys → Create. Scope: Query Read and Project Read, limited to this project.', link: 'https://posthog.com/docs/api#private-endpoint-authentication', linkLabel: 'PostHog personal API keys', placeholder: 'phx_…' }
-    ],
+    keys: [keyField('posthog', 'POSTHOG_PERSONAL_API_KEY', { hint: 'PostHog → Settings → Personal API keys → Create. Scope: Query Read and Project Read, limited to this project.' })],
     config: [
       { key: 'projectId', label: 'Project ID', required: true, kind: 'text', placeholder: '12345', hint: 'Settings → Project → Project ID.' },
       { key: 'host', label: 'Host', required: false, kind: 'text', placeholder: 'https://us.posthog.com', hint: 'https://eu.posthog.com for the EU cloud, or your own host.' }
     ],
+    viaSignIn: { service: 'posthog', config: ['projectId', 'host'] },
     widgets: [
       { id: 'users', kind: 'kpi', title: 'Users', format: 'number', good: 'up', hint: PERIOD },
       { id: 'pageviews', kind: 'kpi', title: 'Pageviews', format: 'number', good: 'up', hint: PERIOD },
@@ -204,21 +182,12 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'stripe',
     name: 'Revenue · Stripe',
     provider: 'Stripe',
+    services: ['stripe'],
     category: 'Revenue',
     tagline: 'MRR, new customers, churn, net revenue and failed payments.',
     description: 'The numbers a CFO asks for, computed from your Stripe subscriptions, customers and charges: MRR and its trend, new and churned customers, churn rate, net revenue after refunds, failed payments and ARPU. Read-only: it needs a restricted key that cannot move money.',
     departments: ['finance', 'sales'],
-    keys: [
-      {
-        name: 'STRIPE_RESTRICTED_KEY',
-        label: 'Restricted key (read-only)',
-        required: true,
-        hint: 'Stripe → Developers → API keys → Create restricted key. Set Customers, Subscriptions and Charges to Read and everything else to None. Never paste a secret key (sk_…).',
-        link: 'https://dashboard.stripe.com/apikeys/create',
-        linkLabel: 'Create a restricted key',
-        placeholder: 'rk_live_…'
-      }
-    ],
+    keys: [keyField('stripe', 'STRIPE_RESTRICTED_KEY')],
     config: [],
     widgets: [
       { id: 'mrr', kind: 'kpi', title: 'MRR', format: 'currency', good: 'up', hint: 'Paying subscriptions, monthly. vs 30 days ago' },
@@ -240,13 +209,12 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
     id: 'github',
     name: 'Engineering · GitHub',
     provider: 'GitHub',
+    services: ['github'],
     category: 'Engineering',
     tagline: 'Pull requests, merge speed, CI health and issues for one repository.',
     description: 'Open and merged pull requests, median time to merge, CI success on the default branch and issue flow for a GitHub repository, with the latest workflow runs and the pull requests waiting for review.',
     departments: ['development'],
-    keys: [
-      { name: 'GITHUB_TOKEN', label: 'GitHub token', required: false, hint: 'Optional when the GitHub CLI is signed in on this Mac (gh auth login). Otherwise a fine-grained token with read access to Pull requests, Issues, Actions and Metadata on this repository.', link: 'https://github.com/settings/personal-access-tokens/new', linkLabel: 'Create a fine-grained token', placeholder: 'github_pat_…' }
-    ],
+    keys: [keyField('github', 'GITHUB_TOKEN', { required: false, hint: 'Optional when the GitHub CLI is signed in on this Mac (gh auth login). Otherwise a fine-grained token with read access to Pull requests, Issues, Actions and Metadata on this repository.' })],
     config: [{ key: 'repo', label: 'Repository', required: true, kind: 'text', placeholder: 'owner/name', hint: 'For example vercel/next.js.' }],
     widgets: [
       { id: 'openPrs', kind: 'kpi', title: 'Open PRs', format: 'number', good: 'neutral' },
@@ -364,6 +332,8 @@ export interface InstalledDashboard {
   status: DashboardStatus
   snapshot: DashboardSnapshot | null
   keys: DashboardKeyState[]
+  /** CONNECTIONS.md §4.3: reads with a saved key, or through the company's sign-in to the service (no key) */
+  via?: 'key' | 'signIn'
   createdAt: string
   updatedAt: string
 }

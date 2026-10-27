@@ -3,6 +3,8 @@
  * fallback until the vault ships), agent seats with "Add agent", recurring agents (attach schedules and Slack
  * triggers), routing defaults (sources, Slack channels) and the board filtered to this department.
  */
+import { serviceById } from '@shared/services'
+import { ConnectionSlot } from '../components/connections/ConnectionSlot'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AGENT_DATA_DEFAULTS,
@@ -396,10 +398,14 @@ function RoutingCard({ dep }: { dep: Department }): React.JSX.Element {
           <span>Sources</span>
           <div className="dep-checks">
             {ROUTABLE_SOURCES.map((s) => (
-              <label key={s} className="dep-check">
-                <input type="checkbox" checked={sources.includes(s)} onChange={(e) => setSources(e.target.checked ? [...sources, s] : sources.filter((x) => x !== s))} />
-                {SOURCE_LABEL[s] ?? s}
-              </label>
+              <span key={s} className="dep-check dep-check--src">
+                <label className="dep-check">
+                  <input type="checkbox" checked={sources.includes(s)} onChange={(e) => setSources(e.target.checked ? [...sources, s] : sources.filter((x) => x !== s))} />
+                  {SOURCE_LABEL[s] ?? s}
+                </label>
+                {/* QA-14: a source is a route, not a connection: its connection's state sits beside it, with Connect when missing */}
+                {serviceById(s) && <ConnectionSlot companyId={dep.companyId} service={s} variant="chip" bare />}
+              </span>
             ))}
           </div>
         </div>

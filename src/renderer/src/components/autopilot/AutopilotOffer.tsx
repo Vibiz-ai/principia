@@ -9,6 +9,8 @@ import { useState } from 'react'
 import type { OrchSuggestion } from '@shared/orchestrator'
 import { isPlaybookId, LEVEL_INFO, levelLabel, limitsLine, maxLevel, OFFER_MAX_LEVEL, playbookDef, playbookLimits, PLAYBOOK_LEVELS, type PlaybookLevel } from '@shared/autopilotPlaybooks'
 import { followLink } from '../../lib/inAppLink'
+import { serviceById } from '@shared/services'
+import { ConnectionSlot } from '../connections/ConnectionSlot'
 import { Button } from '../ui'
 import { hive } from '../../lib/hive'
 import { attempt, refreshTasks, toast } from '../../state/store'
@@ -67,7 +69,11 @@ export function AutopilotOffer({ s, onChanged }: { s: OrchSuggestion; onChanged:
               {limitsLine(def, limits, level)}. {def.limits.join('. ')}. {def.cost}
             </div>
             <div className="ap-offer__limits">Why now: {s.detail.split('. ')[0].replace(/\.$/, '')}.</div>
-            {s.needs && (
+            {s.needs && serviceById(s.needs.connectId) && s.companyId ? (
+              <div className="ap-offer__needs">
+                <ConnectionSlot companyId={s.companyId} service={s.needs.connectId} purpose="playbook" label={`Needs ${s.needs.label} connected first. Turned on now, it waits and starts by itself once you connect it.`} actions={false} />
+              </div>
+            ) : s.needs && (
               <div className="ap-offer__limits ap-offer__needs">
                 Needs {s.needs.label} connected first. Turned on now, it waits and starts by itself once you connect it.{' '}
                 {s.link && (

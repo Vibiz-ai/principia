@@ -9,7 +9,7 @@
 .dsh-roundel svg { position: absolute; inset: 0; }
 .dsh-roundel__outer { fill: none; stroke: var(--rm-ln-1, rgba(255, 255, 255, .9)); stroke-width: 1; }
 .dsh-roundel__inner { fill: none; stroke: var(--rm-ln-3, rgba(255, 255, 255, .2)); stroke-width: 1; }
-.dsh-roundel__text { position: relative; font-family: var(--font-display, Georgia, serif); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; color: var(--text-primary); }
+.dsh-roundel__text { position: relative; font-family: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-primary); }
 
 /* ---------- recommended ---------- */
 .dsh-recs { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }

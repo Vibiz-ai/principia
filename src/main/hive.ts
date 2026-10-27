@@ -124,6 +124,8 @@ export class Hive {
   slack: SlackService | null = null
   /** FORUM.md: the company Forum (null until wired / on failure). */
   forum: ForumService | null = null
+  /** CONNECTIONS.md: one connection per service per company, used everywhere (null until wired / on failure). */
+  connections: import('./connections/resolver').ConnectionResolver | null = null
   /** DASHBOARDS.md: department dashboards (null until wired / on failure). */
   dashboards: DashboardService | null = null
   /** ORCHESTRATOR.md: Principia's own layer between runs (null until startOrchestrator / on failure). */
@@ -266,7 +268,9 @@ export class Hive {
         : null
     // DASHBOARDS.md §6: a department's runs and chats also read its dashboards' latest numbers (cached, read-only)
     const metrics = companyId && departmentId ? this.safe(() => this.dashboards?.contextFor(companyId, departmentId) ?? null, null) : null
-    const text = [passport, metrics].filter(Boolean).join('\n\n')
+    // CONNECTIONS.md §4.3 S18: what is connected and how agents reach it (names only)
+    const services = companyId ? this.safe(() => this.connections?.contextBlock(companyId) ?? null, null) : null
+    const text = [passport, metrics, services].filter(Boolean).join('\n\n')
     return text ? this.vault.redact(text) : null
   }
   /**

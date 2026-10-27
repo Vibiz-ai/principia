@@ -372,6 +372,28 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'dashboards:remove': [{ id: Id }, V]
   /** The marketplace preview: the dashboard on sample data. */
   'dashboards:sample': [{ kind: DashboardKind }, DashboardSnapshot]
+  // CONNECTIONS.md §3.6: one connection per service per company, used everywhere. Answers carry names, states and masked
+  // forms only; a pasted key goes in (connectKey) and never comes back out.
+  'connections:list': [{ companyId: Id }, import('./services').ServiceStatus[]]
+  'connections:get': [{ companyId: Id; serviceId: string }, import('./services').ServiceStatus]
+  /** Refuse patterns, then a read-only check where one exists, then the company's keys. A failed check stores nothing. */
+  'connections:connectKey': [{ companyId: Id; serviceId: string; keys: Record<string, string>; settings?: Record<string, string>; purpose?: import('./services').Purpose }, import('./services').ServiceStatus & { checked: 'ok' | 'unchecked' | 'none' }]
+  /** Creates this company's MCP connection from the registry when missing, then browser sign-in (as gateway:connect). */
+  'connections:signIn': [{ companyId: Id; serviceId: string }, import('./services').ServiceStatus]
+  'connections:settings': [{ companyId: Id; serviceId: string; settings: Record<string, string> }, import('./services').ServiceStatus]
+  /** Which saved key serves a purpose (Stripe: the agent key for agents, the restricted key for the dashboard). */
+  'connections:choose': [{ companyId: Id; serviceId: string; purpose: import('./services').Purpose; keyName: string }, import('./services').ServiceStatus]
+  /** "Also use in…": read another company's connection (a reference); `from: null` stops it. */
+  'connections:reuse': [{ companyId: Id; serviceId: string; from: Id | null }, import('./services').ServiceStatus]
+  /** Removes this company's own key(s) and/or its own MCP connection, after a native confirm naming what loses it. */
+  'connections:disconnect': [{ companyId: Id; serviceId: string; forms: ('key' | 'mcp')[] }, import('./services').ServiceStatus]
+  'connections:usage': [{ companyId: Id; serviceId: string }, import('./services').UsageRef[]]
+  /** "Looks like PostHog?" → Use it (the founder says this saved connection is the service here); null unlinks it. */
+  'connections:confirm': [{ companyId: Id; serviceId: string; connectionId: string | null }, import('./services').ServiceStatus]
+  /** The founder's other companies that have this service connected themselves ("Use the one from Ledgerline"). */
+  'connections:sources': [{ companyId: Id; serviceId: string }, { companyId: Id; name: string }[]]
+  /** Linear: agents also get the vendor's tools from the sync key (off by default). */
+  'connections:keyTools': [{ companyId: Id; serviceId: string; on: boolean }, import('./services').ServiceStatus]
   // LINEAR.md §6: optional Linear sync per company. A key goes in (checkKey, connect), never comes back out.
   'linear:status': [{ companyId: Id }, LinearStatusView]
   'linear:checkKey': [{ companyId: Id; key?: string }, LinearKeyCheck]
@@ -655,6 +677,8 @@ export interface EventMap extends ChatEventMap, RemoteEventMap, BrowserEventMap,
   'window:state': { focused: boolean; fullscreen: boolean }
   /** Coarse invalidation for lists without dedicated events. */
   'data:changed': { domain: 'company' | 'tasks' | 'departments' | 'repos' | 'profiles' | 'workflows' | 'secrets' | 'schedules' | 'dashboards' }
+  /** CONNECTIONS.md §3.7: a key, connection, account or choice changed (null = recompute every company / service). Coalesced 150 ms. */
+  'connections:changed': { companyId: Id | null; serviceId: string | null }
   /** Navigation/commands from app menu, tray, notifications, dock. */
   'ui:command': UiCommand
   /** New mem_event rows (any process) or a page write committed. Refetch visible data, debounced. */
@@ -831,6 +855,7 @@ export const INVOKE_CHANNELS = [
   'workflows:duplicate', 'workflows:validate', 'workflows:export', 'workflows:import',
   'marketplace:list', 'marketplace:preview', 'marketplace:install',
   'dashboards:list', 'dashboards:keys', 'dashboards:install', 'dashboards:update', 'dashboards:refresh', 'dashboards:remove', 'dashboards:sample',
+  'connections:list', 'connections:get', 'connections:connectKey', 'connections:signIn', 'connections:settings', 'connections:choose', 'connections:reuse', 'connections:disconnect', 'connections:usage', 'connections:confirm', 'connections:sources', 'connections:keyTools',
   'linear:status', 'linear:checkKey', 'linear:preview', 'linear:connect', 'linear:sync', 'linear:setAutosync', 'linear:disconnect',
   'runs:start', 'runs:list', 'runs:get', 'runs:cancel', 'runs:rerun', 'runs:stepLog', 'runs:openAsSession',
   'schedules:list', 'schedules:create', 'schedules:update', 'schedules:remove', 'schedules:setEnabled',
@@ -881,7 +906,7 @@ export const SEND_CHANNELS = ['sessions:write', 'sessions:resize', 'artifacts:st
 export const EVENT_NAMES = [
   'pty:data', 'pty:exit', 'session:updated', 'run:updated', 'run:step', 'run:output', 'artifact:added',
   'artifact:removed', 'schedule:updated', 'schedule:fired', 'status:changed', 'providers:changed',
-  'settings:changed', 'window:state', 'data:changed', 'ui:command', 'memory:changed', 'agent:updated',
+  'settings:changed', 'window:state', 'data:changed', 'connections:changed', 'ui:command', 'memory:changed', 'agent:updated',
   'agent:events', 'ask:updated', 'processes:changed', 'author:updated', 'chatCompany:updated', 'worktree:updated', 'history:changed',
   'activity:changed',
   'slack:status', 'slack:channels', 'slack:messages', 'slack:draft', 'slackTrigger:updated',

@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { serviceForKey } from '@shared/services'
+import { useConnections } from '../state/connections'
+import { usedByLine } from '../lib/serviceActions'
 import type { EnvImportEntry, Id, SecretMeta } from '@shared/types'
 import { SECRET_PRESETS } from '@shared/types'
 import { Icon } from '../components/Icon'
@@ -25,6 +28,7 @@ export function KeysView(): React.JSX.Element {
   const info = useStore((s) => s.info)
   const profiles = useStore((s) => s.profiles)
   const { active, scope, company, companies, multi, nonce } = useScope()
+  const services = useConnections(scope ?? null)
   const [list, setList] = useState<SecretMeta[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [vaultDown, setVaultDown] = useState(false)
@@ -148,6 +152,14 @@ export function KeysView(): React.JSX.Element {
     )
   }
 
+  // CONNECTIONS.md §4.3 S2: the service a key connects, and what uses it in this company ("PostHog · used by …")
+  const svcNote = (name: string): string | null => {
+    const def = serviceForKey(name)
+    if (!def) return null
+    const st = services?.find((x) => x.serviceId === def.id)
+    const used = st ? usedByLine(st) : ''
+    return `${def.name}${used ? ` · used by ${used}` : st?.state === 'connected' ? ' · connected' : ''}`
+  }
   const row = (s: SecretMeta, section: KeySection): React.JSX.Element => {
     const id = keyId(s)
     const note = subscriptionNote(s.name, profiles)
@@ -168,6 +180,7 @@ export function KeysView(): React.JSX.Element {
           {s.name}
           {shadowed && <div className="key-note">{company?.name ?? 'This company'} has its own {s.name}; its agents get that one</div>}
           {note && <div className="key-note">{note}</div>}
+          {svcNote(s.name) && <div className="key-note">{svcNote(s.name)}</div>}
         </span>
         <span className="td text-secondary">{s.label}</span>
         <span className={`td mono ${shown ? 'selectable key-revealed' : 'text-secondary'}`}>
@@ -245,7 +258,7 @@ export function KeysView(): React.JSX.Element {
         </Button>
       </Toolbar>
       <div className="keys-note">
-        <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys never leave this Mac. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s, never another company’s.' : '.'}
+        <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys never leave this Mac. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s. A connection you let another company use (“Also use in…”) reaches its agents only through that service’s tools, never as a key in their environment.' : '.'}
       </div>
       {/* design §4.10: each page says what goes where (Diego picks Keys or AI providers on the first try) */}
       <div className="keys-note keys-note--where">

@@ -5,6 +5,7 @@
  * GitHub and Linear open their own sheets; an MCP tool connects in one click (browser sign-in) and belongs to this
  * company only.
  */
+import { serviceMonogram } from '../../lib/serviceActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CompanyPassport } from '@shared/company'
 import type { GatewayConnection } from '@shared/gateway'
@@ -12,7 +13,9 @@ import { Button, Sheet } from '../ui'
 import { Icon } from '../Icon'
 import { GatewayConnections } from '../GatewayConnections'
 import { SlackConnectionCard } from '../slack/SetupGuide'
-import { buildCatalog, cardLink, GROUP_TITLE, searchCards, type CardGroup, type ConnCard } from '../../lib/connections'
+import { buildCatalog, cardLink, cardsFor, GROUP_TITLE, searchCards, type CardGroup, type ConnCard } from '../../lib/connections'
+import { keyForms, serviceById, type Purpose } from '@shared/services'
+import { openConnect, useConnections } from '../../state/connections'
 import { CONNECTION_CATALOG } from '../../lib/connectionCatalog'
 import { CUSTOM_CONNECT_TOOL } from '@shared/deepLink'
 import { routeAsk } from '../../lib/desk'
@@ -27,6 +30,18 @@ import { GithubSheet, useGhLogin } from './GithubSheet'
 import { LinearConnectSheet } from './LinearConnectSheet'
 import '../../styles/settings5.css'
 
+/** "Grouped by need": what a service is for (CONNECTIONS.md §2 purposes). */
+const NEEDS: { value: Purpose | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'agentTools', label: 'Agent tools' },
+  { value: 'dashboard', label: 'Dashboards' },
+  { value: 'askData', label: 'Data questions' },
+  { value: 'knowledge', label: 'Knowledge' },
+  { value: 'playbook', label: 'Autopilot' },
+  { value: 'posting', label: 'Posting' },
+  { value: 'sync', label: 'Sync' }
+]
+
 export type ConnectSheet = 'instagram' | 'github' | 'linear' | 'slack'
 const SHEETS: readonly string[] = ['instagram', 'github', 'linear', 'slack']
 const sheetOf = (tool: string | null | undefined): ConnectSheet | null => (tool && SHEETS.includes(tool) ? (tool as ConnectSheet) : null)
@@ -36,13 +51,15 @@ const sheetOf = (tool: string | null | undefined): ConnectSheet | null => (tool 
  * their sheet; `mcp` opens "add your own MCP server"; any other tool scrolls to its card and marks it. Nothing connects
  * until the person presses the card's button.
  */
-export function ConnectionsPage({ company, open: openFirst }: { company: CompanyPassport; open?: string | null }): React.JSX.Element {
+export function ConnectionsPage({ company, open: openFirst, purpose }: { company: CompanyPassport; open?: string | null; purpose?: Purpose }): React.JSX.Element {
   const code = useIsCode(company.id)
   const agents = useDeskAgents(company.id)
   const writer = useMemo(() => (agents.length ? (routeAsk('write this week’s instagram posts', agents)?.agent.name ?? null) : null), [agents])
   const [connections, setConnections] = useState<GatewayConnection[] | null>(null)
   const [keyNames, setKeyNames] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState('')
+  const [need, setNeed] = useState<Purpose | 'all'>('all')
+  const services = useConnections(company.id)
   const [sheet, setSheet] = useState<ConnectSheet | null>(sheetOf(openFirst))
   const [editor, setEditor] = useState<{ connectionId: string | null } | null>(openFirst === CUSTOM_CONNECT_TOOL ? { connectionId: null } : null)
   const [focus, setFocus] = useState<string | null>(openFirst && !sheetOf(openFirst) && openFirst !== CUSTOM_CONNECT_TOOL ? openFirst : null)
@@ -67,6 +84,12 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
   useEffect(() => {
     if (slackAvailable === null) void loadSlack()
   }, [slackAvailable])
+  // CONNECTIONS.md §4.2: a link to a service that can be connected with a key opens the shared sheet on its card
+  useEffect(() => {
+    const def = serviceById(openFirst)
+    if (def && !sheetOf(openFirst) && keyForms(def).length) openConnect(company.id, def.id, purpose)
+  }, [openFirst, purpose, company.id])
+  useHiveEvent('connections:changed', ({ companyId }) => (!companyId || companyId === company.id) && load())
   useHiveEvent('data:changed', ({ domain }) => (domain === 'secrets' || domain === 'company') && load())
   // a browser sign-in in flight: poll until it lands
   const waiting = connections?.some((c) => c.authStatus === 'connecting')
@@ -91,11 +114,12 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
         slack,
         linear: { connected: !!linear?.connected, teamKey: linear?.team?.key ?? null, problem: linear?.connected && linear.state === 'auth' ? (linear.message ?? 'Linear turned down the key.') : null, offline: linear?.connected && (linear.state === 'network' || linear.state === 'error') ? { kind: linear.state, synced: syncedAgo(linear.lastSyncedAt) } : null },
         instagramKey: keyNames.has('INSTAGRAM_ACCESS_TOKEN'),
-        personal: company.system === 'personal'
+        personal: company.system === 'personal',
+        ...(services ? { services } : {})
       }),
-    [company, code, writer, connections, gh, slack, linear, keyNames]
+    [company, code, writer, connections, gh, slack, linear, keyNames, services]
   )
-  const shown = useMemo(() => searchCards(cards, query), [cards, query])
+  const shown = useMemo(() => cardsFor(searchCards(cards, query), need), [cards, query, need])
   // a link named this card: bring it into view once the catalog is there, and mark it for a moment
   useEffect(() => {
     if (!focus || connections === null) return
@@ -139,6 +163,7 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
     if (a.kind === 'instagram' || a.kind === 'github' || a.kind === 'linear' || a.kind === 'slack') return setSheet(a.kind)
     if (a.kind === 'preset') return void connectPreset(a.presetId)
     if (a.kind === 'custom') return setEditor({ connectionId: null })
+    if (a.kind === 'service') return openConnect(company.id, a.serviceId)
     if (a.kind === 'manage' || a.kind === 'signIn') {
       const conn = connections?.find((x) => x.id === a.connectionId)
       if (!conn) return
@@ -154,11 +179,18 @@ export function ConnectionsPage({ company, open: openFirst }: { company: Company
   return (
     <div className="s5">
       <h2 className="s5__title">Connections</h2>
-      <p className="s5__lede">Tools {company.name}’s agents can use. Each one signs in on its own; a connection you make here belongs to {company.name} only.</p>
+      <p className="s5__lede">Services {company.name} uses. Connect one once, with a key or a sign-in, and its dashboards, agents, autopilots and chats all use it. A connection you make here belongs to {company.name} only, unless you choose “Also use in…”.</p>
       <label className="s5-search">
         <Icon name="search" size={14} />
         <input className="input" type="search" aria-label="Search connections" placeholder={code ? 'Search: GitHub, Linear, Sentry…' : 'Search: Instagram, Stripe, Slack…'} value={query} onChange={(e) => setQuery(e.target.value)} />
       </label>
+      <div className="s5-needs" role="group" aria-label="What it is for">
+        {NEEDS.map((n) => (
+          <button key={n.value} type="button" aria-pressed={need === n.value} onClick={() => setNeed(n.value)}>
+            {n.label}
+          </button>
+        ))}
+      </div>
       {connections === null ? (
         <div className="text-tertiary s5__loading">Loading connections…</div>
       ) : shown.length === 0 ? (
@@ -218,6 +250,19 @@ function Card({ card: c, busy, focused, onAct, onCopy }: { card: ConnCard; busy:
       </div>
       <p className="s5-card__blurb">{c.blurb}</p>
       {c.note && <p className="s5-card__note">{c.note}</p>}
+      {c.state === 'connected' || c.state === 'attention' ? (
+        c.usedBy && (
+          <p className="s5-card__used">
+            <strong>Used by:</strong> {c.usedBy}
+          </p>
+        )
+      ) : (
+        !!c.unlocks?.length && c.state !== 'soon' && (
+          <p className="s5-card__used">
+            <strong>Unlocks:</strong> {c.unlocks.join(', ')}
+          </p>
+        )
+      )}
       <div className="s5-card__foot">
         {onCopy && (
           <button type="button" className="s5-card__copy" title="Copy a principia:// link that opens this card" aria-label={`Copy link to ${c.name}`} onClick={onCopy}>
@@ -234,10 +279,9 @@ function Card({ card: c, busy, focused, onAct, onCopy }: { card: ConnCard; busy:
   )
 }
 
+/** QA-12: the one service monogram (PostHog → PH, Stripe → St), the same as every other surface. */
 function logoText(name: string): string {
-  if (name === 'Instagram') return 'IG'
-  const w = name.replace(/\(.*?\)/g, '').trim().split(/\s+/)
-  return (w.length > 1 ? `${w[0]![0]}${w[1]![0]}` : name[0]!).toUpperCase()
+  return serviceMonogram(name)
 }
 
 /** Manage one MCP connection: its one state, Test, turn off or on, sign in again, edit details, remove. */

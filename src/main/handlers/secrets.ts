@@ -5,12 +5,17 @@ import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { CompanySecrets, KeyNamespaces } from '../db/companySecrets'
 import { LINEAR_KEY_WRITE_ONLY, isWriteOnlyKey } from '../../shared/linear'
+import { connectionsChanged } from '../connections/events'
 
 /** Clipboard holding a secret is cleared after 60 s if it still holds that value (SPEC A11, fixed). */
 const CLIPBOARD_CLEAR_MS = 60_000
 
 export function registerSecretHandlers(h: Hive): void {
-  const changed = () => emit('data:changed', { domain: 'secrets' })
+  // CONNECTIONS.md §3.7: a key is a connection too (PostHog by key shows as connected everywhere)
+  const changed = (companyId?: string | null) => {
+    emit('data:changed', { domain: 'secrets' })
+    connectionsChanged(companyId ?? null)
+  }
   // COMPANY.md §4: Shared = vault.ts `secrets`; companies = company_secrets, same Keychain-backed safeStorage key
   const keys = new KeyNamespaces(
     h.vault,
@@ -25,12 +30,12 @@ export function registerSecretHandlers(h: Hive): void {
   handle('secrets:list', (q) => keys.list(q?.companyId))
   handle('secrets:set', ({ name, value, label, companyId }) => {
     const m = keys.set(companyId, name, value, label)
-    changed()
+    changed(companyId)
     return m
   })
   handle('secrets:remove', ({ name, companyId }) => {
     keys.remove(companyId, name)
-    changed()
+    changed(companyId)
   })
   handle('secrets:move', ({ name, from, to }) => {
     const m = keys.move(name, from, to)
@@ -51,7 +56,7 @@ export function registerSecretHandlers(h: Hive): void {
   handle('secrets:parseEnv', ({ text, companyId }) => keys.parseEnv(companyId, text))
   handle('secrets:importEnv', ({ text, names, companyId }) => {
     const metas = keys.importEnv(companyId, text, names)
-    changed()
+    changed(companyId)
     return metas
   })
   handle('secrets:pickEnvFile', async (q, sender) => {

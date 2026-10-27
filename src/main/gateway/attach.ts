@@ -14,7 +14,9 @@ export function attachGateway(adapter: AdapterId, server: McpServerSpec, previou
   if (adapter !== 'claude') return previous
   const files = [...(previous?.files ?? [])]; const existing = files.find(f => f.path.endsWith('.json') && f.content.includes('mcpServers'))
   const spec = { type: 'stdio', command: server.command, args: server.args, env: server.env }
-  if (existing) { const config = JSON.parse(existing.content); config.mcpServers.principia = spec; return { ...previous!, files: files.map(f => f === existing ? { ...f, content: JSON.stringify(config) } : f) } }
+  // QP-2: the founder's own servers for services Principia serves here stay out (variadic: placed with the MCP flags)
+  const deny = server.deny?.length ? ['--disallowedTools', server.deny.join(',')] : []
+  if (existing) { const config = JSON.parse(existing.content); config.mcpServers.principia = spec; return { ...previous!, args: [...previous!.args, ...deny], files: files.map(f => f === existing ? { ...f, content: JSON.stringify(config) } : f) } }
   const file = join(dir, 'principia.mcp.json')
-  return { args: [...(previous?.args ?? []), '--mcp-config', file], env: previous?.env ?? {}, files: [...files, { path: file, content: JSON.stringify({ mcpServers: { principia: spec } }) }] }
+  return { args: [...(previous?.args ?? []), '--mcp-config', file, ...deny], env: previous?.env ?? {}, files: [...files, { path: file, content: JSON.stringify({ mcpServers: { principia: spec } }) }] }
 }

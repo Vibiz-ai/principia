@@ -10,6 +10,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Id } from '@shared/types'
 import { LEVEL_INFO, levelLabel, limitsLine, maxLevel, parseTargets, playbookDef, PLAYBOOK_LEVELS, type PlaybookDef, type PlaybookLevel, type PlaybookView } from '@shared/autopilotPlaybooks'
 import { connectLink } from '@shared/deepLink'
+import { serviceById } from '@shared/services'
+import { ConnectionSlot } from '../connections/ConnectionSlot'
 import { followLink } from '../../lib/inAppLink'
 import { Button, RelativeTime, Stepper, Switch } from '../ui'
 import { confirmNative, hive, useHiveEvent } from '../../lib/hive'
@@ -96,8 +98,32 @@ async function confirmActs(def: PlaybookDef): Promise<boolean> {
   }).catch(() => false)
 }
 
-/** "Connect your ads account first": opens Settings › Connections on it. */
+/**
+ * QA-09: a playbook whose connection is there says so ("Stripe · key"), the same chip as every other surface; a
+ * service it only works better with (release notes and GitHub) shows its slot either way.
+ */
+function UsesChip({ def, companyId }: { def: PlaybookDef; companyId: Id }): React.JSX.Element | null {
+  const id = def.needs?.connectId ?? def.uses
+  if (!id || !serviceById(id) || serviceById(id)!.soon) return null
+  return (
+    <div className="ap-item__needs ap-item__uses">
+      <span className="ap-item__meta">Uses</span>
+      <ConnectionSlot companyId={companyId} service={id} purpose={def.needs ? 'playbook' : 'agentTools'} variant="chip" />
+    </div>
+  )
+}
+
+/**
+ * "Connect your ads account first": for a registry service (Stripe, Vibiz…) the shared slot (connect in place, with a
+ * key or a sign-in, CONNECTIONS.md §4.3 S7); otherwise a link to Settings › Connections.
+ */
 function NeedsLine({ needs, companyId, waiting }: { needs: { label: string; connectId: string }; companyId: Id; waiting: boolean }): React.JSX.Element {
+  if (serviceById(needs.connectId))
+    return (
+      <div className="ap-item__needs">
+        <ConnectionSlot companyId={companyId} service={needs.connectId} purpose="playbook" label={waiting ? `Waiting for ${needs.label}: it starts by itself once you connect it.` : `Needs ${needs.label} connected. Turned on now, it waits until then.`} actions={false} />
+      </div>
+    )
   return (
     <div className="ap-item__warn">
       {waiting ? `Waiting for ${needs.label}: it starts by itself once you connect it.` : `Needs ${needs.label} connected. Turned on now, it waits until then.`}{' '}
@@ -150,6 +176,7 @@ function OnItem({ v, companyName, focused, onChanged }: { v: PlaybookView; compa
           ))}
         </ul>
         {v.waiting ? <NeedsLine needs={v.waiting} companyId={v.companyId} waiting /> : v.pausedWhy && <div className="ap-item__warn">{v.pausedWhy}</div>}
+        {!v.waiting && <UsesChip def={def} companyId={v.companyId} />}
         {(v.nearMisses ?? []).length > 0 && (
           <ul className="ap-item__misses" aria-label="Refused lately">
             {v.nearMisses!.map((m, i) => (
@@ -249,7 +276,7 @@ function OffItem({ v, focused, onChanged }: { v: PlaybookView; focused: boolean;
         <div className="ap-item__meta">
           {def.cadence} · {def.cost}
         </div>
-        {v.needs && <NeedsLine needs={v.needs} companyId={v.companyId} waiting={false} />}
+        {v.needs ? <NeedsLine needs={v.needs} companyId={v.companyId} waiting={false} /> : <UsesChip def={def} companyId={v.companyId} />}
         {focused && (
           <>
             <div className="ap-offer__plan">

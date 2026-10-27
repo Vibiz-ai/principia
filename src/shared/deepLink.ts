@@ -3,7 +3,9 @@
  * sheet or a prefilled form. It never approves, spends, deletes, sends, connects or creates anything; the person still
  * clicks the button on the page it opens. Unknown or malformed links parse to null and are ignored.
  *
- *   principia://connect/<tool>                 Settings › Connections, on that tool's card or sheet (tool ids below)
+ *   principia://connect/<tool>[?purpose=<p>]   Settings › Connections, on that tool's card or sheet (tool ids below:
+ *                                              every service in the registry, services.ts); `purpose` (dashboard,
+ *                                              agentTools, …) only orders the connect sheet (a key first for a dashboard)
  *   principia://settings/<section>             a Settings section (connections, keys, team, providers, …)
  *   principia://board[?task=<id|NC-12>]        the Board, with that task open
  *   principia://board?new=<title>              the Board's quick create, prefilled (nothing is filed until you press it)
@@ -25,6 +27,7 @@
  * does not have is refused by the caller, never opened somewhere else).
  */
 import { CONNECTION_CATALOG } from './connectionCatalog'
+import { PURPOSES, SERVICE_REGISTRY, type Purpose } from './services'
 
 export const DEEP_LINK_SCHEME = 'principia'
 export const DEEP_LINK_MAX = 2048
@@ -37,9 +40,9 @@ export const SOON_CONNECT_TOOLS = ['shopify', 'google-business', 'meta-ads'] as 
 export const CUSTOM_CONNECT_TOOL = 'mcp'
 
 /** Every tool a principia://connect/<tool> link may name. */
-export const CONNECT_TOOL_IDS: readonly string[] = [...new Set<string>([...OWN_CONNECT_TOOLS, ...CONNECTION_CATALOG.map((p) => p.id), ...SOON_CONNECT_TOOLS, CUSTOM_CONNECT_TOOL])]
+export const CONNECT_TOOL_IDS: readonly string[] = [...new Set<string>([...OWN_CONNECT_TOOLS, ...CONNECTION_CATALOG.map((p) => p.id), ...SERVICE_REGISTRY.map((s) => s.id), ...SOON_CONNECT_TOOLS, CUSTOM_CONNECT_TOOL])]
 /** Friendly aliases: what an agent is likely to type. */
-const CONNECT_ALIASES: Record<string, string> = { custom: 'mcp', 'mcp-server': 'mcp', ig: 'instagram', gh: 'github', 'google-business-profile': 'google-business', meta: 'meta-ads' }
+const CONNECT_ALIASES: Record<string, string> = { custom: 'mcp', 'mcp-server': 'mcp', ig: 'instagram', gh: 'github', 'google-business-profile': 'google-business', meta: 'meta-ads', gsc: 'google-search-console', 'search-console': 'google-search-console', twitter: 'x', 'fal-ai': 'fal' }
 
 export const SETTINGS_SECTIONS = ['company', 'team', 'connections', 'repos', 'keys', 'danger', 'general', 'providers', 'notifications', 'cloud', 'storage', 'experimental', 'about', 'agents', 'data'] as const
 export type DeepLinkSettingsSection = (typeof SETTINGS_SECTIONS)[number]
@@ -47,7 +50,7 @@ export const CHAT_FILTERS = ['live', 'all', 'agents', 'direct'] as const
 export type DeepLinkChatFilter = (typeof CHAT_FILTERS)[number]
 
 export type DeepLink = { companyId?: string } & (
-  | { kind: 'connect'; tool: string }
+  | { kind: 'connect'; tool: string; purpose?: Purpose }
   | { kind: 'settings'; section: DeepLinkSettingsSection }
   | { kind: 'board'; task?: string; newTitle?: string }
   | { kind: 'chats'; filter?: DeepLinkChatFilter; chat?: { kind: 'session' | 'agent'; id: string } }
@@ -113,7 +116,9 @@ export function parseDeepLink(raw: unknown): DeepLink | null {
     case 'connect': {
       if (!a || b !== undefined) return null
       const tool = connectToolId(a)
-      return tool ? { kind: 'connect', tool, ...scope } : null
+      const purpose = q.get('purpose')
+      if (purpose !== null && !(PURPOSES as readonly string[]).includes(purpose)) return null
+      return tool ? { kind: 'connect', tool, ...(purpose ? { purpose: purpose as Purpose } : {}), ...scope } : null
     }
     case 'connections':
       if (!a) return { kind: 'settings', section: 'connections', ...scope }
@@ -204,7 +209,7 @@ export function formatDeepLink(l: DeepLink): string {
   const c = l.companyId
   switch (l.kind) {
     case 'connect':
-      return withQuery(`principia://connect/${enc(l.tool)}`, { company: c })
+      return withQuery(`principia://connect/${enc(l.tool)}`, { purpose: l.purpose, company: c })
     case 'settings':
       return withQuery(`principia://settings/${l.section}`, { company: c })
     case 'board':
@@ -227,9 +232,9 @@ export function formatDeepLink(l: DeepLink): string {
   }
 }
 
-/** principia://connect/<tool>[?company=…]; an unknown tool links to "add your own MCP server". */
-export function connectLink(tool: string, companyId?: string | null): string {
-  return formatDeepLink({ kind: 'connect', tool: connectToolId(tool) ?? CUSTOM_CONNECT_TOOL, ...(companyId ? { companyId } : {}) })
+/** principia://connect/<tool>[?purpose=…][&company=…]; an unknown tool links to "add your own MCP server". */
+export function connectLink(tool: string, companyId?: string | null, purpose?: Purpose): string {
+  return formatDeepLink({ kind: 'connect', tool: connectToolId(tool) ?? CUSTOM_CONNECT_TOOL, ...(purpose ? { purpose } : {}), ...(companyId ? { companyId } : {}) })
 }
 
 /** A principia:// URL (for renderers deciding between "open in app" and "open in browser"). */

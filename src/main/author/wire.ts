@@ -504,7 +504,16 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
 }
 
 /** What one company has connected, and the principia://connect link for the rest (connections_list, the gateway's errors). */
-export function companyConnections(h: Pick<Hive, 'company' | 'gateway' | 'slack' | 'linear'>, companyId: Id, tool?: string): ReturnType<typeof connectionsReport> {
+/** CONNECTIONS.md S5: the resolver's view (key-only services count); [] when it is not wired. */
+function services(h: Pick<Hive, 'connections'>, companyId: Id): import('../../shared/services').ServiceStatus[] {
+  try {
+    return h.connections?.list(companyId, { usage: false }) ?? []
+  } catch {
+    return []
+  }
+}
+
+export function companyConnections(h: Pick<Hive, 'company' | 'gateway' | 'slack' | 'linear' | 'connections'>, companyId: Id, tool?: string): ReturnType<typeof connectionsReport> {
   const c = h.company.scope.get(companyId)
   let slack: 'connected' | 'set-up' | 'none' | 'unavailable' = 'unavailable'
   try {
@@ -520,7 +529,7 @@ export function companyConnections(h: Pick<Hive, 'company' | 'gateway' | 'slack'
     /* not connected */
   }
   return connectionsReport(
-    { companyId, companyName: c?.name ?? 'This company', personal: c?.system === 'personal', accounts: c?.accounts, gateway: h.gateway?.list() ?? [], slack, linear, code: (c?.repoIds?.length ?? 0) > 0 },
+    { companyId, companyName: c?.name ?? 'This company', personal: c?.system === 'personal', accounts: c?.accounts, gateway: h.gateway?.list() ?? [], slack, linear, code: (c?.repoIds?.length ?? 0) > 0, services: services(h, companyId) },
     tool ? { tool } : {}
   )
 }

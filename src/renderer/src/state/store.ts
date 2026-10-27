@@ -95,7 +95,7 @@ export type ViewState =
   /** Alias: Settings → Keys & secrets */
   | { name: 'keys' }
   /** `companyId`/`create`/`nonce`: the Company section (was the `company` route) */
-  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number; connect?: string }
+  | { name: 'settings'; section?: SettingsSection; focus?: 'slackAlerts' | 'grants' | 'worktrees'; companyId?: Id; create?: boolean; nonce?: number; connect?: string; purpose?: import('@shared/services').Purpose }
   | { name: 'slack'; channelId?: string; threadTs?: string; search?: boolean; nonce?: number }
   /** FORUM.md §8: the company Forum (companyId absent = the active company) */
   | { name: 'forum'; companyId?: Id; channelId?: Id; threadId?: Id; nonce?: number }

@@ -6,6 +6,7 @@ import { HiveError } from '../../shared/errors'
 import type { Hive } from '../hive'
 import { handle } from '../ipc'
 import type { LinearSyncService } from '../company/sync/service'
+import { connectionsChanged } from '../connections/events'
 
 export function registerLinearHandlers(h: Hive): void {
   const svc = (): LinearSyncService => {
@@ -15,8 +16,10 @@ export function registerLinearHandlers(h: Hive): void {
   handle('linear:status', ({ companyId }) => svc().status(companyId))
   handle('linear:checkKey', ({ companyId, key }) => svc().checkKey(companyId, key))
   handle('linear:preview', ({ companyId, teamId, key }) => svc().preview(companyId, teamId, key))
-  handle('linear:connect', (q) => svc().connect(q))
+  // CONNECTIONS.md §3.7: Linear's card (sync + tools) follows
+  const tell = <T>(companyId: string, v: T): T => (connectionsChanged(companyId, 'linear'), v)
+  handle('linear:connect', async (q) => tell(q.companyId, await svc().connect(q)))
   handle('linear:sync', ({ companyId }) => svc().syncNow(companyId))
   handle('linear:setAutosync', ({ companyId, on }) => svc().setAutosync(companyId, on))
-  handle('linear:disconnect', ({ companyId }) => svc().disconnect(companyId))
+  handle('linear:disconnect', async ({ companyId }) => tell(companyId, await svc().disconnect(companyId)))
 }

@@ -5,7 +5,7 @@
 import type { DashboardSnapshot } from '../../../shared/dashboards'
 import { configText } from '../../../shared/dashboards'
 import { DashboardFetchError, getJson, isoDay, type HttpFn } from '../http'
-import { secretsOf, type DashboardProvider, type ProviderCtx } from './types'
+import { secretsOf, type DashboardProvider, type McpReader, type ProviderCtx } from './types'
 
 const WINDOW = 28
 
@@ -97,8 +97,9 @@ const projectOf = (ctx: ProviderCtx): string => {
 }
 const posthogHints = { forbidden: 'Give the personal API key the Query Read and Project Read scopes for this project.', config: 'Check the project ID and the host (us.posthog.com or eu.posthog.com).' }
 
-/** One HogQL query; rows as arrays in column order. */
+/** One HogQL query; rows as arrays in column order. With no key, through the company's PostHog sign-in. */
 export async function hogql(ctx: ProviderCtx, query: string): Promise<unknown[][]> {
+  if (!ctx.keys.POSTHOG_PERSONAL_API_KEY && ctx.mcp) return signInSql(ctx.mcp, query)
   const host = hostOf(ctx.config.host, 'https://us.posthog.com')
   const res = await getJson<{ results?: unknown[][] }>(
     ctx.http,
@@ -108,13 +109,111 @@ export async function hogql(ctx: ProviderCtx, query: string): Promise<unknown[][
   return res.results ?? []
 }
 
+// ---------- PostHog through its MCP sign-in (CONNECTIONS.md §4.3) ----------
+
+const NO_SQL = 'PostHog’s sign-in here doesn’t offer SQL queries. Add a personal API key for this dashboard instead.'
+const UNREADABLE = 'PostHog answered through the sign-in in a form Principia can’t read. Add a personal API key for this dashboard instead.'
+const toolCache = new WeakMap<McpReader, Promise<string[]>>()
+
+/**
+ * The PostHog MCP server's SQL tool, whichever shape it has: `execute-sql` as its own tool, or the single `exec` tool
+ * that takes CLI-style commands (`call --json execute-sql {…}`).
+ */
+export async function signInSql(mcp: McpReader, query: string): Promise<unknown[][]> {
+  let tools = toolCache.get(mcp)
+  if (!tools) {
+    tools = mcp.tools()
+    toolCache.set(mcp, tools)
+  }
+  let names: string[]
+  try {
+    names = await tools
+  } catch {
+    toolCache.delete(mcp)
+    throw new DashboardFetchError('invalid_key', 'PostHog’s sign-in isn’t working. Sign in to PostHog again in Settings › Connections.')
+  }
+  let res: unknown
+  try {
+    if (names.includes('execute-sql')) res = await mcp.call('execute-sql', { query })
+    else if (names.includes('exec')) res = await mcp.call('exec', { command: `call --json execute-sql ${JSON.stringify({ query })}`, context: 'Reading product analytics numbers for a dashboard.', llm_model: 'unknown' })
+    else throw new DashboardFetchError('unavailable', NO_SQL)
+  } catch (e) {
+    if (e instanceof DashboardFetchError) throw e
+    throw new DashboardFetchError('unavailable', 'PostHog didn’t answer through the sign-in. Try again later.')
+  }
+  return mcpRows(res)
+}
+
+/** Rows from an MCP tool result: structured content or JSON text with `results` (arrays, or objects in column order). */
+export function mcpRows(res: unknown): unknown[][] {
+  const r = (res ?? {}) as { isError?: boolean; structuredContent?: unknown; content?: { type?: string; text?: string }[] }
+  if (r.isError) throw new DashboardFetchError('forbidden', 'PostHog turned down the query through the sign-in. Check that the sign-in picked this project and may read its data.')
+  const candidates: unknown[] = [r.structuredContent]
+  for (const c of r.content ?? []) {
+    if (c?.type !== 'text' || typeof c.text !== 'string') continue
+    const t = c.text.trim()
+    const start = t.search(/[[{]/)
+    if (start < 0) continue
+    try {
+      candidates.push(JSON.parse(t.slice(start)))
+    } catch {
+      /* not JSON */
+    }
+  }
+  for (const c of candidates) {
+    const rows = findResults(c, 0)
+    if (rows) return rows
+  }
+  throw new DashboardFetchError('unavailable', UNREADABLE)
+}
+
+function findResults(v: unknown, depth: number): unknown[][] | null {
+  if (!v || typeof v !== 'object' || depth > 3) return null
+  const o = v as Record<string, unknown>
+  const list = Array.isArray(v) ? v : Array.isArray(o.results) ? o.results : null
+  if (list) {
+    if (list.every((x) => Array.isArray(x))) return list as unknown[][]
+    if (list.every((x) => x && typeof x === 'object')) {
+      const cols = Array.isArray(o.columns) ? (o.columns as unknown[]).map(String) : null
+      return list.map((x) => (cols ? cols.map((c) => (x as Record<string, unknown>)[c]) : Object.values(x as Record<string, unknown>)))
+    }
+  }
+  if (Array.isArray(v)) return null
+  for (const k of ['result', 'data', 'response']) {
+    const inner = findResults(o[k], depth + 1)
+    if (inner) return inner
+  }
+  return null
+}
+
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v) || 0)
 
 export const posthogProvider: DashboardProvider = {
   kind: 'posthog',
   async validate(ctx) {
+    if (!ctx.keys.POSTHOG_PERSONAL_API_KEY && ctx.mcp) {
+      await signInSql(ctx.mcp, 'SELECT 1')
+      return
+    }
     const host = hostOf(ctx.config.host, 'https://us.posthog.com')
     await getJson(ctx.http, { url: `${host}/api/projects/${projectOf(ctx)}/`, headers: { Authorization: `Bearer ${ctx.keys.POSTHOG_PERSONAL_API_KEY}` } }, { provider: 'PostHog', secrets: secretsOf(ctx), hints: posthogHints })
+  },
+  // whose key is it: /api/users/@me/ on the set host, else the US cloud and then the EU cloud (a personal key works
+  // only in its own region), which also tells the EU host
+  async checkKey(ctx) {
+    const me = (host: string): Promise<unknown> => getJson(ctx.http, { url: `${host}/api/users/@me/`, headers: { Authorization: `Bearer ${ctx.keys.POSTHOG_PERSONAL_API_KEY}` } }, { provider: 'PostHog', secrets: secretsOf(ctx), hints: posthogHints })
+    if (configText(ctx.config.host)) {
+      await me(hostOf(ctx.config.host, 'https://us.posthog.com'))
+      return
+    }
+    try {
+      await me('https://us.posthog.com')
+      return { settings: { host: 'https://us.posthog.com' } }
+    } catch (e) {
+      if (!(e instanceof DashboardFetchError) || e.code !== 'invalid_key') throw e
+    }
+    await me('https://eu.posthog.com')
+    return { settings: { host: 'https://eu.posthog.com' } }
   },
   async fetch(ctx) {
     const W = `INTERVAL ${WINDOW} DAY`

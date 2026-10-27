@@ -11,9 +11,10 @@ import type { DashboardKind } from '@shared/dashboards'
 import { departmentFor, type AutopilotId, type CompanyAutopilots } from '@shared/autopilot'
 import type { SocialStatus } from '@shared/socials'
 import type { Id } from '@shared/types'
+import type { ServiceStatus } from '@shared/services'
 
 export type ChecklistItemId =
-  | 'logo' | 'passport' | 'repo' | 'departments' | 'agents' | 'marketingDashboards' | 'financeDashboards' | 'socials' | 'vibiz' | 'slack' | 'schedule' | 'autopilot'
+  | 'logo' | 'passport' | 'repo' | 'departments' | 'agents' | 'marketingDashboards' | 'financeDashboards' | 'analytics' | 'socials' | 'vibiz' | 'slack' | 'schedule' | 'autopilot'
 
 /** What the item's button does. The card maps each to a navigation or a sheet. */
 export type ChecklistAction =
@@ -28,6 +29,8 @@ export type ChecklistAction =
   | { kind: 'slack' }
   | { kind: 'schedule' }
   | { kind: 'autopilot'; id: AutopilotId }
+  /** CONNECTIONS.md §4.2: the shared connect sheet for one service; `choices`: a small menu of services to pick from first */
+  | { kind: 'connect'; serviceId: string; choices?: { serviceId: string; name: string }[] }
 
 export interface ChecklistItem {
   id: ChecklistItemId
@@ -60,11 +63,19 @@ export interface ChecklistInput {
   scheduleCount: number | null
   autopilots: CompanyAutopilots | undefined
   /**
+   * CONNECTIONS.md §4.3 S9: the company's services (connections:list), null while loading, undefined = not served.
+   * "Connect your analytics" is done by PostHog, Plausible or Search Console in any form, and Vibiz counts by its key too.
+   */
+  services?: readonly Pick<ServiceStatus, 'serviceId' | 'name' | 'state' | 'chip'>[] | null
+  /**
    * Five doors step 3 (design §4.1): only the steps that fit this company. A business with no repository never sees
    * "Connect a repository"; Stripe is suggested only when Finance exists, Search Console only when Marketing does.
    */
   typed?: boolean
 }
+
+/** The services "Connect your product analytics" accepts, preferred first. */
+const ANALYTICS = ['posthog', 'plausible', 'google-search-console']
 
 const MARKETING_KINDS: DashboardKind[] = ['gsc', 'geo']
 
@@ -94,6 +105,11 @@ export function checklistItems(i: ChecklistInput): ChecklistItem[] {
   const firstEmpty = deps.find((d) => !staffed.includes(d))
   const readySocials = i.socials?.filter((s) => s.ready) ?? []
   const anyAutopilot = !!i.autopilots && Object.values(i.autopilots).some(Boolean)
+  const svc = (id: string): Pick<ServiceStatus, 'serviceId' | 'name' | 'state' | 'chip'> | undefined => i.services?.find((s) => s.serviceId === id)
+  const analytics = ANALYTICS.map(svc).filter((s): s is NonNullable<typeof s> => !!s && s.state === 'connected')
+  // QP-1: a key the vendor turned down is "Needs attention · Fix", never "Connect PostHog" as if nothing were there
+  const analyticsHurt = ANALYTICS.map(svc).find((s) => s?.state === 'attention')
+  const vibizOn = i.vibiz === 'connected' || svc('vibiz')?.state === 'connected'
   const items: ChecklistItem[] = [
     { id: 'logo', title: 'Add your logo', detail: i.repoCount > 0 ? 'Shown on the rail, the sidebar and the Portfolio. Picked from your repositories or a file.' : 'Shown on the rail, the sidebar and the Portfolio. Pick an image file.', done: i.hasLogo, action: { kind: 'logo' }, actionLabel: i.hasLogo ? 'Change' : 'Choose logo' },
     { id: 'passport', title: 'Write your mission', detail: 'The Passport tells every agent what the company does, for whom and in which voice.', done: !!co.mission?.trim(), action: { kind: 'passport' }, actionLabel: co.mission?.trim() ? 'Edit' : 'Write it' },
@@ -112,6 +128,26 @@ export function checklistItems(i: ChecklistInput): ChecklistItem[] {
     },
     dashboardItem(i, 'marketingDashboards'),
     dashboardItem(i, 'financeDashboards'),
+    ...(i.services === undefined
+      ? []
+      : [
+          {
+            id: 'analytics' as const,
+            title: 'Connect your product analytics',
+            detail: analytics.length
+              ? `${analytics.map((s) => s.name).join(', ')} connected. Dashboards, agents and “Ask about your data” use it.`
+              : analyticsHurt
+                ? `${analyticsHurt.name} needs attention: it turned down the key. Fix it once, for every dashboard and agent.`
+                : 'PostHog, Plausible or Search Console, with a key or a sign-in. Once, for every dashboard and agent.',
+            done: analytics.length > 0,
+            pending: i.services === null,
+            // QA-10: nothing connected yet: the founder picks their own tool from a small menu
+            action: analytics.length || analyticsHurt
+              ? { kind: 'connect' as const, serviceId: (analytics[0] ?? analyticsHurt)!.serviceId }
+              : { kind: 'connect' as const, serviceId: 'posthog', choices: ANALYTICS.map((id) => ({ serviceId: id, name: svc(id)?.name ?? id })) },
+            actionLabel: analytics.length ? 'Manage' : analyticsHurt ? `Fix ${analyticsHurt.name}` : 'Connect…'
+          }
+        ]),
     {
       id: 'socials',
       title: 'Connect your social channels',
@@ -126,10 +162,10 @@ export function checklistItems(i: ChecklistInput): ChecklistItem[] {
       id: 'vibiz',
       title: 'Sign in to Vibiz',
       detail: i.vibiz === 'error' ? 'The last sign-in failed. Try again.' : i.vibiz === 'connecting' ? 'Finish signing in in your browser.' : 'Brand kit, ad creatives and campaign analytics for your agents.',
-      done: i.vibiz === 'connected',
-      pending: i.vibiz === null,
+      done: vibizOn,
+      pending: i.vibiz === null && !vibizOn,
       action: { kind: 'vibiz', present: i.vibiz !== 'missing' },
-      actionLabel: i.vibiz === 'connected' ? 'Manage' : i.vibiz === 'missing' ? 'Add connection' : 'Sign in'
+      actionLabel: vibizOn ? 'Manage' : i.vibiz === 'missing' ? 'Add connection' : 'Sign in'
     },
     {
       id: 'slack',

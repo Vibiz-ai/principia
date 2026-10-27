@@ -8,6 +8,7 @@
  *   adapters, the departments consent); the renderer cannot claim more.
  * - On registration, a launch left `running` by a quit or crash is marked failed (§7.4).
  */
+import { connectionsChanged } from '../connections/events'
 import { personaNamesElsewhere, type PersonaAgentLike, type PersonaDepartmentLike } from '../../shared/personas'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -152,8 +153,10 @@ export function onboardingLaunchDeps(h: Hive, o: { journal: JournalStore; keys: 
         // KeyNamespaces.set with no space writes Shared: an onboarding key only ever goes to its own business
         if (!companyId || companyId === PERSONAL_COMPANY_ID) throw new HiveError('forbidden', 'A key from setup is saved only to its business')
         void keys.set(companyId, name, value)
+        // CONNECTIONS.md §4.3 S16: fal, OpenAI, Firecrawl… now show as this company's connected services everywhere
+        connectionsChanged(companyId)
       },
-      remove: (companyId, name) => keys.remove(companyId, name),
+      remove: (companyId, name) => (keys.remove(companyId, name), connectionsChanged(companyId)),
       sharedHas: (name) => h.safe(() => h.vault.list().some((m) => m.name === name), false)
     },
     installWorkflow: async (id: BundledWorkflowId, companyId) => {
