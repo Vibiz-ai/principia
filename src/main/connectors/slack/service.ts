@@ -33,6 +33,7 @@ import { matchSlackTrigger, validateSlackTrigger } from '../../engine'
 import { PERSONAL_COMPANY_ID } from '../../../shared/company'
 import type { Hive } from '../../hive'
 import { emit } from '../../ipc'
+import { connectionsChanged } from '../../connections/events'
 import { log } from '../../log'
 import { notify } from '../../notify'
 import { liveRoot } from '../../live/bridge'
@@ -191,7 +192,10 @@ export class SlackService {
         error: (m, meta) => log.error(`slack: ${m}`, this.safeMeta(meta))
       },
       events: {
-        status: (s) => emit('slack:status', s),
+        status: (s) => {
+          emit('slack:status', s)
+          connectionsChanged(null, 'slack')
+        },
         messages: (b) => this.queueMessages(b.channelId, b.messages),
         channels: (list) => emit('slack:channels', list),
         inbound: (m) => this.dispatchInbound(m),

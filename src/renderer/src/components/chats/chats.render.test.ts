@@ -116,7 +116,8 @@ describe('Grok-style reading', () => {
   it('a time line before a new stretch, and bare web addresses as source chips', async () => {
     const { Blocks } = await import('../chat/ChatCards')
     const { stampsFor } = await import('../../lib/agentChatView')
-    const at = Date.now() - 3600_000
+    // an hour ago, but never before midnight: the stamp must read "Today" at any hour
+    const at = Math.max(new Date().setHours(0, 0, 0, 0), Date.now() - 3600_000)
     const items = [{ id: 'u1', kind: 'user', parent: null, text: 'Find sources', images: 0, state: 'sent', at }, { id: 't1', kind: 'text', parent: null, md: 'See https://www.example.org/post/1 for more.', streaming: false }] as ChatItem[]
     const blocks = buildBlocks(items)
     const html = renderToStaticMarkup(createElement(Blocks, { blocks, live: false, actions: null, stamps: stampsFor(blocks) }))

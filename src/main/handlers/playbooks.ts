@@ -25,6 +25,8 @@ export function companyConnections(h: Hive, companyId: string): string[] {
   for (const k of h.safe(() => h.vault.list(), [])) if (k.companyId === companyId) out.push(k.name)
   const co = h.safe(() => h.company.passport(companyId), null)
   for (const [kind, acc] of Object.entries(co?.accounts ?? {})) if (acc) out.push(kind)
+  // CONNECTIONS.md S7: a service connected in any form (a Stripe key, a sign-in) counts by its registry id
+  for (const st of h.safe(() => h.connections?.list(companyId, { usage: false }) ?? [], [])) if (st.state === 'connected') out.push(st.serviceId)
   return out
 }
 

@@ -19,7 +19,7 @@ import { DashboardFetchError, type HttpFn } from './http'
 import { fixtureGeoEngines, fixtureHttp, sampleKeys, SAMPLE_CONFIG } from './fixtures'
 import { appendTrend, openAiEngine, perplexityEngine } from './providers/geo'
 import { PROVIDERS } from './providers'
-import type { GeoEngine, ProviderCtx } from './providers/types'
+import type { GeoEngine, McpReader, ProviderCtx } from './providers/types'
 import { DashboardStore, type DashboardRow } from './store'
 
 export const TICK_MS = 5 * 60_000
@@ -49,12 +49,22 @@ export interface DashboardServiceDeps {
   http: HttpFn
   /** `gh api` transport (GitHub without a token), null when unavailable. */
   gh?: HttpFn | null
+  /**
+   * CONNECTIONS.md §4.3: the company's working sign-in to a service (a saved MCP connection, never a key-backed one), for
+   * a dashboard that can read through it when no key is saved. null = none.
+   */
+  mcp?: (companyId: string, serviceId: string) => McpReader | null
   /** The installed Claude CLI as a GEO engine, null without it. */
   claudeEngine?: () => GeoEngine | null
   /** HIVE_DASHBOARD_FIXTURES: every provider runs on sample data (dev and screenshots only). */
   fixtures?: boolean
   now?: () => Date
   onChange?: (companyId: string) => void
+  /**
+   * CONN-QA-01: a check of a key the company already has (not one pasted with this check) came back: turned down
+   * (`invalid_key` off for everything, `forbidden` off for the dashboard only) or fine again. Every surface shows it.
+   */
+  onKeyVerdict?: (companyId: string, def: DashboardDef, verdict: { ok: true } | { ok: false; code: 'invalid_key' | 'forbidden'; message: string }) => void
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
 }
 
@@ -102,8 +112,9 @@ export class DashboardService {
     const def = dashboardDef(r.kind)!
     const found = new Map(this.deps.keys.lookup(def.keys.map((k) => k.name), r.companyId).map((l) => [l.name, l.source]))
     const keys: DashboardKeyState[] = def.keys.map((k) => ({ name: k.name, required: k.required, source: found.get(k.name) ?? null }))
+    const signIn = !!def.viaSignIn && keys.some((k) => k.required && !k.source) && !!this.deps.mcp?.(r.companyId, def.viaSignIn.service)
     const status: DashboardStatus = this.inflight.has(r.id) ? { ...r.status, state: 'loading' } : r.status
-    return { id: r.id, companyId: r.companyId, departmentId: r.departmentId, kind: r.kind, config: r.config, status, snapshot: r.snapshot, keys, createdAt: r.createdAt, updatedAt: r.updatedAt }
+    return { id: r.id, companyId: r.companyId, departmentId: r.departmentId, kind: r.kind, config: r.config, status, snapshot: r.snapshot, keys, via: signIn ? 'signIn' : 'key', createdAt: r.createdAt, updatedAt: r.updatedAt }
   }
 
   private def(kind: string): DashboardDef {
@@ -115,8 +126,9 @@ export class DashboardService {
   // ---------- install / update / remove ----------
 
   /** Only fields the catalog declares, trimmed; lists capped; required ones present. */
-  cleanConfig(def: DashboardDef, raw: DashboardConfig): DashboardConfig {
+  cleanConfig(def: DashboardDef, raw: DashboardConfig, viaSignIn = false): DashboardConfig {
     const out: DashboardConfig = {}
+    const optional = new Set(viaSignIn ? (def.viaSignIn?.config ?? []) : [])
     for (const f of def.config) {
       if (f.kind === 'list') {
         const items = configList(raw[f.key]).map((s) => s.slice(0, 300)).slice(0, f.max ?? 20)
@@ -125,7 +137,7 @@ export class DashboardService {
         const v = configText(raw[f.key]).slice(0, 300)
         if (v) out[f.key] = v
       }
-      if (f.required && !out[f.key]) throw new HiveError('validation', `${f.label} is required`, [{ path: `config.${f.key}`, message: `${f.label} is required` }])
+      if (f.required && !optional.has(f.key) && !out[f.key]) throw new HiveError('validation', `${f.label} is required`, [{ path: `config.${f.key}`, message: `${f.label} is required` }])
     }
     return out
   }
@@ -142,14 +154,42 @@ export class DashboardService {
     return out
   }
 
-  /** Saved keys overlaid with the pasted ones; a required key missing from both is a validation error. */
-  private keysFor(def: DashboardDef, companyId: string, pasted: Record<string, string>): Record<string, string> {
-    const keys = this.deps.fixtures ? { ...sampleKeys(def.id), ...this.deps.keys.resolve(def.keys.map((k) => k.name), companyId), ...pasted } : { ...this.deps.keys.resolve(def.keys.map((k) => k.name), companyId), ...pasted }
-    for (const k of def.keys) if (k.required && !keys[k.name]) throw new HiveError('validation', `Add your ${k.label}`, [{ path: `keys.${k.name}`, message: `${k.label} is required` }])
-    return keys
+  /**
+   * Saved keys overlaid with the pasted ones. A required key missing from both is a validation error, unless the
+   * dashboard can read through the company's sign-in to its service (CONNECTIONS.md §4.3): then `mcp` is that sign-in.
+   * A key always wins over a sign-in.
+   */
+  private keysFor(def: DashboardDef, companyId: string, pasted: Record<string, string>): { keys: Record<string, string>; mcp: McpReader | null } {
+    const r = this.route(def, companyId, pasted)
+    this.requireKeys(r)
+    return r
   }
 
-  private ctx(def: DashboardDef, keys: Record<string, string>, config: DashboardConfig, previous: DashboardSnapshot | null, sample = false): ProviderCtx {
+  /** keysFor without the check (install and update check the config first, then the keys). */
+  private route(def: DashboardDef, companyId: string, pasted: Record<string, string>): { keys: Record<string, string>; mcp: McpReader | null; missing: DashboardDef['keys'] } {
+    const keys = this.deps.fixtures ? { ...sampleKeys(def.id), ...this.deps.keys.resolve(def.keys.map((k) => k.name), companyId), ...pasted } : { ...this.deps.keys.resolve(def.keys.map((k) => k.name), companyId), ...pasted }
+    const missing = def.keys.filter((k) => k.required && !keys[k.name])
+    if (!missing.length) return { keys, mcp: null, missing }
+    const mcp = def.viaSignIn ? (this.deps.mcp?.(companyId, def.viaSignIn.service) ?? null) : null
+    return { keys, mcp, missing: mcp ? [] : missing }
+  }
+
+  private requireKeys(r: { missing: DashboardDef['keys'] }): void {
+    const k = r.missing[0]
+    if (k) throw new HiveError('validation', `Add your ${k.label}`, [{ path: `keys.${k.name}`, message: `${k.label} is required` }])
+  }
+
+  /** Whether this dashboard would read through a sign-in for this company right now (no key, a working sign-in). */
+  viaSignIn(kind: DashboardKind, companyId: string): boolean {
+    const def = this.def(kind)
+    try {
+      return !!this.keysFor(def, companyId, {}).mcp
+    } catch {
+      return false
+    }
+  }
+
+  private ctx(def: DashboardDef, keys: Record<string, string>, config: DashboardConfig, previous: DashboardSnapshot | null, sample = false, mcp: McpReader | null = null): ProviderCtx {
     const fixtures = sample || !!this.deps.fixtures
     const http = fixtures ? this.sampleHttp : this.deps.http
     return {
@@ -159,6 +199,7 @@ export class DashboardService {
       now: this.now(),
       previous,
       gh: fixtures ? null : (this.deps.gh ?? null),
+      mcp: fixtures ? null : mcp,
       geoEngines: () => {
         if (fixtures) return fixtureGeoEngines(config)
         const engines: GeoEngine[] = []
@@ -171,14 +212,47 @@ export class DashboardService {
     }
   }
 
-  /** Runs the provider's validation; failures become a validation error with the safe message. */
-  private async validate(def: DashboardDef, keys: Record<string, string>, config: DashboardConfig): Promise<void> {
+  /**
+   * Runs the provider's validation; failures become a validation error with the safe message. `saved`: the company
+   * key was not pasted with this check, so a verdict on it is the connection's (onKeyVerdict).
+   */
+  private async validate(def: DashboardDef, keys: Record<string, string>, config: DashboardConfig, mcp: McpReader | null = null, saved: { companyId: string } | null = null): Promise<void> {
     try {
-      await PROVIDERS[def.id].validate(this.ctx(def, keys, config, null))
+      await PROVIDERS[def.id].validate(this.ctx(def, keys, config, null, false, mcp))
+      if (saved && !mcp) this.deps.onKeyVerdict?.(saved.companyId, def, { ok: true })
     } catch (e) {
       const st = asStatus(e, this.now().toISOString())
+      if (saved && !mcp && (st.code === 'invalid_key' || st.code === 'forbidden')) this.deps.onKeyVerdict?.(saved.companyId, def, { ok: false, code: st.code, message: st.message ?? '' })
       const path = st.code === 'config' ? 'config' : 'keys'
       throw new HiveError('validation', st.message ?? 'The keys could not be checked', [{ path, message: st.message ?? '' }])
+    }
+  }
+
+  /**
+   * CONNECTIONS.md §3.6 / CONN-QA-01: the read-only check on keys pasted outside a dashboard (connections:connectKey).
+   * With the config the dashboard needs, its own check; without it, the provider's check of the key alone (PostHog:
+   * who the key belongs to, US then EU cloud), which may also find a setting (the EU host). Saves nothing. A rejected
+   * key throws a validation error with the safe message; a vendor that can't be reached gives `unchecked`.
+   */
+  async checkKeys(kind: DashboardKind, companyId: string, pasted: Record<string, string>, config: DashboardConfig): Promise<{ checked: 'ok' | 'unchecked' | 'none'; settings?: Record<string, string> }> {
+    const def = this.def(kind)
+    const { keys } = this.keysFor(def, companyId, this.cleanKeys(def, pasted))
+    const ready = def.config.every((c) => !c.required || configText(config[c.key]))
+    const provider = PROVIDERS[def.id]
+    if (!ready && !provider.checkKey) return { checked: 'none' }
+    try {
+      if (ready) {
+        await provider.validate(this.ctx(def, keys, this.cleanConfig(def, config), null))
+        return { checked: 'ok' }
+      }
+      const r = await provider.checkKey!(this.ctx(def, keys, config, null))
+      return { checked: 'ok', ...(r?.settings ? { settings: r.settings } : {}) }
+    } catch (e) {
+      if (e instanceof HiveError) throw e
+      const st = asStatus(e, this.now().toISOString())
+      if (st.code === 'network' || st.code === 'unavailable' || st.code === 'rate_limited') return { checked: 'unchecked' }
+      const path = st.code === 'config' ? 'config' : 'keys'
+      throw new HiveError('validation', st.message ?? 'The key could not be checked', [{ path, message: st.message ?? '' }])
     }
   }
 
@@ -194,10 +268,12 @@ export class DashboardService {
     const def = this.def(input.kind)
     if (!this.deps.companyExists(input.companyId)) throw new HiveError('not_found', 'Company not found')
     if (input.departmentId && this.deps.departmentCompany(input.departmentId) !== input.companyId) throw new HiveError('not_found', 'Department not found')
-    const config = this.cleanConfig(def, input.config)
     const pasted = this.cleanKeys(def, input.keys)
-    const keys = this.keysFor(def, input.companyId, pasted)
-    await this.validate(def, keys, config)
+    const r = this.route(def, input.companyId, pasted)
+    const config = this.cleanConfig(def, input.config, !!r.mcp)
+    this.requireKeys(r)
+    const { keys, mcp } = r
+    await this.validate(def, keys, config, mcp, Object.keys(pasted).length ? null : { companyId: input.companyId })
     this.saveKeys(def, input.companyId, pasted)
     const row = this.store.create({ companyId: input.companyId, departmentId: input.departmentId, kind: def.id, config })
     void this.refresh(row.id).catch(() => undefined)
@@ -209,10 +285,12 @@ export class DashboardService {
     this.assertEnabled()
     const row = this.store.get(id)
     const def = this.def(row.kind)
-    const config = patch.config ? this.cleanConfig(def, patch.config) : row.config
     const pasted = this.cleanKeys(def, patch.keys ?? {})
-    const keys = this.keysFor(def, row.companyId, pasted)
-    await this.validate(def, keys, config)
+    const r = this.route(def, row.companyId, pasted)
+    const config = patch.config ? this.cleanConfig(def, patch.config, !!r.mcp) : row.config
+    this.requireKeys(r)
+    const { keys, mcp } = r
+    await this.validate(def, keys, config, mcp, Object.keys(pasted).length ? null : { companyId: row.companyId })
     this.saveKeys(def, row.companyId, pasted)
     if (patch.config) this.store.updateConfig(id, config)
     this.store.setStatus(id, { state: 'never' })
@@ -252,8 +330,8 @@ export class DashboardService {
     const def = this.def(row.kind)
     let timer: NodeJS.Timeout | undefined
     try {
-      const keys = this.keysFor(def, row.companyId, {})
-      const work = PROVIDERS[def.id].fetch(this.ctx(def, keys, row.config, row.snapshot))
+      const { keys, mcp } = this.keysFor(def, row.companyId, {})
+      const work = PROVIDERS[def.id].fetch(this.ctx(def, keys, row.config, row.snapshot, false, mcp))
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new DashboardFetchError('unavailable', 'The service took too long to answer. Try again later.')), FETCH_TIMEOUT_MS[def.id] ?? DEFAULT_FETCH_TIMEOUT_MS)
         timer.unref?.()

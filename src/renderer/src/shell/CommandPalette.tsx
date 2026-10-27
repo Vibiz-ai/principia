@@ -8,7 +8,10 @@ import { Kbd } from '../components/ui'
 import { rankPalette } from '../lib/paletteRank'
 import { paletteEntities } from '../lib/paletteEntities'
 import { agentNameNow } from './DepartmentGroup'
-import { CONNECTION_CATALOG } from '../lib/connectionCatalog'
+import { SERVICE_REGISTRY } from '@shared/services'
+import { openConnect, useConnections } from '../state/connections'
+import { serviceActions, usedByLine } from '../lib/serviceActions'
+import { runServiceAction } from '../components/connections/ConnectionSlot'
 import { runTitle, sessionPlace, tildify } from '../lib/format'
 import { hive } from '../lib/hive'
 import { goNextNeedsYou, useLiveTruth } from '../state/live'
@@ -87,6 +90,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
   /** COMPANY.md §8.6: workflows, schedules, runs and keys follow the focused company unless widened. */
   const [everywhere, setEverywhere] = useState(false)
   const scope = active === 'all' || everywhere ? undefined : active
+  const services = useConnections(scope ?? null)
   // "New session in X" lists X's repos; focused mode lists the focused company's
   const sessionCompany = launchCompanyId ?? (active === 'all' ? undefined : active)
   const repos = useMemo(() => (multi && sessionCompany ? reposOf(allRepos, sessionCompany) : allRepos), [multi, sessionCompany, allRepos])
@@ -306,10 +310,23 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       // Connections → {each} (design §8): a tool's name opens its card (Instagram, GitHub and Linear open their sheet)
       { id: 'conn:instagram', group: 'Connections', label: 'Connect Instagram…', hint: 'Settings › Connections · posts get ready for your OK; you tap Post', keywords: 'instagram ig social posts meta', exact: ['instagram'], icon: 'link', run: () => void navigate({ name: 'settings', section: 'connections', connect: 'instagram', nonce: Date.now() }) },
       { id: 'conn:gh', group: 'Connections', label: 'Connect GitHub…', hint: 'Settings › Connections · use my gh login for pull requests', keywords: 'github gh git pull request pr push login gh login', exact: ['github', 'gh', 'gh login'], icon: 'link', run: () => void navigate({ name: 'settings', section: 'connections', connect: 'github', nonce: Date.now() }) },
-      ...CONNECTION_CATALOG.filter((c) => c.id !== 'linear' && c.id !== 'github').map<Item>((c) => ({ id: `conn:${c.id}`, group: 'Connections', label: `Connect ${c.name}…`, hint: `Settings › Connections · ${c.description}`, keywords: c.keywords, icon: 'link', run: () => void navigate({ name: 'settings', section: 'connections', nonce: Date.now() }) }))
+      // CONNECTIONS.md §4.3 S11: one row per registry service, from the company's one status: "Connect PostHog…" when
+      // it isn't, and for one that is, its card plus what it lets you do here ("PostHog: See sessions", "Ask PostHog…")
+      ...SERVICE_REGISTRY.filter((d) => !d.soon && d.id !== 'instagram' && d.id !== 'github' && (d.card || services?.some((x) => x.serviceId === d.id && (x.state === 'connected' || x.state === 'attention')))).flatMap<Item>((d) => {
+        const st = services?.find((x) => x.serviceId === d.id)
+        const on = st?.state === 'connected'
+        // QP-1: a turned-down key is "Fix PostHog…", never "Connect PostHog…"
+        const hurt = st?.state === 'attention'
+        const open = (): void => (scope ? openConnect(scope, d.id) : void navigate({ name: 'settings', section: 'connections', connect: d.id, nonce: Date.now() }))
+        const rows: Item[] = [{ id: `conn:${d.id}`, group: 'Connections', label: on ? `${d.name} connection` : hurt ? `Fix ${d.name}… (needs attention)` : `Connect ${d.name}…`, hint: on ? [st!.chip, usedByLine(st) && `used by ${usedByLine(st)}`].filter(Boolean).join(' · ') : `Settings › Connections · ${d.blurb}`, keywords: `${d.keywords} connect ${d.category.toLowerCase()}`, exact: [d.name.toLowerCase()], icon: 'link', run: open }]
+        if (on && scope)
+          for (const act of serviceActions(st))
+            rows.push({ id: `conn:${d.id}:${act.id}`, group: 'Connections', label: act.id === 'ask' ? `Ask ${d.name} about your data…` : `${d.name}: ${act.label}`, hint: act.id === 'ask' ? 'a new chat that reads it with the agent tools' : 'opens in the company browser', keywords: `${d.keywords} ${act.label.toLowerCase()}`, icon: act.id === 'ask' ? 'chat' : 'eye', run: () => runServiceAction(act, { companyId: scope, service: d.name }) })
+        return rows
+      })
     )
     return out
-  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany, plansOn, companyAgents, truth, tasks])
+  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany, plansOn, companyAgents, truth, tasks, services])
 
   const filtered = useMemo(() => rankPalette(items, q, 60), [items, q])
   // five doors step 3 (E13): "Ask Marcus: …" is its own row under the results, routed like Home's Ask box. It is a

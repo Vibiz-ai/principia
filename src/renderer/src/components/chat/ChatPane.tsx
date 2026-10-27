@@ -3,6 +3,7 @@
  * approvals and questions are cards in the conversation. The Terminal toggle hands the same conversation to the real
  * TUI and back.
  */
+import { ChatServiceStarters } from '../connections/ConnectionSlot'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@shared/types'
 import type { ChatDecision, ChatImage } from '@shared/chat'
@@ -158,7 +159,10 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
             <div className={`chat-empty ${who?.face ? 'chat-empty--agent' : ''}`}>
               {who?.face ?? <Icon name="chat" size={20} />}
               {who?.face && <div className="chat-empty__name">{name}</div>}
-              <div>{who?.intro ?? `Ask ${name} anything. It can read and change files in this chat’s folders, run commands and use your company’s tools. It asks before anything risky.`}</div>
+              <div>
+                {who?.intro ?? `Ask ${name} anything. It can read and change files in this chat’s folders, run commands and use your company’s tools. It asks before anything risky.`}
+                {s.companyId && <ChatServiceStarters companyId={s.companyId} onAsk={(t) => void send(t, [])} />}
+              </div>
             </div>
           )}
           {blocks.length > shown.length && (

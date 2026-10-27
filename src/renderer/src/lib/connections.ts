@@ -4,12 +4,13 @@
  * Pure: the page passes in what it loaded (this company's gateway connections, its own accounts, gh, Slack, Linear).
  */
 import type { CompanyAccounts } from '@shared/company'
-import { VIBIZ_CONNECTION_ID, type GatewayConnection } from '@shared/gateway'
+import type { GatewayConnection } from '@shared/gateway'
 import { CONNECTION_CATALOG, presetForUrl, type ConnectionPreset } from './connectionCatalog'
 import { CUSTOM_CONNECT_TOOL, connectLink } from '@shared/deepLink'
+import { connectionState, keyForms, serviceById, type ConnState, type Purpose, type ServiceStatus } from '@shared/services'
 
 /** One state per card (round 2): never "Not connected" and "Drafts only" on the same card. */
-export type CardState = 'connected' | 'attention' | 'waiting' | 'off' | 'notConnected' | 'soon' | 'setup'
+export type CardState = ConnState
 export type CardGroup = 'attention' | 'connected' | 'popular' | 'more' | 'developers' | 'custom'
 /** What the card's one button does. */
 export type CardAction =
@@ -22,6 +23,8 @@ export type CardAction =
   | { kind: 'signIn'; connectionId: string }
   | { kind: 'custom' }
   | { kind: 'guide'; presetId: string }
+  /** CONNECTIONS.md §4.2: the shared connect sheet (key, sign-in, what it unlocks, what uses it) */
+  | { kind: 'service'; serviceId: string }
   | { kind: 'none' }
 
 export interface ConnCard {
@@ -41,6 +44,13 @@ export interface ConnCard {
   actionLabel: string
   group: CardGroup
   keywords: string
+  /** CONNECTIONS.md §2: the registry service behind the card */
+  serviceId?: string
+  /** "Marketing dashboard, 3 agents" */
+  usedBy?: string
+  /** what a connection would unlock (capability labels) and the purposes, for "grouped by need" */
+  unlocks?: string[]
+  purposes?: Purpose[]
 }
 
 export interface CatalogInput {
@@ -65,6 +75,12 @@ export interface CatalogInput {
   companyId: string
   /** Personal has no accounts of its own (Instagram, GitHub): those cards are left out */
   personal?: boolean
+  /**
+   * CONNECTIONS.md §3.2: every service's one status for this company (connections:list). A service connected in any
+   * form (a key, a sign-in, an account) shows as Connected on its card; services with no MCP preset (PostHog by key,
+   * Plausible, Search Console, OpenAI…) get a card too. Absent = the cards above only (older main).
+   */
+  services?: readonly ServiceStatus[]
 }
 
 /** Consumer tools Principia can't sign in to yet: an honest "Coming soon", never a fake Connect. */
@@ -74,21 +90,11 @@ const SOON: { id: string; name: string; blurb: string; keywords: string }[] = [
   { id: 'meta-ads', name: 'Meta Ads', blurb: 'Read ad results. Spending always asks you first.', keywords: 'facebook ads advertising meta campaigns' }
 ]
 const POPULAR_BUSINESS = ['instagram', 'stripe', 'slack', 'notion', 'shopify', 'google-business', 'meta-ads', 'vibiz']
-const POPULAR_CODE = ['github', 'linear', 'sentry', 'supabase', 'slack']
+const POPULAR_CODE = ['github', 'linear', 'sentry', 'supabase', 'posthog', 'slack']
 const DEVELOPER_IDS = new Set(['github', 'linear', 'sentry', 'supabase', 'neon', 'figma', 'asana', 'mobbin'])
 
-const usable = (c: GatewayConnection): boolean => c.enabled && c.authStatus !== 'error' && (c.authentication === 'oauth' ? c.authStatus === 'connected' : c.hasCredentials || c.transport === 'stdio' || c.authentication === 'none' || c.authentication === undefined)
-
-/** A gateway connection's one state. */
-export function connectionState(c: GatewayConnection): { state: CardState; chip: string } {
-  if (!c.enabled) return { state: 'off', chip: 'Turned off' }
-  if (c.authStatus === 'error') return { state: 'attention', chip: 'Needs attention' }
-  if (c.authStatus === 'connecting') return { state: 'waiting', chip: 'Waiting for sign-in' }
-  // the Vibiz card is there from install: never signed in is "Not signed in", not a problem to fix
-  if (c.id === VIBIZ_CONNECTION_ID && c.authentication === 'oauth' && (c.authStatus ?? 'disconnected') === 'disconnected') return { state: 'notConnected', chip: 'Not signed in' }
-  if (c.authentication === 'oauth' && c.authStatus !== 'connected') return { state: 'attention', chip: 'Sign-in needed' }
-  return usable(c) ? { state: 'connected', chip: 'Connected' } : { state: 'attention', chip: 'Needs a key' }
-}
+/** A gateway connection's one state: the shared rule (shared/services.ts), so main's resolver and this page agree. */
+export { connectionState }
 
 /** "Shared by every company" for a connection saved before companies, else null (it is this company's own). */
 function sharedNote(c: GatewayConnection): string | null {
@@ -189,12 +195,13 @@ export function buildCatalog(i: CatalogInput): ConnCard[] {
     const st = connectionState(c)
     cards.push({ id: `conn:${c.id}`, name: c.name, blurb: c.url ?? [c.command, ...(c.args ?? [])].join(' '), ...st, account: null, note: sharedNote(c), action: st.state === 'attention' && c.authentication === 'oauth' ? { kind: 'signIn', connectionId: c.id } : { kind: 'manage', connectionId: c.id }, actionLabel: 'Manage', group: 'connected', keywords: `${c.name} mcp custom` })
   }
+  if (i.services) mergeServices(cards, i.services)
   cards.push({ id: 'custom', name: 'Custom (MCP)', blurb: 'Any MCP server URL or command.', state: 'notConnected', chip: '', account: null, note: null, action: { kind: 'custom' }, actionLabel: 'Add server', group: 'custom', keywords: 'mcp custom server url command advanced' })
   // place each not-connected card
   const popular = i.code ? POPULAR_CODE : POPULAR_BUSINESS
   for (const c of cards) {
     if (c.group === 'connected' || c.group === 'custom') continue
-    c.group = popular.includes(c.id) ? 'popular' : DEVELOPER_IDS.has(c.id) ? 'developers' : 'more'
+    c.group = popular.includes(c.id) ? 'popular' : DEVELOPER_IDS.has(c.id) || serviceById(c.id)?.developer ? 'developers' : 'more'
   }
   // the Connected section holds only what works: a card that needs you (sign in again, a lost gh, Linear offline)
   // sits in its own section above it, so "Connected" never shows a "Sign-in needed" card
@@ -203,6 +210,68 @@ export function buildCatalog(i: CatalogInput): ConnCard[] {
   const rank: Record<CardGroup, number> = { attention: 0, connected: 1, popular: 2, more: 3, developers: 4, custom: 5 }
   const own = i.personal ? cards.filter((c) => c.id !== 'instagram' && c.id !== 'github') : cards
   return own.map((c, n) => ({ c, n })).sort((a, b) => rank[a.c.group] - rank[b.c.group] || order(a.c) - order(b.c) || a.n - b.n).map((x) => x.c)
+}
+
+/**
+ * CONNECTIONS.md §4.3 S1: one card per service, whatever form connects it. A card the gateway alone would call "Not
+ * connected" shows Connected when the service is connected another way (a saved key); a service that can be connected
+ * with a key opens the shared sheet (both ways in one place); every service card says what uses it and what it unlocks.
+ */
+function mergeServices(cards: ConnCard[], services: readonly ServiceStatus[]): void {
+  const byId = new Map(services.map((st) => [st.serviceId, st]))
+  const decorate = (c: ConnCard, st: ServiceStatus): void => {
+    const def = serviceById(st.serviceId)
+    c.serviceId = st.serviceId
+    c.usedBy = st.usedBy.map((u) => u.label).join(', ') || undefined
+    c.unlocks = def?.capabilities.map((x) => x.label)
+    c.purposes = def?.capabilities.map((x) => x.purpose)
+  }
+  for (const c of cards) {
+    const st = byId.get(c.id)
+    const def = serviceById(c.id)
+    if (!st || !def) continue
+    decorate(c, st)
+    const keyed = keyForms(def).length > 0
+    if ((c.state === 'notConnected' || c.state === 'setup') && (st.state === 'connected' || st.state === 'attention' || st.state === 'waiting')) {
+      // connected another way (a key, a token connection, another company's): its own state, managed in the shared
+      // sheet; never the card's "not connected" lines (QP-9: "Uses your gh login" when no gh login is used)
+      const problem = st.forms.find((f) => f.problem)?.problem
+      Object.assign(c, {
+        state: st.state, chip: st.chip, group: 'connected', blurb: def.blurb, account: null,
+        note: st.state === 'attention' ? (problem ?? 'Needs attention') : st.sharedFrom ? `Used from ${st.sharedFrom.name}` : (st.forms[0]?.detail ?? null),
+        action: { kind: 'service', serviceId: st.serviceId }, actionLabel: st.state === 'attention' ? 'Fix' : 'Manage'
+      })
+    } else if (c.state === 'connected' && st.state === 'attention') {
+      // QP-1: a key the vendor turned down shows on the card, whatever the card's own check said
+      Object.assign(c, { state: 'attention', chip: st.chip, note: st.forms.find((f) => f.problem)?.problem ?? c.note, action: { kind: 'service', serviceId: st.serviceId }, actionLabel: 'Fix' })
+    } else if (keyed && (c.action.kind === 'preset' || c.action.kind === 'guide')) {
+      c.action = { kind: 'service', serviceId: st.serviceId }
+      c.actionLabel = 'Connect'
+    } else if (keyed && c.action.kind === 'manage' && st.state === 'connected') {
+      // a sign-in and maybe a key: one sheet shows both, and Disconnect removes both
+      c.action = { kind: 'service', serviceId: st.serviceId }
+      c.chip = st.chip
+    }
+  }
+  for (const st of services) {
+    if (cards.some((c) => c.id === st.serviceId)) continue
+    const def = serviceById(st.serviceId)
+    if (!def || def.soon) continue
+    const on = st.state === 'connected' || st.state === 'attention'
+    if (!on && !def.card) continue
+    const c: ConnCard = {
+      id: def.id, name: def.name, blurb: def.blurb, state: st.state, chip: st.chip, account: null,
+      note: st.state === 'attention' ? (st.forms.find((f) => f.problem)?.problem ?? null) : st.sharedFrom ? `Used from ${st.sharedFrom.name}` : null,
+      action: { kind: 'service', serviceId: def.id }, actionLabel: st.state === 'attention' ? 'Fix' : on ? 'Manage' : 'Connect', group: on ? 'connected' : 'more', keywords: `${def.keywords} ${def.category} ${def.name.toLowerCase()}`
+    }
+    decorate(c, st)
+    cards.push(c)
+  }
+}
+
+/** "Grouped by need": the cards whose service can do this. */
+export function cardsFor(cards: readonly ConnCard[], need: Purpose | 'all'): ConnCard[] {
+  return need === 'all' ? [...cards] : cards.filter((c) => c.purposes?.includes(need))
 }
 
 export const GROUP_TITLE: Record<CardGroup, (companyName: string, code: boolean) => string> = {

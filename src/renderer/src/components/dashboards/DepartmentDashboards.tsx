@@ -3,6 +3,10 @@
  * <Department>" cards, and the dashboard marketplace (every catalog dashboard, filtered by department, category and
  * search, with a sample-data preview). Adding one opens the key form: only the keys that dashboard needs, each with
  * where to get it, checked by main with a real read-only call before anything is saved.
+ *
+ * CONNECTIONS.md §4.3: a dashboard whose service the company already has (a key under any of its names, or a sign-in
+ * that can read it, like PostHog's) shows "PostHog connected" and adds with no key form; one that isn't shows the shared
+ * "Connect PostHog" slot. An installed PostHog dashboard also offers "See sessions" and "Ask about your data".
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEPARTMENT_PRESETS, type Department, type DepartmentPresetKey } from '@shared/company'
@@ -22,7 +26,11 @@ import {
 import { Button, IconButton, Pill, RelativeTime, Sheet } from '../ui'
 import { Icon } from '../Icon'
 import { confirmNative, errorMessage, hive, nativeMenu, useHiveEvent, type RendererHiveError } from '../../lib/hive'
-import { installReadiness, keysReady, monogram, statusCopy } from '../../lib/dashboards'
+import { installReadiness, keysReady, statusCopy } from '../../lib/dashboards'
+import { serviceMonogram } from '../../lib/serviceActions'
+import { ConnectionSlot, runServiceAction } from '../connections/ConnectionSlot'
+import { openConnect, useConnection } from '../../state/connections'
+import { serviceActions, viaWords } from '../../lib/serviceActions'
 import { attempt, toast } from '../../state/store'
 import { DashboardBody } from './DashboardBody'
 import '../../styles/dashboards.css'
@@ -65,6 +73,17 @@ function useKeyLookups(companyId: string, defs: readonly DashboardDef[]): Record
   return map
 }
 
+/** The one registry service a dashboard needs a key for (null: GEO's optional engines, GitHub's gh login). */
+export const dashboardService = (def: DashboardDef): string | null => (def.services.length === 1 && def.keys.some((k) => k.required) ? def.services[0]! : null)
+
+/** How the company's connection serves a dashboard now: 'key', 'signIn' (no key, a sign-in that reads it), or null. */
+function useDashboardRoute(companyId: string, def: DashboardDef): { route: 'key' | 'signIn' | null; service: string | null } {
+  const service = dashboardService(def)
+  const { status, ok } = useConnection(companyId, service ?? '', 'dashboard')
+  if (!service || !ok || !status) return { route: null, service }
+  return { route: status.purposes.dashboard?.via === 'mcp' ? 'signIn' : 'key', service }
+}
+
 const presetName = (key: DepartmentPresetKey | null): string | null => (key ? (DEPARTMENT_PRESETS.find((p) => p.key === key)?.name ?? null) : null)
 
 export function DepartmentDashboards({ dep }: { dep: Department }): React.JSX.Element {
@@ -89,14 +108,14 @@ export function DepartmentDashboards({ dep }: { dep: Department }): React.JSX.El
         </Button>
       </header>
       {items?.map((d, i) => (
-        <DashboardPanel key={d.id} item={d} defaultOpen={i === 0} onEdit={() => setInstalling({ def: dashboardDef(d.kind)!, existing: d })} onChanged={reload} />
+        <DashboardPanel key={d.id} item={d} departmentId={dep.id} defaultOpen={i === 0} onEdit={() => setInstalling({ def: dashboardDef(d.kind)!, existing: d })} onChanged={reload} />
       ))}
       {recs.length > 0 && !readonly && (
         <div className="dsh-recs">
           <div className="dsh-eyebrow">Recommended for {dep.name}</div>
           <div className="dsh-recs__grid">
             {recs.map((def) => (
-              <RecommendedCard key={def.id} def={def} lookups={lookups[def.id] ?? []} onAdd={() => setInstalling({ def })} onPreview={() => setMarket({ open: def })} />
+              <RecommendedCard key={def.id} def={def} companyId={dep.companyId} lookups={lookups[def.id] ?? []} onAdd={() => setInstalling({ def })} onPreview={() => setMarket({ open: def })} />
             ))}
           </div>
         </div>
@@ -142,7 +161,7 @@ function Roundel({ def, size = 30 }: { def: DashboardDef; size?: number }): Reac
         <circle cx="16" cy="16" r="15" className="dsh-roundel__outer" />
         <circle cx="16" cy="16" r="12.5" className="dsh-roundel__inner" />
       </svg>
-      <span className="dsh-roundel__text">{monogram(def.provider)}</span>
+      <span className="dsh-roundel__text">{serviceMonogram(def.provider)}</span>
     </span>
   )
 }
@@ -165,8 +184,9 @@ function KeyChips({ def, lookups }: { def: DashboardDef; lookups: DashboardKeyLo
   )
 }
 
-function RecommendedCard({ def, lookups, onAdd, onPreview }: { def: DashboardDef; lookups: DashboardKeyLookup[]; onAdd: () => void; onPreview: () => void }): React.JSX.Element {
-  const ready = keysReady(def, lookups)
+function RecommendedCard({ def, companyId, lookups, onAdd, onPreview }: { def: DashboardDef; companyId: string; lookups: DashboardKeyLookup[]; onAdd: () => void; onPreview: () => void }): React.JSX.Element {
+  const { route, service } = useDashboardRoute(companyId, def)
+  const ready = !!route || keysReady(def, lookups)
   return (
     <div className="dsh-rec">
       <div className="dsh-rec__top">
@@ -177,11 +197,14 @@ function RecommendedCard({ def, lookups, onAdd, onPreview }: { def: DashboardDef
         </span>
       </div>
       <p className="dsh-rec__tagline">{def.tagline}</p>
-      <KeyChips def={def} lookups={lookups} />
+      {service ? <ConnectionSlot companyId={companyId} service={service} purpose="dashboard" variant="inline" actions={false} /> : <KeyChips def={def} lookups={lookups} />}
       <div className="dsh-rec__actions">
-        <Button size="sm" variant="primary" icon="plus" onClick={onAdd}>
-          {ready ? 'Add' : 'Add your keys'}
-        </Button>
+        {/* a service-backed dashboard that isn't connected yet has one button: the slot's "Connect PostHog" above */}
+        {(!service || ready) && (
+          <Button size="sm" variant="primary" icon="plus" onClick={onAdd}>
+            {ready ? 'Add' : 'Add your keys'}
+          </Button>
+        )}
         <Button size="sm" variant="ghost" onClick={onPreview}>
           Preview
         </Button>
@@ -192,8 +215,11 @@ function RecommendedCard({ def, lookups, onAdd, onPreview }: { def: DashboardDef
 
 // ---------- an installed dashboard ----------
 
-function DashboardPanel({ item, defaultOpen, onEdit, onChanged }: { item: InstalledDashboard; defaultOpen: boolean; onEdit: () => void; onChanged: () => void }): React.JSX.Element | null {
+function DashboardPanel({ item, departmentId, defaultOpen, onEdit, onChanged }: { item: InstalledDashboard; departmentId: string; defaultOpen: boolean; onEdit: () => void; onChanged: () => void }): React.JSX.Element | null {
   const def = dashboardDef(item.kind)
+  const service = def ? dashboardService(def) : null
+  const { status: conn } = useConnection(item.companyId, service ?? '')
+  const acts = service ? serviceActions(conn) : []
   const [open, setOpen] = useState(defaultOpen)
   const [busy, setBusy] = useState(false)
   if (!def) return null
@@ -244,6 +270,12 @@ function DashboardPanel({ item, defaultOpen, onEdit, onChanged }: { item: Instal
           </span>
         </button>
         {snap?.sample && <Pill tone="accent" title="HIVE_DASHBOARD_FIXTURES is on: these numbers are sample data">sample data</Pill>}
+        {item.via === 'signIn' && <Pill tone="idle" title={`Reads through ${def.provider}’s sign-in (no key saved)`}>via sign-in</Pill>}
+        {acts.map((a) => (
+          <Button key={a.id} size="sm" variant="ghost" onClick={() => runServiceAction(a, { companyId: item.companyId, departmentId, service: def.provider })}>
+            {a.label}
+          </Button>
+        ))}
         {loading && <span className="dsh-panel__busy">Refreshing…</span>}
         <IconButton icon="refresh" label={`Refresh ${def.name}`} disabled={loading} onClick={() => void refresh()} />
         <IconButton icon="more" label="More" onClick={() => void more()} />
@@ -281,6 +313,19 @@ function DashboardPanel({ item, defaultOpen, onEdit, onChanged }: { item: Instal
 
 const DEPARTMENT_FILTERS: { value: DepartmentPresetKey | 'all'; label: string }[] = [{ value: 'all', label: 'All departments' }, ...DEPARTMENT_PRESETS.map((p) => ({ value: p.key, label: p.name }))]
 
+function NeedsLine({ def, companyId }: { def: DashboardDef; companyId: string }): React.JSX.Element {
+  const { route, service } = useDashboardRoute(companyId, def)
+  const { status } = useConnection(companyId, service ?? '')
+  if (route && status) return <>{`${status.name} connected · ${viaWords(status)}`}</>
+  // QA-08: connected, but not in a form this dashboard can read: say which key it needs, never "Needs Stripe"
+  if (status && (status.state === 'connected' || status.state === 'attention')) {
+    const p = status.purposes.dashboard
+    const k = p?.fixKey ? def.keys.find((x) => x.name === p.fixKey) : def.keys.find((x) => x.required)
+    return <>{status.state === 'attention' ? `${status.name} needs attention` : `${status.name} connected · needs ${k ? `a ${k.label.replace(/\s*\(.*?\)/g, '').toLowerCase()}` : 'another key'} for this dashboard`}</>
+  }
+  return <>{def.keys.filter((k) => k.required).length ? `Needs ${service && status ? status.name : def.keys.filter((k) => k.required).map((k) => k.label).join(', ')}` : 'No key required'}</>
+}
+
 function DashboardMarketplace({ dep, installed, initial, onClose, onAdd }: { dep: Department; installed: Set<string>; initial: DashboardDef | null; onClose: () => void; onAdd: (def: DashboardDef) => void }): React.JSX.Element {
   const preset = dashboardDepartmentKey(dep)
   const [query, setQuery] = useState('')
@@ -292,7 +337,7 @@ function DashboardMarketplace({ dep, installed, initial, onClose, onAdd }: { dep
   return (
     <Sheet title="Dashboard marketplace" onCancel={onClose} cancelLabel="Done" width={860}>
       <div className="dsh-market">
-        <p className="dsh-market__intro">Add your keys and the numbers fill in. Each dashboard asks only for the keys it needs, checks them with one read-only request, and refreshes on its own.</p>
+        <p className="dsh-market__intro">Dashboards use this company’s connections: a service connected anywhere in Principia fills its numbers here. One that isn’t connected yet asks for its key or sign-in once, checks it with one read-only request, and refreshes on its own.</p>
         <div className="dsh-market__controls">
           <label className="dsh-market__search">
             <Icon name="search" size={14} />
@@ -332,7 +377,7 @@ function DashboardMarketplace({ dep, installed, initial, onClose, onAdd }: { dep
                   {preset && def.departments.includes(preset) ? ' · recommended here' : ''}
                 </span>
                 <span className="dsh-market__needs">
-                  {def.keys.filter((k) => k.required).length ? `Needs ${def.keys.filter((k) => k.required).map((k) => k.label).join(', ')}` : 'No key required'}
+                  <NeedsLine def={def} companyId={dep.companyId} />
                   <span>
                     Preview <Icon name="chevronRight" size={11} />
                   </span>
@@ -376,6 +421,10 @@ function MarketDetail({ dep, def, installed, onBack, onClose, onAdd }: { dep: De
 
 // ---------- adding keys ----------
 
+const configHas = (v: string | string[] | undefined): boolean => (Array.isArray(v) ? v.length > 0 : !!(v ?? '').trim())
+/** The dashboard can read through a sign-in to its service (PostHog). */
+const dashboardSignIn = (def: DashboardDef): boolean => !!def.viaSignIn
+
 function InstallDashboardSheet({ dep, def, existing, onClose, onDone }: { dep: Department; def: DashboardDef; existing?: InstalledDashboard; onClose: () => void; onDone: () => void }): React.JSX.Element {
   const [lookups, setLookups] = useState<DashboardKeyLookup[]>([])
   const [pasted, setPasted] = useState<Record<string, string>>({})
@@ -389,11 +438,27 @@ function InstallDashboardSheet({ dep, def, existing, onClose, onDone }: { dep: D
     return c
   })
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<{ message: string; path: string | null } | null>(null)
   useEffect(() => {
     hive.dashboards.keys({ companyId: dep.companyId, kind: def.id }).then(setLookups, () => setLookups([]))
   }, [dep.companyId, def.id])
-  const ready = installReadiness(def, lookups, pasted, config)
+  // CONNECTIONS.md §4.3: the company's connection already serves this dashboard: no key form, settings prefilled
+  const { route, service } = useDashboardRoute(dep.companyId, def)
+  const { status: conn } = useConnection(dep.companyId, service ?? '')
+  const [replacing, setReplacing] = useState(false)
+  const [error, setError] = useState<{ message: string; path: string | null } | null>(null)
+  // QP-7: a key the vendor just turned down is never "already connected, no key to add": the key fields come back
+  const useConnectionRoute = !!route && !replacing && error?.path !== 'keys'
+  // QA-08: connected, but not in a form this dashboard reads (Stripe with an agent key): why, and where the one key goes
+  const notForThis = !route && conn && (conn.state === 'connected' || conn.state === 'attention') ? conn.purposes.dashboard : undefined
+  useEffect(() => {
+    if (!conn?.settings) return
+    setConfig((c) => {
+      const next = { ...c }
+      for (const f of def.config) if (!configHas(next[f.key]) && conn.settings[f.key]) next[f.key] = conn.settings[f.key]!
+      return next
+    })
+  }, [conn?.settings, def.config])
+  const ready = installReadiness(def, lookups, pasted, config, useConnectionRoute ? route : null)
   const submit = async (): Promise<void> => {
     if (!ready.ok || busy) return
     setBusy(true)
@@ -423,7 +488,7 @@ function InstallDashboardSheet({ dep, def, existing, onClose, onDone }: { dep: D
       primaryDisabled={!ready.ok || busy}
       primaryTitle={ready.ok ? undefined : `Still needed: ${ready.missing.join(', ')}`}
       width={620}
-      footerLeft={<span className="dsh-install__safe"><Icon name="lock" size={11} /> Checked with one read-only request, stored encrypted in this company’s Keys, never shown again.</span>}
+      footerLeft={<span className="dsh-install__safe"><Icon name="lock" size={11} /> {useConnectionRoute ? `Checked with one read-only request through ${def.provider}, already connected for this company.` : 'Checked with one read-only request, stored encrypted in this company’s Keys, never shown again.'}</span>}
     >
       <div className="dsh-install">
         {error && (
@@ -432,7 +497,43 @@ function InstallDashboardSheet({ dep, def, existing, onClose, onDone }: { dep: D
           </div>
         )}
         {def.keylessNote && <p className="dsh-install__note">{def.keylessNote}</p>}
-        {def.keys.map((k) => {
+        {notForThis && conn && (
+          <p className="dsh-install__note">
+            {conn.name} is connected for this company ({conn.chip.replace(/^Connected · /, '')}). {notForThis.why ?? `${def.name} needs its own key.`}{' '}
+            {service && (
+              <button type="button" className="dep-link" onClick={() => openConnect(dep.companyId, service, 'dashboard')}>
+                Add it in {conn.name}’s connection
+              </button>
+            )}
+          </p>
+        )}
+        {useConnectionRoute && conn && (
+          <div className="dsh-key">
+            <div className="dsh-key__saved">
+              <Icon name="check" size={12} />
+              <span>
+                Uses {conn.name}, already connected for this company · {viaWords(conn)}. No key to add.
+                {route === 'signIn' ? ' It reads through the sign-in, which already picked the project.' : ''}
+              </span>
+              <span className="flex1" />
+              {route === 'key' && (
+                <button type="button" className="dep-link" onClick={() => setReplacing(true)}>
+                  Use another key
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {!route && service && dashboardSignIn(def) && (
+          <p className="dsh-install__note">
+            Or skip the key:{' '}
+            <button type="button" className="dep-link" onClick={() => openConnect(dep.companyId, service, 'dashboard')}>
+              sign in to {def.provider}
+            </button>{' '}
+            and this dashboard reads through the sign-in.
+          </p>
+        )}
+        {!useConnectionRoute && def.keys.map((k) => {
           const saved = lookups.find((l) => l.name === k.name)
           const showInput = !saved?.source || replace[k.name]
           return (
@@ -481,7 +582,7 @@ function InstallDashboardSheet({ dep, def, existing, onClose, onDone }: { dep: D
                   ) : (
                     <input className="input" placeholder={f.placeholder} value={config[f.key] as string} onChange={(e) => setConfig({ ...config, [f.key]: e.target.value })} />
                   )}
-                  {f.hint && <span className="dep-field__hint">{f.hint}{f.required ? '' : ' Optional.'}</span>}
+                  {f.hint && <span className="dep-field__hint">{f.hint}{f.required && !(useConnectionRoute && route === 'signIn' && def.viaSignIn?.config.includes(f.key)) ? '' : ' Optional.'}</span>}
                 </span>
               </label>
             ))}

@@ -28,6 +28,7 @@ import { useScope } from '../components/CompanyChip'
 import { useIsCode } from '../components/desk/Desk'
 import { useDeskAgents } from '../state/desk'
 import { ConnectionsPage } from '../components/connections/ConnectionsPage'
+import type { Purpose } from '@shared/services'
 import { DiskSection } from '../components/usage/DiskSection'
 import { PrincipiaRunsTeam } from '../components/orchestrator/PrincipiaTeam'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
@@ -48,7 +49,7 @@ import '../styles/settings5.css'
  */
 export { defaultSettingsSection } from '../lib/settingsModel'
 
-export function SettingsView({ section, nonce, connect }: { section?: SettingsSection; nonce?: number; connect?: string }): React.JSX.Element {
+export function SettingsView({ section, nonce, connect, purpose }: { section?: SettingsSection; nonce?: number; connect?: string; purpose?: Purpose }): React.JSX.Element {
   const { company, multi } = useScope()
   const companies = useStore((s) => s.companies)
   const inCompany = !!company
@@ -127,7 +128,7 @@ export function SettingsView({ section, nonce, connect }: { section?: SettingsSe
             {!settings ? null : cur === 'pick' ? (
               <CompanyPick companies={pickable} section={pickTarget(section)} />
             ) : cur === 'connections' && company ? (
-              <ConnectionsPage key={connect ? `open-${nonce ?? 0}` : company.id} company={company} open={connect ?? null} />
+              <ConnectionsPage key={connect ? `open-${nonce ?? 0}` : company.id} company={company} open={connect ?? null} {...(purpose ? { purpose } : {})} />
             ) : cur === 'team' && company ? (
               <TeamAutonomy company={company} />
             ) : cur === 'general' ? (

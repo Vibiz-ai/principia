@@ -771,6 +771,8 @@ export type HiveErrorCode =
   | 'internal'
   /** a declared channel whose implementation has not shipped yet (PASSPORT.md §11 stubs) */
   | 'not_implemented'
+  /** CONNECTIONS.md §3.2: the service is not connected for this purpose (the message carries the connect link) */
+  | 'not_connected'
 export interface HiveErrorShape {
   code: HiveErrorCode
   message: string

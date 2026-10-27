@@ -2,6 +2,7 @@
  * Home's one suggestion at a time (lib/nudges.ts): a quiet card above Needs you with one action and a "Don't suggest
  * this again". It never blocks anything; doing what it suggests also retires it.
  */
+import { useConnections } from '../../state/connections'
 import { useMemo, useState } from 'react'
 import { connectionsFor } from '@shared/gateway'
 import { presetForUrl } from '@shared/connectionCatalog'
@@ -34,6 +35,7 @@ export function NudgeCard({ companyId }: { companyId: Id }): React.JSX.Element |
   const { ctx, schedules, workflows } = useRoutineContext(companyId)
   const [busy, setBusy] = useState(false)
 
+  const services = useConnections(companyId)
   const tasks = useMemo(() => allTasks.filter((t) => t.companyId === companyId), [allTasks, companyId])
   const connected = useMemo(() => {
     if (!setup.connections) return null
@@ -44,8 +46,10 @@ export function NudgeCard({ companyId }: { companyId: Id }): React.JSX.Element |
     }
     if (company?.accounts?.instagram) ids.add('instagram')
     if (company?.accounts?.github) ids.add('github')
+    // CONNECTIONS.md §4.3 S10: connected in any form (a saved key counts) means no "Connect it" nudge
+    for (const st of services ?? []) if (st.state === 'connected') ids.add(st.serviceId)
     return ids
-  }, [setup.connections, companyId, company?.accounts])
+  }, [setup.connections, companyId, company?.accounts, services])
   const routinesOn = useMemo(() => new Set<RoutineId>(schedules ? ROUTINE_IDS.filter((id) => routineSchedule(id, companyId, records?.[id], schedules)?.enabled) : []), [schedules, records, companyId])
 
   const nudge = useMemo<Nudge | null>(() => {

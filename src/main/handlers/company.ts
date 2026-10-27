@@ -5,6 +5,7 @@ import { previewGithubIssue } from '../company/github'
 import { baseChildEnv } from '../loginEnv'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
+import { connectionsChanged } from '../connections/events'
 import { registerPassportStubs } from './passportStubs'
 import { BrowserWindow, dialog, nativeImage } from 'electron'
 import type { CompanyPassport } from '../../shared/company'
@@ -90,8 +91,8 @@ export function registerCompanyHandlers(h: Hive): void {
   // AUTOPILOT.md §7: a new company starts with Autopilot on (it has no work yet, so nothing starts by itself; the
   // limits stay: tasks at once, the monthly cap, Pause). Existing companies keep their switch.
   handle('company:create',input=>{const p=newCompanyAutopilotOn(c,c.create(input));changed('company');reposChanged();return p})
-  handle('company:update',({id,patch})=>{const p=c.update(id,patch);changed('company');return p})
-  handle('company:archive',({id,archived})=>{const p=c.archive(id,archived??true);changed('company');return p})
+  handle('company:update',({id,patch})=>{const p=c.update(id,patch);changed('company');if(patch.account!==undefined)connectionsChanged(id);return p})
+  handle('company:archive',({id,archived})=>{const p=c.archive(id,archived??true);if(archived??true){for(const other of h.safe(()=>h.connections?.companyArchived(id)??[],[]))connectionsChanged(other)};changed('company');return p})
   handle('company:reorder',({ids})=>{const list=c.reorder(ids);changed('company');return list})
   handle('company:assignRepo',({repoId,companyId})=>{const p=c.assignRepo(repoId,companyId);changed('company');emit('data:changed',{domain:'repos'});return p})
   handle('company:overview',()=>c.overview())
