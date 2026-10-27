@@ -6,7 +6,9 @@
  * - A direct chat (Claude or Codex, repo sessions, department chats) is that chat itself (CHAT-UI.md), with the
  *   session's panel; a session that is not a chat shows who and where, what it is doing, its questions and its last
  *   answer (code companies get a Terminal button, C7: no Terminal elsewhere).
- * - With nothing picked it opens the last conversation you had open in this company, else the newest.
+ * - A conversation with the team, or your private one with one agent (CHAT-UI.md §7): the thread itself.
+ * - With nothing picked (or "New conversation") a company opens New conversation: To: Principia picks ▾, the line
+ *   that says who will answer, and your recent conversations. All companies opens the last chat you had open.
  * - Empty: the company's own empty state ("No chats in Harbor Dental Group yet…").
  */
 import { useEffect } from 'react'
@@ -30,6 +32,8 @@ import { focusAgent, useOpenAsks } from '../state/live'
 import { pausedChatsLine } from '../state/desk'
 import { focusSession, openNewChat, providerLabel, useStore, type ChatsFilter } from '../state/store'
 import { MarkdownLite } from '../components/diagrams/MarkdownLite'
+import { ConversationThread, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
+import type { Id } from '@shared/types'
 import '../styles/diagrams.css'
 import '../styles/desk.css'
 
@@ -38,12 +42,15 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
   const { scope, company } = useScope()
   const rows = useChatRows(scope)
   const remembered = lastChat(scope)
-  const cur = (chat && rows.find((r) => r.key === chat)) || (remembered && rows.find((r) => r.key === remembered)) || rows[0] || null
+  // CHAT-UI.md §7: in a company, Chats with nothing picked is New conversation, not the newest row
+  const pane = !!scope && (!chat || chat.startsWith('new'))
+  const cur = pane ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && rows.find((r) => r.key === remembered)) || rows[0] || null
   const code = useIsCode(scope)
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   useEffect(() => {
     if (cur) rememberChat(scope, cur.key)
   }, [scope, cur?.key])
+  if (pane && scope) return <NewConversationPane companyId={scope} chat={chat} companyName={company?.name ?? ''} />
   if (!cur)
     return (
       <div className="view">
@@ -68,6 +75,13 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
 function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): React.JSX.Element {
   if (row.kind === 'agent') return <AgentConversation agent={row.agent} />
   if (row.kind === 'session') return <DirectChat session={row.session} code={code} />
+  if (row.kind === 'conv')
+    return (
+      <div className="view convo-view">
+        <Toolbar title="Chats" sub={<span className="company-toolbar-meta">{row.conv.private ? 'One-on-one · private' : 'With the team'}</span>} />
+        <ConversationThread companyId={row.companyId} channelId={row.conv.id} />
+      </div>
+    )
   return (
     <div className="view convo-view">
       <Toolbar
@@ -87,6 +101,24 @@ function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): Reac
       </Toolbar>
       <div className="chats5-session">
         <AgentTimeline agentId={row.agentId} note={row.detail} />
+      </div>
+    </div>
+  )
+}
+
+/** CHAT-UI.md §7: New conversation (the sidebar button, ⌥⌘N, Team › Message): the composer and your recent ones. */
+function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; chat: string | undefined; companyName: string }): React.JSX.Element {
+  return (
+    <div className="view">
+      <Toolbar title="Chats" sub={<span className="company-toolbar-meta">{companyName}</span>} />
+      <div className="scroll view__body">
+        <div className="cx-newpane" data-chatux="new-pane">
+          <h2 className="cx-newpane__title">New conversation</h2>
+          <p className="cx-newpane__sub">Say what you need. Principia brings in the right people, or pick someone in To.</p>
+          <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} />
+          <div className="cx-newpane__sec">Recent conversations</div>
+          <RecentConversations companyId={companyId} limit={8} onOpen={openConversation} empty="Your conversations show here, each with who is in it." />
+        </div>
       </div>
     </div>
   )

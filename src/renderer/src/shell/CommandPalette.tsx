@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Run, Schedule, SecretMeta, Workflow } from '@shared/types'
 import { openCustomizeSidebar } from './CustomizeSidebar'
-import { routeAsk } from '../lib/desk'
-import { sendToAgent, useDeskAgents } from '../state/desk'
+import { useDeskAgents } from '../state/desk'
+import { conversationOfRunTitle, routeLine, routeTeam } from '../lib/conversations'
+import { conversationText, startConversation, useConversations, whoLine } from '../state/conversations'
+import { openConversation } from '../components/conversations/ConversationKit'
 import { Icon } from '../components/Icon'
 import { Kbd } from '../components/ui'
 import { rankPalette } from '../lib/paletteRank'
@@ -102,6 +104,8 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
   const companyAgents = useStore((s) => s.companyAgents)
   const tasks = useStore((s) => s.tasks)
   const truth = useLiveTruth()
+  // CHAT-UI.md §7: conversations are found by title, who is in them and what about; reply runs open their conversation
+  const convs = useConversations(mode === 'all' && active !== 'all' ? active : null)
   const adapter = settings?.defaultAdapter ?? 'claude'
   const plansOn = plansEnabled(settings?.experimental)
   const [q, setQ] = useState('')
@@ -254,13 +258,27 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       ...(live.working.length
         ? [{ id: 'a:working', group: 'Working now', label: `Go to working… (${live.working.length})`, hint: 'Chats › Live', keywords: 'running live sessions agents', icon: 'agents', run: () => void navigate({ name: 'chats', filter: 'live' }) }]
         : []),
-      ...live.working.slice(0, 40).map<Item>((it) => ({
-        id: `agent:${it.agentId}`,
-        group: 'Working now',
-        label: `Go to ${it.title}`,
-        hint: [multi && !scope ? companyName(it.companyId) : null, it.detail].filter(Boolean).join(' · ') || undefined,
-        icon: 'agents',
-        run: () => void openLiveItem({ agentId: it.agentId, askId: null, companyId: it.companyId })
+      ...live.working.slice(0, 40).map<Item>((it) => {
+        const reply = conversationOfRunTitle(it.title, convs)
+        return {
+          id: `agent:${it.agentId}`,
+          group: 'Working now',
+          label: reply ? `Go to ${reply.conv?.title ?? it.title}` : `Go to ${it.title}`,
+          hint: (reply ? `${reply.who ?? 'Someone'} answering` : [multi && !scope ? companyName(it.companyId) : null, it.detail].filter(Boolean).join(' · ')) || undefined,
+          icon: 'agents',
+          run: () => (reply?.conv ? openConversation(reply.conv.id) : void openLiveItem({ agentId: it.agentId, askId: null, companyId: it.companyId }))
+        }
+      })
+    )
+    out.push(
+      ...convs.map<Item>((c) => ({
+        id: `conv:${c.id}`,
+        group: 'Conversations',
+        label: c.title,
+        hint: whoLine(c),
+        keywords: conversationText(c),
+        icon: 'chat',
+        run: () => openConversation(c.id)
       }))
     )
     out.push(
@@ -272,7 +290,8 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       ...workflows.map<Item>((w) => ({ id: `wfe:${w.id}`, group: 'Workflows', label: `Edit ${w.name}`, icon: 'workflows', run: () => void navigate({ name: 'editor', workflowId: w.id, nonce: Date.now() }) })),
       ...workflows.map<Item>((w) => ({ id: `wfs:${w.id}`, group: 'Workflows', label: `Schedule ${w.name}…`, icon: 'schedules', run: () => void navigate({ name: 'schedules', seed: { workflowId: w.id }, nonce: Date.now() }) })),
       ...schedules.map<Item>((s) => ({ id: `sch:${s.id}`, group: 'Schedules', label: s.name, hint: multi && !scope ? `${chip(s)} · ${s.sentence}` : s.sentence, icon: 'clock', run: () => void navigate({ name: 'schedules', selectedId: s.id }) })),
-      ...runs.map<Item>((r) => ({
+      // a reply in a conversation is the conversation's (above), never a run to open: its internals are plumbing
+      ...runs.filter((r) => !conversationOfRunTitle(runTitle(r, 200), [])).map<Item>((r) => ({
         id: `run:${r.id}`,
         group: 'Recent runs',
         label: runTitle(r, 60),
@@ -326,14 +345,15 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       })
     )
     return out
-  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany, plansOn, companyAgents, truth, tasks, services])
+  }, [mode, repos, sessions, workflows, schedules, runs, secrets, adapter, settings?.lastRepoId, agents, asks, drafts, companies, multi, active, scope, launchCompanyId, sessionCompany, plansOn, companyAgents, truth, tasks, services, convs])
 
   const filtered = useMemo(() => rankPalette(items, q, 60), [items, q])
-  // five doors step 3 (E13): "Ask Marcus: …" is its own row under the results, routed like Home's Ask box. It is a
-  // click (or Tab then Enter), never the Enter default, so a typo never sends work to an agent.
+  // CHAT-UI.md §7: "New conversation: …" is its own row under the results, routed like Home's composer (Principia
+  // picks, or the @name), and it opens the conversation. It is a click (or ↓ then Enter), never the Enter default, so a
+  // typo never sends work to an agent.
   const teamOn = useStore((st) => departmentsOn(st))
   const deskTeam = useDeskAgents(mode === 'all' && active !== 'all' && teamOn ? active : null)
-  const askTarget = q.trim().length >= 3 ? routeAsk(q, deskTeam) : null
+  const askTarget = q.trim().length >= 3 ? routeTeam(q, deskTeam) : null
   // "New task: …" (pm-review, Diego): the words become a task in quick create, its agent and branch shown before ↵
   const taskTarget = mode === 'all' && active !== 'all' && q.trim().length >= 3 ? active : null
   // the footer rows (New task, then Ask) are reached with ↓ past the last result (or ↓ when nothing matches); only
@@ -347,9 +367,9 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
     setFootSel(-1)
   }, [q])
   const ask = (): void => {
-    if (!askTarget) return
+    if (!askTarget || active === 'all') return
     closePalette()
-    void sendToAgent(askTarget.agent.id, q, { open: true })
+    void startConversation(active, q, askTarget).then((id) => id && openConversation(id))
   }
   const newTask = (): void => {
     if (!taskTarget) return
@@ -482,13 +502,11 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
             onMouseDown={(e) => e.preventDefault()}
             onClick={ask}
             aria-selected={askSel}
-            title={`Sends it to ${askTarget.agent.name} (↓ to here, then ↵; or click)`}
+            title={`Starts a conversation (↓ to here, then ↵; or click)`}
           >
             <Icon name="chat" size={14} />
-            <span className="palette__label">
-              Ask {askTarget.agent.name}: {q.trim()}
-            </span>
-            <span className="palette__hint">{askTarget.agent.role}</span>
+            <span className="palette__label">New conversation: {q.trim()}</span>
+            <span className="palette__hint">{routeLine(q, askTarget).replace(/^→ /, '')}</span>
           </button>
         )}
       </div>

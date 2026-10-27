@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { CompanyAgent, CompanyPassport, CompanyTask, Department } from '@shared/company'
@@ -235,6 +235,10 @@ describe('Milestones strip and toast (VOICE.md §7)', () => {
   })
 
   it('playful shows one Latin badge name (the freshest milestone) over its plain name; plain shows plain names; coins in both', async () => {
+    // calmWeek needs the fixture's done task inside the last 7 days of "now"
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-21T00:00:00Z'))
+    onTestFinished(() => { vi.useRealTimers() })
     await withState({ tasks: [task('1', { status: 'done', agentId: 'agt_copy' })], extra: { onboardingStatus: { journal: { status: 'done', companyId: 'co_a' } } } })
     const { MilestoneStrip } = await import('./MilestoneStrip')
     const playful = html(createElement(MilestoneStrip, { companyId: 'co_a' }))

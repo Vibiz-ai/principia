@@ -1,17 +1,20 @@
 /**
  * Chats switches the sidebar (founder: "too much info" for a second list column): pressing Chats (⌘4) turns the left
- * sidebar itself into the conversations list, same width, same place. At its top "‹ Back" returns to the menu (also
- * Esc while the list has focus, and ⌘[); the chat stays open in the main area until you go somewhere else. Below it:
- * New chat, search, the Live / All / Agents / Direct filters, then every conversation like a list of bots.
+ * sidebar itself into the conversations list, same width, same place. Its top keeps you oriented (CHAT-UI.md §7: the
+ * synthetic users lost their menu here): "‹ Menu" returns to the menu (also Esc while the list has focus, and ⌘[), and
+ * Home, Team and Board stay one click away. Below: New conversation (the same button as the menu's), search (titles,
+ * who is in them, what they are about), Everything / Live only, then the conversations in groups: With the team,
+ * One-on-one, Agent sessions, Claude, Working.
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChatsFilter } from '../../state/store'
 import { Icon } from '../Icon'
-import { IconButton, useTick } from '../ui'
+import { IconButton, Kbd, useTick } from '../ui'
 import { CompanyTagged, useScope } from '../CompanyChip'
 import { navigate, openNewChat, useStore } from '../../state/store'
 import { pausedChatsLine } from '../../state/desk'
-import { CHATS_FILTERS, ChatRow, filterRows, lastChat, useChatRows } from './ChatList'
+import { PRIMARY, viewFor } from '../../lib/nav'
+import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, useChatRows } from './ChatList'
 
 export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Element {
   useTick()
@@ -24,7 +27,9 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const picked = view.name === 'chats' ? view.chat : undefined
   // the open conversation: the one picked, else the one ChatsView opened (the last one, else the first row)
   const remembered = lastChat(scope)
-  const cur = (picked && rows.find((r) => r.key === picked)?.key) || (remembered && rows.find((r) => r.key === remembered)?.key) || rows[0]?.key || null
+  // CHAT-UI.md §7: a company opens Chats on "New conversation" until you pick one (chat=new…); All companies keeps the last
+  const pane = !!scope && (!picked || picked.startsWith('new'))
+  const cur = pane ? null : (picked && rows.find((r) => r.key === picked)?.key) || (remembered && rows.find((r) => r.key === remembered)?.key) || rows[0]?.key || null
   const counts = { live: rows.filter((r) => r.live).length, all: rows.length }
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   const listRef = useRef<HTMLDivElement>(null)
@@ -48,12 +53,20 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
       <div className="side-chats__head">
         <button type="button" className="side-chats__back" onClick={onBack} title="Back to the menu (⌘[)" aria-label="Back to the menu">
           <Icon name="chevronLeft" size={14} />
-          <span>Back</span>
+          <span>Menu</span>
         </button>
-        <span className="side-chats__title">Chats</span>
         <span className="flex1" />
-        <IconButton icon="plus" label={company ? `New chat in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'} onClick={() => openNewChat(scope)} />
+        <nav className="side-chats__doors" aria-label="Go to">
+          {PRIMARY.filter((d) => d.key !== 'chats' && d.key !== 'knowledge').map((d) => (
+            <IconButton key={d.key} icon={d.icon} label={`${d.label} (${d.kbd})`} onClick={() => void navigate(viewFor(d.key))} />
+          ))}
+        </nav>
       </div>
+      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New conversation in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
+        <Icon name="edit" size={14} />
+        <span>New conversation</span>
+        <Kbd>⌥⌘N</Kbd>
+      </button>
       <label className="side-chats__search">
         <Icon name="search" size={13} />
         <input
@@ -76,12 +89,15 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
         />
       </label>
       <div className="side-chats__filters" role="tablist" aria-label="Show">
-        {CHATS_FILTERS.map((f) => (
-          <button key={f.value} type="button" role="tab" aria-selected={filter === f.value} className={`side-chats__filter ${filter === f.value ? 'is-on' : ''}`} onClick={() => go(f.value, picked)}>
-            {f.label}
-            {f.value === 'live' && counts.live > 0 && <span className="side-chats__n">{counts.live}</span>}
-          </button>
-        ))}
+        {CHATS_FILTERS.map((f) => {
+          const on = f.value === 'live' ? filter === 'live' : filter !== 'live'
+          return (
+            <button key={f.value} type="button" role="tab" aria-selected={on} className={`side-chats__filter ${on ? 'is-on' : ''}`} onClick={() => go(f.value, picked)}>
+              {f.label}
+              {f.value === 'live' && counts.live > 0 && <span className="side-chats__n">{counts.live}</span>}
+            </button>
+          )
+        })}
       </div>
       {paused && scope && <div className="chats5-paused">{pausedChatsLine(scope)}</div>}
       <div
@@ -106,19 +122,20 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
               ? `No chat matches “${query}”.`
               : filter === 'live'
                 ? `Nothing is live in ${where} right now. Every conversation is under All.`
-                : filter === 'direct'
-                  ? `No direct chats in ${where} yet. + starts one; it stays inside ${company?.name ?? 'its company'}.`
-                  : filter === 'agents'
-                    ? `No agent conversations in ${where} yet.`
-                    : company
-                      ? `No chats in ${company.name} yet. They are saved here, inside ${company.name}, and nowhere else.`
-                      : 'No chats yet. Ask Claude or Codex anything.'}
+                : company
+                  ? `No conversations in ${company.name} yet. New conversation starts one; it stays inside ${company.name}.`
+                  : 'No chats yet. Ask Claude or Codex anything.'}
           </div>
         )}
-        {shown.map((r) => (
-          <CompanyTagged key={r.key} companyId={r.companyId} chips={chips}>
-            <ChatRow row={r} selected={cur === r.key} onPick={() => go(filter, r.key)} />
-          </CompanyTagged>
+        {groupRows(shown).map((g) => (
+          <div key={g.group} role="group" aria-label={g.label} data-group={g.group}>
+            <div className="cx-side-group">{g.label}</div>
+            {g.rows.map((r) => (
+              <CompanyTagged key={r.key} companyId={r.companyId} chips={chips}>
+                <ChatRow row={r} selected={cur === r.key} onPick={() => go(filter, r.key)} />
+              </CompanyTagged>
+            ))}
+          </div>
         ))}
       </div>
     </div>
