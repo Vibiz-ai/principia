@@ -36,6 +36,8 @@ struct PrincipiaApp: App {
                     // simulator checks (docs/IOS.md): SIMCTL_CHILD_PRINCIPIA_OPEN_URL=principia://… opens a link at launch
                     if let u = ProcessInfo.processInfo.environment["PRINCIPIA_OPEN_URL"].flatMap(URL.init(string:)) { app.handle(url: u) }
                     if ProcessInfo.processInfo.environment["PRINCIPIA_AUTOPAIR"] == "1", case .pair(let l) = app.phase { await app.pair(l) }
+                    // SIMCTL_CHILD_PRINCIPIA_DEMO=1 opens the demo company (screenshots, UI tests)
+                    if ProcessInfo.processInfo.environment["PRINCIPIA_DEMO"] == "1", case .out(.unpaired) = app.phase { await app.startDemo() }
                     #endif
                 }
                 .onOpenURL { url in app.handle(url: url) }
