@@ -61,9 +61,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
         run: |
           set -euo pipefail
+          # the open release pull request's branch: steps.rp.outputs.pr is empty when release-please only UPDATED it
+          BRANCH="$(gh pr list --repo "$REPO" --state open --label 'autorelease: pending' --json headRefName -q '.[0].headRefName')"
           if ! [[ "$BRANCH" =~ ^release-please--[A-Za-z0-9._/-]+$ ]]; then
             echo "::error::unexpected release branch name '$BRANCH'"
             exit 1
