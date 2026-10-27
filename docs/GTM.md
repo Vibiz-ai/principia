@@ -6,7 +6,7 @@ Audit date: **19 October 2026**. This is a proposed execution plan; no launch su
 
 | Item | Verified public state | Evidence |
 | --- | --- | --- |
-| Repository | Public, `example-org/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
+| Repository | Public, `Vibiz-ai/principia`, default branch `main` | [Repository](https://github.com/Vibiz-ai/principia) |
 | Stars / forks | **1 star / 0 forks** | Public repository API, checked 19 October 2026 |
 | Open issues / PRs | **0 open issues / 0 open PRs** | [Issues](https://github.com/Vibiz-ai/principia/issues), [pull requests](https://github.com/Vibiz-ai/principia/pulls) |
 | License | MIT recognized by GitHub | [License](https://github.com/Vibiz-ai/principia/blob/main/LICENSE) |

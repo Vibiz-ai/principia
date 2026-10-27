@@ -10,7 +10,7 @@
 
 [Website](https://principia-vibiz-deployments.vercel.app) · [GitHub](https://github.com/Vibiz-ai/principia) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/example-org/principia/badge)](https://scorecard.dev/viewer/?uri=github.com/example-org/principia)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Vibiz-ai/principia/badge)](https://scorecard.dev/viewer/?uri=github.com/Vibiz-ai/principia)
 
 **Run your entire company. From one workspace.**
 

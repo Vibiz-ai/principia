@@ -1,5 +1,5 @@
 /**
- * RELEASING.md §4: app updates. The packaged app asks GitHub Releases (example-org/principia) for a newer version on
+ * RELEASING.md §4: app updates. The packaged app asks GitHub Releases (Vibiz-ai/principia) for a newer version on
  * launch and every few hours, downloads it in the background, and says "Update ready". It never restarts by itself:
  * the founder presses Restart, and Restart is refused while agents are working. A ready update also installs on a
  * normal quit (the quit already asks before stopping running work). Pure: the policy main and the renderer share.

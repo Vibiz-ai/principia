@@ -271,7 +271,7 @@ export interface WorkflowDraft {
 export interface WorkflowOrigin {
   kind: 'agent'
   adapter: AdapterId
-  ownerLabel: string // "vibiz-04 · Claude"
+  ownerLabel: string // "example-project · Claude"
   ownerKey: string
   sessionId: Id | null
   runId: Id | null

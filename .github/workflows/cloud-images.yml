@@ -6,7 +6,7 @@
 # to one reviewed commit (OPEN_PASSPORT_COMMIT below: bump it in a pull request to ship a newer Open Passport).
 # Publishing waits for approval in the `release` environment, like the macOS release; the image carries BuildKit
 # provenance and an SBOM, and a build-provenance attestation pushed to the registry
-# (verify: gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:<version> -R example-org/principia).
+# (verify: gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:<version> -R Vibiz-ai/principia).
 name: cloud-images
 on:
   push:
