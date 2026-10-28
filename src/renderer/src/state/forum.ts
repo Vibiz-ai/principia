@@ -105,7 +105,7 @@ export async function markRead(companyId: string, channelId: string, seq?: numbe
   const ch = st.byCompany[companyId]?.state?.channels.find((c) => c.id === channelId)
   if (ch && !ch.unread && !ch.mentions && (seq === undefined || seq <= ch.lastReadSeq)) return
   // optimistic: the badge clears now, the event confirms
-  patchCompany(companyId, (c) => (c.state ? { state: { ...c.state, channels: c.state.channels.map((x) => (x.id === channelId ? { ...x, unread: 0, mentions: 0, lastReadSeq: Math.max(x.lastReadSeq, seq ?? x.lastSeq) } : x)) } } : {}))
+  patchCompany(companyId, (c) => (c.state ? { state: { ...c.state, channels: c.state.channels.map((x) => (x.id === channelId ? { ...x, unread: 0, mentions: 0, unreadTasks: [], lastReadSeq: Math.max(x.lastReadSeq, seq ?? x.lastSeq) } : x)) } } : {}))
   try {
     await hive.forum.markRead({ channelId, ...(seq !== undefined ? { seq } : {}) })
   } catch {

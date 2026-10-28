@@ -1040,7 +1040,8 @@ export class ForumService implements ForumBridge {
       // asks between agents are their conversation (AGENT-COLLAB.md), not something the owner must answer
       // a task's question in its conversation is the task's Needs you already: not counted twice
       openAsks: this.store.openAsks(companyId).filter((m) => m.ask?.to.some((id) => this.store.member(id)?.kind !== 'agent') && !isCardAsk(m)).length,
-      openProposals: this.store.openProposals(companyId).length
+      openProposals: this.store.openProposals(companyId).length,
+      taskChannels: this.store.taskChannels(companyId)
     }
   }
 

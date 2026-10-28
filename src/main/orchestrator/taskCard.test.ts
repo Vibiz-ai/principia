@@ -99,6 +99,28 @@ describe('a task started from a conversation', () => {
     expect(w.forum.store.taskCards(co.id, { open: true })).toHaveLength(0)
   })
 
+  it('CHAT-UI.md §8.6: the result waiting in the conversation is unread and names its task until it is read; the state maps the task to it', async () => {
+    const { w, co, owner, conv, say } = setup()
+    say('we need to get more conversion in vibiz ugc… check posthog')
+    await w.drain()
+    const t = w.c.listTasks(co.id).find((x) => /UGC conversion/.test(x.title))!
+    expect(w.forum.state(co.id).taskChannels).toMatchObject({ [t.id]: conv.id })
+    // read up to now: the filer's reply and the card are not news
+    w.forum.store.markRead(owner.id, conv.id, w.forum.store.channel(conv.id, owner.id).lastSeq)
+    expect(w.forum.store.channel(conv.id, owner.id).unreadTasks).toBeUndefined()
+    await w.runNow(t.id)
+    await w.drain()
+    w.forum.reconcileTaskCards(co.id, { post: true })
+    const ch = w.forum.state(co.id).channels.find((c) => c.id === conv.id)!
+    expect(ch.unread).toBeGreaterThan(0)
+    expect(ch.unreadTasks).toEqual([t.id])
+    // opening the conversation reads it
+    w.forum.store.markRead(owner.id, conv.id, ch.lastSeq)
+    const after = w.forum.store.channel(conv.id, owner.id)
+    expect(after.unread).toBe(0)
+    expect(after.unreadTasks).toBeUndefined()
+  })
+
   it('without Principia’s report the agent’s own answer still lands in the conversation, once', async () => {
     const { w, co, say, inConv } = setup({ taskOutput: 'Rewrote the hero and checked the funnel.' })
     w.settings = { mode: 'off', extractFallback: false }

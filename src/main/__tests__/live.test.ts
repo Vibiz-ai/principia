@@ -226,6 +226,14 @@ d('LiveStore', () => {
     expect(up?.detail).toBe('done ••••KEY')
   })
 
+  it('CHAT-UI.md §8.4: a tool event keeps its description (redacted) through its result', () => {
+    const r = live.insertAgent(agent())
+    live.appendAgentEvents(r.id, [{ ts: '', kind: 'tool', toolUseId: 'tu_d', name: 'Bash', summary: 'Bash npm test', detail: '{"command":"npm test"}', state: 'running', description: 'Run the tests with sk-secret-1234' }])
+    const up = live.updateAgentEvent(r.id, 'tu_d', { state: 'ok', detail: '42 passed' })
+    expect(up).toMatchObject({ detail: '42 passed', description: 'Run the tests with ••••KEY' })
+    expect(live.listEvents(r.id)[0]!.description).toBe('Run the tests with ••••KEY')
+  })
+
   it('asks: open list, cancel a root tree (A4a), boot recovery, needs-you count (A3)', () => {
     const r = live.insertAgent(agent({ sessionId: 's_aaaaaaaaaa' }))
     live.insertAsk(ask({ agentId: r.id, rootId: r.id, sessionId: 's_aaaaaaaaaa' }))

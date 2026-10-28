@@ -49,11 +49,13 @@ describe('one row per running task', () => {
 })
 
 describe('the live view key', () => {
-  it('round-trips and maps back to the agent row', () => {
+  it('round-trips and maps back to its conversation or its own task row', () => {
     expect(taskOfChatKey(liveTaskKey('vo-15'))).toBe('vo-15')
     expect(taskOfChatKey('agent:julia')).toBeNull()
     expect(taskOfChatKey(undefined)).toBeNull()
-    expect(rowKeyOfLive('task:vo-15', [task('vo-15')])).toBe('agent:julia')
+    // CHAT-UI.md §8.6: never the agent's resting chat: the conversation that filed it, else its own task row
+    expect(rowKeyOfLive('task:vo-15', [task('vo-15')])).toBe('task:vo-15')
+    expect(rowKeyOfLive('task:vo-15', [task('vo-15')], { 'vo-15': 'ch_launch' })).toBe('conv:ch_launch')
     expect(rowKeyOfLive('task:gone', [task('vo-15')])).toBeNull()
   })
   it('liveTaskOf prefers the item’s own task, else the run’s', () => {

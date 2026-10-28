@@ -1,7 +1,7 @@
 /**
- * CHAT-UI.md §8.4: a task at work, watched in Chats. The header names who and what with the run clock, Pause and Open
- * task; the line under it is the activity in words (never the raw tool call); the run's log fills the pane. An
- * agent's resting chat carries "Julia is working on VO-15 now · Watch".
+ * CHAT-UI.md §8.4: a task is a chat. The header names who and what with the run clock, Pause, Open task and From: its
+ * conversation; the body is a thread (the brief first, bubbles, tool calls folded into words, never the raw call);
+ * the composer adds a note that reaches the running agent (tasks:comment, by you), or answers its open question.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
@@ -14,7 +14,13 @@ vi.mock('react', async () => {
   const useSyncExternalStore = <T,>(sub: (cb: () => void) => () => void, get: () => T): T => actual.useSyncExternalStore(sub, get, get)
   return { ...actual, default: { ...actual, useSyncExternalStore }, useSyncExternalStore }
 })
-vi.stubGlobal('window', { hive: { on: () => () => {} }, addEventListener: () => {}, removeEventListener: () => {}, innerHeight: 900, innerWidth: 1440 })
+const calls: { channel: string; req: unknown }[] = []
+const tasksApi = {
+  comment: async (req: { id: string; message: string; by?: string }) => (calls.push({ channel: 'tasks:comment', req }), { id: 'act_1', taskId: req.id, kind: 'comment', message: req.message, createdAt: new Date().toISOString(), by: req.by ?? 'human' }),
+  answer: async (req: unknown) => (calls.push({ channel: 'tasks:answer', req }), {}),
+  get: async () => ({ task: null, activity: [] })
+}
+vi.stubGlobal('window', { hive: { on: () => () => {}, tasks: tasksApi }, addEventListener: () => {}, removeEventListener: () => {}, innerHeight: 900, innerWidth: 1440 })
 vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
 
 const T = new Date(Date.now() - 10 * 60_000).toISOString()
@@ -39,8 +45,10 @@ beforeAll(async () => {
   })
 })
 
-describe('a task at work, watched in Chats', () => {
-  it('working: who and what, the run clock, Pause and Open task, the activity in words, the log in the pane', async () => {
+describe('a task is a chat', () => {
+  it('working: who and what, the run clock, Pause, Open task, From: its conversation, the brief, the activity in words, the composer', async () => {
+    const { resetForum } = await import('../../state/forum')
+    resetForum({ byCompany: { co_a: { state: { companyId: 'co_a', me: 'm_me', members: [], presence: [], openAsks: 0, openProposals: 0, taskChannels: { 'vo-15': 'ch_launch' }, channels: [{ id: 'ch_launch', companyId: 'co_a', kind: 'private', name: 'chat-launch-x1', topic: 'Spring launch', purpose: '', departmentId: null, system: null, createdBy: null, createdAt: T, archivedAt: null, memberIds: [], lastSeq: 1, lastMessageAt: T, joined: true, lastReadSeq: 1, unread: 0, mentions: 0 }] } as never, error: null, pages: {}, threads: {} } } })
     const { TaskLiveView } = await import('./TaskLiveView')
     const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-15' }))
     expect(html).toContain('data-chatux="task-live"')
@@ -49,30 +57,68 @@ describe('a task at work, watched in Chats', () => {
     expect(html).toMatch(/data-chatux="task-clock">4m 1[23]s</)
     expect(html).toContain('>Pause<')
     expect(html).toContain('>Open task<')
+    expect(html).toMatch(/data-chatux="task-chat-from"[^>]*>From: Spring launch</)
+    // the thread starts with the brief, and says what it does now in words
+    expect(html).toMatch(/data-chatux="task-chat-brief".*Check why maria@example.com/)
     expect(html).toMatch(/data-chatux="task-live-activity"[^>]*>.*Running a SQL query in PostHog/)
     expect(html).not.toContain('execute-sql')
-    expect(html).toContain('data-chatux="task-log"')
-    expect(html).toContain('cx-task__log--fill')
+    // the full log is one click away, not the pane
+    expect(html).toContain('data-chatux="task-chat-fulllog"')
+    expect(html).not.toContain('cx-task__log--fill')
+    // the composer
+    expect(html).toMatch(/placeholder="Add a note for [^"]+…"/)
+    expect(html).toMatch(/data-chatux="task-chat-hint">→ [^<]+ gets it as soon as this turn ends/)
+    resetForum()
   })
-  it('came back: no Pause, the result line, the log kept', async () => {
+  it('came back: no Pause, the outcome line, the full log kept', async () => {
     const { TaskLiveView } = await import('./TaskLiveView')
     const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-9' }))
     expect(html).toContain('data-state="in_review"')
-    expect(html).toContain('Found the duplicate scheduler')
+    expect(html).toMatch(/data-chatux="task-chat-outcome".*In review · Found the duplicate scheduler/)
     expect(html).not.toContain('>Pause<')
-    expect(html).toContain('data-chatux="task-log"')
+    expect(html).not.toContain('task-chat-from')
+    expect(html).toContain('data-chatux="task-chat-fulllog"')
   })
   it('a task that is gone says so', async () => {
     const { TaskLiveView } = await import('./TaskLiveView')
     expect(renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'nope' }))).toContain('not on the board any more')
   })
-  it('the resting chat’s banner: "Julia is working on VO-15 now · Watch"', async () => {
-    const { TaskLiveBanner } = await import('./TaskLiveView')
-    const html = renderToStaticMarkup(createElement(TaskLiveBanner, { agent: julia, name: 'Julia' }))
-    expect(html).toContain('data-chatux="live-banner"')
-    expect(html).toContain('Julia is working on VO-15 now')
-    expect(html).toContain('>Watch<')
-    const idle = { ...julia, id: 'agt_other' } as CompanyAgent
-    expect(renderToStaticMarkup(createElement(TaskLiveBanner, { agent: idle, name: 'Marcus' }))).toBe('')
+  it('an open question: the agent asks in the thread with quick answers, and Send answers it', async () => {
+    const store = await import('../../state/store')
+    const before = store.getState().tasks
+    store.setState({ tasks: [...before, task('vo-21', { status: 'blocked', blockReason: 'needs_input', runId: 'run_q', ask: { kind: 'choice', prompt: 'Refund or replacement?', options: ['Refund', 'Replacement'] } } as Partial<CompanyTask>)] })
+    const { TaskLiveView } = await import('./TaskLiveView')
+    const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-21' }))
+    expect(html).toMatch(/data-chatux="task-chat-question".*Refund or replacement\?/)
+    expect(html).toContain('>Replacement<')
+    expect(html).toMatch(/placeholder="Answer [^"]+…"/)
+    expect(html).toMatch(/→ Answers [^<]+ question, and the task goes on/)
+    store.setState({ tasks: before })
+  })
+  it('folded tool calls read as words; the raw call never shows until a step is opened', async () => {
+    const { ThreadRow } = await import('./TaskLiveView')
+    const ev = (seq: number, name: string, summary: string, description?: string) => ({ seq, agentId: 'n_run', ts: T, kind: 'tool' as const, toolUseId: `t${seq}`, name, summary, detail: null, state: 'ok' as const, ...(description ? { description } : {}) })
+    const it2 = { kind: 'tools' as const, key: 'ev:1', at: T, events: [ev(1, 'ToolSearch', 'ToolSearch select:mcp__hivemem__task_get,mcp__hivemem__task_comment'), ev(2, 'mcp__hivemem__task_get', 'hivemem.task_get VO-15'), ev(3, 'Bash', 'Bash npm test', 'Run the unit tests'), ev(4, 'Bash', 'Bash git status')], label: 'Ran 2 commands · read the task', running: false }
+    const html = renderToStaticMarkup(createElement(ThreadRow, { it: it2, head: true, who: 'Julia', role: null, face: null, code: true }))
+    expect(html).toContain('Ran 2 commands · read the task')
+    expect(html).toContain('4 steps')
+    expect(html).not.toMatch(/ToolSearch|mcp__|hivemem|select:/)
+    const one = renderToStaticMarkup(createElement(ThreadRow, { it: { ...it2, events: [it2.events[2]!], label: 'Run the unit tests' }, head: true, who: 'Julia', role: null, face: null, code: true }))
+    expect(one).toContain('Run the unit tests')
+    expect(one).not.toContain('npm test')
+  })
+})
+
+describe('the note reaches the agent', () => {
+  it('Send posts a task comment by you (the wake path teammates use), or answers the open question', async () => {
+    const { sendTaskNote } = await import('./TaskLiveView')
+    calls.length = 0
+    const a = await sendTaskNote('vo-15', '  Use the blue logo  ', false)
+    expect(calls).toEqual([{ channel: 'tasks:comment', req: { id: 'vo-15', message: 'Use the blue logo', by: 'human' } }])
+    // the thread shows it at once
+    expect(a).toMatchObject({ kind: 'comment', by: 'human', message: 'Use the blue logo' })
+    const b = await sendTaskNote('vo-21', 'Replacement', true)
+    expect(calls[1]).toEqual({ channel: 'tasks:answer', req: { id: 'vo-21', answer: 'Replacement' } })
+    expect(b).toMatchObject({ kind: 'answered', by: 'human', message: 'Replacement' })
   })
 })

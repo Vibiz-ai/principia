@@ -47,6 +47,20 @@ const subagents = (r: Replay) =>
     .filter((n) => n.kind === 'subagent')
 const eventsOf = (r: Replay, key: string) => r.ops.filter((o): o is Extract<LiveOp, { op: 'event.append' }> => o.op === 'event.append' && o.key === key).map((o) => o.event)
 
+describe('CHAT-UI.md §8.4: a tool call keeps its own description', () => {
+  it('a Bash call with a description stores it on its event; one without has none', () => {
+    const parser = createClaudeParser()
+    const tracker = createAgentTracker({ provider: 'claude', root: { kind: 'step', title: 'Step', cwd: '/x' }, headless: true })
+    const ops: LiveOp[] = [...tracker.begin()]
+    const feed = (o: unknown) => parser.line(JSON.stringify(o)).forEach((e) => ops.push(...tracker.stream(e)))
+    feed({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Bash', input: { command: 'npm test -- --run', description: 'Run the   unit tests' } }] } })
+    feed({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_2', name: 'Bash', input: { command: 'git status' } }] } })
+    const evs = ops.filter((o): o is Extract<LiveOp, { op: 'event.append' }> => o.op === 'event.append').map((o) => o.event).filter((e) => e.kind === 'tool')
+    expect(evs[0]).toMatchObject({ name: 'Bash', summary: 'Bash npm test -- --run', description: 'Run the unit tests' })
+    expect(evs[1]!.description).toBeUndefined()
+  })
+})
+
 describe('claude headless stream (verified fixtures)', () => {
   it('background Bash tasks (task_type local_bash) are not subagents', () => {
     const parser = createClaudeParser()

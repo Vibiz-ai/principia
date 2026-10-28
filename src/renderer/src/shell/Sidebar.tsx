@@ -76,7 +76,8 @@ import { plansEnabled } from '@shared/plans'
 import { nativeMenu } from '../lib/hive'
 import { ChatsSidebar } from '../components/chats/ChatsSidebar'
 import { openConversation, RecentConversations } from '../components/conversations/ConversationKit'
-import { useConversations } from '../state/conversations'
+import { useConversations, useTaskChannels } from '../state/conversations'
+import { groupLive, workersLine, type LiveEntry } from '../lib/convWork'
 import { conversationOfRunTitle } from '../lib/conversations'
 import { liveRowView } from '../lib/liveRow'
 
@@ -346,6 +347,42 @@ export function Sidebar(): React.JSX.Element {
     const reply = conversationOfRunTitle(it.title, convs)
     if (reply) return { name: reply.who ?? 'Someone', task: null, detail: `Answering in “${reply.conv?.title ?? it.title.replace(/^.*?replying in “|”$/gi, '')}”`, taskId: null, convId: reply.conv?.id ?? null }
     return { name: v.name, task: null, detail: v.activity, taskId: null }
+  }
+  // CHAT-UI.md §8.6: LIVE lists conversations with work in progress (their tasks are their subagents), and on its own
+  // only what has no conversation: a task from autopilot, Run now or a routine, your own chat, a workflow step
+  const taskChannels = useTaskChannels(company && departments ? company : null)
+  const liveEntries = useMemo(() => {
+    const known = new Set(convs.map((c) => c.id))
+    const chans: Record<string, string> = {}
+    for (const [t, ch] of Object.entries(taskChannels)) if (known.has(ch)) chans[t] = ch
+    return groupLive(working, { tasks: allTasks, taskChannels: chans, replyConv: (it) => conversationOfRunTitle(it.title, convs)?.conv?.id ?? null })
+  }, [working, allTasks, taskChannels, convs])
+  const convLiveRow = (e: Extract<LiveEntry, { kind: 'conv' }>): React.JSX.Element | null => {
+    const conv = convs.find((c) => c.id === e.channelId)
+    if (!conv) return null
+    const tasks = e.taskIds.map((id) => allTasks.find((t) => t.id === id)).filter((t): t is (typeof allTasks)[number] => !!t)
+    const seatName = (agentId: string | null): string => {
+      const a = agentId ? liveSeats.find((x) => x.id === agentId) : undefined
+      return a ? agentNameNow(a).name : ''
+    }
+    const names = workersLine(tasks.map((t) => seatName(t.agentId ?? null)))
+    const newest = [...e.items].sort((a, b) => (a.at < b.at ? 1 : -1))[0]!
+    const now = liveWho(newest).detail
+    const doing = now && now !== 'Working' && !/^Answering in /.test(now) ? now : null
+    const line = [names || (e.answering ? 'Someone' : null), tasks.length ? `${tasks.length} task${tasks.length === 1 ? '' : 's'} working` : 'answering…', doing].filter(Boolean).join(' · ')
+    const startedAt = e.items.map((it) => it.startedAt ?? agentsMap[it.agentId]?.startedAt ?? it.at).sort()[0]!
+    return (
+      <button key={e.key} type="button" className="live-row is-shimmering" data-live-conv={conv.id} title={`${conv.title}\n${line}`} onClick={() => openConversation(conv.id)}>
+        <span className="live-row__dot" aria-hidden />
+        <span className="live-row__text">
+          <span className="live-row__l1">
+            <span className="live-row__name">{conv.title}</span>
+            <span className="live-row__age">{age(startedAt)}</span>
+          </span>
+          <span className="live-row__l2 shimmer-text">{line}</span>
+        </span>
+      </button>
+    )
   }
   const liveRow = (it: LiveItem): React.JSX.Element => {
     const w = liveWho(it)
@@ -633,10 +670,10 @@ export function Sidebar(): React.JSX.Element {
               <span className="sidebar__section-meta">{working.length} working</span>
             </div>
             <div className="side-sec__rows">
-              {working.slice(0, LIVE_MAX).map(liveRow)}
-              {working.length > LIVE_MAX && (
+              {liveEntries.slice(0, LIVE_MAX).map((e) => (e.kind === 'conv' ? convLiveRow(e) : liveRow(e.item)))}
+              {liveEntries.length > LIVE_MAX && (
                 <button type="button" className="live-row live-row--more" onClick={() => void navigate({ name: 'chats', filter: 'live' })}>
-                  +{working.length - LIVE_MAX} more in Chats
+                  +{liveEntries.length - LIVE_MAX} more in Chats
                 </button>
               )}
             </div>

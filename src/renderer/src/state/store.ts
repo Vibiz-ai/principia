@@ -166,6 +166,8 @@ export interface State {
   liveAvailable: boolean | null
   /** A3: idle session roots whose pane the user has looked at (window focused). They stop counting as Needs you. */
   seenIdle: Record<Id, true>
+  /** CHAT-UI.md §8.6: when each task's chat was last open (task id → ISO), so a result you have not read is marked */
+  taskSeen: Record<Id, string>
   /** Last "jump to this agent" request (hub row, ⌘J, notification): views expand / scroll to it. */
   agentFocus: { agentId: Id; askId: Id | null; nonce: number } | null
   /** AUTHORING.md §2: agent-authored drafts by id (pending ones, plus any decided while Principia was open). */
@@ -254,6 +256,7 @@ const initial: State = {
   asks: {},
   liveAvailable: null,
   seenIdle: {},
+  taskSeen: loadJson<Record<Id, string>>('principia.taskSeen', {}),
   agentFocus: null,
   drafts: {},
   authorAvailable: null,
@@ -281,6 +284,27 @@ const initial: State = {
   onboardingOffer: null,
   onboardingPlanPending: false,
   onboardingProgress: { journalId: null, steps: {}, clone: null }
+}
+
+const TASK_SEEN_KEY = 'principia.taskSeen'
+/** When this window started keeping task reads: results older than this never light up as unread. */
+export const TASK_SEEN_SINCE: string = (() => {
+  const k = `${TASK_SEEN_KEY}.since`
+  const v = loadJson<string | null>(k, null)
+  if (v) return v
+  const now = new Date().toISOString()
+  saveJson(k, now)
+  return now
+})()
+/** The task's chat is open: its news counts as read (kept across restarts, the newest 300 tasks). */
+export function markTaskSeen(taskId: Id, at: string = new Date().toISOString()): void {
+  const cur = state.taskSeen[taskId]
+  if (cur && cur >= at) return
+  const all = { ...state.taskSeen, [taskId]: at }
+  const keys = Object.keys(all).sort((a, b) => (all[a]! < all[b]! ? -1 : 1))
+  for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete all[k]
+  setState({ taskSeen: all })
+  saveJson(TASK_SEEN_KEY, all)
 }
 
 function loadJson<T>(key: string, fallback: T): T {

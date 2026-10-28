@@ -186,7 +186,7 @@ export function createLiveSink(o: LiveSinkOptions): LiveSink {
         case 'event.append': {
           const id = ids.get(op.key) ?? rootId
           const e = op.event
-          const ev = { ...e, summary: o.redact(e.summary), detail: r(e.detail) }
+          const ev = { ...e, summary: o.redact(e.summary), detail: r(e.detail), ...(e.description ? { description: o.redact(e.description) } : {}) }
           const stored = safe('appendAgentEvents', () => o.store.appendAgentEvents?.(id, [ev]))
           const full: AgentEvent = stored?.[0] ?? { ...ev, seq: ++localSeq, agentId: id }
           if (!stored) {

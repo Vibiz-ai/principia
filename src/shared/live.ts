@@ -79,6 +79,8 @@ export interface AgentEvent {
   summary: string // <= 200 chars
   detail: string | null // <= 4 KB, redacted
   state: 'running' | 'ok' | 'error' | 'denied' | null
+  /** a tool call's own one-line description of what it does (Claude's Bash `description`), <= 200 chars; absent = none */
+  description?: string | null
 }
 /** `allow_always` is kept for shape compatibility; A1 drops it for interactive sessions. */
 export interface AskOption {

@@ -613,28 +613,42 @@ Answer, the strip's link), `chat/chatTasks.test.ts` (a chat's question notice on
 (`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).
 
 
-### 8.4 Live opens the work itself (2026-10-28)
+### 8.4 Live opens the work itself (2026-10-28), and the task is a chat
 
-"If it says live and I click it, I should see it working within the chat, not on the right."
+"If it says live and I click it, I should see it working within the chat, not on the right." Then, trying it: a wall
+of "Running a command" rows and raw `ToolSearch select:mcp__hivemem__task_get,…` lines. "Why don't we just see a chat,
+so I can add or comment more stuff if I want?"
 
-- **The live view** (Chats, `task:<id>`, `components/chats/TaskLiveView.tsx`): the header names who and what
-  ("Julia · VO-15 Check why…", the title alone in a company with no code), "Working · 4m 12s" ticking from the run's
-  start, Pause, Chat with Julia, Open task. Under it, what it is doing now in words; an open ask shows as its AskCard;
-  then the run's log fills the pane: the task card's TaskLog (AgentTimeline Activity / StepLog Output), following the
-  tail. Tool rows read in words ("Running a SQL query in PostHog"); the raw call and its input open on click. A task
-  that came back keeps its log with the result line; Pause goes.
-- **Every live entry opens it**: LIVE rows, the status bar's "1 working" (more than one opens Chats › Live), Home's
-  Open, the rail popover and palette rows (`openLiveItem` with a `taskId`), a working agent's row in Chats (its line
-  says what it is working on, not its old chat; on several tasks at once it opens their chat, whose banner has one
-  Watch per task), the right panel's working box ("Watch it work"; on several tasks, one "Watch VO-15" per task in
-  flight, from the seat's `working` list), and the task card's
-  and strip's Watch while the task is in progress (a finished run still opens the run view).
-- **Labelled by what runs**: one LIVE row per running task (an agent on two tasks is two rows): "Julia · VO-15 Check
-  why…" over the activity (`lib/liveRow.ts`). Connector calls are words (`lib/plainActivity.ts`: `posthog.exec call
-  execute-sql {…}` → "Running a SQL query in PostHog", "Looking up data in PostHog" without code; `mcp__google_drive__
-  search` → "Searching Google Drive"; memory lines → "Checking memory").
-- **The resting chat says so**: an agent's own chat, while it works on a task, carries a slim line on top: "Julia is
-  working on VO-15 now · Watch" (several: "working on 2 tasks now", one Watch each).
+- **The task chat** (Chats, `task:<id>`, `components/chats/TaskLiveView.tsx`, thread built by `lib/taskThread.ts`):
+  - header: who and what ("Julia · VO-15 Check why…", the title alone in a company with no code), the state with
+    "Working · 4m 12s" ticking from the run's start, **From: <conversation>** back to the conversation that filed it,
+    Pause, Open task;
+  - body, a conversation thread in time order: the task's brief as the first message ("The task"), the agent's text
+    and thoughts as bubbles (the conversation's `Bubble`, so it reads like the team chat; thoughts dimmed), the task's
+    activity (your notes and answers on the right; the agent's comments, reports and questions), quiet lines for
+    started / paused / stopped, and **tool calls folded** between the bubbles: one line per run of calls, "Ran 6
+    commands · read 3 files · checked memory" (`toolsLabel`; one call reads as itself). A click opens each call in
+    words ("Run the unit tests", "Reading taskCard.ts", "Loading tools"), its duration and state; a click on a call
+    shows the raw call and its output. An open permission ask shows as its AskCard; an open board question as the
+    agent's question bubble with its options as quick answers; a task that came back ends with its outcome line;
+    while it works, the activity in words under the last message. **Full log** opens the run's TaskLog (Activity /
+    Output) in place;
+  - composer: "Add a note for Julia…". Send posts a task comment (`tasks:comment`, by you): it is in the thread at once
+    (optimistic, replaced by the stored row) and reaches the agent through the task's wake, the same inbox a
+    teammate's question uses (`orchestrator/mailbox.ts` → `pendingWake`): coalesced while the run works, so the agent
+    picks it up as soon as the running turn ends; a task not running gets it as its next turn's wake. With an open
+    question, Send answers it (`tasks:answer`). The line under the box says which (`noteHint`).
+- **Words, never raw calls**: a Bash call uses its own `description` ("Run the unit tests"; stored with the event,
+  `agent_events.description`, from the call's input in `engine/live/tracker.ts`); `ToolSearch` reads "Loading tools";
+  Principia's task tools on the memory server read as what they do (`mcp__hivemem__task_get` "Reading the task",
+  `task_comment` "Commenting on the task", `task_report` "Reporting back"…; `lib/plainActivity.ts`). Connector calls
+  stay words ("Running a SQL query in PostHog").
+- **Who opens it**: Watch on a task card and in the dock, the right panel's working box, Home's Open, a task row in
+  Chats (§8.6), LIVE rows of tasks with no conversation, the status bar when its one working item is such a task.
+  LIVE rows of tasks filed from a conversation open the conversation instead (§8.6).
+- **The resting chat is not live**: an agent's own chat shows live only while it answers there; its row keeps its own
+  last message (never "Working on 2 tasks…") and the "Julia is working on 2 tasks now · Watch …" banner is gone: the
+  eye goes to the conversation that filed the work.
 
 ### 8.5 Working tasks stay at the bottom: the dock (2026-10-28)
 
@@ -667,3 +681,44 @@ back on VO-15") the live card scrolls away to the top and the work is "hidden". 
   `conversations/taskCard.render.test.ts` (the dock's cards, the compact working and needs-you cards, the history's
   reference and the full card once done, the options as buttons without the "Options:" line, `startsGroup`, the strip's
   link to the dock), `cloud/phone/phone.test.ts` (pinned cards, references, "+N more").
+
+### 8.6 Tasks are the conversation's subagents (2026-10-28)
+
+"At the end these tasks are like subagents, and I was working within the other chat. That chat should show as live, or
+with X tasks being done, so I can focus my eyes there." `lib/convWork.ts`:
+
+- **Which conversation**: main's Forum state carries `taskChannels` (task id → the channel of its newest card,
+  `ForumStore.taskChannels`); `workOf` sorts a conversation's tasks into working, needs you, queued.
+- **The row says it**: in the sidebar's RECENT, Chats › With the team / One-on-one and New conversation's Recent
+  conversations, a conversation with work shows the live shimmer and "Julia · 2 tasks working" or "1 needs you"
+  (`workLine`), with the needs dot; such rows sort first (`workRank`, `byWork`: needs you, working or answering,
+  unread news, the rest).
+- **LIVE lists conversations**: the one live source's working items are grouped (`groupLive`): every task filed from a
+  conversation, and an agent answering in one, joins that conversation's row ("Launch plan" over "Julia · 2 tasks
+  working · Running the tests"), which opens the conversation (its working tasks are docked, §8.5). Tasks with no
+  conversation (autopilot, Board › Run now, routines), your own chats and workflow steps stay rows of their own; such
+  a task opens its task chat. Chats › Live only counts the same: conversations with work, live sessions, task rows.
+- **Task rows** (Chats › Tasks): a task with no conversation while it works, needs you, or came back unread; it opens
+  the task chat. Its sessions ("Open as session", a restart of one) are not listed again under Claude.
+- **Unread results**: when a task finishes (in review, done, failed) or stops for you, its result or question is posted
+  in the parent conversation (§8). The Forum's own read state (`last_read_seq`, persisted) already counts it unread;
+  each channel now also names the tasks behind its unread messages (`ForumChannel.unreadTasks`, from the message's ask,
+  its `card:<taskId>:…` key or the run it came from), so the row reads "VO-16 finished · unread" ("2 results to read"
+  for more) with a dot and the bright title until the conversation is opened. Opening it marks it read (`forum:markRead`)
+  and the view opens on the first new message under a "New" line. A task with no conversation is unread from its last
+  change until its chat is opened (`state.taskSeen`, kept in local storage; only results after the first launch with
+  this, and from the last week, light up).
+- **Status bar**: "2 working" opens the conversation when every working item belongs to one, the task chat when it is
+  one task with no conversation, else Chats › Live only (`workingTarget`).
+- **One row per chat with Claude**: Restart, Hand off and Open as session make a new session row that continues the same
+  agent conversation, and the old exited one stayed, so "VO-15 · Check why…" was listed twice under Claude.
+  `lib/sessionRows.ts dedupeSessions` keeps one per board task (sessions now carry `taskId`), else per agent-side
+  conversation id, the running one or else the newest.
+- CDP selectors: `task-chat`, `task-chat-brief`, `task-chat-msg` (`data-by`), `task-chat-tools` (`data-count`),
+  `task-chat-tools-label`, `task-chat-step`, `task-chat-composer`, `task-chat-input`, `task-chat-hint`,
+  `task-chat-send`, `task-chat-from`, `task-chat-fulllog`, `task-row`, `thread-new`; rows carry `data-work`.
+- Tests: `lib/convWork.test.ts` (work by conversation, lines, ranks, LIVE grouping, orphan tasks, the status bar's
+  target, orphan unread), `lib/taskThread.test.ts` (thread order, folding, labels, Bash descriptions, ToolSearch,
+  the note hint), `lib/sessionRows.test.ts`, `lib/plainActivity.test.ts`, `components/chats/taskLive.render.test.ts`
+  (the task chat, its composer and its comment delivery), `components/chats/chats.render.test.ts` (rows),
+  `main/forum` (`unreadTasks`, `taskChannels`), `main/engine/live` (the stored description).

@@ -361,6 +361,7 @@ export class ForumStore {
     const unread = viewer && viewerId
       ? (this.db.prepare('SELECT COUNT(*) AS n FROM forum_messages WHERE channel_id=? AND thread_seq IS NULL AND seq>? AND author_id!=? AND deleted_at IS NULL').get(id, lastReadSeq, viewerId) as { n: number }).n
       : 0
+    const unreadTasks = unread > 0 && viewerId ? this.unreadTaskIds(id, lastReadSeq, viewerId) : []
     const mentions = viewerId
       ? (this.db.prepare('SELECT COUNT(*) AS n FROM forum_mentions x JOIN forum_messages m ON m.seq=x.seq WHERE x.member_id=? AND x.read_at IS NULL AND m.channel_id=? AND m.deleted_at IS NULL').get(viewerId, id) as { n: number }).n
       : 0
@@ -383,8 +384,54 @@ export class ForumStore {
       lastReadSeq,
       unread,
       mentions,
+      ...(unreadTasks.length ? { unreadTasks } : {}),
       ...conversationMetaView(parseJson<ChannelData>(r.data, {}))
     }
+  }
+
+  /**
+   * CHAT-UI.md §8.6: the tasks whose news (a result posted back, a question for you) is among the viewer's unread
+   * messages of a channel, oldest first: the row says "VO-16 finished · unread" until the conversation is opened. A
+   * message names its task by its ask, its `card:<taskId>:…` key, or the run it came from (principia:<runId>).
+   */
+  unreadTaskIds(channelId: string, afterSeq: number, viewerId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT origin, data FROM forum_messages WHERE channel_id=? AND thread_seq IS NULL AND seq>? AND author_id!=? AND deleted_at IS NULL ORDER BY seq LIMIT 50')
+      .all(channelId, afterSeq, viewerId) as { origin: string | null; data: string | null }[]
+    const out: string[] = []
+    const add = (id: string | null | undefined): void => {
+      if (id && !out.includes(id)) out.push(id)
+    }
+    for (const r of rows) {
+      const d = parseJson<{ opKey?: string; ask?: { taskId?: string | null } }>(r.data, {})
+      if (d.ask?.taskId) {
+        add(d.ask.taskId)
+        continue
+      }
+      const card = /^card:([^:]+):/.exec(d.opKey ?? '')
+      if (card) {
+        add(card[1])
+        continue
+      }
+      const run = /^principia:(?:ask:)?(.+)$/.exec(r.origin ?? '')?.[1] ?? /^orch:(.+):post$/.exec(d.opKey ?? '')?.[1]
+      if (!run) continue
+      try {
+        add((this.db.prepare('SELECT task_id FROM runs WHERE id=?').get(run) as { task_id: string | null } | undefined)?.task_id ?? (this.db.prepare('SELECT id FROM company_tasks WHERE id=?').get(run) as { id: string } | undefined)?.id)
+      } catch {
+        /* no runs table (a bare Forum db): the message still counts as unread */
+      }
+    }
+    return out
+  }
+
+  /** CHAT-UI.md §8.6: the conversation (or channel) each carded task of a company was filed in, newest card wins. */
+  taskChannels(companyId: string): Record<string, string> {
+    const rows = this.db
+      .prepare("SELECT json_extract(data,'$.task.taskId') AS t, channel_id AS c FROM forum_messages WHERE company_id=? AND kind='system' AND json_extract(data,'$.task.taskId') IS NOT NULL ORDER BY seq DESC LIMIT 500")
+      .all(companyId) as { t: string; c: string }[]
+    const out: Record<string, string> = {}
+    for (const r of rows) if (!(r.t in out)) out[r.t] = r.c
+    return out
   }
 
   // ---------- conversation meta (CHAT-UI.md §7.1, §7.2) ----------
