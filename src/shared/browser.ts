@@ -1,11 +1,25 @@
 /**
  * docs/BROWSER.md: the company browser. One embedded browser per company (its own cookies and storage), shown in a
- * panel on the right, driven by agents through the principia-browser MCP server and by the founder directly.
+ * panel on the right, driven by agents through the principia-browser MCP server and by the founder directly. Its tabs
+ * belong to one chat or task each (a BrowserScope): an agent only sees and drives its own chat's tabs.
  * Shared by main, the renderer and the MCP bridge: types, IPC channels, events and the tool definitions.
  */
 import type { Id } from './types'
 
 export const BROWSER_SERVER_NAME = 'principia-browser'
+
+/**
+ * Whose tabs: one chat (pane:<session id>), one board task (task:<task id>, the same across its wakes), one run with
+ * no task (run:<run id>), or the founder's own tabs, opened from a page that is no chat or task.
+ */
+export type BrowserScope = string
+export const FOUNDER_SCOPE: BrowserScope = 'founder'
+export const paneScope = (sessionId: string): BrowserScope => `pane:${sessionId}`
+export const taskScope = (taskId: string): BrowserScope => `task:${taskId}`
+export const runScope = (runId: string): BrowserScope => `run:${runId}`
+export const BROWSER_SCOPE_RE = /^(founder|(pane|task|run):[A-Za-z0-9_.-]{1,120})$/
+/** The renderer's key for one scope's state. */
+export const browserStateKey = (companyId: Id, scope: BrowserScope): string => `${companyId}|${scope}`
 
 export interface BrowserTabView {
   id: string
@@ -23,7 +37,7 @@ export interface BrowserActivity {
   /** plain words: "Opening example.com", "Clicking “Sign in”" */
   doing: string
   at: string
-  /** one chat or task run: the panel opens by itself once per key */
+  /** the chat or task browsing (its BrowserScope): the panel opens by itself only beside that chat or task */
   sessionKey: string
 }
 
@@ -46,8 +60,10 @@ export interface BrowserDownload {
   note?: string
 }
 
+/** One chat's or task's view of its company's browser: its own tabs, takeover, activity and screenshots. */
 export interface BrowserState {
   companyId: Id
+  scope: BrowserScope
   tabs: BrowserTabView[]
   activeTabId: string | null
   /** the founder is driving: agent actions wait until they hand back */
@@ -67,16 +83,16 @@ export interface BrowserBounds {
 
 type V = void
 export interface BrowserInvokeMap {
-  'browser:state': [{ companyId: Id }, BrowserState]
-  /** where the live view sits in the window (CSS pixels); null hides it */
-  'browser:bounds': [{ companyId: Id; bounds: BrowserBounds | null }, V]
-  'browser:navigate': [{ companyId: Id; url: string }, BrowserState]
-  'browser:nav': [{ companyId: Id; action: BrowserNavAction }, BrowserState]
-  'browser:tab': [{ companyId: Id; op: 'new' | 'close' | 'select'; tabId?: string; url?: string }, BrowserState]
-  'browser:takeover': [{ companyId: Id; on: boolean }, BrowserState]
+  'browser:state': [{ companyId: Id; scope: BrowserScope }, BrowserState]
+  /** where the live view of this scope sits in the window (CSS pixels); null hides it */
+  'browser:bounds': [{ companyId: Id; scope: BrowserScope; bounds: BrowserBounds | null }, V]
+  'browser:navigate': [{ companyId: Id; scope: BrowserScope; url: string }, BrowserState]
+  'browser:nav': [{ companyId: Id; scope: BrowserScope; action: BrowserNavAction }, BrowserState]
+  'browser:tab': [{ companyId: Id; scope: BrowserScope; op: 'new' | 'close' | 'select'; tabId?: string; url?: string }, BrowserState]
+  'browser:takeover': [{ companyId: Id; scope: BrowserScope; on: boolean }, BrowserState]
   'browser:openShot': [{ companyId: Id; id: string }, V]
-  /** forget the company's cookies, storage and cache, and close its tabs */
-  'browser:clear': [{ companyId: Id }, BrowserState]
+  /** forget the company's cookies, storage and cache, and close all its tabs (every chat's) */
+  'browser:clear': [{ companyId: Id; scope: BrowserScope }, BrowserState]
 }
 export const BROWSER_CHANNELS = [
   'browser:state',
@@ -118,7 +134,7 @@ const obj = (properties: Record<string, unknown>, required: string[] = []): Reco
 export const BROWSER_TOOL_DEFS = {
   browser_navigate: {
     name: 'browser_navigate',
-    description: 'Open a URL in the company browser (the founder sees it in Principia). Returns the page snapshot with element refs.',
+    description: "Open a URL in this chat's tabs of the company browser (the founder sees it beside this chat). Returns the page snapshot with element refs.",
     inputSchema: obj({ url: { type: 'string', description: 'http(s) URL, or a bare host like example.com' }, newTab: { type: 'boolean', description: 'open in a new tab' } }, ['url'])
   },
   browser_snapshot: {
@@ -169,7 +185,7 @@ export const BROWSER_TOOL_DEFS = {
   browser_reload: { name: 'browser_reload', description: 'Reload the page.', inputSchema: obj({}) },
   browser_tabs: {
     name: 'browser_tabs',
-    description: 'List, open, select or close tabs. Pages that open a new window get a new tab here.',
+    description: "List, open, select or close this chat's tabs (other chats and tasks have their own). Pages that open a new window get a new tab here.",
     inputSchema: obj({ action: { type: 'string', enum: ['list', 'new', 'select', 'close'] }, tabId: { type: 'string' }, url: { type: 'string' } })
   },
   browser_console: {
@@ -198,7 +214,7 @@ export const isBrowserTool = (s: unknown): s is BrowserTool => typeof s === 'str
 export const BROWSER_READ_TOOLS: ReadonlySet<BrowserTool> = new Set<BrowserTool>(['browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network'])
 
 export const BROWSER_INSTRUCTIONS =
-  "Principia's company browser: a real browser the founder watches in Principia (on the right of the chat). Start with browser_navigate, read the page with browser_snapshot (refs like e12), act with browser_click / browser_type / browser_press / browser_select, and take browser_screenshot only when seeing the page matters. If the founder has taken over, wait or ask them. Never type passwords, card numbers or one-time codes yourself and never pay or send anything without the founder's yes."
+  "Principia's company browser: a real browser the founder watches in Principia (on the right of this chat). Its tabs are this chat's own: other chats and tasks never see them. Start with browser_navigate, read the page with browser_snapshot (refs like e12), act with browser_click / browser_type / browser_press / browser_select, and take browser_screenshot only when seeing the page matters. If the founder has taken over, wait or ask them. Never type passwords, card numbers or one-time codes yourself and never pay or send anything without the founder's yes."
 
 /** One MCP tool result block (text or image), as the HTTP endpoint returns it. */
 export type BrowserContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }

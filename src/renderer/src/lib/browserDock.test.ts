@@ -4,8 +4,9 @@ import { addressToUrl } from '@shared/browser'
 import { formatDeepLink, parseDeepLink } from '@shared/deepLink'
 import { activityLine, autoOpen, clampDockWidth, dockLayout, overlaps, PAGE_MIN } from './browserDock'
 
-const state = (companyId: string, sessionKey: string | null): BrowserState => ({
+const state = (companyId: string, sessionKey: string | null, scope = sessionKey ?? 'founder'): BrowserState => ({
   companyId,
+  scope,
   tabs: [],
   activeTabId: null,
   takeover: false,
@@ -13,20 +14,29 @@ const state = (companyId: string, sessionKey: string | null): BrowserState => ({
   shots: [],
   downloads: []
 })
+const base = { activeCompany: 'co_a', pageScope: 'pane:1', open: false, opened: new Set<string>(), sinceTyping: 10_000 }
 
 describe('autoOpen', () => {
-  it('opens once per chat or run when an agent starts browsing in the company on screen', () => {
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('open')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(['pane:1']), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: null, open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('open')
+  it('opens once per chat or task when its agent starts browsing while that chat is on screen', () => {
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1') })).toBe('open')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), opened: new Set(['pane:1']) })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), activeCompany: null })).toBe('open')
+    expect(autoOpen({ ...base, state: state('co_a', 'task:t9'), pageScope: 'task:t9' })).toBe('open')
+  })
+  it('never opens beside another chat or task, or on a page that is no chat', () => {
+    // the agent of chat 2 browses while the founder reads chat 1: the panel stays shut, chat 2 keeps its tabs
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:2') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'task:t9') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), pageScope: null })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1', 'pane:2'), pageScope: 'pane:2' })).toBe('no')
   })
   it('never opens for another company, when already open, or without an agent', () => {
-    expect(autoOpen({ state: state('co_b', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: true, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', null), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_b', 'pane:1') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), open: true })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', null) })).toBe('no')
   })
   it('waits while the founder is typing', () => {
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 200 })).toBe('later')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), sinceTyping: 200 })).toBe('later')
   })
 })
 

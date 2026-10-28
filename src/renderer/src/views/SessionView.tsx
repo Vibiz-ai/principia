@@ -26,6 +26,7 @@ import { clock } from '../lib/time'
 import { sessionEndLabel, sessionPlace, tildify } from '../lib/format'
 import { ProviderSwitcher } from '../shell/ProviderSwitcher'
 import { BrowserToggle } from '../components/browser/BrowserToggle'
+import { paneScope } from '@shared/browser'
 import { TaskStrip } from '../components/board/TaskStrip'
 import { SessionDiagrams } from '../components/diagrams/SessionDiagrams'
 import { openVisualize } from '../state/diagrams'
@@ -181,7 +182,7 @@ export function SessionView(): React.JSX.Element {
             Stop
           </Button>
         )}
-        <BrowserToggle companyId={cur ? companyOf(cur) : null} />
+        <BrowserToggle companyId={cur ? companyOf(cur) : null} scope={cur ? paneScope(cur.id) : null} />
         <ProviderSwitcher />
       </Toolbar>
       {/* WORKTREE.md: which task this session is doing */}
