@@ -39,9 +39,17 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'conversation',
     title: 'Start a new conversation',
     how:
-      'Press New conversation at the top of the sidebar (⌥⌘N), or type in the composer on Home. The To: menu picks who answers: "Principia picks" (it brings in the right agents from your words), "Everyone on the team", "Talk to one person" (a private one-on-one), or outside the team: plain Claude, or Claude in one of your repositories. The line under the composer says who will answer before you send. Typing @ in any composer adds people (@all for the whole team). Your last five conversations are under RECENT in the sidebar, and all of them in Chats (⌘4); ⌘K finds one by title, person or topic.',
+      'Press New conversation at the top of the sidebar (⌥⌘N), or type in the composer on Home. The To: menu picks who answers: "Principia picks" (it brings in the right agents from your words), "Everyone on the team", "Talk to one person" (a private one-on-one), or outside the team: plain Claude, or Claude in one of your repositories. The line under the composer says who will answer before you send. Typing @ in any composer adds people (@all for the whole team). Your last five conversations are under RECENT in the sidebar, and all of them in Chats (⌘4); ⌘K finds one by title, person or topic. Work an agent starts from a conversation shows there as a task card; when it needs you, the agent asks in the conversation itself, and your next reply (or Answer on the card) goes straight back to the task.',
     keywords: ['new chat', 'start a chat', 'new conversation', 'conversation', 'chat', 'talk', 'talk to', 'message', 'ask an agent', 'mention', '@', 'recent', 'to:', 'who answers', 'private', 'one on one', 'dm', 'continue a chat', 'thread'],
     links: [L('Chats', 'principia://chats'), L('Home', 'principia://home')]
+  },
+  {
+    id: 'conversation-titles',
+    title: 'Conversation titles, who answers, and new specialists',
+    how:
+      'Principia names each conversation in a few words ("Onboarding flow fixes") from your first message, and once more after the first answer; until then it shows your first words. Rename it by clicking the title in the conversation, or right-click it in the Chats list › Rename… (F2): your name is kept for good. With "Principia picks", Principia reads the request against each agent\'s role, department and instructions and brings in the best fit. When nobody on the team does that kind of work it suggests a new specialist in the conversation: Create & bring in (it joins and answers), Edit…, or Use <someone> instead. Nothing is hired without your click; agents can suggest one mid-conversation the same way.',
+    keywords: ['title', 'rename', 'rename conversation', 'conversation name', 'name a chat', 'who answers', 'principia picks', 'routing', 'wrong agent', 'new specialist', 'create agent', 'hire from chat', 'nobody fits', 'suggest agent'],
+    links: [L('Chats', 'principia://chats'), L('Settings › Team & autonomy', 'principia://settings/team')]
   },
   {
     id: 'navigation',
@@ -63,7 +71,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'autopilot',
     title: 'Autopilot',
     how:
-      'Autopilot is everything that runs without you pressing Start; the chip in the company header says whether it is on and what it does. Automations › Autopilot has three parts: On autopilot (playbooks such as Ads watch, Site watch, Social rhythm, Support triage, Revenue brief: each with a level, 1 Watch & report, 2 Propose changes, 3 Act within limits), Assigned work with the Auto-start switch (agents set to work on their own start the work assigned to them without waiting for Start; also on the Board and the company menu; on for new companies), and Schedule packs (Marketing pack, Company pack: ordinary schedules you can edit). Needs you also offers "Put your ads on autopilot?" with Turn on / Not now / Never for this. A link only opens the card: you pick the level and press Turn on.',
+      'Autopilot is everything that runs without you pressing Start; the chip in the company header says whether it is on and what it does. Automations › Autopilot has three parts: On autopilot (playbooks such as Ads watch, Site watch, Social rhythm, Support triage, Revenue brief: each with a level, 1 Watch & report, 2 Propose changes, 3 Act within limits), Assigned work with the Auto-start switch (agents set to work on their own start the work assigned to them without waiting for Start; also on the Board and the company menu; on for new companies; an agent takes up to 3 tasks at once, and Run now never waits for a busy one), and Schedule packs (Marketing pack, Company pack: ordinary schedules you can edit). Needs you also offers "Put your ads on autopilot?" with Turn on / Not now / Never for this. A link only opens the card: you pick the level and press Turn on.',
     keywords: ['autopilot', 'auto pilot', 'auto-start', 'auto start', 'on its own', 'automatic', 'autonomous', 'run by itself', 'playbook', 'ads watch', 'site watch', 'schedule pack', 'marketing pack', 'company pack', 'level'],
     links: [L('Automations › Autopilot', 'principia://automations/autopilots'), L('Ads watch playbook', 'principia://automations/autopilots?add=ads-watch')]
   },
@@ -183,7 +191,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'worktrees',
     title: 'Worktrees, branches and merging code tasks',
     how:
-      'A code task on the Board has Start in its details: "Opens a new branch and worktree. Your checkout is not touched." Each task gets one worktree on a branch hive/<id>-<slug> from the default branch, and every turn of that task runs there. The task moves to In Progress when the worktree is made and In Review when its pull request is ready; "Changes requested" sends the agent back with your note. Its Work section has Open in Editor, Open PR, Merge… and Remove Worktree…: merging is yours (a squash merge through the GitHub CLI, gh), agents never merge, and a merged PR marks the task Done. Up to 3 run at once by default; the rest are queued. There is no conflict-resolution screen.',
+      'A code task on the Board has Start in its details: "Opens a new branch and worktree. Your checkout is not touched." Each task gets one worktree on a branch hive/<id>-<slug> from the default branch, and every turn of that task runs there. The task moves to In Progress when the worktree is made and In Review when its pull request is ready; "Changes requested" sends the agent back with your note. Its Work section has Open in Editor, Open PR, Merge… and Remove Worktree…: merging is yours (a squash merge through the GitHub CLI, gh), agents never merge, and a merged PR marks the task Done. Up to 3 run at once by default; the rest are queued. An agent works on several tasks at once: when another run already works in the checkout, Run now gives the task its own worktree by itself. There is no conflict-resolution screen.',
     keywords: ['worktree', 'branch', 'git', 'pull request', 'pr', 'merge', 'code review', 'repository', 'repo', 'checkout', 'github', 'commit', 'parallel tasks'],
     links: [L('The Board', 'principia://board'), L('Settings › Repositories', 'principia://settings/repos')]
   },
@@ -207,7 +215,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'departments',
     title: 'Departments and hiring agents',
     how:
-      'Team (⌘2) shows one section per department and its agents. Hire adds a department from presets (Development, Marketing, Sales, Support, Ops, Finance); a department page has Add agent ("Add an agent to …": pick a profile, then role, instructions, autonomy and limits). Each agent card has Message; an agent\'s page has its chat plus Details, Queue, History, Instructions, Library, Computer. Agents can also propose a new department or agent in the Forum for your Approve or Reject. Departments are an Experimental switch (Settings › Experimental), or Turn on departments on Team.',
+      'Team (⌘2) shows one section per department and its agents. Hire adds a department from presets (Development, Marketing, Sales, Support, Ops, Finance); a department page has Add agent ("Add an agent to …": pick a profile, then role, instructions, autonomy and limits). Each agent card has Message; an agent\'s page has its chat plus Details, Queue, History, Instructions, Library, Computer. Agents can also propose a new department or agent in the Forum for your Approve or Reject, and in a conversation Principia suggests a new specialist when nobody on the team fits (Create & bring in). Departments are an Experimental switch (Settings › Experimental), or Turn on departments on Team.',
     keywords: ['department', 'hire', 'hiring', 'new agent', 'add agent', 'add an agent', 'team', 'employee', 'staff', 'role', 'agent instructions', 'org chart', 'marketing team', 'sales team'],
     links: [L('Settings › Team & autonomy', 'principia://settings/team'), L('Settings › Experimental', 'principia://settings/experimental')]
   },

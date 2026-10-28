@@ -203,6 +203,11 @@ describe('screens', () => {
     expect(textOf(node[0]!)).toContain('VO-9')
     expect(textOf(node[0]!)).toContain('Working · 2m')
     expect(findAll(working, (n) => n.attrs?.class === 'tes tes--run')).toHaveLength(1)
+    // the working line: what its run is doing now, only while it works
+    const doing = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('working', 'Working', { activity: 'Reading funnel.md' }))] } }, noop, now)
+    expect(findAll(doing, (n) => n.attrs?.class === 'tcard__a').map(textOf)).toEqual(['Reading funnel.md'])
+    const queuedDoing = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('queued', 'Queued', { activity: 'Reading funnel.md' }))] } }, noop, now)
+    expect(findAll(queuedDoing, (n) => n.attrs?.class === 'tcard__a')).toHaveLength(0)
     const done = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('done', 'Done', { result: 'Rewrote the hero', prUrl: 'https://github.com/a/b/pull/7', finishedAt: '2026-10-25T10:05:00.000Z' }))] } }, noop, now + 3_600_000)
     expect(textOf(done)).toContain('Done · 5m')
     expect(textOf(done)).toContain('Rewrote the hero')

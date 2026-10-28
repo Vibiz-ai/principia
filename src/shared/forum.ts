@@ -58,7 +58,15 @@ export interface ForumChannel {
   lastReadSeq: number
   unread: number
   mentions: number
+  /**
+   * CHAT-UI.md §7.1, conversations only: who set the title. 'first' = the first message's words (the fallback),
+   * 'ai' = Principia named it, 'you' = renamed by a person (never overwritten). Absent on older conversations.
+   */
+  titleBy?: ConversationTitleBy
+  /** CHAT-UI.md §7.2: Principia is still picking who answers this conversation */
+  picking?: boolean
 }
+export type ConversationTitleBy = 'first' | 'ai' | 'you'
 
 export const FORUM_MESSAGE_KINDS = ['text', 'ask', 'proposal', 'system'] as const
 export type ForumMessageKind = (typeof FORUM_MESSAGE_KINDS)[number]
@@ -88,13 +96,14 @@ export interface ForumAsk {
 export const FORUM_PROPOSAL_KINDS = ['department', 'agent'] as const
 export type ForumProposalKind = (typeof FORUM_PROPOSAL_KINDS)[number]
 export const FORUM_AGENT_ADAPTERS = ['claude', 'codex', 'gemini', 'cursor'] as const
+export type ForumAgentAdapter = (typeof FORUM_AGENT_ADAPTERS)[number]
 export interface ForumProposalDepartment { name: string; key?: string; does: string; doesNot: string }
 export interface ForumProposalAgent {
   departmentKey: string | null
   role: string
   instructions: string
   capabilities: string
-  adapter?: (typeof FORUM_AGENT_ADAPTERS)[number]
+  adapter?: ForumAgentAdapter
 }
 export interface ForumProposal {
   kind: ForumProposalKind
@@ -107,6 +116,16 @@ export interface ForumProposal {
   note?: string
   result?: { departmentId?: string; agentId?: string }
   error?: string
+  /**
+   * CHAT-UI.md §7.2, a hire proposed in a conversation: the person's message the new agent answers once it is created
+   * (it joins the conversation), the closest existing agent offered instead ("Use Julia instead"), and the need in a
+   * few words ("social media scheduling").
+   */
+  forMessageId?: string
+  insteadAgentId?: string | null
+  need?: string
+  /** agent id brought in instead of hiring (decide reject with useAgentId) */
+  usedAgentId?: string
 }
 
 export interface ForumMessage {
@@ -209,6 +228,24 @@ export interface ForumCreateChannelRequest {
   purpose?: string
   memberIds?: string[]
 }
+/**
+ * CHAT-UI.md §7: New conversation, started in main (forum:startConversation). `agentIds`: the people you picked (To:
+ * a person, @names, Everyone), who answer at once. `pick`: Principia picks (§7.2): main reads the request against
+ * the team and brings in the best fit, or proposes a new specialist; `pick.agentIds` and `pick.handoff` are the
+ * deterministic route (lib/conversations.ts routeTeam), used when no model can be asked.
+ */
+export interface ForumStartConversationRequest {
+  companyId: string
+  text: string
+  /** the first-message title (the fallback until Principia names it) */
+  title: string
+  /** the channel slug (conversationSlug) */
+  name: string
+  /** the handoff line */
+  purpose: string
+  agentIds?: string[]
+  pick?: { agentIds: string[]; handoff: string }
+}
 export interface ForumInviteRequest {
   companyId: string
   role: ForumInviteRole
@@ -222,6 +259,8 @@ export interface ForumDecideRequest {
   messageId: string
   decision: 'approve' | 'reject'
   note?: string
+  /** reject a conversation's hire proposal by bringing in this existing agent instead ("Use Julia instead") */
+  useAgentId?: string
   /** approve with edits (the sheet's fields) */
   edits?: { name?: string; key?: string; role?: string; departmentKey?: string | null; profileId?: string; instructions?: string; capabilities?: string; does?: string; doesNot?: string }
 }

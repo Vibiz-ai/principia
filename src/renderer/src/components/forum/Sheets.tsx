@@ -201,8 +201,8 @@ export function InviteSheet({ companyId, channels, members, display, onCancel }:
   )
 }
 
-/** Approve a proposal: the agent's draft, editable. */
-export function DecideSheet({ m, onCancel, onDone }: { m: ForumMessage; onCancel: () => void; onDone: () => void }): React.JSX.Element {
+/** Approve a proposal: the agent's draft, editable. `title` / `primaryLabel`: a conversation's hire card says "Create & bring in". */
+export function DecideSheet({ m, onCancel, onDone, title, primaryLabel }: { m: ForumMessage; onCancel: () => void; onDone: () => void; title?: string; primaryLabel?: string }): React.JSX.Element {
   const p = m.proposal!
   const departments = useStore((s) => s.departments.filter((d) => d.companyId === m.companyId && !d.archivedAt))
   const profiles = useStore((s) => s.profiles.filter((x) => x.adapter !== 'shell'))
@@ -225,7 +225,7 @@ export function DecideSheet({ m, onCancel, onDone }: { m: ForumMessage; onCancel
   }
   const ok = p.kind === 'department' ? !!name.trim() : !!role.trim() && !!profileId
   return (
-    <Sheet title={p.kind === 'department' ? 'Approve: new department' : 'Approve: new agent'} onCancel={onCancel} onPrimary={() => void approve()} primaryLabel={p.kind === 'department' ? 'Create department' : 'Hire'} primaryDisabled={!ok} width={560}>
+    <Sheet title={title ?? (p.kind === 'department' ? 'Approve: new department' : 'Approve: new agent')} onCancel={onCancel} onPrimary={() => void approve()} primaryLabel={primaryLabel ?? (p.kind === 'department' ? 'Create department' : 'Hire')} primaryDisabled={!ok} width={560}>
       <p className="fm-sheet-why">{p.reason}</p>
       {p.kind === 'department' ? (
         <>

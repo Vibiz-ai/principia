@@ -387,3 +387,22 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .week1__turns-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
 .week1__turns-list b { color: var(--text-primary); font-weight: 600; }
 .week1__turns-note { font-size: var(--text-xs); color: var(--text-tertiary); }
+
+/* CHAT-UI.md §8.4: a task at work, watched in Chats; the banner on a resting agent chat. Cool blue only. */
+.task-live { display: flex; flex-direction: column; min-height: 0; }
+.task-live__state { display: inline-flex; align-items: center; gap: 6px; }
+.task-live__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 24px 18px; }
+.task-live__now { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); }
+.task-live__now > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-live__now--done { color: var(--text-secondary); white-space: normal; }
+.task-live__dot, .live-banner__dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--status-running); box-shadow: 0 0 0 3px var(--status-running-soft); animation: hive-pulse var(--dur-pulse) ease-in-out infinite; }
+.task-live__empty { padding: 24px 0; text-align: center; font-size: var(--text-sm); }
+.live-banner { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface-1); font-size: var(--text-sm); }
+.live-banner__line { min-width: 0; padding: 0; border: 0; background: none; color: var(--text-primary); font-size: var(--text-sm); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.live-banner__line:hover { text-decoration: underline; text-underline-offset: 2px; }
+.live-banner__watch { flex: none; }
+.convo__chat > .live-banner { flex: none; }
+.convo-panel__status--live { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: inherit; cursor: pointer; }
+.convo-panel__status--live:hover .desk-status__text { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; }
+.convo-panel__watch { display: block; margin-top: 4px; font-size: var(--text-xs); }
+.convo-panel__status--many .convo-panel__watch { text-align: inherit; }

@@ -152,7 +152,7 @@ export class Mailbox {
       const msg = forum.postAsAgent({ companyId: req.companyId, agentId: req.fromAgentId, runId: req.fromRunId, text, channelId, ask: { status: 'open', to: [target.id], taskId: null, runId: req.fromRunId }, opKey: req.opKey })
       if (!msg) return { status: 'refused', detail: 'the ask could not be posted' }
       // delivery: into the teammate's task in flight, else a short reply run on its own harness
-      const inflight = target.agentId ? (this.d.db.prepare("SELECT id, run_id FROM company_tasks WHERE agent_id=? AND status='in_progress' AND run_id IS NOT NULL LIMIT 1").get(target.agentId) as { id: string; run_id: string } | undefined) : undefined
+      const inflight = target.agentId ? (this.d.db.prepare("SELECT id, run_id FROM company_tasks WHERE agent_id=? AND status='in_progress' AND run_id IS NOT NULL ORDER BY seq LIMIT 1").get(target.agentId) as { id: string; run_id: string } | undefined) : undefined
       const reason = `Question from @${asker.handle} (${msg.ref}): ${clip(flat(req.question), 600)}${req.why ? ` (why: ${clip(flat(req.why), 200)})` : ''}. Answer it in your run report's "answers" with ref "${msg.ref}", or reply in the Forum thread.`
       const res = forum.collab.request(caller, msg, [target], 'report', req.why || '', {
         deliver: inflight

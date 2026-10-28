@@ -31,7 +31,10 @@ task, with an agent on it. The founder's checkout is never touched. The task fol
    push its own `hive/*` branch and open a PR; never the default branch, never force, never delete.
 6. **Several tasks at once**, capped by the company's maxInFlight (default 3). Start beyond the cap queues the task:
    "Queued: 3 already running". It starts when a running task finishes.
-7. **Nothing pops up unasked.** A deleted worktree shows a banner on the task, not a dialog. gh missing or signed out is a
+7. **Agents work in parallel; two runs never share a checkout.** An agent takes several tasks at once (§3a). A task
+   whose repository checkout another in-flight run already works in gets its own worktree by itself, on Run now, a
+   chat's start or an automatic one: the same binding as Start, made before its first turn.
+8. **Nothing pops up unasked.** A deleted worktree shows a banner on the task, not a dialog. gh missing or signed out is a
    line on the task ("GitHub CLI not signed in"), and statuses stop moving by themselves until it is fixed.
 
 ## 1. Code map
@@ -100,6 +103,27 @@ Start, the queue and a dispatcher turn share one worktree creation, so only the 
 
 The queue drains on every run end, every 60 s tick and on window focus, oldest first. A queued task the dispatcher claims
 by itself gets its worktree with that turn (`workdir`), never the founder's checkout.
+
+## 3a. Parallel tasks
+
+An agent is never "busy": a human Run now (or a chat's start) never waits for the agent's other work, nor for the
+company's maxInFlight; Start never waits for a busy agent (it still queues at maxInFlight, §0.6). Automatic starts (the dispatcher, a follow-up turn, a schedule fire, a
+handoff, an answer resuming, the plan pilot) still stop at the company's maxInFlight, and at `AGENT_MAX_PARALLEL` (3)
+tasks in flight per agent; the wait says so: "Julia is running 3 tasks; VO-15 starts when one finishes". The claim's
+compare-and-set counts the agent's other in-flight tasks against that cap, and the same task can still start only once
+("An agent already owns this task").
+
+Each task keeps its own provider conversation (`agentSessionId` per task), so parallel turns never share a session.
+
+The checkout rule, in `CompanyStore.startTask`: the task's repository (its own, else its agent's default) is a git
+checkout, and another task in flight with a run or session of ours works in it (no `work` binding, not a plan task).
+Then the task gets a `work` binding (not started yet: path from `WorktreeManager.taskPath`, branch `hive/<id>-<slug>`),
+its `repoId` written, its `agentSessionId` cleared (a new folder is a new conversation), the worktree brief in its wake
+and a `work` activity "VO-12 is already working in the app checkout, so VO-15 runs in its own worktree on hive/…".
+`TaskWorkService.workdir` makes the worktree before the turn, as for a queued Start; from then on it is a Started task
+(PR followed, Merge…, Remove Worktree…). The first run keeps the checkout as before. Shared as before: the company
+workspace and plain folders (no git), a workflow seat's run, and Open as session (the founder's own interactive
+session, in the folder as it is). Without the task worktree service (no `setWorktreePaths`) a checkout is shared.
 
 ## 4. Following the work
 

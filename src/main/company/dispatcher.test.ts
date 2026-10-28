@@ -8,7 +8,7 @@ import { createEngineStore, runTaskLink } from '../db/engineStore'
 import { LiveStore } from '../db/liveStore'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge, type DispatcherSessions } from './dispatcher'
 import type { StartRunOptions } from '../../shared/engine'
-import type { CompanyTaskInput } from '../../shared/company'
+import { AGENT_MAX_PARALLEL, type CompanyTaskInput } from '../../shared/company'
 import type { Run, RunTarget, Session } from '../../shared/types'
 
 let db: DB; let store: Store; let c: HookedCompanyStore; let dir: string; let d: Dispatcher
@@ -146,25 +146,40 @@ describe('DEPARTMENTS.md §3 dispatcher: assignment is the wake', () => {
     expect(new Set(started.map(s => s.opts.agentId)).size).toBe(2)
     expect((db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE status='in_progress'").get() as { n: number }).n).toBe(2)
   })
-  it('a manual Run racing a tick has one winner; the loser gets a busy error', async () => {
-    const { co, agent, task } = board({ autopilot: false })
+  it('a manual Run racing a tick: the agent takes both tasks at once, a busy agent never refuses a click, the same task never starts twice', async () => {
+    const { co, task } = board({ autopilot: false })
     const t1 = task({ title: 'First' }), t2 = task({ title: 'Second' })
     c.setAutopilot(co.id, true)
-    // the click lands while the tick is queued: the click wins, the tick finds the seat busy
+    // the click lands while the tick is queued: the click starts t2, the tick starts t1 beside it
     const tick = d.tick()
     expect(d.runNow(t2.id).status).toBe('in_progress')
     await tick
-    expect(started.map(s => s.opts.taskId)).toEqual([t2.id])
-    expect(c.task(t1.id).status).toBe('todo')
-    // the tick wins: the click is refused with the busy message
-    end(started[0].run.id, 'passed')
-    await settle()
+    expect(started.map(s => s.opts.taskId)).toEqual([t2.id, t1.id])
     expect(c.task(t1.id).status).toBe('in_progress')
+    // a third task: the agent is on two already, the click starts it anyway (past the company's cap too)
     const t3 = task({ title: 'Third' })
-    expect(() => d.runNow(t3.id)).toThrow(`${agent.name} is busy on ${c.task(t1.id).identifier}`)
-    expect(started).toHaveLength(2)
+    expect(d.runNow(t3.id).status).toBe('in_progress')
+    expect(started).toHaveLength(3)
+    // the CAS / transaction still holds per task
+    expect(() => d.runNow(t1.id)).toThrow('An agent already owns this task')
+    await d.pump(co.id)
+    expect(started).toHaveLength(3)
     // the human click reset the wake guard of the task it started
     expect(c.task(t2.id).autoWakes).toEqual({ windowStart: null, n: 0 })
+  })
+  it('automatic starts stop at AGENT_MAX_PARALLEL tasks per agent; the next one starts when one finishes', async () => {
+    const { co, agent, task } = board({ autopilot: false })
+    const ts = [1, 2, 3, 4].map(n => task({ title: `Task ${n}` }))
+    c.setAutopilot(co.id, true, 10)
+    for (let i = 0; i < 5; i++) await d.pump(co.id)
+    expect(started).toHaveLength(AGENT_MAX_PARALLEL)
+    const waiting = ts.find(t => c.task(t.id).status === 'todo')!
+    // a system start of the waiting one is refused with the plain line; a human one is not
+    expect(() => c.startTask(waiting.id, undefined, () => { throw new Error('no run') }, { actor: 'system' })).toThrow(`${agent.name} is running ${AGENT_MAX_PARALLEL} tasks; ${waiting.identifier} starts when one finishes`)
+    end(started[0].run.id, 'passed')
+    await settle()
+    expect(c.task(waiting.id).status).toBe('in_progress')
+    expect((db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress'").get(agent.id) as { n: number }).n).toBe(AGENT_MAX_PARALLEL)
   })
 })
 
@@ -517,8 +532,8 @@ describe('DEPARTMENTS.md §4.4 interactive leases', () => {
     expect(f.created[0].initialPrompt).toContain('Write the launch post')
     expect(db.prepare('SELECT task_id AS taskId FROM sessions WHERE id=?').get(session.id)).toEqual({ taskId: t.id })
     expect(d.leaseOf(t.id)).toBe(session.id)
-    // the session is the agent's one task in flight
-    expect(() => d.runNow(other.id)).toThrow(`${agent.name} is busy on ${t.identifier}`)
+    // the agent works on another task beside the session (a headless run of its own)
+    expect(d.runNow(other.id)).toMatchObject({ status: 'in_progress', agentId: agent.id })
     d.checkSessions()
     expect(c.task(t.id).status).toBe('in_progress')
     f.live.delete(session.id)

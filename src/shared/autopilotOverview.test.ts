@@ -53,7 +53,11 @@ describe('What is Autopilot doing?', () => {
   })
   it('a busy agent, a full company, a switch that is off, a paused company and a waiting playbook each say so', () => {
     const busy = autopilotOverview(base({ tasks: [{ id: 'a', identifier: 'LL-7', title: 'A', status: 'in_progress', agentId: 'm', dependencyIds: [], priority: 0 }, { id: 'b', identifier: 'LL-8', title: 'B', status: 'todo', agentId: 'm', dependencyIds: [], priority: 0 }] }))
-    expect(busy.next[0]!.why).toBe('starts after Marcus finishes LL-7')
+    // an agent works on several tasks at once: a busy one takes its next task beside the first
+    expect(busy.next[0]!.why).toBe('starts within a minute')
+    const run = (n: number) => ({ id: `r${n}`, identifier: `LL-${10 + n}`, title: 'R', status: 'in_progress' as const, agentId: 'm', dependencyIds: [], priority: 0 })
+    const full = autopilotOverview(base({ maxInFlight: 10, tasks: [run(1), run(2), run(3), { id: 'b', identifier: 'LL-8', title: 'B', status: 'todo', agentId: 'm', dependencyIds: [], priority: 0 }] }))
+    expect(full.next[0]!.why).toBe('starts when Marcus finishes one of the 3 tasks running')
     const off = autopilotOverview(base({ switchOn: false }))
     expect(off.starters).toEqual([])
     expect(off.headline.startsWith('Agents wait for you to press Start')).toBe(true)

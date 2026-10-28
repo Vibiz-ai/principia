@@ -1,4 +1,4 @@
-import { companyName, navigate, resumeCompanyAsked, scopeCompanyId, useStore } from '../state/store'
+import { companyName, navigate, openTaskLive, resumeCompanyAsked, scopeCompanyId, useStore } from '../state/store'
 import { useNeeds, useWorking } from '../state/live'
 import { RelativeTime } from '../components/ui'
 import { statusNext } from '../lib/statusNext'
@@ -16,7 +16,10 @@ export function StatusBar(): React.JSX.Element {
   const companyId = useStore((s) => scopeCompanyId(s))
   const multi = useStore((s) => s.companies.length >= 2)
   const paused = useStore((s) => (companyId ? (s.companies.find((c) => c.id === companyId)?.pausedAt ?? null) : null))
-  const working = useWorking(companyId ?? 'all').count
+  const workingSlice = useWorking(companyId ?? 'all')
+  const working = workingSlice.count
+  // CHAT-UI.md §8.4: one task at work opens its live view; more open Chats › Live, one row each
+  const only = working === 1 ? workingSlice.items[0] : undefined
   const needs = useNeeds(companyId ?? 'all').count
   const own = companyId && status?.activeByCompany ? (status.activeByCompany[companyId] ?? { running: 0, queued: 0 }) : null
   const queued = own ? own.queued : (status?.queuedRuns ?? 0)
@@ -34,7 +37,7 @@ export function StatusBar(): React.JSX.Element {
           <span className="glyph" aria-hidden>‖</span> {name ?? 'Paused'}{name ? ' is paused' : ''} · <span className="statusbar__action">Resume</span>
         </button>
       )}
-      <button type="button" className="statusbar__item" onClick={() => void navigate({ name: 'chats', filter: 'live' })} title="Open Chats › Live (⇧⌘A)">
+      <button type="button" className="statusbar__item" onClick={() => (only?.taskId ? openTaskLive(only.taskId, only.companyId) : void navigate({ name: 'chats', filter: 'live' }))} title={only?.taskId ? 'Watch it work' : 'Open Chats › Live (⇧⌘A)'}>
         {working > 0 ? (
           <>
             <span className="glyph glyph--running status-dot--running">●</span> {working} working

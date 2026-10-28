@@ -8,7 +8,7 @@
  * - a session row is a direct chat with Claude or Codex (repo sessions, department chats);
  * - a run row is live work with no chat (a workflow step, a schedule's prompt).
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { CompanyAgent } from '@shared/company'
 import type { Id, Session } from '@shared/types'
 import type { AgentNode } from '@shared/live'
@@ -20,11 +20,14 @@ import { inScope } from '../../lib/scope'
 import { age } from '../../lib/time'
 import { firstLine, sessionEndLabel } from '../../lib/format'
 import { lastChatKey, sessionUnread } from '../../lib/agentChatView'
+import { liveTaskKey } from '../../lib/liveRow'
+import { plainActivity } from '../../lib/plainActivity'
 import { useWorking } from '../../state/live'
 import { useDeskWho } from '../../state/desk'
 import { departmentsOn, loadJson, providerLabel, saveJson, sessionTitle, useStore, type ChatsFilter } from '../../state/store'
 import { useAgentStatus } from '../desk/Desk'
-import { conversationText, useConversations, whoLine, type ConversationRow } from '../../state/conversations'
+import { conversationText, renameConversation, useConversations, whoLine, type ConversationRow } from '../../state/conversations'
+import { nativeMenu } from '../../lib/hive'
 import { useForum } from '../../state/forum'
 import { MemberAvatar, useMemberDisplay } from '../forum/Avatar'
 
@@ -108,9 +111,10 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
         if (a.archivedAt || a.kind !== 'profile' || (scope && a.companyId !== scope)) continue
         const mine = tasks.filter((t) => t.agentId === a.id && t.companyId === a.companyId)
         const chats = (chatOf.get(a.id) ?? []).slice().sort((x, y) => Number(y.status === 'running') - Number(x.status === 'running') || (x.startedAt < y.startedAt ? 1 : -1))
-        const cur = mine.find((t) => t.status === 'in_progress')
-        const live = (!!cur?.runId && (liveRuns.has(cur.runId) || liveSessions.has(cur.runId))) || chats.some((s) => liveSessions.has(s.id))
-        if (cur?.runId) covered.add(cur.runId)
+        // an agent may work on several tasks at once: any of their runs keeps the row live, and each belongs to it
+        const runs = mine.filter((t) => t.status === 'in_progress' && t.runId).map((t) => t.runId!)
+        const live = runs.some((r) => liveRuns.has(r) || liveSessions.has(r)) || chats.some((s) => liveSessions.has(s.id))
+        for (const r of runs) covered.add(r)
         for (const c of chats) covered.add(c.id)
         const at = [...mine.map((t) => t.updatedAt), ...chats.map((s) => s.endedAt ?? s.startedAt), a.createdAt].reduce((m, x) => (x > m ? x : m), '')
         if (!chats.length && !live) continue
@@ -146,12 +150,13 @@ export function useSessionAgent(sessionId: Id | null | undefined): AgentNode | u
   })
 }
 
-export function ChatRow({ row, selected, onPick }: { row: ChatRowModel; selected: boolean; onPick: () => void }): React.JSX.Element {
+/** `onPick(key)`: a row may open something other than its own key (a working agent's row opens its task's live view). */
+export function ChatRow({ row, selected, onPick }: { row: ChatRowModel; selected: boolean; onPick: (key?: string) => void }): React.JSX.Element {
   if (row.kind === 'agent') return <AgentChatRow row={row} selected={selected} onPick={onPick} />
   if (row.kind === 'session') return <SessionChatRow row={row} selected={selected} onPick={onPick} />
   if (row.kind === 'conv') return <ConvChatRow row={row} selected={selected} onPick={onPick} />
   return (
-    <button type="button" role="option" aria-selected={selected} className={`chats5-row is-shimmering ${selected ? 'is-selected' : ''}`} onClick={onPick}>
+    <button type="button" role="option" aria-selected={selected} className={`chats5-row is-shimmering ${selected ? 'is-selected' : ''}`} onClick={() => onPick()}>
       <span className="chats5-row__face" aria-hidden>
         <AgentGlyph visual="running" />
       </span>
@@ -166,7 +171,7 @@ export function ChatRow({ row, selected, onPick }: { row: ChatRowModel; selected
   )
 }
 
-function AgentChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'agent' }>; selected: boolean; onPick: () => void }): React.JSX.Element {
+function AgentChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'agent' }>; selected: boolean; onPick: (key?: string) => void }): React.JSX.Element {
   const who = useDeskWho(row.agent)
   const status = useAgentStatus(row.agent)
   const node = useSessionAgent(row.chat?.id)
@@ -177,9 +182,13 @@ function AgentChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { 
   const needs = node?.status === 'needs_you' && node.needs !== 'idle'
   // like a bot list: what it is doing while it works, else the last thing it said, else its status sentence
   const said = node ? saidPreview(node, 160) : null
-  const line = turnWorking ? (node?.activity ? firstLine(node.activity, 120) : 'Working…') : needs ? 'Waiting for you to allow something' : said ?? status.text
+  // CHAT-UI.md §8.4: at work on a task (its own chat resting), the row says what it is doing and opens the live view
+  // on several tasks at once the row opens their chat, whose banner has one Watch per task
+  const onTasks = status.kind === 'working' && !turnWorking && !needs
+  const onTask = onTasks && status.seat.working.length < 2 ? status.seat.current : null
+  const line = turnWorking ? (node?.activity ? (plainActivity(node.activity) ?? firstLine(node.activity, 120)) : 'Working…') : needs ? 'Waiting for you to allow something' : onTasks ? status.text : said ?? status.text
   return (
-    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={onPick} title={`${who.name} · ${who.role}`}>
+    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick(onTask ? liveTaskKey(onTask.id) : undefined)} title={onTasks ? `${who.name} · ${status.text}` : `${who.name} · ${who.role}`}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
         <AgentBust agent={row.agent} size={30} />
       </span>
@@ -196,7 +205,7 @@ function AgentChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { 
   )
 }
 
-function SessionChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'session' }>; selected: boolean; onPick: () => void }): React.JSX.Element {
+function SessionChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'session' }>; selected: boolean; onPick: (key?: string) => void }): React.JSX.Element {
   const s = row.session
   const node = useSessionAgent(s.id)
   const seen = useStore((x) => (node ? !!x.seenIdle[node.id] : false))
@@ -210,7 +219,7 @@ function SessionChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, 
   const working = glyph === 'running' || glyph === 'queued'
   const unread = !selected && s.status === 'running' && sessionUnread(node, seen)
   return (
-    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${s.status === 'running' ? '' : 'is-dim'} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={onPick}>
+    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${s.status === 'running' ? '' : 'is-dim'} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()}>
       <span className="chats5-row__face" aria-hidden>
         {glyph ? <AgentGlyph visual={glyph} /> : <Icon name={s.repoId ? 'branch' : s.departmentId ? 'department' : 'chat'} size={13} />}
       </span>
@@ -229,17 +238,51 @@ function SessionChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, 
   )
 }
 
-/** A conversation: its title, who is in it ("Private · Seneca"), a shimmer while one of them answers IN it. */
-function ConvChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'conv' }>; selected: boolean; onPick: () => void }): React.JSX.Element {
+/**
+ * A conversation: its title (CHAT-UI.md §7.1: Principia names it; right-click › Rename… to name it yourself, kept for
+ * good), who is in it ("Private · Seneca"), a shimmer while one of them answers IN it.
+ */
+function ConvChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { kind: 'conv' }>; selected: boolean; onPick: (key?: string) => void }): React.JSX.Element {
   const c = row.conv
   const state = useForum((s) => s.byCompany[c.companyId]?.state ?? null)
   const display = useMemberDisplay(state?.members ?? [])
+  const [renaming, setRenaming] = useState<string | null>(null)
   const who = whoLine(c)
   const answering = c.agentMemberIds.filter((id) => c.workingIds.includes(id)).map((id) => display(id)?.name).filter(Boolean).join(', ')
   const first = c.agentMemberIds[0]
   const unread = !selected && c.unread > 0
+  if (renaming !== null)
+    return (
+      <div className={`chats5-row ${selected ? 'is-selected' : ''}`} data-chatux="chat-row-rename">
+        <input
+          className="input input--sm chats5-row__rename"
+          autoFocus
+          value={renaming}
+          maxLength={80}
+          aria-label="Conversation title"
+          onChange={(e) => setRenaming(e.target.value)}
+          onBlur={() => {
+            void renameConversation(c.companyId, c.id, renaming)
+            setRenaming(null)
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              setRenaming(null)
+            }
+          }}
+        />
+      </div>
+    )
+  const menu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    const id = await nativeMenu([{ id: 'rename', label: 'Rename…' }])
+    if (id === 'rename') setRenaming(c.title)
+  }
   return (
-    <button type="button" role="option" aria-selected={selected} data-chatux="chat-row" data-title={c.title} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={onPick} title={`${c.title} · ${who}`}>
+    <button type="button" role="option" aria-selected={selected} data-chatux="chat-row" data-title={c.title} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live || c.picking ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void menu(e)} onKeyDown={(e) => e.key === 'F2' && (e.preventDefault(), setRenaming(c.title))} title={`${c.title} · ${who} · right-click to rename`}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
         {first ? <MemberAvatar display={display(first)} size={30} working={row.live} /> : <Icon name="chat" size={13} />}
       </span>
@@ -248,7 +291,7 @@ function ConvChatRow({ row, selected, onPick }: { row: Extract<ChatRowModel, { k
           <span className="chats5-row__name">{c.title}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
-        <span className={`chats5-row__last ${row.live ? 'shimmer-text' : ''}`}>{row.live ? `${answering || who} · answering…` : c.private ? who : `With ${who}`}</span>
+        <span className={`chats5-row__last ${row.live || c.picking ? 'shimmer-text' : ''}`}>{row.live ? `${answering || who} · answering…` : c.picking && !c.who.length ? who : c.private ? who : `With ${who}`}</span>
       </span>
       {unread && <span className="chats5-row__dot" aria-label="New answer" />}
     </button>

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
+import { AGENT_MAX_PARALLEL, agentFullLine, DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -12,6 +12,8 @@ import { assignRepoSchema, companyCreateSchema, companyReorderSchema, companyUpd
 import { buildResumePrompt, buildTaskPrompt } from './taskPrompt'
 import { briefPromptBlock, contextFromDescription, planStartRefusal } from './brief'
 import { planBlockerMet } from '../../shared/plans'
+import { taskBranchName, workBrief, type TaskWork } from '../../shared/taskWork'
+import { taskWorkSchema } from './taskWorkSchema'
 import { assertEditable, assertReassignable, assertTransition, runEndState, type StopReason } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
@@ -54,6 +56,8 @@ export class CompanyStore {
   private redact: (text: string) => string = s=>s
   /** experimental.departments (§0.8); off, plain tasks keep today's statuses (no dependency lock, no auto heal) */
   private boardOn: () => boolean = ()=>true
+  /** WORKTREE.md: a task's own worktree folder (setWorktreePaths); null = a busy checkout is shared */
+  private worktreePath: ((identifier: string) => string) | null = null
   /** why main canceled a task's run (time or wake cap); consumed at its run end */
   private readonly stopReasons = new Map<string, StopReason>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
@@ -938,9 +942,12 @@ export class CompanyStore {
    * §4: starts a task turn. The seat (agentId) decides the profile or workflow; legacy tasks run their
    * assigneeProfileId (or the explicit `profileId` of "Run agent"). cwd: the task's repo, else the agent's default repo,
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
-   * autopilot gate. One in-flight task per agent.
+   * autopilot gate. An agent works on several tasks at once: a human start never waits for it, an automatic one only
+   * at AGENT_MAX_PARALLEL. A code task whose checkout another in-flight run already works in gets its own worktree
+   * (WORKTREE.md binding, made by TaskWorkService.workdir before the turn): two runs never edit one checkout.
+   * `lease`: an interactive session (Open as session) opens in the folder as it is, shared or not.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean;lease?:boolean}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
@@ -962,16 +969,30 @@ export class CompanyStore {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
         if(actor==='system'&&agent.pausedAt) fail(`${agent.name} is paused`)
-        const busy=this.store.db.prepare("SELECT data FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>? LIMIT 1").get(agent.id,task.id) as {data:string}|undefined
-        if(busy) fail(`${agent.name} is busy on ${readTask(busy.data).identifier}`)
+        // parallel work: a busy agent takes the task beside the others; only automatic starts stop at the per-agent cap
+        if(actor==='system') {
+          const n=this.inFlightOf(agent.id,task.id)
+          if(n>=AGENT_MAX_PARALLEL) fail(agentFullLine(agent.name,n,task.identifier))
+        }
       }
       const company=this.passport(task.companyId)
       const repoId=task.repoId ?? agent?.data.defaultRepoId ?? null
       if(repoId&&!company.repoIds.includes(repoId)) fail(`The agent's default repository no longer belongs to ${company.name}. Choose a repository on the task.`)
       const cwd=repoId ? this.store.getRepo(repoId)?.path ?? fail('Repository no longer exists') : this.companyWorkspace(task.companyId)
-      const wake=task.pendingWake?.reasons.length ? task.pendingWake.reasons : [actor==='human' ? 'Run now: the human started this task.' : 'Assigned: this task is yours.']
+      let wake=task.pendingWake?.reasons.length ? task.pendingWake.reasons : [actor==='human' ? 'Run now: the human started this task.' : 'Assigned: this task is yours.']
+      const workflow=agent?.kind==='workflow'&&!profileId
+      // WORKTREE.md: the checkout is someone else's right now (another task's run works in it): this task gets its own
+      // worktree and branch, a new folder and so a new conversation. The company workspace and a plain folder (no git)
+      // are shared.
+      const holder=repoId&&this.worktreePath&&!workflow&&!task.plan&&!task.work&&!opts.lease&&this.store.getRepo(repoId)?.isGit ? this.checkoutHolder(repoId,task.id) : null
+      if(holder) {
+        const work=taskWorkSchema.parse({repoId,worktreePath:this.worktreePath!(task.identifier),branch:taskBranchName(task.identifier,task.title)}) as TaskWork
+        task={...task,repoId,agentSessionId:null,work}
+        wake=[...wake,workBrief(work)]
+        this.activity(id,'work',`${holder.identifier} is already working in the ${this.store.getRepo(repoId!)?.name ?? 'repository'} checkout, so ${task.identifier} runs in its own worktree on ${work.branch}. Your checkout is not touched.`,'system')
+      }
       let target:RunTarget;let selected:string|null=task.assigneeProfileId;let resumeSessionId:string|null=null
-      if(agent?.kind==='workflow'&&!profileId) {
+      if(workflow) {
         if(!this.store.getWorkflow(agent.refId)) fail('The workflow behind this agent no longer exists')
         this.scope.assertSameCompany(task.companyId,{workflowId:agent.refId})
         target={kind:'workflow',workflowId:agent.refId,inputs:{task_identifier:task.identifier,task_title:this.redact(task.title),task_description:this.redact(task.description)}}
@@ -1016,6 +1037,24 @@ export class CompanyStore {
     if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
+  /** The agent's tasks in flight, besides `taskId`. */
+  private inFlightOf(agentId: string, taskId: string): number {
+    return (this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(agentId,taskId) as {n:number}).n
+  }
+  /**
+   * WORKTREE.md: an in-flight task (with a run or session of ours) working in the repo's own checkout: no worktree
+   * binding and not a plan task (those work in their milestone's worktree). Its repo: its own, else its agent's default.
+   */
+  private checkoutHolder(repoId: string, taskId: string): BoardTask|null {
+    const rows=this.store.db.prepare("SELECT data FROM company_tasks WHERE status='in_progress' AND run_id IS NOT NULL AND id<>? AND json_extract(data,'$.plan') IS NULL AND json_extract(data,'$.work') IS NULL ORDER BY seq").all(taskId) as {data:string}[]
+    for(const r of rows) {
+      const t=readTask(r.data)
+      if((t.repoId ?? (t.agentId ? this.departments.getAgent(t.agentId)?.data.defaultRepoId : null) ?? null)===repoId) return t
+    }
+    return null
+  }
+  /** WORKTREE.md: where a task's own worktree goes (WorktreeManager.taskPath), plugged in with the task worktree service; unset = no isolation (a busy checkout is shared). */
+  setWorktreePaths(fn: ((identifier: string) => string) | null): void { this.worktreePath = fn }
   private companyWorkspace(companyId: string): string|null {
     if(!this.scope.companiesRoot) return null
     return this.scope.ensureWorkspace(companyId)

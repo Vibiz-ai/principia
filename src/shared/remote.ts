@@ -489,6 +489,8 @@ export interface PhoneTaskCard {
   prUrl: string | null
   startedAt: string
   finishedAt: string | null
+  /** while it works: what its run is doing now ("Reading funnel.md"), read when the room loads */
+  activity?: string
 }
 export interface PhoneRoom {
   companyId: Id

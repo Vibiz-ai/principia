@@ -50,7 +50,11 @@ const ROUTES: [RegExp, RegExp][] = [
 const ROLE_GENERIC = new Set('analyst builder specialist agent assistant lead manager officer helper partner expert person team member'.split(' '))
 
 /** Words of a seat's description that say nothing about the work ("Does not publish without approval"). */
-const ABOUT_GENERIC = new Set('doe not never without approval each every our their client clients customer customers thing things work help'.split(' '))
+const ABOUT_GENERIC = new Set(
+  // …and everyday verbs: "Checks the repo for leaks" must not catch "check whats the status of the posts" (CHAT-UI.md §7.2)
+  ('doe not never without approval each every our their client clients customer customers thing things work help ' +
+    'check look see find know tell show give take keep need want use run what whats how why when where which there here now let bro hey thank thanks good great').split(' ')
+)
 
 const MENTION = /(^|\s)@([\p{L}\p{N}_-]+)/u
 
@@ -418,6 +422,8 @@ export interface StatusSentence {
 export const STATUS_GLYPH: Record<StatusKind, string> = { working: '●', needs: '◆', ready: '○', idle: '○', paused: '‖', failed: '✕' }
 type SeatLike = {
   current: Pick<CompanyTask, 'identifier' | 'title'> | null
+  /** every task in flight (current among them): an agent works on several at once */
+  working?: Pick<CompanyTask, 'identifier' | 'title'>[]
   /** To do, in order; an item with `waiting` cannot start yet (a task it depends on is not done) */
   queue: (Pick<CompanyTask, 'identifier' | 'title'> & { waiting?: boolean })[]
   review: Pick<CompanyTask, 'identifier' | 'title'>[]
@@ -436,10 +442,18 @@ export function statusSentence(o: { seat: SeatLike; agentPaused: boolean; compan
   const s = o.seat
   const name = (t: Pick<CompanyTask, 'identifier' | 'title'>): string => taskName(t, o.code)
   const make = (kind: StatusKind, text: string): StatusSentence => ({ kind, glyph: STATUS_GLYPH[kind], text })
-  if (o.companyPaused) return make('paused', `Paused with ${o.companyPaused}${s.current ? `: ${name(s.current)} is saved` : ''}`)
-  if (o.agentPaused) return make('paused', s.current ? `Paused by you: ${name(s.current)} is saved` : 'Paused by you')
+  const n = s.working?.length ?? (s.current ? 1 : 0)
+  // several in flight: "Working on 2 tasks: NW-7 Week plan and NW-9 Menu", "… 3 tasks: A, B and 1 more"
+  const many = (): string => {
+    const w = s.working!
+    return `${n} tasks: ${n === 2 ? `${name(w[0]!)} and ${name(w[1]!)}` : `${name(w[0]!)}, ${name(w[1]!)} and ${n - 2} more`}`
+  }
+  const saved = n > 1 ? `${n} tasks are saved` : s.current ? `${name(s.current)} is saved` : ''
+  if (o.companyPaused) return make('paused', `Paused with ${o.companyPaused}${saved ? `: ${saved}` : ''}`)
+  if (o.agentPaused) return make('paused', saved ? `Paused by you: ${saved}` : 'Paused by you')
   if (s.current) {
-    if (s.kind === 'needs') return make('needs', `Asking you about ${name(s.current)}`)
+    if (s.kind === 'needs') return make('needs', `Asking you about ${name(s.current)}${n > 1 ? ` (working on ${n - 1} more)` : ''}`)
+    if (n > 1) return make('working', `Working on ${many()}`)
     const doing = o.activity ? `: ${o.activity.charAt(0).toLowerCase()}${o.activity.slice(1)}` : ''
     return make('working', `Working on ${name(s.current)}${doing}${o.since ? ` · ${o.since}` : ''}`)
   }

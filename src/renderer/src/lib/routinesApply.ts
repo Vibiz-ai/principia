@@ -14,7 +14,7 @@ export interface RoutineDeps {
   setScheduleEnabled(id: Id, enabled: boolean): Promise<Schedule>
   updateSchedule?(id: Id, input: ScheduleInput): Promise<Schedule>
   runSchedule(id: Id): Promise<unknown>
-  /** the schedule's latest event message ("Created NC-4; Seneca is busy on NC-2; it starts right after") */
+  /** the schedule's latest event message ("Created NC-4; Seneca is running 3 tasks; NC-4 starts when one finishes") */
   lastScheduleMessage?(id: Id): Promise<string | null>
   startRun(target: RunTarget, companyId: Id): Promise<Run>
   createTask(task: CompanyTaskInput): Promise<CompanyTask>

@@ -89,7 +89,8 @@ export function routeLine(text: string, route: TeamRoute | null): string {
   const miss = route.unknown ? `No ${route.unknown} here · ` : ''
   if (route.by === 'mention') return `${miss}→ ${who} directly`
   if (route.by === 'words') return `${miss}→ Principia brings in ${who}`
-  return `${miss}→ No clear fit · Principia starts with ${who} (first on the team) · @someone to change`
+  // CHAT-UI.md §7.2: Principia reads it on Send and brings in whoever fits, or suggests a new specialist for your yes
+  return `${miss}→ No clear fit · Principia reads it and picks, or suggests a new specialist · @someone to choose`
 }
 
 /** The handoff line a conversation opens with: who Principia brought in, and why. */
@@ -202,6 +203,10 @@ export interface ConversationRow {
   working: boolean
   /** one agent, you picked them: your private conversation with them */
   private: boolean
+  /** CHAT-UI.md §7.2: Principia is still picking who answers */
+  picking?: boolean
+  /** CHAT-UI.md §7.1: who set the title (null: an older conversation) */
+  titleBy?: 'first' | 'ai' | 'you' | null
 }
 
 /** Pure: the conversation rows of a Forum state (conversations.test.ts). */
@@ -225,7 +230,9 @@ export function conversationRows(state: Pick<ForumState, 'members' | 'presence' 
         lastAt: c.lastMessageAt ?? c.createdAt,
         unread: c.unread,
         working: workingIds.length > 0,
-        private: agentMemberIds.length === 1 && c.purpose.startsWith(PRIVATE_HANDOFF)
+        private: agentMemberIds.length === 1 && c.purpose.startsWith(PRIVATE_HANDOFF),
+        picking: !!c.picking,
+        titleBy: c.titleBy ?? null
       }
     })
     .sort((a, b) => (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : 0))
@@ -237,7 +244,8 @@ export function privateWith(rows: readonly ConversationRow[], agentId: string): 
 }
 
 /** One line of who is in a conversation: "Marcus", "Marcus, Cato", "Private · Seneca". */
-export function whoLine(r: Pick<ConversationRow, 'who' | 'private'>): string {
+export function whoLine(r: Pick<ConversationRow, 'who' | 'private'> & Partial<Pick<ConversationRow, 'picking'>>): string {
+  if (r.picking && !r.who.length) return 'Principia is picking who answers…'
   return r.private ? `Private · ${r.who[0] ?? ''}` : r.who.join(', ') || 'the team'
 }
 

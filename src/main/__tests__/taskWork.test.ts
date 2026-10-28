@@ -565,3 +565,28 @@ d('QA fixes', () => {
     expect(await wm.branches(runId)).toEqual([])
   })
 })
+
+d('parallel work: two runs never share a checkout', () => {
+  it('a second Run now on the same repo starts at once in its own worktree; the first keeps the checkout', async () => {
+    const { companyId, repoId } = company()
+    c.setWorktreePaths((id) => wm.taskPath(id))
+    const a = task({ companyId, repoId, title: 'Audit the repo' }), b = task({ companyId, repoId, title: 'Check the build' })
+    let seq = 0
+    const start = (id: string) => c.startTask(id, undefined, (target, companyId, link) => {
+      const run: Run = { id: `run_p${++seq}`, kind: 'prompt', title: 'Task', target, workflowId: null, scheduleId: null, parentRunId: null, trigger: 'manual', status: 'queued', reason: null, createdAt: new Date().toISOString(), startedAt: null, endedAt: null, artifactsDir: root, artifactCount: 0 }
+      runs.push({ run, target, opts: { trigger: 'task', companyId, taskId: link.taskId } })
+      return run
+    })
+    const before = founder()
+    start(a.id)
+    // the first one works in the checkout (no binding: workdir says null, the engine uses the repo)
+    expect(await svc.workdir(a.id)).toBeNull()
+    expect(start(b.id).status).toBe('in_progress')
+    const wd = await svc.workdir(b.id)
+    expect(wd!.cwd).toBe(path.join(userData, 'worktrees', `task-${b.identifier}`))
+    expect(fs.readFileSync(path.join(wd!.cwd, 'a.txt'), 'utf8')).toBe('one\n')
+    expect(c.task(b.id).work).toMatchObject({ repoId, startedAt: expect.any(String), branch: expect.stringMatching(/^hive\//) })
+    expect(promptOf(lastRun().target)).toContain('You work in your own git worktree')
+    expect(founder()).toEqual(before)
+  })
+})

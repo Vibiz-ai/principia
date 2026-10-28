@@ -41,6 +41,13 @@ const PROPOSAL_SCHEMA = {
   additionalProperties: false
 }
 
+/** forum_reply's proposal: a hire only, in few words (the schema document stays under its size cap); capabilities, adapter also accepted. */
+const HIRE_SCHEMA = {
+  type: 'object',
+  properties: { kind: { const: 'agent' }, role: { type: 'string' }, department: { type: ['string', 'null'] }, instructions: { type: 'string' }, reason: { type: 'string' } },
+  required: ['kind', 'role', 'reason']
+}
+
 export interface ForumToolDef { name: ForumTool; description: string; inputSchema: Record<string, unknown> }
 export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
   forum_read: {
@@ -75,14 +82,16 @@ export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
   },
   forum_reply: {
     name: 'forum_reply',
-    description: 'Reply in the thread of a message (m3fk). task: when the person asked for work to be done or tracked, also files their request as a Board task for you (one per message).',
+    description: 'Reply in a message\'s thread (m3fk). task: file the person\'s request as your Board task (one per message). proposal: a hire they confirm. answer_task: their message answers a task\'s question (VO-15).',
     inputSchema: {
       type: 'object',
       properties: {
         to: ref,
         text: { type: 'string', minLength: 1, maxLength: FORUM_LIMITS.agentText },
         refs: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 8 },
-        task: { type: 'object', properties: { title: { type: 'string', minLength: 3, maxLength: 120, description: 'plain words, what the person asked for' } }, required: ['title'], additionalProperties: false }
+        task: { type: 'object', properties: { title: { type: 'string', minLength: 3, maxLength: 120 } }, required: ['title'], additionalProperties: false },
+        proposal: HIRE_SCHEMA,
+        answer_task: { type: 'object', properties: { task: { type: 'string' }, answer: { type: 'string' } }, required: ['task'] }
       },
       required: ['to', 'text'],
       additionalProperties: false
@@ -222,7 +231,7 @@ export const FORUM_ARGS = {
     refs: z.array(z.string().max(300)).max(8).optional(),
     proposal: proposalArgZ.optional()
   }),
-  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional(), task: z.strictObject({ title: z.string().trim().min(3).max(120) }).optional() }),
+  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional(), task: z.strictObject({ title: z.string().trim().min(3).max(120) }).optional(), proposal: proposalArgZ.refine((p) => p.kind === 'agent', { message: 'a reply proposes a hire (kind "agent")' }).optional(), answer_task: z.strictObject({ task: z.string().trim().min(1).max(40), answer: z.string().trim().max(4000).optional() }).optional() }),
   forum_ask: z.strictObject({
     question: z.string().trim().min(3).max(1000),
     to: handleList.max(5).optional(),

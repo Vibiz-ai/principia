@@ -12,6 +12,7 @@ import {
   channelSlug,
   handleSlug,
   messageRef,
+  type ConversationTitleBy,
   type ForumAsk,
   type ForumChannel,
   type ForumChannelKind,
@@ -78,6 +79,9 @@ export interface ForumStoreDeps {
 interface MemberRow { id: string; company_id: string; kind: string; role: string; agent_id: string | null; handle: string; name: string; status: string; created_at: string; data: string }
 interface ChannelRow { id: string; company_id: string; kind: string; name: string | null; topic: string; purpose: string; department_id: string | null; system: string | null; dm_key: string | null; created_by: string | null; created_at: string; archived_at: string | null; data: string }
 interface MessageRow { seq: number; id: string; company_id: string; channel_id: string; thread_seq: number | null; author_id: string; kind: string; text: string; reply_count: number; last_reply_at: string | null; created_at: string; edited_at: string | null; deleted_at: string | null; origin: string; data: string }
+/** forum_channels.data: a conversation's title owner and Principia's routing state (CHAT-UI.md §7.1, §7.2). */
+export interface ChannelData { titleBy?: ConversationTitleBy; titleRefined?: boolean; picking?: boolean }
+const conversationMetaView = (d: ChannelData): Pick<ForumChannel, 'titleBy' | 'picking'> => ({ ...(d.titleBy ? { titleBy: d.titleBy } : {}), ...(d.picking ? { picking: true } : {}) })
 interface MessageData { mentions?: string[]; mentionDepartments?: string[]; refs?: ForumRef[]; reactions?: Record<string, string[]>; ask?: ForumAsk; proposal?: ForumProposal; task?: ForumTaskCard; repliers?: string[]; opKey?: string }
 
 export interface PostInput {
@@ -378,8 +382,41 @@ export class ForumStore {
       joined: !!viewer,
       lastReadSeq,
       unread,
-      mentions
+      mentions,
+      ...conversationMetaView(parseJson<ChannelData>(r.data, {}))
     }
+  }
+
+  // ---------- conversation meta (CHAT-UI.md §7.1, §7.2) ----------
+
+  /** The channel's conversation bookkeeping (data column): who titled it, whether Principia is still picking. */
+  conversationMeta(id: string): ChannelData {
+    return parseJson<ChannelData>(this.channelRow(id).data, {})
+  }
+  /** Merges into the channel's data and tells the renderer (no system line). */
+  setConversationMeta(id: string, patch: Partial<ChannelData>): void {
+    const r = this.channelRow(id)
+    const next = { ...parseJson<ChannelData>(r.data, {}), ...patch }
+    this.db.prepare('UPDATE forum_channels SET data=?, updated_at=? WHERE id=?').run(JSON.stringify(next), this.iso(), id)
+    this.emit({ kind: 'channel', companyId: r.company_id, channel: this.channel(id), channelId: id })
+  }
+  /**
+   * Principia's title for a conversation (titles.ts). A person's rename always wins: checked in the same transaction
+   * as the write, so a rename made while the model was thinking is never overwritten. No system line. False = kept.
+   */
+  autoTitle(id: string, title: string, opts: { refined?: boolean } = {}): boolean {
+    const r = this.channelRow(id)
+    const t = this.redact(title.trim()).slice(0, 250)
+    const done = this.db.transaction(() => {
+      const cur = this.channelRow(id)
+      const d = parseJson<ChannelData>(cur.data, {})
+      if (d.titleBy === 'you' || !t) return false
+      const next: ChannelData = { ...d, titleBy: 'ai', ...(opts.refined ? { titleRefined: true } : {}) }
+      this.db.prepare('UPDATE forum_channels SET topic=?, data=?, updated_at=? WHERE id=?').run(t, JSON.stringify(next), this.iso(), id)
+      return true
+    })()
+    if (done) this.emit({ kind: 'channel', companyId: r.company_id, channel: this.channel(id), channelId: id })
+    return done
   }
 
   /** Channels `viewer` can read (public ones even when not joined; DMs only their own). */
@@ -436,6 +473,8 @@ export class ForumStore {
     if (!v.ok) fail(v.reason)
     const at = this.iso()
     if (patch.topic !== undefined) this.db.prepare('UPDATE forum_channels SET topic=?, updated_at=? WHERE id=?').run(this.redact(patch.topic.trim()).slice(0, 250), at, id)
+    // CHAT-UI.md §7.1: a person who renames a conversation owns its title from then on (Principia never renames it)
+    if (patch.topic !== undefined && by.kind === 'human') this.db.prepare("UPDATE forum_channels SET data=json_set(data,'$.titleBy','you') WHERE id=?").run(id)
     if (patch.purpose !== undefined) this.db.prepare('UPDATE forum_channels SET purpose=?, updated_at=? WHERE id=?').run(this.redact(patch.purpose.trim()).slice(0, 300), at, id)
     if (patch.archived !== undefined) this.db.prepare('UPDATE forum_channels SET archived_at=?, updated_at=? WHERE id=?').run(patch.archived ? at : null, at, id)
     if (patch.topic !== undefined) this.systemPost(id, `${by.name} set the topic: ${clip(patch.topic.trim(), 200) || '(cleared)'}`)
@@ -467,7 +506,8 @@ export class ForumStore {
     }
   }
 
-  addMembers(byId: string, channelId: string, memberIds: string[]): ForumChannel {
+  /** `quiet`: no "X added Y" line (Principia bringing people into a conversation says so in its handoff line). */
+  addMembers(byId: string, channelId: string, memberIds: string[], opts: { quiet?: boolean } = {}): ForumChannel {
     const by = this.mustMember(byId)
     const r = this.channelRow(channelId)
     if (r.company_id !== by.companyId) notFound('Channel')
@@ -482,7 +522,7 @@ export class ForumStore {
     }
     if (added.length) {
       this.emit({ kind: 'channel', companyId: r.company_id, channel: this.channel(channelId), channelId })
-      this.systemPost(channelId, `${by.name} added ${added.join(', ')}`)
+      if (!opts.quiet) this.systemPost(channelId, `${by.name} added ${added.join(', ')}`)
     }
     return this.channel(channelId, byId)
   }

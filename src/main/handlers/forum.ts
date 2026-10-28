@@ -20,7 +20,12 @@ export function registerForumHandlers(h: Hive): void {
   const channelCompany = (channelId: string) => svc().store.channel(channelId).companyId
   const messageCompany = (messageId: string) => svc().store.message(messageId).companyId
 
-  handle('forum:state', ({ companyId }) => svc().state(companyId))
+  handle('forum:state', ({ companyId }) => {
+    const s = svc()
+    // CHAT-UI.md §7.1: older conversations get a real title once (background, one call at a time)
+    s.pilot?.backfill(companyId)
+    return s.state(companyId)
+  })
   handle('forum:messages', ({ companyId, channelId, beforeSeq, limit }) => {
     const s = svc()
     const me = meOf(companyId)
@@ -63,6 +68,8 @@ export function registerForumHandlers(h: Hive): void {
         }
       }
     }
+    // CHAT-UI.md §8: the person's next message in a conversation answers a task's one open question there
+    if (!answered && !proposal && !ask) answered = !!s.routeTaskReply(msg, me)
     // §6.4: everything else a person writes wakes the agents it is for
     if (!answered && !proposal) s.humanPosted(msg)
     return msg
@@ -73,6 +80,13 @@ export function registerForumHandlers(h: Hive): void {
     svc().store.markRead(meOf(channelCompany(channelId)), channelId, seq)
   })
   handle('forum:createChannel', ({ companyId, name, kind, purpose, memberIds }) => svc().store.createChannel(meOf(companyId), { name, kind, purpose, memberIds }))
+  handle('forum:startConversation', (req) => {
+    const s = svc()
+    if (!s.pilot) throw new HiveError('not_implemented', 'Conversations are not available in this Principia')
+    s.store.sync(req.companyId)
+    for (const agentId of req.agentIds ?? []) if (s.store.memberForAgent(agentId)?.companyId !== req.companyId) throw new HiveError('not_found', 'Agent not found')
+    return s.pilot.start(req).channel
+  })
   handle('forum:updateChannel', ({ channelId, ...patch }) => svc().store.updateChannel(meOf(channelCompany(channelId)), channelId, patch))
   handle('forum:membership', (q) => {
     const s = svc()

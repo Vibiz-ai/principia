@@ -5,7 +5,7 @@
  * the monthly cap) and what it did lately. Pure: main gathers the rows (playbooks:overview), this words them, so the
  * rules mirror the dispatcher's (company/dispatcher.ts) in one place a test can read.
  */
-import { DEFAULT_MAX_IN_FLIGHT } from './company'
+import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT } from './company'
 import { levelLabel, limitsLine, playbookDef, type PlaybookView } from './autopilotPlaybooks'
 
 export interface OverviewAgent {
@@ -91,8 +91,9 @@ export function autopilotOverview(i: OverviewInput): AutopilotOverview {
   const autoAgents = active.filter((a) => a.auto)
   const starters = i.switchOn && !i.paused ? autoAgents.map(label) : []
   const manual = active.filter((a) => !a.auto || !i.switchOn).map(label)
-  const busy = new Map<string, OverviewTask>()
-  for (const t of i.tasks) if (t.status === 'in_progress' && t.agentId) busy.set(t.agentId, t)
+  // an agent works on several tasks at once; only AGENT_MAX_PARALLEL in flight holds its next one
+  const busy = new Map<string, number>()
+  for (const t of i.tasks) if (t.status === 'in_progress' && t.agentId) busy.set(t.agentId, (busy.get(t.agentId) ?? 0) + 1)
   const inFlight = i.tasks.filter((t) => t.status === 'in_progress').length
 
   // what starts next: To do work of an agent, and work blocked on its dependencies
@@ -116,7 +117,7 @@ export function autopilotOverview(i: OverviewInput): AutopilotOverview {
     else if (i.paused) why = `${i.companyName} is paused: nothing starts until you resume it`
     else if (!a.auto && !t.scheduleCard) why = `${a.name} works only when you press Start`
     else if (!i.switchOn && !t.scheduleCard) why = 'Autopilot is off: it waits for your Start'
-    else if (busy.has(a.id)) why = `starts after ${a.name} finishes ${busy.get(a.id)!.identifier}`
+    else if ((busy.get(a.id) ?? 0) >= AGENT_MAX_PARALLEL) why = `starts when ${a.name} finishes one of the ${plural(busy.get(a.id)!, 'task')} running`
     else if (firstOf.has(a.id)) why = `next in ${a.name}’s queue`
     else if (inFlight >= max) why = `starts when one of the ${plural(inFlight, 'task')} running finishes (up to ${max} at once)`
     else why = 'starts within a minute'

@@ -15,6 +15,9 @@ import { boardActions } from '../handlers/board'
 import { createTaskGuarded, departmentActions } from '../handlers/company'
 import { ForumService, type ForumTaskView } from './service'
 import { ForumResponder } from './responder'
+import { ConversationPilot } from './conversationPilot'
+import { routeModelCall } from '../company/routeCall'
+import { FORUM_AGENT_ADAPTERS, type ForumAgentAdapter } from '../../shared/forum'
 
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 
@@ -225,9 +228,51 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
     onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    taskAsks: (channelId) =>
+      service.openTaskAsks(channelId).flatMap((q) => {
+        const t = q.ask?.taskId ? view(q.ask.taskId) : null
+        return t?.ask ? [{ identifier: t.identifier, ref: q.ref, prompt: t.ask.prompt }] : []
+      }),
     log
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)
+  service.wakeOne = (memberId, m) => void responder.wakeOne(memberId, m)
+  // CHAT-UI.md §7.1, §7.2: conversation titles and "Principia picks", on the cheap tier (routeCall.ts: haiku, no tools)
+  service.pilot = new ConversationPilot({
+    store: () => service.store,
+    call: () => (h.engine ? routeModelCall({ providers: () => h.engine.providers.cached() }) : null),
+    seats: (companyId) => {
+      const deps = new Map(c().departments.list(companyId).map((d) => [d.id, d]))
+      return c()
+        .departments.listAgents({ companyId })
+        .filter((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile' && (h.store.getProfile(a.refId)?.adapter ?? 'shell') !== 'shell')
+        .map((a) => {
+          const d = a.departmentId ? deps.get(a.departmentId) : undefined
+          return {
+            agentId: a.id,
+            name: service.store.memberForAgent(a.id)?.name ?? a.name,
+            role: a.name,
+            departmentKey: d?.key ?? null,
+            department: d?.name ?? null,
+            does: d?.data.charter.does ?? '',
+            capabilities: a.data.capabilities ?? '',
+            instructions: a.data.instructions ?? ''
+          }
+        })
+    },
+    departments: (companyId) =>
+      c()
+        .departments.list(companyId)
+        .filter((d) => !d.archivedAt)
+        .map((d) => ({ key: d.key, name: d.name, does: d.data.charter.does ?? '' })),
+    defaultAdapter: () => {
+      const a = h.settings().defaultAdapter
+      return (FORUM_AGENT_ADAPTERS as readonly string[]).includes(a) ? (a as ForumAgentAdapter) : null
+    },
+    humanPosted: (m) => service.humanPosted(m),
+    redact: (s) => h.vault.redact(s),
+    log
+  })
   // AGENT-COLLAB.md §2: an agent's ask or mention wakes another agent, after collab.ts checked the guards
   service.collabWake = (req) =>
     responder.wakeForAgent(req.target, req.message.companyId, req.message.id, {

@@ -483,14 +483,34 @@ describe('DEPARTMENTS.md board: task model, state machine, heal and park',()=>{
     expect(c.detail(t.id).activity.at(-1)).toMatchObject({kind:'sent_back',by:'human'})
     const {target}=start(t.id);expect(target.kind==='prompt'&&target.prompt).toContain('Sent back: Shorter headline')
   })
-  it('one in-flight task per agent; reassigning in flight and cancelling in flight are refused',()=>{
+  it('an agent works on several tasks at once (a human start never waits for it); reassigning in flight and cancelling in flight are refused',()=>{
     const {acme,dep,agent}=board()
-    const a=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id}),b=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id})
-    start(a.id)
-    expect(()=>start(b.id)).toThrow(`Copywriter is busy on ${a.identifier}`)
+    const a=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id}),b=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id}),x=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id})
+    const sa=start(a.id)
+    // the company workspace (no git) is shared: b starts at once, beside a, in the same folder
+    const sb=start(b.id);expect(sb.task.status).toBe('in_progress');expect(sb.link.cwd).toBe(sa.link.cwd);expect(sb.task.work).toBeNull()
+    expect(()=>start(b.id)).toThrow('An agent already owns this task')
     expect(()=>c.assign(a.id,{agentId:null})).toThrow('Stop it');expect(()=>c.cancel(a.id)).toThrow()
     expect(()=>c.updateTask(a.id,{title:'x'})).toThrow('running')
-    expect(c.cancel(b.id).status).toBe('canceled');expect(()=>c.assign(b.id,{agentId:agent.id})).toThrow('Reopen')
+    expect(c.cancel(x.id).status).toBe('canceled');expect(()=>c.assign(x.id,{agentId:agent.id})).toThrow('Reopen')
+  })
+  it('a code task whose checkout another run works in gets its own worktree binding; its first turn is fresh',()=>{
+    const {acme,dep,agent}=board()
+    const repo=repoAt('shop');fs.mkdirSync(path.join(repo.path,'.git'))
+    c.assignRepo(repo.id,acme.id)
+    const a=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id,repoId:repo.id}),b=task({companyId:acme.id,departmentId:dep.id,agentId:agent.id,repoId:repo.id})
+    // the task worktree service tells the store where task worktrees go; the first run takes the checkout itself
+    c.setWorktreePaths(id=>path.join(dir,'worktrees',`task-${id}`))
+    const sa=start(a.id);expect(sa.task.work).toBeNull();expect(sa.link.cwd).toBe(repo.path)
+    c.patchInFlight(b.id,{agentSessionId:'old-conversation'});c.updateTask(b.id,{assigneeProfileId:agent.refId})
+    const sb=start(b.id)
+    expect(sb.task.work).toMatchObject({repoId:repo.id,worktreePath:path.join(dir,'worktrees',`task-${b.identifier}`),startedAt:null,queuedAt:null})
+    expect(sb.task.work!.branch).toMatch(/^hive\//)
+    // a new folder is a new conversation: the full prompt with the worktree brief, no resume
+    expect(sb.link.resumeSessionId).toBeNull();expect(sb.task.agentSessionId).toBeNull()
+    expect(sb.target.kind==='prompt'&&sb.target.prompt).toContain('You work in your own git worktree')
+    expect(c.detail(b.id).activity.at(-2)).toMatchObject({kind:'work',by:'system'})
+    expect(c.detail(b.id).activity.at(-2)!.message).toContain(`${a.identifier} is already working in the shop checkout`)
   })
   it('a workflow-backed agent starts its workflow with the task inputs',()=>{
     const {acme,dep}=board()

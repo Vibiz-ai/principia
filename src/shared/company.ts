@@ -322,6 +322,13 @@ export interface DepartmentSaveInput {
   data?: Partial<Omit<DepartmentData, 'charter'>> & { charter?: Partial<DepartmentCharter> }
 }
 
+/**
+ * Tasks one agent works on at once when they start by themselves (the dispatcher, a follow-up, a schedule fire, the
+ * plan pilot), under the company's maxInFlight. A human Run now / Start is never held by it, nor by a busy agent.
+ */
+export const AGENT_MAX_PARALLEL = 3
+/** The wait line of a task whose agent is at AGENT_MAX_PARALLEL: "Julia is running 3 tasks; VO-15 starts when one finishes". */
+export const agentFullLine = (agent: string, n: number, task: string): string => `${agent} is running ${n} tasks; ${task} starts when one finishes`
 export const AGENT_LIMITS = { instructions: 4000, capabilities: 400, name: 80, runMinutes: { min: 1, max: 24 * 60 }, autoWakesPerHour: { min: 1, max: 4 } } as const
 export type CompanyAgentKind = 'profile' | 'workflow'
 export type AgentAutonomy = 'manual' | 'auto'

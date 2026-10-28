@@ -93,6 +93,11 @@ const RULES: readonly Rule[] = [
     kinds: ['task'],
     text: "Work outside your department's charter: task_handoff the task or task_create {departmentKey} for a piece; a quick question for a teammate: forum_ask_agent. Never do another department's work silently."
   },
+  {
+    needs: [['forum_reply']],
+    kinds: ['task'],
+    text: 'Work that needs a specialist nobody on the team is: propose a hire (forum_reply with proposal {kind:"agent", role, department, instructions, reason}); the founder confirms it.'
+  },
   // everyone
   {
     needs: [['memory_search', 'memory_get']],

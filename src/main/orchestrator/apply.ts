@@ -16,6 +16,7 @@
 import fs from 'node:fs'
 import type Database from 'better-sqlite3'
 import { departmentsEnabled, type BoardTask } from '../../shared/company'
+import { waitsForAnswer } from '../../shared/taskCard'
 import type { StepOutputEvent } from '../../shared/engine'
 import { orchestratorFor, orchestratorSettings, type OrchAction, type OrchestratorSettings, type RunFollowUp, type RunOrchestration, type RunReport, type RunReportSource } from '../../shared/orchestrator'
 import type { Run } from '../../shared/types'
@@ -449,6 +450,9 @@ export class RunApplier {
       // the only news is the wait: the question card in the Forum already says it (the board keeps the report)
       else if (r.outcome === 'blocked' && x.waits && !r.followUps.length && !r.answers.length) out.push({ kind: 'post', status: 'skipped', detail: `No update posted: ${task.identifier} only waits for the answer, and the question is already in the Forum` })
       else if (x.shadow) out.push({ kind: 'post', status: 'shadow', detail: `Would post ${task.identifier}'s update to the team` })
+      // CHAT-UI.md §8: a task from a conversation that stopped for the founder: its agent asks there instead (one
+      // message with what it found and the whole question, ForumService.followAsk), not an update and then a question
+      else if (r.outcome === 'blocked' && waitsForAnswer(task) && safe(() => forum.conversationOfTask(task.id), null)) out.push({ kind: 'post', status: 'skipped', detail: `No update posted: ${task.identifier} waits for your answer, and its question goes to the conversation it came from` })
       // CHAT-UI.md §8: a task started from a conversation reports back there (the card's result already came back: skip)
       else if (safe(() => forum.resultPosted(task.id, x.runId), false)) out.push({ kind: 'post', status: 'skipped', detail: `${task.identifier}'s result is already in the conversation it came from` })
       else {
@@ -456,7 +460,9 @@ export class RunApplier {
         const ev = r.evidence.slice(0, 3)
         // agents often name the task in their summary themselves: then it is not put in front again
         const named = new RegExp(`(^|[^A-Za-z0-9])${task.identifier.replace(/[-]/g, '\\-')}([^A-Za-z0-9]|$)`, 'i').test(r.summary)
-        const text = `${named ? r.summary : `${task.identifier}: ${r.summary}`}${ev.length ? `\nEvidence: ${ev.join('; ')}` : ''}`
+        // in the conversation it reads as the agent talking to the person who asked; in a room, as a team update
+        const head = conv && r.outcome === 'review' ? `${named ? 'Ready for your review' : `${task.identifier} is ready for your review`}. ${r.summary}` : named ? r.summary : `${task.identifier}: ${r.summary}`
+        const text = `${head}${ev.length ? `\n${conv ? 'What I checked' : 'Evidence'}: ${ev.join('; ')}` : ''}`
         const m = safe(() => forum.postAsAgent({ companyId: x.companyId, agentId: x.agentId!, runId: x.runId, text, ...(conv ? { channelId: conv } : {}), opKey: `orch:${x.runId}:post` }), null)
         out.push(m ? { kind: 'post', status: 'done', detail: conv ? `Posted ${task.identifier}'s result in the conversation it came from` : `Posted ${task.identifier}'s update to the team`, ref: m.ref } : { kind: 'post', status: 'failed', detail: 'The update could not be posted' })
       }

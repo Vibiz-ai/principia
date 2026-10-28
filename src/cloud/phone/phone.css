@@ -209,6 +209,7 @@ h3.md-h { font: 500 18px/1.25 var(--font-display); letter-spacing: .01em; }
 .tcard__h b { font-size: 12px; letter-spacing: .02em; }
 .tcard__t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tcard__s { margin-top: 4px; font-size: 12px; color: var(--faint); }
+.tcard__a { margin-top: 2px; font-size: 12px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tcard__r { margin: 4px 0 0; font-size: 14px; }
 .tcard__pr { display: inline-block; margin-top: 4px; font-size: 13px; }
 

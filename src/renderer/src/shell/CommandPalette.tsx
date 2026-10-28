@@ -266,7 +266,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
           label: reply ? `Go to ${reply.conv?.title ?? it.title}` : `Go to ${it.title}`,
           hint: (reply ? `${reply.who ?? 'Someone'} answering` : [multi && !scope ? companyName(it.companyId) : null, it.detail].filter(Boolean).join(' · ')) || undefined,
           icon: 'agents',
-          run: () => (reply?.conv ? openConversation(reply.conv.id) : void openLiveItem({ agentId: it.agentId, askId: null, companyId: it.companyId }))
+          run: () => (reply?.conv ? openConversation(reply.conv.id) : void openLiveItem({ agentId: it.agentId, askId: null, companyId: it.companyId, taskId: it.taskId }))
         }
       })
     )

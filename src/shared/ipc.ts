@@ -2,7 +2,7 @@ import type { ActivitySnapshot, CleanupItem, CleanupResult, DiskUsage, TokenActi
 import type { AuthorizeConnectionResponse, CloudAdapter, CloudAsk, CloudCompany, CloudDevice, CloudRunDetail, CloudRunSummary, CloudWorkspace, LoginLinkResponse, PassportProposal, ProviderAccount, ProviderCredentialKind, ProviderTestResponse, WorkspaceSummary } from './cloud'
 import type { CloudDesktopEvent, CloudLinkState, CloudLoginStatus, CloudMoveChoices, CloudMovePlan, CloudMoveResult } from './types'
 import type { CollabState, RunConversation } from './collab'
-import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
+import type { ForumChannel, ForumCreateChannelRequest, ForumDecideRequest, ForumStartConversationRequest, ForumEvent, ForumInvite, ForumInviteRequest, ForumMember, ForumMessage, ForumPostRequest, ForumState } from './forum'
 import type { CompanyProposal, ProposalDecision } from './chatCompany'
 import { PLANS_CHANNELS, type PlansInvokeMap } from './plans'
 import { CHAT_CHANNELS, CHAT_EVENTS, type ChatEventMap, type ChatInvokeMap } from './chat'
@@ -269,6 +269,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'forum:react': [{ messageId: Id; emoji: string }, ForumMessage]
   'forum:markRead': [{ channelId: Id; seq?: number }, void]
   'forum:createChannel': [ForumCreateChannelRequest, ForumChannel]
+  /** CHAT-UI.md §7: New conversation (the channel, your message, then who answers; Principia picks in main) */
+  'forum:startConversation': [ForumStartConversationRequest, ForumChannel]
   'forum:updateChannel': [{ channelId: Id; topic?: string; purpose?: string; archived?: boolean }, ForumChannel]
   'forum:membership': [{ op: 'join' | 'leave'; channelId: Id } | { op: 'add'; channelId: Id; memberIds: Id[] } | { op: 'remove'; memberId: Id }, void]
   'forum:openDm': [{ companyId: Id; memberIds: Id[] }, ForumChannel]
@@ -842,7 +844,7 @@ export const INVOKE_CHANNELS = [
   'board:autopilot', 'board:autopilotPreview',
   'playbooks:list', 'playbooks:summary', 'playbooks:overview', 'playbooks:turnOn', 'playbooks:configure', 'playbooks:setPaused', 'playbooks:turnOff',
   'taskWork:start', 'taskWork:merge', 'taskWork:remove', 'taskWork:resolveGone', 'taskWork:refresh', 'taskWork:openEditor',
-  'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel',
+  'forum:state', 'forum:messages', 'forum:thread', 'forum:post', 'forum:edit', 'forum:react', 'forum:markRead', 'forum:createChannel', 'forum:startConversation',
   'forum:updateChannel', 'forum:membership', 'forum:openDm', 'forum:search', 'forum:decide', 'forum:answer', 'forum:invite', 'forum:invites',
   'forum:revokeInvite', 'forum:acceptInvite', 'forum:toTask', 'forum:collab', 'forum:runConversation',
   'orchestrator:forRun', 'orchestrator:suggestions', 'orchestrator:decideSuggestion', 'orchestrator:decisions',

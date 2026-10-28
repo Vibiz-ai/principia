@@ -12,6 +12,7 @@ import { Icon } from '../Icon'
 import { IconButton, Kbd, useTick } from '../ui'
 import { CompanyTagged, useScope } from '../CompanyChip'
 import { navigate, openNewChat, useStore } from '../../state/store'
+import { rowKeyOfLive } from '../../lib/liveRow'
 import { pausedChatsLine } from '../../state/desk'
 import { PRIMARY, viewFor } from '../../lib/nav'
 import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, useChatRows } from './ChatList'
@@ -22,6 +23,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const { scope, company, chips } = useScope()
   const filter: ChatsFilter = (view.name === 'chats' && view.filter) || 'all'
   const rows = useChatRows(scope)
+  const tasks = useStore((s) => s.tasks)
   const [query, setQuery] = useState('')
   const shown = filterRows(rows, filter, query)
   const picked = view.name === 'chats' ? view.chat : undefined
@@ -29,7 +31,9 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: a company opens Chats on "New conversation" until you pick one (chat=new…); All companies keeps the last
   const pane = !!scope && (!picked || picked.startsWith('new'))
-  const cur = pane ? null : (picked && rows.find((r) => r.key === picked)?.key) || (remembered && rows.find((r) => r.key === remembered)?.key) || rows[0]?.key || null
+  // a task's live view keeps its agent's row selected (CHAT-UI.md §8.4)
+  const liveOwner = rowKeyOfLive(picked, tasks)
+  const cur = pane ? null : liveOwner || (picked && rows.find((r) => r.key === picked)?.key) || (remembered && rows.find((r) => r.key === remembered)?.key) || rows[0]?.key || null
   const counts = { live: rows.filter((r) => r.live).length, all: rows.length }
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   const listRef = useRef<HTMLDivElement>(null)
@@ -132,7 +136,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
             <div className="cx-side-group">{g.label}</div>
             {g.rows.map((r) => (
               <CompanyTagged key={r.key} companyId={r.companyId} chips={chips}>
-                <ChatRow row={r} selected={cur === r.key} onPick={() => go(filter, r.key)} />
+                <ChatRow row={r} selected={cur === r.key} onPick={(key) => go(filter, key ?? r.key)} />
               </CompanyTagged>
             ))}
           </div>

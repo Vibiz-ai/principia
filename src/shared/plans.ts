@@ -351,7 +351,7 @@ export interface PlanDetail {
   turn: Turn
   /** why a running plan waits (another plan touches the same files) */
   waiting: string | null
-  /** why a ready milestone has not started yet, by milestone id ("waits: Livia is busy on PRN-17") */
+  /** why a ready milestone has not started yet, by milestone id ("waits: Livia is running 3 tasks; PRN-17 starts when one finishes") */
   waits?: Record<string, string>
 }
 

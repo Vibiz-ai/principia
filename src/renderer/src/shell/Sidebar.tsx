@@ -58,6 +58,7 @@ import {
   assignRepoToCompany,
   multiCompany,
   openLiveItem,
+  openTaskLive,
   openPalette,
   departmentsOn,
   departmentContextMenu,
@@ -77,6 +78,7 @@ import { ChatsSidebar } from '../components/chats/ChatsSidebar'
 import { openConversation, RecentConversations } from '../components/conversations/ConversationKit'
 import { useConversations } from '../state/conversations'
 import { conversationOfRunTitle } from '../lib/conversations'
+import { liveRowView } from '../lib/liveRow'
 
 /** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
 export const REPO_DRAG_TYPE = 'application/x-principia-repository'
@@ -331,28 +333,31 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
-   * LIVE (design §2.6): name + time, then the full activity sentence. A click opens that agent's own chat. Step 3: a
-   * board task's run reads as its agent ("Pliny", then what it is doing) and opens that agent's thread in Chats; a
-   * company with no code never sees a task code (C7).
+   * LIVE (design §2.6, CHAT-UI.md §8.4): one row per running task, labelled by what runs ("Julia · VO-15 Check why…",
+   * then what it is doing in words, "Running a SQL query in PostHog"), and a click opens that task's live view in
+   * Chats, never the agent's resting chat. A company with no code never sees a task code (C7). Your own chats open the
+   * chat; an agent answering in a conversation opens the conversation.
    */
-  const liveWho = (it: LiveItem): { name: string; detail: string | null; agentId: Id | null; convId?: Id | null } => {
-    const t = allTasks.find((x) => x.status === 'in_progress' && !!x.runId && (x.runId === it.runId || x.runId === it.sessionId))
-    const a = t?.agentId ? liveSeats.find((x) => x.id === t.agentId && x.companyId === t.companyId) : undefined
+  const liveWho = (it: LiveItem): { name: string; task: string | null; detail: string | null; taskId: Id | null; convId?: Id | null } => {
     const code = allRepos.some((r) => r.companyId === it.companyId)
-    if (a && t) return { name: agentNameNow(a).name, detail: it.detail ?? t.title, agentId: a.id }
+    const v = liveRowView(it, { tasks: allTasks, seats: liveSeats, nameOf: (a) => agentNameNow(a).name, code })
+    if (v.taskId) return { name: v.name, task: v.task, detail: v.activity ?? 'Working', taskId: v.taskId }
     // an agent answering in a conversation: "Marcus" over "Answering in “Launch plan”", and the row opens the conversation
     const reply = conversationOfRunTitle(it.title, convs)
-    if (reply) return { name: reply.who ?? 'Someone', detail: `Answering in “${reply.conv?.title ?? it.title.replace(/^.*?replying in “|”$/gi, '')}”`, agentId: null, convId: reply.conv?.id ?? null }
-    return { name: code ? it.title : it.title.replace(/^[A-Z][A-Z0-9]{0,5}-\d+ · /, ''), detail: it.detail, agentId: null }
+    if (reply) return { name: reply.who ?? 'Someone', task: null, detail: `Answering in “${reply.conv?.title ?? it.title.replace(/^.*?replying in “|”$/gi, '')}”`, taskId: null, convId: reply.conv?.id ?? null }
+    return { name: v.name, task: null, detail: v.activity, taskId: null }
   }
   const liveRow = (it: LiveItem): React.JSX.Element => {
     const w = liveWho(it)
     return (
-    <button key={it.key} type="button" className="live-row is-shimmering" title={`${w.name}${w.detail ? `\n${w.detail}` : ''}`} onClick={() => void (w.convId ? openConversation(w.convId) : w.agentId ? navigate({ name: 'chats', filter: 'live', chat: `agent:${w.agentId}` }) : openLiveItem(it))}>
+    <button key={it.key} type="button" className="live-row is-shimmering" data-live-task={w.taskId ?? undefined} title={[w.task ? `${w.name} · ${w.task}` : w.name, w.detail].filter(Boolean).join('\n')} onClick={() => void (w.convId ? openConversation(w.convId) : w.taskId ? openTaskLive(w.taskId, it.companyId) : openLiveItem(it))}>
       <span className="live-row__dot" aria-hidden />
       <span className="live-row__text">
         <span className="live-row__l1">
-          <span className="live-row__name">{w.name}</span>
+          <span className="live-row__name">
+            {w.name}
+            {w.task && <span className="live-row__task"> · {w.task}</span>}
+          </span>
           <span className="live-row__age">{age(it.startedAt ?? agentsMap[it.agentId]?.startedAt ?? it.at)}</span>
         </span>
         {/* All companies: the company leads line 2, so the title keeps the width (design §2.6: the full sentence) */}

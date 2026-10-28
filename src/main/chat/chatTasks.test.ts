@@ -140,3 +140,17 @@ describe('task_create from a chat (the chat tracks its own work)', () => {
     expect(sessionOfTask({ source: 'manual', externalId: 's_ana:tu' })).toBeNull()
   })
 })
+
+describe("a chat-filed task's question (CHAT-UI.md §8)", () => {
+  it('is said in that chat once per ask, in full', () => {
+    const said: string[] = []
+    const n = new ChatTaskNotes({ isSession: () => true, note: (_sid, text) => (said.push(text), true) })
+    const t = { id: 't1', identifier: 'VO-15', status: 'blocked', blockReason: 'needs_input', source: 'agent', externalId: 's_ana:tu_1', runId: 'r1', ask: { prompt: "Needs access: Can't read production rows (social_post)" } }
+    expect(n.onTaskWrite(t)).toBe("VO-15 is stuck and needs you.\nI need access: Can't read production rows (social_post)\nAnswer it with Answer on the VO-15 card.")
+    expect(n.onTaskWrite({ ...t, status: 'todo' })).toBeNull()
+    // answered: no question; a new ask on the next run is said again
+    expect(n.onTaskWrite({ ...t, status: 'todo', ask: { ...t.ask, answer: 'Use PostHog' } })).toBeNull()
+    expect(n.onTaskWrite({ ...t, runId: 'r2', ask: { prompt: 'Which workspace?' } })).toContain('Which workspace?')
+    expect(said).toHaveLength(2)
+  })
+})

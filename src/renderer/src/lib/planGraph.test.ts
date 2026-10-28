@@ -24,6 +24,6 @@ const sub = (waits?: Record<string, string>) => (planGraph(plan, rows, () => '',
 describe('planGraph', () => {
   it('a milestone that waits says why on its next card, not just "not started" (QA)', () => {
     expect(sub()).toBe('PRN-2 · not started')
-    expect(sub({ pm_2: 'waits: Livia is busy on PRN-1' })).toBe('PRN-2 · waits: Livia is busy on PRN-1')
+    expect(sub({ pm_2: 'waits: Livia is running 3 tasks; PRN-2 starts when one finishes' })).toBe('PRN-2 · waits: Livia is running 3 tasks; PRN-2 starts when one finishes')
   })
 })

@@ -44,7 +44,7 @@ import { useCompanyShortName, useLaneContext } from '../lib/company'
 import { inScope } from '../lib/scope'
 import { firstLine } from '../lib/format'
 import { age } from '../lib/time'
-import { attempt, closeSession, companyName, departmentsOn, getState, navigate, openBoard, providerLabel, refreshTasks, setCompanyPaused, toast, useStore } from '../state/store'
+import { attempt, closeSession, companyName, departmentsOn, getState, navigate, openBoard, openTaskLive, providerLabel, refreshTasks, setCompanyPaused, toast, useStore } from '../state/store'
 import { focusAgent, goNextNeedsYou, useNeeds, useSeenSet, useWorking } from '../state/live'
 import { usePendingDrafts } from '../state/authoring'
 import { deskAgents } from '../state/desk'
@@ -462,7 +462,7 @@ function WorkingList({ items, scope, paused, code, noClaude = false }: { items: 
               </div>
             </div>
             <div className="home5-row__acts">
-              <Button size="sm" onClick={() => (agent ? void navigate({ name: 'chats', filter: 'live', chat: `agent:${agent.id}` }) : i.agentId ? void focusAgent(i.agentId) : undefined)}>
+              <Button size="sm" onClick={() => (task ? openTaskLive(task.id, task.companyId) : agent ? void navigate({ name: 'chats', filter: 'live', chat: `agent:${agent.id}` }) : i.agentId ? void focusAgent(i.agentId) : undefined)}>
                 Open
               </Button>
               {task ? (

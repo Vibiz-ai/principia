@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentNode, Ask } from '@shared/live'
+import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
 import type { ForumTaskCard } from '@shared/taskCard'
-import { cardsOfMessages, openAskOfRun, rootOfRun, stripTasks, taskCardView } from './taskCardView'
+import { cardsOfMessages, connectToolsIn, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -55,5 +55,65 @@ describe('live sources', () => {
     const names: Record<string, string> = { agt_julia: 'Julia', agt_junia: 'Junia' }
     const items = stripTasks(cardsOfMessages(msgs), tasks, (id) => (id ? names[id]! : null), new Set(['r1']))
     expect(items.map((i) => [i.identifier, i.who, i.state])).toEqual([['VO-9', 'Julia', 'needs_you'], ['VO-8', 'Junia', 'done']])
+  })
+  it('the strip clock of a working task is its run start (a primitive key, so agent churn does not re-render it)', () => {
+    const agents = [node({ id: 'a', runId: 'r1', startedAt: '2026-10-27T10:01:00.000Z' } as Partial<AgentNode>), node({ id: 'sub', runId: 'r1', parentId: 'a' }), node({ id: 'b', runId: 'r9' })]
+    const key = runStartsKey(agents, new Set(['r1']))
+    expect(key).toBe('r1=2026-10-27T10:01:00.000Z')
+    expect(runStartsKey(agents, new Set())).toBe('')
+    const starts = parseRunStarts(key)
+    const tasks = [{ id: 't9', status: 'in_progress' as const, runId: 'r1', updatedAt: T0, agentId: 'agt_julia' }]
+    const [it9] = stripTasks([card()], tasks, () => 'Julia', new Set(), (r) => starts.get(r) ?? null)
+    expect(it9).toMatchObject({ state: 'working', since: '2026-10-27T10:01:00.000Z' })
+    // queued: no run clock
+    expect(stripTasks([card()], [{ ...tasks[0]!, status: 'todo' as const, runId: null }], () => 'Julia')[0]!.since).toBeNull()
+  })
+})
+
+describe('the live tail and the working clock', () => {
+  const ev = (seq: number, over: Partial<AgentEvent>): AgentEvent => ({ seq, agentId: 'ag1', ts: T0, kind: 'tool', toolUseId: null, name: null, summary: '', detail: null, state: 'ok', ...over })
+  it('tool calls in words, the latest message, last N in order; thinking and answers left out', () => {
+    const events = [
+      ev(1, { name: 'Read', summary: 'Read /repo/src/old.ts' }),
+      ev(2, { name: 'Read', summary: 'Read /repo/src/shared/taskCard.ts' }),
+      ev(3, { kind: 'thinking', summary: 'hmm', state: null }),
+      ev(4, { name: 'Bash', summary: 'Bash npm test -- taskCard', state: 'running' }),
+      ev(5, { kind: 'answer', summary: 'Allowed', state: null }),
+      ev(6, { kind: 'text', summary: 'Found it.', detail: '\nFound it: the strip\nsecond line', state: null }),
+      ev(7, { name: 'Edit', summary: 'Edit /repo/src/x.ts' })
+    ]
+    const lines = tailLines(events, { n: 4 })
+    expect(lines.map((l) => l.text)).toEqual(['Reading taskCard.ts', 'Running npm test -- taskCard', 'Found it: the strip', 'Editing x.ts'])
+    expect(lines.map((l) => l.key)).toEqual([2, 4, 6, 7])
+    expect(lines[1]!.state).toBe('running')
+    // a company without code never reads "Running npm test"
+    expect(tailLines(events, { n: 4, code: false })[1]!.text).toBe('Working on it')
+    expect(tailLines([], { n: 4 })).toEqual([])
+    expect(tailLines([ev(1, { kind: 'error', summary: 'x'.repeat(300), state: null })])[0]!.text.length).toBe(140)
+  })
+  it('working: the clock counts from the run root start; a stale root of another run does not count', () => {
+    const t = { status: 'in_progress' as const, runId: 'r1', updatedAt: T0 }
+    const rootStart = '2026-10-27T10:01:00.000Z'
+    expect(taskCardView(card(), t, { root: node({ startedAt: rootStart } as Partial<AgentNode>), now: NOW })).toMatchObject({ since: rootStart, elapsed: '1m' })
+    expect(taskCardView(card(), t, { root: node({ runId: 'r0', startedAt: rootStart } as Partial<AgentNode>), now: NOW }).since).toBe(T0)
+    expect(taskCardView(card(), { ...t, status: 'todo' as const, runId: null }, { now: NOW }).since).toBe(T0)
+  })
+  it('needs you after a run stopped to ask: the report it stopped with is the outcome line', () => {
+    const t = { status: 'blocked' as const, blockReason: 'needs_input' as const, runId: 'r1', updatedAt: T0, report: { outcome: 'needs_input' as const, summary: 'Which funnel step first?', evidence: [], at: T0 } }
+    expect(taskCardView(card(), t as never, { now: NOW })).toMatchObject({ state: 'needs_you', result: 'Which funnel step first?' })
+    // working tasks carry no result line
+    expect(taskCardView(card(), { status: 'in_progress', runId: 'r1', updatedAt: T0 }, { now: NOW }).result).toBeNull()
+  })
+})
+
+describe("a task's question in the conversation", () => {
+  it('names the services to connect from its principia://connect links', () => {
+    expect(connectToolsIn('I need a connection: Set it up: principia://connect/posthog. And principia://connect/posthog?purpose=dashboard')).toEqual(['posthog'])
+    expect(connectToolsIn('No links here')).toEqual([])
+  })
+  it('is open while its ask is', () => {
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [], taskId: 't1' } })).toBe(true)
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'answered', to: [], taskId: 't1' } })).toBe(false)
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [] } })).toBe(false)
   })
 })
