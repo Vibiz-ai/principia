@@ -1,4 +1,7 @@
+import { spawn } from 'node:child_process'
+import os from 'node:os'
 import type { Hive } from '../hive'
+import { ClaudeSignIn, type SignInProc } from '../claudeSignIn'
 import { emit, handle } from '../ipc'
 import { RECHECK_ENV_TIMEOUT_MS, baseChildEnv, loginEnvState, resolveLoginEnv } from '../loginEnv'
 import { defaultGhExec } from '../onboarding/github'
@@ -48,4 +51,33 @@ export function registerProfileHandlers(h: Hive): void {
     authMemo = { at: Date.now(), v }
     return v
   })
+  // PR-30: "Sign in to Claude" for people who signed in to Claude Desktop only and never open Terminal
+  const signIn = new ClaudeSignIn({
+    bin: async () => (await h.engine.providers.list({ refresh: false })).find((p) => p.id === 'claude' && p.available)?.binPath ?? null,
+    spawn: (file, args): SignInProc => {
+      const p = spawn(file, args, { cwd: os.homedir(), env: baseChildEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
+      p.stdin.on('error', () => undefined)
+      return {
+        onOutput: (cb) => {
+          p.stdout.on('data', (b: Buffer) => cb(b.toString('utf8')))
+          p.stderr.on('data', (b: Buffer) => cb(b.toString('utf8')))
+        },
+        onExit: (cb) => {
+          p.on('exit', (code) => cb(code))
+          p.on('error', () => cb(null)) // ENOENT and friends: no 'exit' follows
+        },
+        write: (text) => void p.stdin.write(text),
+        kill: () => void p.kill()
+      }
+    }
+  })
+  handle('providers:claudeSignIn', () => signIn.start())
+  handle('providers:claudeSignInWait', async () => {
+    const s = await signIn.wait()
+    // the next claudeAuth reads Claude again instead of the minute-old "signed out"
+    authMemo = null
+    return s
+  })
+  handle('providers:claudeSignInCode', ({ code }) => ({ ok: signIn.submitCode(code) }))
+  handle('providers:claudeSignInCancel', () => signIn.cancel())
 }
