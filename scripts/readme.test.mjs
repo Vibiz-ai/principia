@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -47,4 +47,10 @@ test('the Mac download is the latest signed release, not a pinned preview', () =
   assert.ok(downloads.length > 0, 'README has a download link')
   for (const link of downloads) assert.match(link, /\/releases\/latest\/download\/Principia-arm64\.dmg$/)
   assert.doesNotMatch(readme, /preview\.\d|Open Anyway/)
+})
+
+test('the demo GIF is in the README and small enough for GitHub to show (under 10 MB)', () => {
+  const gifs = targets.filter(t => /\.gif$/i.test(t))
+  assert.ok(gifs.includes('website/public/principia-demo.gif'), 'README shows the demo GIF')
+  for (const gif of gifs) assert.ok(statSync(path.join(root, gif)).size < 10 * 1024 * 1024, `${gif} is 10 MB or more`)
 })
