@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { dropMentions, mentionOf, withMentions, type DropIO } from './dropFiles'
+import { dropMentions, mentionOf, pendingAttachments, withMentions, type DropIO } from './dropFiles'
 
 const file = (name: string, type: string, path = ''): File & { path: string } => Object.assign(new File([new Uint8Array([1, 2, 3])], name, { type }), { path })
 const io = (over: Partial<DropIO> = {}): DropIO => ({ pathFor: (f) => (f as File & { path: string }).path, saveImage: vi.fn(async () => '/data/pastes/shot.png'), ...over })
@@ -34,5 +34,64 @@ describe('dropped files in New conversation (PR-11)', () => {
   it('any file from Finder goes in by its path, images or not', async () => {
     const r = await dropMentions([file('brief.pdf', 'application/pdf', '/Users/m/brief.pdf'), file('a.webp', 'image/webp', '/tmp/a.webp')], io())
     expect(r.mentions).toEqual(['@/Users/m/brief.pdf', '@/tmp/a.webp'])
+  })
+})
+
+describe('Send waits for images still being saved (PR-16, Codex on #79)', () => {
+  const later = <T,>(): { p: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } => {
+    let resolve!: (v: T) => void
+    let reject!: (e: unknown) => void
+    const p = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)))
+    return { p, resolve, reject }
+  }
+  it('a message sent right after a paste carries the screenshot, and the box is not written to after', async () => {
+    // the composer: text in a box, a paste that saves the image, a Send that waits then clears the box
+    let box = 'look at this'
+    const sent: string[] = []
+    const saving = later<string>()
+    const attaching = pendingAttachments()
+    void attaching.track(dropMentions([file('image.png', 'image/png')], io({ saveImage: () => saving.p })).then((r) => void (box = withMentions(box, r.mentions))))
+    const send = (async () => {
+      await attaching.settled()
+      sent.push(box.trim())
+      box = ''
+    })()
+    await Promise.resolve()
+    expect(sent).toEqual([]) // Enter was pressed while the image was saving: nothing went out yet
+    saving.resolve('/data/pastes/shot.png')
+    await send
+    expect(sent).toEqual(['look at this @/data/pastes/shot.png'])
+    expect(box).toBe('')
+  })
+  it('nothing pending: settled is immediate', async () => {
+    const a = pendingAttachments()
+    expect(a.size).toBe(0)
+    await expect(a.settled()).resolves.toBeUndefined()
+  })
+  it('a failed save does not hold Send forever, and is forgotten', async () => {
+    const a = pendingAttachments()
+    const s = later<void>()
+    const tracked = a.track(s.p).catch(() => 'failed')
+    expect(a.size).toBe(1)
+    s.reject(new Error('disk full'))
+    await a.settled()
+    expect(a.size).toBe(0)
+    expect(await tracked).toBe('failed')
+  })
+  it('waits for every attachment, including one added while waiting', async () => {
+    const a = pendingAttachments()
+    const one = later<void>()
+    const two = later<void>()
+    let done = false
+    void a.track(one.p)
+    const waiting = a.settled().then(() => (done = true))
+    one.resolve()
+    void a.track(two.p)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(done).toBe(false)
+    two.resolve()
+    await waiting
+    expect(done).toBe(true)
   })
 })
