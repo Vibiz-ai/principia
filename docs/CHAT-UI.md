@@ -447,6 +447,36 @@ to wait… it should show the task within the thing while its doing it so i can 
 - **The composer** says where answers and results go: "→ Junia and Julia answer here · work they start reports back
   here".
 
+### Seeing it work: the live tail, the log in place, Run now (2026-10-28)
+
+The founder: "within the chat I should see it working … show the task it's doing, like all the logs, within the chat,
+or at least saying working, and if I click it I could see the actual logs". The card said "Julia · Waiting for its
+turn · 3m" and nothing else. Now (`components/conversations/TaskCard.tsx`, `lib/taskCardView.ts`, `shared/taskCard.ts`):
+
+- **Working**: the line reads "Julia · Working · 1m 12s"; the clock ticks every second (`clockLabel`, its own
+  `WorkClock` component so only the clock re-renders) and counts from the run's root agent `startedAt`, not from when
+  the task was filed. Under it, the **live tail**: the last 4 things the agent did (`tailLines`): tool calls in words
+  ("Reading taskCard.ts", "Running npm test" in a company with code, "Working on it" without), the first line of its
+  latest message, errors and asks. Data: `useAgentEvents(root.id)`, the same `agent:events` stream and cache the run
+  view's Activity timeline reads, subscribed per card, so a new event re-renders that card only, never the chat.
+- **Show logs** (or a click on the card's head) opens the run's whole log in place, 320 px, scrollable, following the
+  tail unless you scrolled up: the run view's own components, `AgentTimeline` (Activity, default) and `StepLog`
+  (Output: `runs:stepLog` + live `run:output`), behind a small Activity / Output switch. Mounted only while open; the
+  tail hides while it is open. Done, in review, failed and needs-you cards keep Show logs. The run's root loads on
+  demand (`agents:list {runId, rootsOnly}`) when the store has none, e.g. a chat reopened after a restart.
+  **Watch** / **See the run** and **Open task** are secondary links.
+- **Queued says why** (`queuedReason`, the dispatcher's gates in order): nobody assigned / waiting to be routed, the
+  company or seat paused, dependencies not done ("Waiting for VO-3 to finish"), an open question, backlog / triage,
+  a session seat, Autopilot off ("Autopilot is off in Vibiz: it waits for you to press Run now"), a manual seat, the
+  company at maxInFlight, the agent already running AGENT_MAX_PARALLEL tasks ("Julia is running 3 tasks; VO-15 starts when one finishes"), else "Starting in a moment". When it can start, **Run now**
+  (Start without code) sits on the card and calls `tasks:start`, the Board drawer's Run now; a refusal is shown inline
+  on the card (`task-run-error`), not as a toast.
+- **Needs you** after a run stopped (blocked, needs input) shows the report it stopped with as an outcome line.
+- **The strip** uses the same run clock ("Julia is working on VO-15 · 1m"), and with several tasks it no longer calls
+  queued ones running: "2 tasks · 1 working · 1 queued" ("2 tasks running" only when none waits).
+- **The phone** (`PhoneTaskCard.activity`): a working card carries its run's current activity line, read when the room
+  loads (`PhoneApi.cardActivity`, plain words, redacted), shown under "Working · 3m" (`tcard__a`). No full log there.
+
 ### The result comes back to the conversation
 
 Before this, a task run's update went to the agent's department channel (`postAsAgent`'s default), never to the
@@ -499,7 +529,7 @@ follow the same rules:
 mapped by `remote/api.ts roomMessage` from main's stored payload. The web phone app (`cloud/phone/render.ts
 roomTaskCard`) and the iPhone (`ios/Principia/UI/RoomView.swift TaskCardRow`) draw it as a compact card with its state
 tile, the elapsed time, the result and the PR link; a patched card replaces itself in place (`AppModel.place`, the web
-app's `room` message). No Watch, answer or activity line on the phone yet: the Mac keeps those.
+app's `room` message). A working card shows its run's activity line (read when the room loads); Watch, answers and the log stay on the Mac.
 
 ### Tests
 
@@ -510,5 +540,8 @@ conversation and not the department, the card patched in place, the fallback wit
 wording rule in the chat rules and the reply prompt), `cloud/phone/phone.test.ts` and `ChatReplicaTests.swift` (the
 phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `data-task`), `task-state`,
 `task-activity`, `task-needs`, `task-result`, `task-watch`, `task-open`, `task-approve`, `task-option`, `task-answer`,
-`task-pr`, `working-strip`, `working-strip-line`, `working-strip-watch`.
+`task-pr`, `working-strip`, `working-strip-line`, `working-strip-watch`, `task-clock`, `task-tail`, `task-logs`,
+`task-log`, `task-why`, `task-run`, `task-run-error`. Live tail, log, Run now and the queued reasons:
+`conversations/taskCard.render.test.ts`, `taskCardView.test.ts` (tail, run clock), `shared/taskCard.test.ts`
+(`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).
 

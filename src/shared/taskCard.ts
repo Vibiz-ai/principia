@@ -6,6 +6,7 @@
  *
  * Pure: shared by main (the stored state, the phone), the renderer and the phone web app.
  */
+import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT, agentFullLine } from './company'
 
 /** What the card says about its task. */
 export const TASK_CARD_STATES = ['queued', 'working', 'needs_you', 'in_review', 'done', 'failed'] as const
@@ -112,6 +113,70 @@ export function elapsedLabel(fromIso: string, toIso: string | null | undefined, 
   return `${Math.floor(h / 24)}d`
 }
 
+/** A ticking clock: "12s", "1m 12s", "1h 5m" (the working line counts seconds while it runs). */
+export function clockLabel(fromIso: string, toIso: string | null | undefined = null, now: number = Date.now()): string {
+  const from = Date.parse(fromIso)
+  const to = toIso ? Date.parse(toIso) : now
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return ''
+  const s = Math.max(0, Math.floor((to - from) / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  const h = Math.floor(m / 60)
+  return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+}
+
+/** What a queued card needs to say why it waits: the gates the dispatcher checks (DEPARTMENTS.md §3). */
+export interface QueueInput {
+  task: { status: string; identifier?: string; blockReason?: string | null; agentId?: string | null; assigneeProfileId?: string | null; ask?: { answer?: string | null } | null }
+  /** the seat on it (null: nobody, or its row is gone) */
+  agent: { name: string; archivedAt?: string | null; pausedAt?: string | null; data?: { autonomy?: string; mode?: string } } | null
+  company: { name: string; autopilot?: boolean; pausedAt?: string | null; maxInFlight?: number } | null
+  /** identifiers of its dependencies that are not done yet */
+  depsOpen?: readonly string[]
+  /** the company's tasks in flight right now (in progress with a run) */
+  inFlight?: number
+  /** how many other tasks its agent is running right now (an agent works on up to AGENT_MAX_PARALLEL at once) */
+  agentRunning?: number
+  /** work the founder already said go to starts with autopilot off too (startsWithoutAutopilot) */
+  startsAnyway?: boolean
+  /** "Run now" for a company with code, "Start" without */
+  runLabel?: string
+}
+export interface QueueReason {
+  /** one line: why it waits ("Autopilot is off in Vibiz: it waits for you to press Run now") */
+  text: string
+  /** Run now can start it from the card: an agent, nothing it waits on, no question open */
+  canRun: boolean
+}
+
+const listIds = (ids: readonly string[]): string => (ids.length <= 2 ? ids.join(' and ') : `${ids.slice(0, 2).join(', ')} and ${ids.length - 2} more`)
+
+/** Why a queued task has not started, in words, and whether Run now can start it from the card (CHAT-UI.md §8). */
+export function queuedReason(i: QueueInput): QueueReason {
+  const t = i.task
+  const run = i.runLabel ?? 'Run now'
+  const who = i.agent?.name ?? 'Its agent'
+  const deps = i.depsOpen ?? []
+  const company = i.company
+  if (!t.agentId && !t.assigneeProfileId) return { text: t.status === 'triage' ? 'Waiting to be routed to an agent' : 'Nobody is on it yet: assign an agent', canRun: false }
+  if (company?.pausedAt) return { text: `${company.name} is paused: nothing starts until you resume it`, canRun: false }
+  if (i.agent && (i.agent.archivedAt || i.agent.pausedAt)) return { text: `${i.agent.name} is ${i.agent.archivedAt ? 'archived' : 'paused'}`, canRun: false }
+  if ((t.status === 'blocked' && t.blockReason === 'deps') || deps.length) return { text: deps.length ? `Waiting for ${listIds(deps)} to finish` : 'Waiting for its dependencies to finish', canRun: false }
+  if (t.ask && !t.ask.answer) return { text: 'Waiting for your answer', canRun: false }
+  if (t.status === 'backlog') return { text: `In the backlog: it starts when it moves to To do, or with ${run}`, canRun: true }
+  if (t.status === 'triage') return { text: `In triage: it starts once it is routed, or with ${run}`, canRun: true }
+  if (i.agent?.data?.mode === 'session') return { text: `${who} works in a session: it starts when you press ${run}`, canRun: true }
+  if (!company?.autopilot && !i.startsAnyway) return { text: `Autopilot is off${company ? ` in ${company.name}` : ''}: it waits for you to press ${run}`, canRun: true }
+  if (i.agent?.data?.autonomy && i.agent.data.autonomy !== 'auto' && !i.startsAnyway) return { text: `${who} starts only when you say so: press ${run}`, canRun: true }
+  const max = typeof company?.maxInFlight === 'number' && company.maxInFlight >= 1 ? company.maxInFlight : DEFAULT_MAX_IN_FLIGHT
+  const inFlight = i.inFlight ?? 0
+  if (inFlight >= max) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
+  const mine = i.agentRunning ?? 0
+  if (mine >= AGENT_MAX_PARALLEL) return { text: agentFullLine(who, mine, t.identifier ?? 'this task'), canRun: true }
+  return { text: 'Starting in a moment', canRun: true }
+}
+
 /** One open task for the strip. */
 export interface StripTask {
   taskId: string
@@ -120,6 +185,8 @@ export interface StripTask {
   who: string | null
   state: TaskCardState
   startedAt: string
+  /** when its run started working (the run's root agent): a working task's clock counts from here */
+  since?: string | null
 }
 export interface WorkingStrip {
   /** the collapsed line: "Julia is working on VO-9 · 2m", "2 tasks running · 1 needs you" */
@@ -139,7 +206,8 @@ export function workingStrip(cards: readonly StripTask[], now: number = Date.now
   const focus = tasks[0]!
   if (tasks.length === 1) {
     const t = focus
-    const age = elapsedLabel(t.startedAt, null, now)
+    // the same clock as the card: a working task counts from its run's start, a queued one from when it was filed
+    const age = elapsedLabel(t.state === 'working' && t.since ? t.since : t.startedAt, null, now)
     const who = t.who ?? 'Nobody yet'
     const line =
       t.state === 'needs_you'
@@ -150,7 +218,12 @@ export function workingStrip(cards: readonly StripTask[], now: number = Date.now
     return { line: age ? `${line} · ${age}` : line, tasks, focus }
   }
   const needs = tasks.filter((t) => t.state === 'needs_you').length
-  return { line: `${tasks.length} tasks running${needs ? ` · ${needs} need${needs === 1 ? 's' : ''} you` : ''}`, tasks, focus }
+  const queued = tasks.filter((t) => t.state === 'queued').length
+  const needLine = needs ? ` · ${needs} need${needs === 1 ? 's' : ''} you` : ''
+  // "running" only when nothing waits for its turn: a queued task is not running yet
+  if (!queued) return { line: `${tasks.length} tasks running${needLine}`, tasks, focus }
+  const working = tasks.length - queued - needs
+  return { line: `${tasks.length} tasks${working ? ` · ${working} working` : ''} · ${queued} queued${needLine}`, tasks, focus }
 }
 
 /** The card's text line (what an older client, a search hit or a notification shows). */

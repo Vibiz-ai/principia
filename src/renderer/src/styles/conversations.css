@@ -146,6 +146,26 @@
 .cx-task__answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 30px; }
 .cx-task__input { flex: 1; min-width: 160px; }
 .cx-task__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 24px; }
+.cx-task__head.is-toggle { cursor: pointer; }
+.cx-task__why { color: var(--text-secondary); }
+.cx-task__outcome { padding-left: 30px; font-size: var(--text-sm); color: var(--text-primary); }
+.cx-task__error { margin-left: 30px; padding: 4px 8px; border-left: 2px solid var(--status-failed); font-size: var(--text-sm); color: var(--text-primary); }
+.cx-task__link { padding: 0 6px; font-size: var(--text-sm); color: var(--text-secondary); }
+.cx-task__link:hover { color: var(--text-primary); text-decoration: underline; }
+/* the live tail: the last few things the agent did, one quiet mono line each (white line art, no fill) */
+.cx-task__tail { display: flex; flex-direction: column; gap: 1px; margin-left: 30px; padding: 4px 0 4px 10px; border-left: 1px solid var(--border-strong); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; line-height: 18px; color: var(--text-tertiary); min-width: 0; }
+.cx-task__tl { display: flex; gap: 8px; min-width: 0; }
+.cx-task__tl.is-last { color: var(--text-secondary); }
+.cx-task__tl.is-text .cx-task__tl-text { font-family: var(--font-sans, inherit); }
+.cx-task__tl.is-error, .cx-task__tl.is-error .cx-task__tl-glyph { color: var(--status-failed); }
+.cx-task__tl-glyph { flex: none; width: 12px; text-align: center; font-size: 10px; }
+.cx-task__tl.is-running .cx-task__tl-glyph { color: var(--status-running); }
+.cx-task__tl-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Show logs: the run's whole log in place, scrollable, following the tail */
+.cx-task__log { display: flex; flex-direction: column; gap: 6px; margin-left: 30px; min-width: 0; }
+.cx-task__logtabs { align-self: flex-start; }
+.cx-task__logbox { display: flex; flex-direction: column; height: 320px; max-height: 50vh; min-height: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: var(--term-bg, var(--surface-0)); }
+.cx-task__logbox > .timeline, .cx-task__logbox > .log { flex: 1; min-height: 0; overflow: auto; }
 
 .cx-strip { position: relative; z-index: 1; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface-1); font-size: var(--text-sm); }
 .cx-strip.is-needs { box-shadow: inset 2px 0 0 var(--status-needs); }

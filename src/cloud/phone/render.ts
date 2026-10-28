@@ -480,6 +480,7 @@ export function roomTaskCard(t: PhoneTaskCard, now = Date.now()): VNode {
     { class: `tcard is-${t.state}`, 'data-task': t.identifier, 'data-state': t.state },
     h('div', { class: 'tcard__h' }, h('span', { class: `tes tes--${CARD_TILE[t.state] ?? 'q'}`, 'aria-hidden': 'true' }), h('b', null, t.identifier), h('span', { class: 'tcard__t' }, t.title)),
     h('div', { class: 'tcard__s' }, `${t.label}${age ? ` · ${age}` : ''}`),
+    t.state === 'working' && t.activity ? h('div', { class: 'tcard__a' }, t.activity) : null,
     t.result ? h('p', { class: 'tcard__r' }, t.result) : null,
     t.prUrl ? h('a', { class: 'tcard__pr', href: t.prUrl, target: '_blank', rel: 'noopener' }, 'Pull request') : null
   )

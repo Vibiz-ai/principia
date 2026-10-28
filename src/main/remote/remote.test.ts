@@ -59,7 +59,9 @@ function world() {
     members: [member('mb_owner_a', 'co_a', { kind: 'human', role: 'owner', handle: 'you' }), member('mb_ag_a', 'co_a', { agentId: 'ag_a', handle: 'livia', name: 'Livia' }), member('mb_ag_b', 'co_b', { agentId: 'ag_b', handle: 'marcus' })],
     runs: [] as { id: string; companyId: string; agentId: string | null; title: string; status: string }[],
     calls: [] as { channel: string; req: unknown }[],
-    suggestions: [] as OrchSuggestion[]
+    suggestions: [] as OrchSuggestion[],
+    /** the room's messages (null: one "hello") */
+    roomMessages: null as ForumMessage[] | null
   }
   const listeners = new Set<(e: string, p: unknown) => void>()
   const host: PhoneHost = {
@@ -68,7 +70,7 @@ function world() {
       switch (channel) {
         case 'settings:get': return d.settings
         case 'company:list': return d.companies
-        case 'agents:list': return d.agents
+        case 'agents:list': return req?.runId ? d.agents.filter((a) => a.runId === req.runId) : d.agents
         case 'asks:list': return d.asks
         case 'sessions:list': return d.sessions
         case 'tasks:list': return d.tasks
@@ -81,7 +83,7 @@ function world() {
         case 'chat:snapshot': return snap(req.id)
         case 'app:dashboard': return { done: [] }
         case 'forum:state': return { companyId: req.companyId, me: 'mb_owner_a', members: d.members.filter((m) => m.companyId === req.companyId), channels: d.channels.filter((c) => c.companyId === req.companyId), presence: [], openAsks: 0, openProposals: 0 }
-        case 'forum:messages': return { messages: [msg('fm_1', req.companyId, req.channelId, 'hello')], hasMore: false }
+        case 'forum:messages': return { messages: d.roomMessages ?? [msg('fm_1', req.companyId, req.channelId, 'hello')], hasMore: false }
         case 'forum:post': return msg('fm_2', req.companyId, req.channelId, req.text)
         case 'chat:sendAgent': return { id: 'se_agent', companyId: 'co_a', companyAgentId: req.agentId }
         case 'sessions:restart': return { ...sess('se_next', 'co_a'), agentSessionId: d.sessions.find((x) => x.id === req.id)?.agentSessionId ?? null }
@@ -549,6 +551,19 @@ describe('terminal replies from the phone', () => {
     const api = new PhoneApi(host)
     const room = (await api.handle('room', { companyId: 'co_a' }, {}, dev)) as { answering: string[] }
     expect(room.answering).toEqual(['Livia'])
+  })
+  it('a working task card carries what its run is doing now (the phone working line, CHAT-UI.md §8)', async () => {
+    const { host, d } = world()
+    const card = (id: string, taskId: string, state: 'working' | 'queued', runId: string | null): ForumMessage => ({ ...msg(id, 'co_a', 'ch_a', `Livia started ${taskId}`), kind: 'system', task: { taskId, identifier: taskId.toUpperCase(), title: 'Spring menu', agentId: 'ag_a', filedBy: null, state, runId, startedAt: T } })
+    d.roomMessages = [card('fm_w', 'ta_run', 'working', 'run_a'), card('fm_q', 'ta_q', 'queued', null)]
+    d.agents = [...d.agents, node('n_old', { runId: 'run_a', status: 'done', activity: 'Read old.md', updatedAt: '2026-01-01T00:00:00.000Z' })]
+    const api = new PhoneApi(host)
+    const room = (await api.handle('room', { companyId: 'co_a' }, {}, dev)) as { messages: { id: string; task?: { state: string; activity?: string } }[] }
+    const w = room.messages.find((m) => m.id === 'fm_w')!
+    // the run's newest root, in plain words (no code in this company)
+    expect(w.task).toMatchObject({ state: 'working', activity: 'Working on it' })
+    expect(room.messages.find((m) => m.id === 'fm_q')!.task!.activity).toBeUndefined()
+    expect(d.calls.filter((c) => c.channel === 'agents:list' && (c.req as { runId?: string }).runId).map((c) => (c.req as { runId: string }).runId)).toEqual(['run_a'])
   })
 })
 

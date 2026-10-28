@@ -492,16 +492,34 @@ export class PhoneApi implements RemoteApi {
       answering: [...new Set(answering)],
       members: members
         .map((m) => ({ id: m.id, handle: m.handle, name: m.name, kind: m.kind, role: m.agentId ? (seats.find((a) => a.id === m.agentId)?.name ?? null) : null })),
-      messages: await this.withReplies(page.messages.filter((m) => !m.deletedAt && !m.threadId))
+      messages: await this.withReplies(page.messages.filter((m) => !m.deletedAt && !m.threadId), await this.cardActivity(companyId, page.messages))
     }
   }
 
+  /** CHAT-UI.md §8: what each working card's run is doing now (its root agent's activity, in plain words), by task. */
+  private async cardActivity(companyId: Id, msgs: readonly ForumMessage[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>()
+    const working = msgs.filter((m) => !m.deletedAt && m.task?.state === 'working' && m.task.runId)
+    if (!working.length) return out
+    const repos = await this.safe(() => this.h.invoke('repos:list', undefined), [])
+    const code = reposOf(repos, companyId).length > 0
+    await Promise.all(
+      working.map(async (m) => {
+        const roots = await this.safe(() => this.h.invoke('agents:list', { runId: m.task!.runId!, rootsOnly: true, limit: 10 }), [] as AgentNode[])
+        const root = cardActivityRoot(roots)
+        const line = root ? plainActivity(root.activity, { code }) : null
+        if (line) out.set(m.task!.taskId, this.redact(line))
+      })
+    )
+    return out
+  }
+
   /** Agents answer in a thread under your message (the Forum responder): replies follow their root, in order. */
-  private async withReplies(roots: ForumMessage[]): Promise<PhoneRoomMessage[]> {
+  private async withReplies(roots: ForumMessage[], activity: ReadonlyMap<string, string> = new Map()): Promise<PhoneRoomMessage[]> {
     const out: PhoneRoomMessage[] = []
     const recent = new Set(roots.slice(-20).map((m) => m.id))
     for (const m of roots) {
-      out.push(roomMessage(m))
+      out.push(roomMessage(m, m.task ? activity.get(m.task.taskId) : undefined))
       if (!m.replyCount || !recent.has(m.id)) continue
       const t = await this.safe(() => this.h.invoke('forum:thread', { messageId: m.id }), null)
       for (const r of t?.replies ?? []) if (!r.deletedAt && r.companyId === m.companyId) out.push(roomMessage(r))
@@ -715,12 +733,21 @@ export function terminalMessage(raw: string): string {
   return text
 }
 
-export function roomMessage(m: ForumMessage): PhoneRoomMessage {
+/** `activity`: what a working card's run is doing now (the phone's working line); only a working card carries it. */
+export function roomMessage(m: ForumMessage, activity?: string | null): PhoneRoomMessage {
   const t = m.task
+  const doing = t?.state === 'working' && activity ? activity : null
   return {
     id: m.id, seq: m.seq, channelId: m.channelId, threadId: m.threadId, authorId: m.authorId, kind: m.kind, text: m.text, at: m.createdAt,
-    ...(t ? { task: { identifier: t.identifier, title: t.title, state: t.state, label: TASK_CARD_LABEL[t.state] ?? t.state, result: t.result ?? null, prUrl: t.prUrl ?? null, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null } } : {})
+    ...(t ? { task: { identifier: t.identifier, title: t.title, state: t.state, label: TASK_CARD_LABEL[t.state] ?? t.state, result: t.result ?? null, prUrl: t.prUrl ?? null, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null, ...(doing ? { activity: doing } : {}) } } : {})
   }
+}
+
+/** The run's live root (a step root), newest first; only one that is still working has an activity worth showing. */
+export function cardActivityRoot(roots: readonly AgentNode[]): AgentNode | null {
+  let best: AgentNode | null = null
+  for (const a of roots) if (a.parentId === null && (!best || a.updatedAt > best.updatedAt)) best = a
+  return best && (best.status === 'working' || best.status === 'starting') ? best : null
 }
 
 export { agentStatus, whoResolver }
