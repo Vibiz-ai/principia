@@ -659,7 +659,7 @@ function withRootRef(s: ForumStore, m: ForumMessage): ForumMessage & { rootRef?:
  * reply that claims none of these gets the state added.
  */
 export function notStarted(text: string, identifier: string, line: string): string {
-  const id = identifier.replace(/[-]/g, '\\-')
+  const id = identifier.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
   let said = false
   const say = (): string => (said ? '' : ((said = true), line))
   let out = text
