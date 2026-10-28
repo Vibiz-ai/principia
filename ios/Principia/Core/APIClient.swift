@@ -7,7 +7,7 @@ enum Route: Sendable, Equatable {
     case tasks(String), task(String, taskId: String)
     case answerAsk(String, askId: String)
     case approveTask(String, taskId: String), sendBackTask(String, taskId: String), answerTask(String, taskId: String), cancelTask(String, taskId: String)
-    case chats(String), session(String, sessionId: String)
+    case chats(String), newChat(String), session(String, sessionId: String)
     case sessionSend(String, sessionId: String), sessionStop(String, sessionId: String), sessionAnswer(String, sessionId: String), sessionReply(String, sessionId: String)
     case sessionContinue(String, sessionId: String)
     case agent(String, agentId: String), agentSend(String, agentId: String)
@@ -39,6 +39,7 @@ enum Route: Sendable, Equatable {
         case .answerTask(let co, let id): return "\(c(co))/tasks/\(e(id))/answer"
         case .cancelTask(let co, let id): return "\(c(co))/tasks/\(e(id))/cancel"
         case .chats(let co): return "\(c(co))/chats"
+        case .newChat(let co): return "\(c(co))/chats/new"
         case .session(let co, let id): return "\(c(co))/sessions/\(e(id))"
         case .sessionSend(let co, let id): return "\(c(co))/sessions/\(e(id))/send"
         case .sessionStop(let co, let id): return "\(c(co))/sessions/\(e(id))/stop"
@@ -209,6 +210,14 @@ final class APIClient: @unchecked Sendable {
     func answerTask(_ co: String, taskId: String, text: String) async throws -> PhoneNeeds { try await call(.answerTask(co, taskId: taskId), body: ["text": text]) }
     func notNeeded(_ co: String, taskId: String) async throws -> PhoneNeeds { try await call(.cancelTask(co, taskId: taskId), body: [:]) }
     func chats(_ co: String) async throws -> PhoneChats { try await call(.chats(co)) }
+    /// New chat: with the agent when one is picked (its own chat), else Claude directly; the session it opened
+    func newChat(_ co: String, text: String, agentId: String? = nil) async throws -> String {
+        var body: [String: Any] = ["text": text]
+        if let agentId { body["agentId"] = agentId }
+        let r: NewChat = try await call(.newChat(co), body: body)
+        return r.sessionId
+    }
+    private struct NewChat: Decodable { var sessionId: String }
     func session(_ co: String, _ id: String) async throws -> PhoneSession { try await call(.session(co, sessionId: id)) }
     /// an agent's ended chat reopens in a new session (same conversation): the session to follow, when the Mac says
     @discardableResult

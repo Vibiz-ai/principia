@@ -90,6 +90,10 @@ function world() {
         default: return { ok: true }
       }
     }) as PhoneHost['invoke'],
+    newChat: async (req) => {
+      d.calls.push({ channel: 'newChat', req })
+      return sess('se_new', req.companyId)
+    },
     onEvent: (fn) => {
       const f = fn as (e: string, p: unknown) => void
       listeners.add(f)
@@ -467,6 +471,27 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(out.sessionId).toBe('se_agent')
     expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'just do it bro' })
     expect(d.calls.some((c) => c.channel === 'tasks:create' || c.channel === 'tasks:comment' || c.channel === 'tasks:start')).toBe(false)
+  })
+  it('New chat: Claude directly in this company (the Mac\'s New conversation), or the agent\'s own chat', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    const out = (await api.handle('newChat', { companyId: 'co_a' }, { text: '  Can you draft the spring menu?  ' }, dev)) as { sessionId: string }
+    expect(out).toEqual({ sessionId: 'se_new' })
+    expect(d.calls.find((c) => c.channel === 'newChat')?.req).toEqual({ companyId: 'co_a', text: 'Can you draft the spring menu?', title: 'Draft the spring menu' })
+    const withAgent = (await api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', agentId: 'ag_a' }, dev)) as { sessionId: string }
+    expect(withAgent).toEqual({ sessionId: 'se_agent' })
+    // To: offers this company's agents only
+    expect(((await api.handle('chats', { companyId: 'co_a' }, {}, dev)) as { team: { id: string }[] }).team.map((m) => m.id)).toEqual(['ag_a'])
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'hi' })
+  })
+  it('New chat: another company\'s agent or an unknown company is 404, an empty message 400, nothing starts', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', agentId: 'ag_b' }, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('newChat', { companyId: 'co_zzz' }, { text: 'hi' }, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: '   ' }, dev)).rejects.toMatchObject({ status: 400 })
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', cwd: '/' }, dev)).rejects.toMatchObject({ status: 400 })
+    expect(d.calls.filter((c) => c.channel === 'newChat' || c.channel === 'chat:sendAgent')).toEqual([])
   })
   it('an agent on the phone opens its own chat: the agent view names it, so the phone reads it with the chat model', async () => {
     const { host, d } = world()

@@ -5,7 +5,7 @@ import { EMPTY_CHAT_META } from '../../shared/chat'
 import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskCard, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
 import { ago, placeMessage, ChatLoad, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
-import { renderAgent, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
+import { renderAgent, renderChats, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
 
 const T = '2026-10-25T10:00:00.000Z'
 const snap = (items: ChatItem[] = [], seq = 1): ChatSnapshot => ({ sessionId: 'se_1', mode: 'chat', available: true, turn: 'idle', activity: null, turnStartedAt: null, items, queue: [], meta: { ...EMPTY_CHAT_META }, seq, note: null })
@@ -130,6 +130,15 @@ describe('the board (read only)', () => {
 })
 
 describe('screens', () => {
+  it('Chats: New chat opens a box, To: Claude or one of the team', () => {
+    const chats = { companyId: 'co_a', rows: [], team: [{ id: 'ag_a', who: { name: 'Livia', role: 'Copywriter', bust: 'Livia' } }] }
+    expect(btns(renderChats({ ...baseView(), tab: 'chats', chats }, noop))).toContain('New chat')
+    const open = renderChats({ ...baseView(), tab: 'chats', chats, drafts: { 'new:open': '1', new: 'hi' } }, noop)
+    expect(findAll(open, (n) => n.tag === 'option').map((o) => textOf(o))).toEqual(['To: Claude', 'To: Livia · Copywriter'])
+    expect(btns(open)).toEqual(expect.arrayContaining(['Send', 'Cancel']))
+    // no team: Claude only, no picker
+    expect(findAll(renderChats({ ...baseView(), tab: 'chats', chats: { ...chats, team: [] }, drafts: { 'new:open': '1' } }, noop), (n) => n.tag === 'select')).toEqual([])
+  })
   it('Now: who works, with the live sentence, and what finished', () => {
     const now: PhoneNow = { companyId: 'co_a', name: 'Northwind', paused: false, needs: 1, working: [{ key: 'w', who: { name: 'Livia', role: 'Copywriter', bust: 'Livia' }, title: 'Spring menu', activity: 'Checking the menu file', startedAt: T, open: { kind: 'agent', id: 'ag_a' } }], done: [{ key: 'd', title: 'Instagram week', who: null, at: T, status: 'review', summary: 'Seven posts' }] }
     const t = renderNow({ ...baseView(), now }, noop, Date.parse(T))

@@ -219,6 +219,8 @@ export const REMOTE_ROUTES = {
   /** Not needed: the task is canceled and leaves Needs you (reopen it from the Board on the Mac) */
   cancelTask: 'POST /api/c/:companyId/tasks/:taskId/cancel',
   chats: 'GET /api/c/:companyId/chats',
+  /** New chat: with an agent (its own chat), else Claude directly (the Mac's New conversation); answers { sessionId } */
+  newChat: 'POST /api/c/:companyId/chats/new',
   session: 'GET /api/c/:companyId/sessions/:sessionId',
   sessionSend: 'POST /api/c/:companyId/sessions/:sessionId/send',
   sessionStop: 'POST /api/c/:companyId/sessions/:sessionId/stop',
@@ -409,6 +411,8 @@ export interface PhoneChatRow {
 export interface PhoneChats {
   companyId: Id
   rows: PhoneChatRow[]
+  /** who a New chat can be with (the company's agents); empty: Claude only */
+  team: { id: Id; who: PhoneWho }[]
 }
 
 export interface PhoneSession {

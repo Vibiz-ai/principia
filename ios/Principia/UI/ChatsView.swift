@@ -2,13 +2,21 @@ import SwiftUI
 
 struct ChatsTab: View {
     @Environment(AppModel.self) private var app
+    @State private var composing = false
 
     var body: some View {
         @Bindable var app = app
         NavigationStack(path: $app.chatPath) {
             ChatsList()
                 .stone()
-                .toolbar { TopBar() }
+                .toolbar {
+                    TopBar()
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { composing = true } label: { Image(systemName: "square.and.pencil") }
+                            .accessibilityLabel("New chat")
+                            .disabled(app.chats == nil)
+                    }
+                }
                 .navigationDestination(for: PhoneChatRef.self) { ref in
                     ConversationView(ref: ref)
                 }
@@ -16,6 +24,57 @@ struct ChatsTab: View {
         .onChange(of: app.chatPath) { _, path in
             if path.isEmpty { app.closedChat() }
         }
+        .sheet(isPresented: $composing) { NewChatSheet() }
+    }
+}
+
+/// New chat: the first message, to Claude directly or to one of the company's agents (the Mac's New conversation).
+struct NewChatSheet: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    /// nil: Claude directly
+    @State private var agentId: String?
+    @FocusState private var focused: Bool
+
+    private var team: [PhoneTeamMember] { app.chats?.team ?? [] }
+    private var sending: Bool { app.busy.contains("newChat") }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if !team.isEmpty {
+                    Picker("To", selection: $agentId) {
+                        Text("Claude").tag(String?.none)
+                        ForEach(team) { m in
+                            Text(m.who.role.isEmpty ? m.who.name : "\(m.who.name) · \(m.who.role)").tag(String?.some(m.id))
+                        }
+                    }
+                }
+                Section {
+                    TextField("What do you need?", text: $text, axis: .vertical)
+                        .lineLimit(4...12)
+                        .focused($focused)
+                } footer: {
+                    Text(agentId == nil ? "A new chat with Claude on your Mac." : "Goes into their chat on your Mac.")
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.page)
+            .navigationTitle("New chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send", systemImage: "arrow.up") {
+                        Task { if await app.newChat(text, agentId: agentId) { dismiss() } }
+                    }
+                    .disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear { focused = true }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

@@ -59,6 +59,20 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(Route.pause("co_a").method, "POST")
     }
 
+    func testNewChatPostsTheTextAndTheAgentAndReturnsTheSession() async throws {
+        let t = FakeTransport { _ in (200, #"{"sessionId":"se_new"}"#) }
+        let api = APIClient(transport: t, target: target)
+        let plain = try await api.newChat("co_a", text: "hi")
+        XCTAssertEqual(plain, "se_new")
+        var req = try XCTUnwrap(t.requests.last)
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.url?.path(percentEncoded: true), "/api/c/co_a/chats/new")
+        XCTAssertEqual(try XCTUnwrap(JSONSerialization.jsonObject(with: req.httpBody!) as? [String: String]), ["text": "hi"])
+        _ = try await api.newChat("co_a", text: "hi", agentId: "ag_1")
+        req = try XCTUnwrap(t.requests.last)
+        XCTAssertEqual(try XCTUnwrap(JSONSerialization.jsonObject(with: req.httpBody!) as? [String: String]), ["text": "hi", "agentId": "ag_1"])
+    }
+
     func testErrorsMeanWhatTheWebAppSays() async {
         func expect(_ status: Int, _ body: String, _ want: APIError) async {
             let api = APIClient(transport: FakeTransport { _ in (status, body) }, target: target)
