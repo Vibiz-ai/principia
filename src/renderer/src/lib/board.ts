@@ -108,13 +108,14 @@ export function laneText(t: CompanyTask, ctx: LaneContext): string {
 export type DropAction =
   | { kind: 'status'; status: 'triage' | 'todo' }
   | { kind: 'unpark' }
+  | { kind: 'done' }
   | { kind: 'assign'; agentId: Id; departmentId?: Id }
 export type DropResult = { ok: true; action: DropAction } | { ok: false; reason: string } | { ok: true; action: null }
 const routed = (t: CompanyTask): boolean => !!(t.departmentId || t.agentId)
 
 /**
  * A card dropped on a column. Mirrors §1.4 (main enforces it again): nothing is ever dragged into Working (work starts
- * with Run now or Autopilot), Needs you fills itself, and Done needs an approval with a note. `action: null` = the
+ * with Run now or Autopilot), Needs you fills itself, and a drop on Done marks it done (main writes the note). `action: null` = the
  * card is already in that column (no-op, no toast).
  */
 export function laneDrop(t: CompanyTask, target: TaskLane, ctx: LaneContext): DropResult {
@@ -123,7 +124,7 @@ export function laneDrop(t: CompanyTask, target: TaskLane, ctx: LaneContext): Dr
   if (target === 'working') return { ok: false, reason: 'Cards can’t be dragged into Working. Use Run now, or turn on Auto-start for assigned agents.' }
   if (target === 'needs_you') return { ok: false, reason: 'Tasks land in Needs you by themselves when they wait for you.' }
   if (t.status === 'in_progress') return { ok: false, reason: 'This task is running. Stop it before moving it.' }
-  if (target === 'done') return { ok: false, reason: t.status === 'in_review' ? 'Approve it in the task details: a done note is required.' : 'Only a reviewed task can be approved as done.' }
+  if (target === 'done') return { ok: true, action: { kind: 'done' } }
   if (t.status === 'in_review') return { ok: false, reason: 'Use Send back with a note in the task details.' }
   // a routed task with no eligible agent stays in Needs you whatever its status: only an assignment moves it
   if (taskReason(t, ctx) === 'unassigned') return { ok: false, reason: 'Assign an agent first: drop the card on an agent in the filter bar.' }

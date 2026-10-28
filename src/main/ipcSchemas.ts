@@ -640,7 +640,7 @@ export const REQUEST_SCHEMAS = {
     .refine((q) => q.departmentId !== undefined || q.agentId !== undefined, 'Choose a department or an agent'),
   'tasks:acceptRoute': z.object({ id }).strict(),
   'tasks:answer': z.object({ id, answer: z.string().trim().min(1, 'Answer is empty').max(10_000) }).strict(),
-  'tasks:approve': z.object({ id, doneNote: z.string().trim().min(1, 'A done note is required').max(10_000) }).strict(),
+  'tasks:approve': z.object({ id, doneNote: z.string().trim().max(10_000).optional() }).strict(),
   'tasks:sendBack': z.object({ id, note: z.string().trim().min(1, 'Say what to change').max(10_000) }).strict(),
   'tasks:unpark': z.object({ id }).strict(),
   'tasks:openSession': z.object({ id, ...ptySize }).strict(),

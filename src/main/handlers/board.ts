@@ -86,7 +86,12 @@ export function boardActions(h: BoardHost, onChange: (companyId: string) => void
       h.dispatcher.goAhead(q.id, 'you answered its question')
       return c.task(q.id)
     },
-    approve: (q: { id: string; doneNote: string }) => review(act(q.id, () => c.approve(q.id, h.vault ? h.vault.redact(q.doneNote) : q.doneNote, 'human')), 'approved', q.doneNote),
+    approve: (q: { id: string; doneNote?: string }) => {
+      const note = q.doneNote?.trim() ?? ''
+      const done = act(q.id, () => c.approve(q.id, h.vault && note ? h.vault.redact(note) : note, 'human'))
+      // only a note the founder wrote is a taste signal; a drop on Done writes none
+      return note ? review(done, 'approved', note) : done
+    },
     sendBack: (q: { id: string; note: string }) => review(act(q.id, () => c.sendBack(q.id, h.vault ? h.vault.redact(q.note) : q.note)), 'sent_back', q.note),
     unpark: (q: { id: string }) => act(q.id, () => c.unpark(q.id)),
     /** Cancels the task's run (the run end parks it, §1.4) or, for a session lease, asks the dispatcher. */

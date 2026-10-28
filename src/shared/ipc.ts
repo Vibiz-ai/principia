@@ -219,7 +219,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   /** Answers the board ask of a blocked(needs_input) task: back to todo and the same agent resumes. */
   'tasks:answer': [{ id: Id; answer: string }, CompanyTask]
   /** in_review -> done, human only; the note is required. */
-  'tasks:approve': [{ id: Id; doneNote: string }, CompanyTask]
+  'tasks:approve': [{ id: Id; doneNote?: string }, CompanyTask]
   /** in_review -> todo + wake; the note becomes the next turn's prompt. */
   'tasks:sendBack': [{ id: Id; note: string }, CompanyTask]
   /** blocked (any reason but deps) -> todo; resets the wake counter. */

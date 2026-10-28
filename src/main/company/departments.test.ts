@@ -364,7 +364,8 @@ describe('task schema and IPC contract', () => {
     const channels = ['departments:list', 'departments:save', 'departments:archive', 'departments:reorder', 'departments:createPresets', 'companyAgents:list', 'companyAgents:save', 'companyAgents:archive', 'companyAgents:pause', 'companyAgents:resume',
       'tasks:assign', 'tasks:acceptRoute', 'tasks:answer', 'tasks:approve', 'tasks:sendBack', 'tasks:unpark', 'tasks:openSession', 'tasks:takeover', 'tasks:stop', 'tasks:pause', 'board:autopilot'] as const
     for (const ch of channels) { expect(INVOKE_CHANNELS).toContain(ch); expect(REQUEST_SCHEMAS[ch]).toBeDefined() }
-    expect(REQUEST_SCHEMAS['tasks:approve'].safeParse({ id: 'task_1', doneNote: '  ' }).success).toBe(false)
+    expect(REQUEST_SCHEMAS['tasks:approve'].safeParse({ id: 'task_1' }).success).toBe(true)
+    expect(REQUEST_SCHEMAS['tasks:approve'].safeParse({ id: 'task_1', doneNote: 'x'.repeat(10_001) }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:assign'].safeParse({ id: 'task_1' }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:assign'].safeParse({ id: 'task_1', agentId: null }).success).toBe(true)
     expect(REQUEST_SCHEMAS['board:autopilot'].safeParse({ companyId: 'co_a', on: true }).success).toBe(true)

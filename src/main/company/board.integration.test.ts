@@ -314,7 +314,6 @@ async function scenario(): Promise<string> {
   expect(w.c.task(t2.id).status).toBe('blocked')
 
   // the human approves with a note (tasks:approve): done; the Marketing task heals and runs at once
-  expect(() => w.board.approve({ id: t1.id, doneNote: '  ' })).toThrow()
   w.board.approve({ id: t1.id, doneNote: 'Customer confirmed the replacement arrived' })
   await settle()
   expect(w.c.task(t1.id)).toMatchObject({ status: 'done', doneNote: 'Customer confirmed the replacement arrived' })

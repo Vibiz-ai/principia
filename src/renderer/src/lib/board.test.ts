@@ -73,11 +73,11 @@ describe('drag and drop', () => {
       else expect(r.ok).toBe(false)
     }
   })
-  it('refuses Needs you and Done (approve needs a note) and snaps running cards back', () => {
+  it('refuses Needs you, marks done on a drop on Done, and snaps running cards back', () => {
     expect(laneDrop(task('1'), 'needs_you', ctx).ok).toBe(false)
-    const done = laneDrop(task('1', { status: 'in_review' }), 'done', ctx)
-    expect(done.ok).toBe(false)
-    expect(!done.ok && done.reason).toMatch(/done note/)
+    for (const status of ['in_review', 'todo', 'triage', 'backlog'] as const) expect(laneDrop(task('1', { status }), 'done', ctx)).toEqual({ ok: true, action: { kind: 'done' } })
+    expect(laneDrop(task('1', { status: 'blocked', blockReason: 'needs_input' }), 'done', ctx)).toEqual({ ok: true, action: { kind: 'done' } })
+    expect(laneDrop(task('1', { status: 'in_progress' }), 'done', ctx).ok).toBe(false)
     expect(laneDrop(task('1', { status: 'in_progress' }), 'queued', ctx).ok).toBe(false)
     expect(laneDrop(task('1', { status: 'in_review' }), 'queued', ctx).ok).toBe(false)
   })
