@@ -17,6 +17,7 @@ import { ForumService, type ForumTaskView } from './service'
 import { ForumResponder } from './responder'
 import { ConversationPilot } from './conversationPilot'
 import { routeModelCall } from '../company/routeCall'
+import { conversationTaskLines } from './taskStatus'
 import { FORUM_AGENT_ADAPTERS, type ForumAgentAdapter } from '../../shared/forum'
 
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
@@ -91,6 +92,18 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
       answer: (taskId, answer) => {
         board().answer({ id: taskId, answer })
       },
+      lastAnswer: (taskId) => {
+        const a = c().detail(taskId).activity.filter((x) => x.kind === 'answered').pop()
+        return a ? a.message.replace(/^Answer: /, '') : null
+      },
+      // the founder's go-ahead (their answer, "go ahead", a request filed from the conversation): a consented start now
+      start: (taskId, why) => {
+        const d = h.dispatcher
+        if (!d) return { state: 'refused', line: 'Tasks cannot start yet: Principia is still starting up.' }
+        const go = d.goAhead(taskId, why)
+        changed('tasks')
+        return go
+      },
       create: (input) => {
         const t = createTaskGuarded(h, {
           companyId: input.companyId, title: input.title, description: input.description, repoId: null,
@@ -101,6 +114,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         return { id: t.id, identifier: t.identifier }
       }
     },
+    // CHAT-UI.md §8: answer or status question? the cheap tier (routeCall.ts: haiku, no tools); null without a Claude CLI
+    replyKind: () => (h.engine ? routeModelCall({ providers: () => h.engine.providers.cached() }) : null),
     company: {
       saveDepartment: (input) => {
         const dep = departmentActions(h).save({ companyId: input.companyId, name: input.name, ...(input.key ? { key: input.key } : {}), data: { charter: { does: input.does, doesNot: input.doesNot } } })
@@ -228,6 +243,12 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
     onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    taskStates: (channelId) =>
+      conversationTaskLines(
+        c(),
+        service.conversationCards(channelId).map((card) => card.taskId),
+        (agentId) => service.store.memberForAgent(agentId)?.name ?? null
+      ),
     taskAsks: (channelId) =>
       service.openTaskAsks(channelId).flatMap((q) => {
         const t = q.ask?.taskId ? view(q.ask.taskId) : null

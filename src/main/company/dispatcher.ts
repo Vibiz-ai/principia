@@ -24,7 +24,7 @@
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, AGENT_MAX_PARALLEL, agentActive, agentFullLine, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, AGENT_MAX_PARALLEL, agentActive, agentFullLine, GO_AHEAD, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -68,6 +68,11 @@ export interface DispatcherDeps {
   /** h.vault.redact, for the task text the model sees */
   redact?(text: string): string
 }
+/**
+ * Dispatcher.goAhead: 'started' (its run is starting), 'running' (it already was), 'queued' (it starts by itself once a
+ * slot or its dependencies free up), 'refused' (it needs the founder: a pause, an assignment, a question). `line` says so.
+ */
+export interface GoAhead { state: 'started' | 'running' | 'queued' | 'refused'; line: string }
 /** The CompanyStore writes the dispatcher listens to (HookedCompanyStore fires them after the write). */
 export interface BoardHooks {
   created(task: BoardTask): void
@@ -323,6 +328,61 @@ export class Dispatcher {
     const out = this.c.patchInFlight(taskId, { autoWakes: RESET })
     this.d.onChange?.(out.companyId)
     return out
+  }
+
+  /**
+   * The founder's go-ahead: their answer to the task's question (chat, phone, drawer), their "go ahead" / "start it" in
+   * its conversation (forum_reply start_task), or a conversation agent filing what they just asked for. A consented
+   * start now: not gated by autopilot, the seat's autonomy or the company's maxInFlight; never on a paused or archived
+   * company, a paused, archived or session seat, nor past AGENT_MAX_PARALLEL. A task that cannot start this minute keeps
+   * a GO_AHEAD wake, so the pump starts it once the reason clears (a slot frees, its dependencies finish, a resume).
+   * Never throws and never parks: the result says what happened, in a line the conversation can show as it is.
+   */
+  goAhead(taskId: string, why: string): GoAhead {
+    let t: BoardTask
+    try { t = this.c.task(taskId) } catch { return { state: 'refused', line: 'That task no longer exists.' } }
+    const id = t.identifier
+    const refused = (line: string): GoAhead => ({ state: 'refused', line })
+    if (t.status === 'in_progress') return { state: 'running', line: `${id} is already running.` }
+    if (t.status === 'done' || t.status === 'canceled') return refused(`${id} is ${t.status}; reopen it to start it again.`)
+    if (t.status === 'in_review') return refused(`${id} is waiting for your review.`)
+    if (t.plan) return refused(`${id} is part of a plan; it starts with its milestone.`)
+    if (t.ask && !t.ask.answer) return refused(`${id} is waiting for your answer to its question.`)
+    if (!this.d.enabled() || this.disposed) return refused(`${id} can't start: departments are off.`)
+    if (!t.agentId) return refused(`${id} has no agent yet. Assign one and it starts.`)
+    const agent = this.c.departments.getAgent(t.agentId)
+    if (!agent || agent.archivedAt) return refused(`${id}'s agent is archived. Assign another one.`)
+    if (agent.data.mode === 'session') return refused(`${agent.name} works in an interactive session: press Start on ${id} to open it.`)
+    const company = this.c.scope.get(t.companyId)
+    if (!company || company.archivedAt) return refused(`${id} can't start: the company is archived.`)
+    try {
+      if (t.status === 'blocked' && t.blockReason !== 'deps') t = this.c.unpark(t.id)
+      if (t.status !== 'todo' && !(t.status === 'blocked' && t.blockReason === 'deps')) return refused(`${id} can't start from ${t.status}.`)
+      // the go-ahead outlives this minute: whatever holds the task now, the pump starts it once that clears
+      const marked = startsWithoutAutopilot(t) || t.pendingWake?.reasons.some(r => r.startsWith(GO_AHEAD))
+      t = this.c.patchInFlight(t.id, { ...(marked ? {} : { pendingWake: addWake(t.pendingWake, `${GO_AHEAD}${clip(why, 300)}`) }), autoWakes: RESET })
+    } catch (err) {
+      return refused(`${id} can't start: ${clip(err instanceof Error ? err.message : String(err), 200)}`)
+    }
+    if (t.status === 'blocked') return { state: 'queued', line: `${id} starts as soon as its dependencies are done.` }
+    if (this.c.isPaused(t.companyId)) return refused(`${company.name} is paused; ${id} starts when you resume it.`)
+    if (agent.pausedAt) return refused(`${agent.name} is paused; ${id} starts when you resume ${agent.name}.`)
+    if (this.full(agent.id)) return { state: 'queued', line: `${agentFullLine(agent.name, AGENT_MAX_PARALLEL, id)}.` }
+    let runId: string | null = null
+    try {
+      this.db.transaction(() => {
+        if (!this.cas(t.id, agent.id)) fail(agentFullLine(agent.name, AGENT_MAX_PARALLEL, id))
+        this.c.activity(t.id, 'woke', `Woke ${agent.name} on your go-ahead: ${clip(why)}`, 'human')
+        this.c.startTask(t.id, undefined, this.starter(agent, rid => { runId = rid }), { actor: 'system', goAhead: true })
+      })()
+    } catch (err) {
+      if (runId) void this.d.cancelRun(runId).catch(() => undefined)
+      const message = err instanceof Error ? err.message : String(err)
+      this.warn('go-ahead start failed', { taskId, error: message })
+      return refused(`${id} didn't start: ${clip(message, 200)}`)
+    }
+    this.d.onChange?.(t.companyId)
+    return { state: 'started', line: `${id} is starting.` }
   }
 
   // ---------- wakes ----------

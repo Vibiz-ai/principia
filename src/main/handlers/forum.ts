@@ -68,10 +68,11 @@ export function registerForumHandlers(h: Hive): void {
         }
       }
     }
-    // CHAT-UI.md §8: the person's next message in a conversation answers a task's one open question there
-    if (!answered && !proposal && !ask) answered = !!s.routeTaskReply(msg, me)
-    // §6.4: everything else a person writes wakes the agents it is for
-    if (!answered && !proposal) s.humanPosted(msg)
+    // CHAT-UI.md §8: the person's next message in a conversation answers a task's one open question there when it
+    // plausibly does (an option said back, or the cheap classifier says so); else, like everything else a person
+    // writes, it wakes the agents it is for (§6.4). The classifier never holds up the post.
+    if (!answered && !proposal && !ask) void s.routeHumanPost(msg, me)
+    else if (!answered && !proposal) s.humanPosted(msg)
     return msg
   })
   handle('forum:edit', ({ messageId, text }) => svc().store.edit(meOf(messageCompany(messageId)), messageId, text))

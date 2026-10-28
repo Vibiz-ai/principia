@@ -81,6 +81,8 @@ export interface TaskToolsDeps {
    */
   teammate?: (companyId: string, raw: string) => { agentId: string } | { teammates: string[] }
   createDepartment?: (input: { companyId: string; name: string; key?: string; does: string; doesNot: string }) => { id: string; key: string; name: string }
+  /** company_file_task {start}: the user asked for it now, so it starts at once (Dispatcher.goAhead). Absent = it waits. */
+  goAhead?: (taskId: string, why: string) => { state: string; line: string } | null
   now?: () => Date
   log?: { warn(msg: string, meta?: Record<string, unknown>): void }
   /**
@@ -143,7 +145,8 @@ const ARGS = {
     departmentKey: z.string().trim().min(1).max(80).optional(),
     departmentId: idArg.optional(),
     agent: z.string().trim().min(1).max(80).optional(),
-    reason: z.string().trim().min(1).max(COMPANY_LIMITS.reason)
+    reason: z.string().trim().min(1).max(COMPANY_LIMITS.reason),
+    start: z.boolean().optional()
   }).refine(a => !!a.departmentKey || !!a.departmentId, { message: 'Name a departmentKey (see company_departments)' }),
   company_create_department: z.strictObject({
     name: z.string().trim().min(1).max(60),
@@ -618,9 +621,15 @@ export class TaskTools {
       routing: { departmentId: d.departmentId ?? dep!.id, agentId: d.agentId ?? null, by: 'model', reason: clip(`Filed from chat: ${reason}`, 500) }
     })
     this.c.activity(created.id, 'routed', clip(`Filed from a chat into ${dep!.name}: ${reason}`, 1000), 'agent')
+    // the user asked for this work now: their go-ahead starts it at once, autopilot or not
+    let go: { state: string; line: string } | null = null
+    if (a.start && created.agentId && this.d.goAhead) {
+      try { go = this.d.goAhead(created.id, 'you asked for it in the chat') } catch (err) { this.d.log?.warn('company_file_task: start failed', { taskId: created.id, error: String(err) }) }
+    }
     const t = this.c.task(created.id)
     this.changed(caller.companyId)
-    return { ok: true, task: this.summary(t), detail: `Filed ${t.identifier} in ${dep!.name}${t.agentId ? ` for ${this.agentRow(t.agentId)?.name ?? 'its agent'}` : ' (waiting for you to assign an agent)'}. Tell the user.` }
+    const said = go ? (go.state === 'started' || go.state === 'running' ? ` ${t.identifier} is starting now.` : ` It has not started: ${go.line}`) : ''
+    return { ok: true, task: this.summary(t), ...(go ? { started: go.state === 'started' || go.state === 'running' } : {}), detail: `Filed ${t.identifier} in ${dep!.name}${t.agentId ? ` for ${this.agentRow(t.agentId)?.name ?? 'its agent'}` : ' (waiting for you to assign an agent)'}.${said} Tell the user.` }
   }
 
   /**

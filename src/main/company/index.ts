@@ -947,7 +947,7 @@ export class CompanyStore {
    * (WORKTREE.md binding, made by TaskWorkService.workdir before the turn): two runs never edit one checkout.
    * `lease`: an interactive session (Open as session) opens in the folder as it is, shared or not.
    */
-  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean;lease?:boolean}={}): BoardTask {
+  startTask(id:string, profileId:string|undefined, start:(target:RunTarget, companyId:string, link:TaskRunLink)=>Run, opts:{actor?:'human'|'system';work?:'changes_requested';plan?:boolean;consented?:boolean;goAhead?:boolean;lease?:boolean}={}): BoardTask {
     const actor=opts.actor ?? 'human'
     return this.store.db.transaction(()=> {
       let task=this.task(id)
@@ -964,7 +964,9 @@ export class CompanyStore {
       assertTransition(task,{status:'in_progress'},actor,{start:true,depsDone:true,...(opts.work ? {work:opts.work} : {})})
       this.validate(task,task.id,task)
       const agent=task.agentId ? this.departments.agent(task.agentId) : null
-      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent,opts.consented===true&&startsWithoutAutopilot(task))
+      // goAhead (Dispatcher.goAhead): the founder said go in so many words, so neither autopilot nor the company's
+      // in-flight limit holds it; the seat's pause and AGENT_MAX_PARALLEL below still do
+      if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent,opts.goAhead===true||(opts.consented===true&&startsWithoutAutopilot(task)),opts.goAhead===true)
       if(agent) {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
@@ -1022,7 +1024,7 @@ export class CompanyStore {
    * on for the company, an `auto` seat, and the company under maxInFlight. Checked inside startTask's transaction, so
    * the gate and the claim cannot interleave with another start. A human click skips it.
    */
-  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null, consented=false): void {
+  private assertAutoStart(task: BoardTask, agent: CompanyAgent|null, consented=false, goAhead=false): void {
     if(!this.boardOn()) fail('Departments are off; only a human can start a task')
     if(!agent) fail('Only a human can start a task without an agent')
     // work the founder already said go to (a schedule's fire, their answer: startsWithoutAutopilot) is not gated by
@@ -1034,7 +1036,7 @@ export class CompanyStore {
     if(!consented&&!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
     // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot; LINEAR.md: nor does a task started in a tracker (no run of ours)
     const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
-    if(n>=settings.maxInFlight) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
+    if(n>=settings.maxInFlight&&!goAhead) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
   /** The agent's tasks in flight, besides `taskId`. */
