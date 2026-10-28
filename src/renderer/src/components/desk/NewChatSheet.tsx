@@ -6,10 +6,12 @@
  * A company with no code never lands in a terminal (C7): its direct chat starts with your message and reads as a
  * conversation in Chats. A code company's direct chat opens its Claude Code session, as before.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { AdapterId, Id } from '@shared/types'
 import { Sheet } from '../ui'
 import { ChatServiceStarters } from '../connections/ConnectionSlot'
+import { addDroppedFiles, DropHint } from '../conversations/ConversationKit'
+import { useFileDrop } from '../../lib/dropFiles'
 import { reposOf } from '../../lib/companyModel'
 import { taskTitleFor } from '../../lib/desk'
 import { sendToAgent, useDeskAgents } from '../../state/desk'
@@ -35,6 +37,12 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
   const [where, setWhere] = useState<Id | null>(null)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const box = useRef<HTMLTextAreaElement>(null)
+  // images and files dropped or pasted in go in by their path (the agent, or Claude, opens them)
+  const attach = (files: FileList | File[]): void => {
+    void addDroppedFiles(files, () => box.current?.value ?? text, setText).then(() => box.current?.focus())
+  }
+  const drop = useFileDrop(attach, busy)
   const agent = withWho.kind === 'agent' ? agents.find((a) => a.id === withWho.id) : undefined
   // an agent needs to hear what you want; a direct chat in a company with no code starts from your message (no terminal)
   const needsText = withWho.kind === 'agent' || !code
@@ -100,9 +108,11 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
             </div>
           </div>
         )}
-        <div>
+        <div className="newchat__msg" {...drop.handlers}>
+          {drop.dragging && <DropHint />}
           <div className="newchat__label">{withWho.kind === 'agent' ? `What should ${agent?.name ?? 'they'} do?` : code ? 'First message (optional)' : 'What do you want to ask?'}</div>
           <textarea
+            ref={box}
             className="input"
             rows={3}
             maxLength={8000}
@@ -111,6 +121,11 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
             disabled={busy}
             placeholder={withWho.kind === 'agent' ? `e.g. draft three posts for next week` : 'Ask anything'}
             onChange={(e) => setText(e.target.value)}
+            onPaste={(e) => {
+              if (!e.clipboardData.files.length) return
+              e.preventDefault()
+              attach(e.clipboardData.files)
+            }}
             aria-label="Message"
           />
           {/* QA-13: what this company has connected, with a starter question that reads it */}

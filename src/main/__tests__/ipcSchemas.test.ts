@@ -55,4 +55,12 @@ describe('IPC request schemas', () => {
     expect(REQUEST_SCHEMAS['schedules:create'].safeParse(ok).success).toBe(true)
     expect(REQUEST_SCHEMAS['schedules:create'].safeParse({ ...ok, name: '  ' }).success).toBe(false)
   })
+  it('sessions:saveImage takes an image with or without a session (New conversation has none yet)', () => {
+    const data = new Uint8Array([137, 80, 78, 71])
+    expect(REQUEST_SCHEMAS['sessions:saveImage'].safeParse({ data, type: 'image/png' }).success).toBe(true)
+    expect(REQUEST_SCHEMAS['sessions:saveImage'].safeParse({ id: 's_abc', data, type: 'image/png' }).success).toBe(true)
+    expect(REQUEST_SCHEMAS['sessions:saveImage'].safeParse({ id: '../x', data, type: 'image/png' }).success).toBe(false)
+    expect(REQUEST_SCHEMAS['sessions:saveImage'].safeParse({ data: new Uint8Array(), type: 'image/png' }).success).toBe(false)
+    expect(REQUEST_SCHEMAS['sessions:saveImage'].safeParse({ data, type: 'image/svg+xml' }).success).toBe(false)
+  })
 })

@@ -53,9 +53,10 @@ export function registerSessionHandlers(h: Hive): void {
     h.statusChanged()
     return s
   })
-  // pasted / dropped images with no file behind them: the agent CLIs take image paths, so give them one
+  // pasted / dropped images with no file behind them: the agent CLIs take image paths, so give them one (no id: a
+  // New conversation box, whose session or conversation does not exist yet)
   handle('sessions:saveImage', ({ id, data, type }) => {
-    if (!h.store.getSession(id)) throw new HiveError('not_found', 'Session not found')
+    if (id && !h.store.getSession(id)) throw new HiveError('not_found', 'Session not found')
     const dir = path.join(h.paths.userData, 'pastes')
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     const ext = type === 'image/jpeg' ? 'jpg' : type.slice('image/'.length)

@@ -80,6 +80,9 @@
 .reply-box__row { display: flex; gap: 6px; align-items: center; }
 .reply-box__said { font-size: var(--text-sm); color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; padding: 6px 10px; border-left: 2px solid var(--status-needs); background: var(--status-needs-soft); border-radius: var(--radius-sm); }
 .reply-box__input { flex: 1; height: 26px; }
+/* Home: the answer opens the full chat (button reset, the same quote look, clickable) */
+.reply-box__said--open { display: block; width: 100%; text-align: left; font: inherit; font-size: var(--text-sm); cursor: pointer; border-top: 0; border-right: 0; border-bottom: 0; }
+.reply-box__said--open:hover { filter: brightness(1.08); }
 
 /* ---------- timeline ---------- */
 .timeline { flex: 1; min-height: 0; padding: 6px 10px 10px; font-size: var(--text-sm); }

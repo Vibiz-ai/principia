@@ -561,7 +561,7 @@ export const REQUEST_SCHEMAS = {
   'sessions:restart': z.object({ id }),
   'sessions:handoff': z.object({ id, adapter: z.enum(['claude', 'codex']) }),
   'sessions:saveImage': z.object({
-    id,
+    id: id.optional(),
     data: z.instanceof(Uint8Array).refine((d) => d.byteLength > 0 && d.byteLength <= 20 * 1024 * 1024, 'Image is empty or over 20 MB'),
     type: z.enum(PASTED_IMAGE_TYPES)
   }),

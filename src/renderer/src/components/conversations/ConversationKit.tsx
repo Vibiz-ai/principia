@@ -33,12 +33,37 @@ import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, useTaskChannels, whoLine } from '../../state/conversations'
 import { byWork, workLine, workOf, workRank } from '../../lib/convWork'
 import { useIsCode } from '../desk/Desk'
-import { navigate, startSession, useStore } from '../../state/store'
+import { navigate, startSession, toast, useStore } from '../../state/store'
+import { hive } from '../../lib/hive'
+import { dropMentions, useFileDrop, withMentions } from '../../lib/dropFiles'
 import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
 import { cardsOfMessages, connectToolsIn, dockedTasks, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
 import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
+
+/**
+ * A box that only carries text takes dropped or pasted files as @path mentions (images too: the agent opens them).
+ * `current` reads the box's text at drop time; `set` writes it back with the mentions added.
+ */
+export async function addDroppedFiles(files: FileList | File[], current: () => string, set: (t: string) => void): Promise<void> {
+  const { mentions, skipped } = await dropMentions(files, {
+    pathFor: (f) => hive.pathForFile?.(f) ?? '',
+    saveImage: async (data, type) => (await hive.sessions.saveImage({ data, type })).path
+  })
+  if (mentions.length) set(withMentions(current(), mentions))
+  if (skipped.length) toast(`Couldn't attach ${skipped.join(', ')}: drop a file from Finder, or a PNG, JPEG, GIF or WebP image.`, 'error')
+}
+
+/** What a drop does, over the box (or the New conversation page) while files are dragged over it. */
+export function DropHint(): React.JSX.Element {
+  return (
+    <div className="cx-drop" data-chatux="drop-hint" aria-hidden>
+      <Icon name="plus" size={16} />
+      <span>Drop to attach: images and files go in by their path, so whoever answers can open them</span>
+    </div>
+  )
+}
 
 /** Opens a conversation in Chats (the one destination after Send, from Home, ⌘K or New conversation). */
 export function openConversation(id: Id): void {
@@ -58,7 +83,22 @@ export function toFromChat(chat: string | undefined): To {
   return { kind: 'team' }
 }
 
-export function TeamComposer({ companyId, onStarted, autoFocus = false, initialTo, variant = 'home' }: { companyId: Id; onStarted: (conversationId: Id) => void; autoFocus?: boolean; initialTo?: To; variant?: 'home' | 'pane' }): React.JSX.Element {
+export function TeamComposer({
+  companyId,
+  onStarted,
+  autoFocus = false,
+  initialTo,
+  variant = 'home',
+  dropRef
+}: {
+  companyId: Id
+  onStarted: (conversationId: Id) => void
+  autoFocus?: boolean
+  initialTo?: To
+  variant?: 'home' | 'pane'
+  /** the page around it (New conversation) takes files dropped anywhere on it and hands them in through this */
+  dropRef?: React.MutableRefObject<((files: FileList | File[]) => void) | null>
+}): React.JSX.Element {
   const agents = useDeskAgents(companyId)
   const allRepos = useStore((s) => s.repos)
   const repos = useMemo(() => reposOf(allRepos, companyId), [allRepos, companyId])
@@ -83,6 +123,13 @@ export function TeamComposer({ companyId, onStarted, autoFocus = false, initialT
   useEffect(() => {
     if (autoFocus) ref.current?.focus()
   }, [autoFocus])
+  const attach = (files: FileList | File[]): void => {
+    if (busy) return
+    void addDroppedFiles(files, () => ref.current?.value ?? text, setText).then(() => ref.current?.focus())
+  }
+  if (dropRef) dropRef.current = attach
+  // with a dropRef the page around takes the drop (and shows where it goes); else this box does
+  const drop = useFileDrop(attach, !!dropRef || busy)
   const toKey = JSON.stringify(to)
   useEffect(() => setFresh(false), [toKey])
   const picked = to.kind === 'agent' ? agents.find((a) => a.id === to.id) : undefined
@@ -141,7 +188,8 @@ export function TeamComposer({ companyId, onStarted, autoFocus = false, initialT
   return (
     <div className={`cx-composer cx-composer--${variant}`} data-chatux="composer">
       <form
-        className="cx-composer__box"
+        className={`cx-composer__box ${drop.dragging ? 'is-dropping' : ''}`}
+        {...drop.handlers}
         onSubmit={(e) => {
           e.preventDefault()
           void send()
@@ -182,6 +230,12 @@ export function TeamComposer({ companyId, onStarted, autoFocus = false, initialT
             mentions.update(e.target.value, e.target.selectionStart)
           }}
           onClick={(e) => mentions.update(e.currentTarget.value, e.currentTarget.selectionStart)}
+          onPaste={(e) => {
+            // a copied screenshot or file pastes in as an @path; plain text pastes as usual
+            if (!e.clipboardData.files.length) return
+            e.preventDefault()
+            attach(e.clipboardData.files)
+          }}
           onKeyDown={(e) => {
             if (mentions.onKeyDown(e)) return
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -190,6 +244,7 @@ export function TeamComposer({ companyId, onStarted, autoFocus = false, initialT
             }
           }}
         />
+        {drop.dragging && <DropHint />}
         {mentions.menu}
         <div className="cx-composer__foot">
           <button type="button" className="cx-routeline" data-chatux="route-line" onClick={() => setMenu(true)} title={why ? `Why: ${why}. Click to pick who gets it.` : 'Pick who gets it'}>

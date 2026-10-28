@@ -344,7 +344,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'sessions:restart': [{ id: Id }, Session]
   'sessions:handoff': [{ id: Id; adapter: 'claude' | 'codex' }, Session]
   /** Image pasted or dropped without a file path (clipboard, browser drag) -> saved under userData/pastes; its path. */
-  'sessions:saveImage': [{ id: Id; data: Uint8Array; type: PastedImageType }, { path: string }]
+  /** id: the session it is for; none from a box that starts one (New conversation) */
+  'sessions:saveImage': [{ id?: Id; data: Uint8Array; type: PastedImageType }, { path: string }]
   // workflows
   'workflows:list': [CompanyFilter | V, Workflow[]]
   'workflows:get': [{ id: Id }, Workflow]

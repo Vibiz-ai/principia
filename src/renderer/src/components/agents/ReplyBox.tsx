@@ -57,3 +57,28 @@ export function ReplyBox({ agent, onOpen, autoFocus = false }: { agent: AgentNod
     </div>
   )
 }
+
+/**
+ * Home's "answered" row: what the agent said, and one way on, into the full chat (or its terminal), where you see
+ * the whole conversation you are replying to. No reply box here: a one-line input under a clipped answer is too
+ * small to answer well.
+ */
+export function AnsweredCard({ agent, onOpen }: { agent: AgentNode; onOpen: () => void }): React.JSX.Element {
+  const said = lastSaid(agent)
+  const chat = !!agent.sessionId && peekChat(agent.sessionId)?.mode === 'chat'
+  const label = chat ? 'Open chat to reply' : 'Open terminal to reply'
+  return (
+    <div className="reply-box reply-box--answered" data-home="answered" onClick={(e) => e.stopPropagation()}>
+      {said && (
+        <button type="button" className="reply-box__said reply-box__said--open selectable" title={label} aria-label={`${agent.title} said: ${said}. ${label}`} onClick={onOpen}>
+          {said}
+        </button>
+      )}
+      <div className="reply-box__row">
+        <Button size="sm" variant="primary" icon={chat ? 'chat' : 'terminal'} onClick={onOpen} data-home="open-chat">
+          {label}
+        </Button>
+      </div>
+    </div>
+  )
+}
