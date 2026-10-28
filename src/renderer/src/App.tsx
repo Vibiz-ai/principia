@@ -151,7 +151,7 @@ function ViewSwitch({ view: raw }: { view: ViewState }): React.JSX.Element {
     case 'agentSeat':
       // DEPARTMENTS.md §0.8: a stale deep link with the flag off lands on a plain notice, never a half-working page
       if (!departments) return <DepartmentsOff />
-      return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} nonce={view.nonce} /> : <AgentSeatView id={view.id} focus={view.focus} nonce={view.nonce} />
+      return view.name === 'department' ? <DepartmentView id={view.id} focus={view.focus} dashboard={view.dashboard} nonce={view.nonce} /> : <AgentSeatView id={view.id} focus={view.focus} nonce={view.nonce} />
     case 'tasks':
       return <TasksView />
     case 'plans':

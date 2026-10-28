@@ -86,8 +86,16 @@ function useDashboardRoute(companyId: string, def: DashboardDef): { route: 'key'
 
 const presetName = (key: DepartmentPresetKey | null): string | null => (key ? (DEPARTMENT_PRESETS.find((p) => p.key === key)?.name ?? null) : null)
 
-export function DepartmentDashboards({ dep }: { dep: Department }): React.JSX.Element {
+export function DepartmentDashboards({ dep, target = null }: { dep: Department; /** opened from the sidebar: open this dashboard and scroll to it */ target?: { id: string; nonce: number } | null }): React.JSX.Element {
   const { items, reload } = useDepartmentDashboards(dep)
+  // the sidebar's dashboard rows: once the list is here, bring the dashboard into view (the card itself if it is gone)
+  const loaded = items !== null
+  const targetId = target?.id ?? null
+  const targetNonce = target?.nonce ?? 0
+  useEffect(() => {
+    if (!targetId || !loaded) return
+    requestAnimationFrame(() => (document.getElementById(`dsh-${targetId}`) ?? document.getElementById('dep-dashboards'))?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  }, [targetId, targetNonce, loaded])
   const preset = dashboardDepartmentKey(dep)
   const recommended = useMemo(() => recommendedFor(preset), [preset])
   const installedKinds = new Set((items ?? []).map((d) => d.kind))
@@ -108,7 +116,7 @@ export function DepartmentDashboards({ dep }: { dep: Department }): React.JSX.El
         </Button>
       </header>
       {items?.map((d, i) => (
-        <DashboardPanel key={d.id} item={d} departmentId={dep.id} defaultOpen={i === 0} onEdit={() => setInstalling({ def: dashboardDef(d.kind)!, existing: d })} onChanged={reload} />
+        <DashboardPanel key={d.id} item={d} departmentId={dep.id} defaultOpen={i === 0 || target?.id === d.id} focusNonce={target?.id === d.id ? target.nonce : 0} onEdit={() => setInstalling({ def: dashboardDef(d.kind)!, existing: d })} onChanged={reload} />
       ))}
       {recs.length > 0 && !readonly && (
         <div className="dsh-recs">
@@ -215,13 +223,16 @@ function RecommendedCard({ def, companyId, lookups, onAdd, onPreview }: { def: D
 
 // ---------- an installed dashboard ----------
 
-function DashboardPanel({ item, departmentId, defaultOpen, onEdit, onChanged }: { item: InstalledDashboard; departmentId: string; defaultOpen: boolean; onEdit: () => void; onChanged: () => void }): React.JSX.Element | null {
+function DashboardPanel({ item, departmentId, defaultOpen, focusNonce = 0, onEdit, onChanged }: { item: InstalledDashboard; departmentId: string; defaultOpen: boolean; /** changes each time the sidebar opens this dashboard: it unfolds */ focusNonce?: number; onEdit: () => void; onChanged: () => void }): React.JSX.Element | null {
   const def = dashboardDef(item.kind)
   const service = def ? dashboardService(def) : null
   const { status: conn } = useConnection(item.companyId, service ?? '')
   const acts = service ? serviceActions(conn) : []
   const [open, setOpen] = useState(defaultOpen)
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (focusNonce) setOpen(true)
+  }, [focusNonce])
   if (!def) return null
   const snap = item.snapshot
   const loading = busy || item.status.state === 'loading'
@@ -252,7 +263,7 @@ function DashboardPanel({ item, departmentId, defaultOpen, onEdit, onChanged }: 
     }
   }
   return (
-    <article className={`dsh-panel ${open ? 'is-open' : ''}`} aria-label={def.name}>
+    <article className={`dsh-panel ${open ? 'is-open' : ''}`} id={`dsh-${item.id}`} aria-label={def.name}>
       <header className="dsh-panel__head">
         <button type="button" className="dsh-panel__toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
           <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
