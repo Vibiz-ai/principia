@@ -12,7 +12,7 @@ import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
 import { TASK_CARD_LABEL } from '../../shared/taskCard'
-import type { ChatSnapshot } from '../../shared/chat'
+import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import type { AgentNode } from '../../shared/live'
 import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
@@ -23,7 +23,7 @@ import { reposOf } from '../../renderer/src/lib/companyModel'
 import { HttpError, type RemoteApi } from './server'
 import type { StoredDevice } from './auth'
 import { TerminalFeeds, terminalSnapshot, terminalTurn, transcriptItems, type PhoneTerminalHost } from './terminalFeed'
-import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, phoneTaskDetail, phoneTasks, providerName, whoResolver, type PhoneData } from './views'
+import { agentStatus, askCompany, deskHistory, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, phoneTaskDetail, phoneTasks, providerName, whoResolver, type PhoneData } from './views'
 
 /**
  * RA3: every desktop channel the Phone may reach. Nothing else is callable from here: no settings writes, keys,
@@ -114,6 +114,8 @@ export class PhoneApi implements RemoteApi {
   readonly feeds: TerminalFeeds | null
   /** each chat's last op number seen here (the subscription's ack says it, so a phone can tell it missed some) */
   private chatSeq = new Map<Id, number>()
+  /** AGENT CHAT: the desk thread shown above each agent chat a phone read (withDesk) */
+  private desk = new Map<Id, ChatItem[]>()
   /** when each session's current turn began (Now's "working for"), from its chat state ops or its root going to work */
   private turnSince = new Map<Id, string>()
 
@@ -367,7 +369,7 @@ export class PhoneApi implements RemoteApi {
     // an agent's chat speaks in the agent's name and face, not the AI tool's
     const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId) : undefined
     const view = { ref: { kind: 'session' as const, id: s.id }, title: s.title, who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null } }
-    if (chat) return { ...view, chat, terminal: null }
+    if (chat) return { ...view, chat: await this.withDesk(d, s, agent, chat), terminal: null }
     const activity = root ? plainActivity(root.activity, { code }) : null
     const ended = s.status === 'exited'
     const terminal: PhoneTerminal = { activity, canReply: !ended && s.adapter !== 'shell' && !!root && isIdleWaiting(root), ended }
@@ -393,6 +395,23 @@ export class PhoneApi implements RemoteApi {
       /* the composer stays; sending re-checks */
     }
     return { ...view, chat: feed.chat, terminal: { ...terminal, canType: pastes(s) && !held, held, source: feed.source, screen: feed.screen, asks, canContinue: false } }
+  }
+
+  /**
+   * AGENT CHAT: an agent's chat reads under the desk thread its screen showed before the chat began (deskHistory), so
+   * the first message from that screen keeps the conversation. Kept per chat: a reset op (the chat rebuilt from its
+   * transcript) gets it in front again.
+   */
+  private async withDesk(d: PhoneData, s: Session, agent: CompanyAgent | undefined, chat: ChatSnapshot): Promise<ChatSnapshot> {
+    if (!agent) return chat
+    const start = d.sessions.filter((x) => x.companyAgentId === agent.id).reduce((m, x) => (x.startedAt < m ? x.startedAt : m), s.startedAt)
+    const before = deskHistory(phoneAgent(d, agent, await this.details(d, agent)).items, start)
+    if (!before.length) {
+      this.desk.delete(s.id)
+      return chat
+    }
+    this.desk.set(s.id, before)
+    return { ...chat, items: [...before, ...chat.items] }
   }
 
   private safeItems<T>(f: () => T[]): T[] {
@@ -628,7 +647,9 @@ export class PhoneApi implements RemoteApi {
         }
         this.chatSeq.set(p.sessionId, p.seq)
         for (const o of p.ops) if (o.op === 'state' && o.turnStartedAt !== undefined) this.turnStarted(p.sessionId, o.turnStartedAt)
-        this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops: p.ops })
+        const desk = this.desk.get(p.sessionId)
+        const ops = desk ? p.ops.map((o) => (o.op === 'reset' ? { ...o, items: [...desk, ...o.items] } : o)) : p.ops
+        this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops })
         return
       }
       case 'forum:event': {

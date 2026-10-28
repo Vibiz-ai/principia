@@ -22,7 +22,7 @@ import type { OrchSuggestion } from '../../shared/orchestrator'
 import { PHONE_CHANNELS, PhoneApi, terminalReply, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared, parseTunnelUrl } from './tunnel'
-import { askHeading, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
+import { askHeading, deskHistory, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
 
 const T = '2026-10-25T10:00:00.000Z'
 
@@ -490,6 +490,31 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'still there?' })
     expect(d.calls.some((c) => c.channel === 'chat:send')).toBe(false)
   })
+  it('the first message to an agent keeps what its screen showed: the desk thread from before its chat stays above the chat', async () => {
+    const { host, d, fire } = world()
+    const api = new PhoneApi(host)
+    // no chat yet: the agent's screen is its desk thread (its tasks and reports)
+    const desk = (await api.handle('agent', { companyId: 'co_a', agentId: 'ag_a' }, {}, dev)) as { items: { text?: string }[]; chatSessionId: string | null }
+    expect(desk.chatSessionId).toBeNull()
+    expect(desk.items.map((i) => i.text)).toContain('Seven posts are ready.')
+    // "Ok can you post them?": the agent's chat starts and the phone follows it there
+    const out = (await api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { text: 'Ok can you post them?' }, dev)) as { sessionId: string }
+    d.sessions.push(sess(out.sessionId, 'co_a', { companyAgentId: 'ag_a', startedAt: '2026-10-26T09:00:00.000Z' }))
+    const words = (items: ChatSnapshot['items']): string[] => items.map((i) => (i.kind === 'text' ? i.md : i.kind === 'user' || i.kind === 'notice' ? i.text : i.kind))
+    const view = (await api.handle('session', { companyId: 'co_a', sessionId: out.sessionId }, {}, dev)) as { chat: ChatSnapshot }
+    expect(words(view.chat.items)).toContain('Seven posts are ready.')
+    // a reset (the chat rebuilt from its transcript) keeps it in front too
+    const sent: PhoneServerMsg[] = []
+    api.socket({ OPEN: 1, readyState: 1, send: (t: string) => sent.push(JSON.parse(t)), on: () => undefined } as unknown as WebSocket, dev)
+    await api.subscribe(api.subscriptions()[0]!, { t: 'sub', companyId: 'co_a', sessionId: out.sessionId })
+    fire('chat:ops', { sessionId: out.sessionId, seq: 2, ops: [{ op: 'reset', items: [{ id: 'u1', parent: null, kind: 'user', text: 'Ok can you post them?', images: 0, state: 'sent' }] }] })
+    const reset = sent.find((m) => m.t === 'chat') as { ops: { op: string; items: ChatSnapshot['items'] }[] }
+    expect(words(reset.ops[0]!.items)).toEqual([...words(view.chat.items), 'Ok can you post them?'])
+    // an agent's history from after its chat began is the chat's own; a chat of yours gets nothing added
+    const plain = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_a' }, {}, dev)) as { chat: ChatSnapshot }
+    expect(plain.chat.items).toEqual([])
+    api.dispose()
+  })
   it('a Codex agent chat reads and replies on the phone like a Claude one', async () => {
     const { host, d } = world()
     const api = new PhoneApi(host)
@@ -627,6 +652,20 @@ describe('PhoneApi live (RA3)', () => {
 
 // ---------- views ----------
 describe('Phone views (the desktop’s one live source)', () => {
+  it('deskHistory: the desk thread before the chat began, as chat items (yours, the agent’s, quiet lines)', () => {
+    const items = deskHistory(
+      [
+        { kind: 'task', id: 'a1', at: '2026-10-25T09:00:00.000Z', taskId: 't', text: 'PR-17 · Combine the PRs (from you)' },
+        { kind: 'me', id: 'a2', at: '2026-10-25T09:01:00.000Z', taskId: 't', text: 'one PR please' },
+        { kind: 'agent', id: 'a3', at: '2026-10-25T09:30:00.000Z', taskId: 't', text: 'PR #85 is ready.', card: 'review' },
+        { kind: 'note', id: 'a4', at: '2026-10-26T10:00:00.000Z', taskId: 't', text: 'You approved PR-17' }
+      ],
+      '2026-10-26T00:00:00.000Z'
+    )
+    expect(items.map((i) => [i.id, i.kind])).toEqual([['desk_a1', 'notice'], ['desk_a2', 'user'], ['desk_a3', 'text']])
+    expect(items[1]).toMatchObject({ text: 'one PR please', state: 'sent', at: Date.parse('2026-10-25T09:01:00.000Z') })
+    expect(items[2]).toMatchObject({ md: 'PR #85 is ready.', streaming: false })
+  })
   const data = (): PhoneData => {
     const { d } = world()
     // the working step has no open ask here (an agent with an ask needs you instead of working)

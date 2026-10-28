@@ -6,6 +6,7 @@
 import type { CompanyAgent, CompanyPassport, CompanyTask, Department, TaskDetail } from '../../shared/company'
 import { PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { Ask, AgentNode, RunCard } from '../../shared/live'
+import type { ChatItem } from '../../shared/chat'
 import type { Id, Repo, Session } from '../../shared/types'
 import { resolvePersonas } from '../../shared/personas'
 import type { PhoneAgent, PhoneAsk, PhoneChatRef, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneTaskColumn, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
@@ -452,6 +453,23 @@ export function phoneAgent(d: PhoneData, a: CompanyAgent, details: TaskDetail[])
   )
   const chat = d.sessions.filter((s) => s.companyAgentId === a.id).sort((x, y) => Number(y.status === 'running') - Number(x.status === 'running') || (x.startedAt < y.startedAt ? 1 : -1))[0]
   return { ref: { kind: 'agent', id: a.id }, who, status: agentStatus(d, a), items, chatSessionId: chat?.id ?? null }
+}
+
+/**
+ * AGENT CHAT: what the agent's screen showed before its chat began (the desk thread: your requests, its reports), as
+ * chat items above the chat. The first message from that screen starts the chat and the phone follows it there: the
+ * conversation it was reading stays. Later desk lines are the chat's own (tasks it filed report back into it).
+ */
+export function deskHistory(items: readonly PhoneThreadItem[], before: string, max = 60): ChatItem[] {
+  return items
+    .filter((i) => i.at < before)
+    .slice(-max)
+    .map((i): ChatItem => {
+      const base = { id: `desk_${i.id}`, parent: null }
+      if (i.kind === 'me') return { ...base, kind: 'user', text: i.text, images: 0, state: 'sent', ...(Date.parse(i.at) ? { at: Date.parse(i.at) } : {}) }
+      if (i.kind === 'agent') return { ...base, kind: 'text', md: i.text, streaming: false }
+      return { ...base, kind: 'notice', tone: 'info', text: i.text, action: null }
+    })
 }
 const ORIGIN: Record<string, string> = { setup: 'from setup', you: 'from you', board: 'from the Board', linear: 'from Linear', github: 'from GitHub', schedule: 'from a schedule', agent: 'from another agent' }
 
