@@ -4,6 +4,7 @@
  * Principia Cloud. TYPE-ONLY except small `as const` lists and pure helpers. No Node or DOM imports.
  */
 import type { ChatDecision, ChatOp, ChatSnapshot } from './chat'
+import { CHAT_IMAGE_BYTES, CHAT_IMAGE_MAX } from './chat'
 
 type Id = string
 type V = void
@@ -14,7 +15,16 @@ export const REMOTE_COOKIE = 'pp_device'
 export const REMOTE_PAIR_TTL_MS = 5 * 60_000
 /** RA2: pairing tries per minute, across all callers */
 export const REMOTE_PAIR_PER_MINUTE = 5
-export const REMOTE_LIMITS = { name: 60, text: 8000, answer: 4000 } as const
+/** images: per message, as on the Mac's composer; imageBytes: each one, decoded */
+export const REMOTE_LIMITS = { name: 60, text: 8000, answer: 4000, images: CHAT_IMAGE_MAX, imageBytes: CHAT_IMAGE_BYTES } as const
+/** sessionSend and agentSend may carry images (base64, the Mac's image types; thumb: a small JPEG data URL for the bubble) */
+export interface PhoneImage {
+  mime: string
+  data: string
+  thumb?: string
+}
+/** the routes that may carry images: their bodies may be this big (the rest stay small) */
+export const REMOTE_IMAGE_ROUTES = ['sessionSend', 'agentSend'] as const
 /** RA2: a device token lives 90 days after its last use (each use pushes it out) */
 export const REMOTE_TOKEN_TTL_MS = 90 * 24 * 60 * 60_000
 /** RA2: after a rotation the old token still works this long, so a lost answer never signs the phone out */

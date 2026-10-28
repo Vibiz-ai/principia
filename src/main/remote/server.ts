@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { matchRemoteRoute, REMOTE_AUTH_SCHEME, REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_TOKEN_TTL_MS, REMOTE_WS_AUTH_MS, type RemoteRouteName } from '../../shared/remote'
+import { matchRemoteRoute, REMOTE_AUTH_SCHEME, REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_IMAGE_ROUTES, REMOTE_LIMITS, REMOTE_TOKEN_TTL_MS, REMOTE_WS_AUTH_MS, type RemoteRouteName } from '../../shared/remote'
 import { KeyedRateLimit, PairError, type RemoteAuth, type StoredDevice } from './auth'
 
 export class HttpError extends Error {
@@ -57,6 +57,8 @@ const TYPES: Record<string, string> = {
   '.woff2': 'font/woff2'
 }
 const BODY_MAX = 64 * 1024
+/** a message with images: each full-size image in base64 and its thumb, plus the words */
+const IMAGE_BODY_MAX = REMOTE_LIMITS.images * (Math.ceil(REMOTE_LIMITS.imageBytes / 3) * 4 + 60_000) + BODY_MAX
 /** RA8: hello tries per caller a minute (a phone needs one) */
 export const HELLO_PER_MINUTE = 20
 const cookieFor = (token: string): string => `${REMOTE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${Math.floor(REMOTE_TOKEN_TTL_MS / 1000)}`
@@ -438,7 +440,7 @@ export class RemoteServer {
     fs.createReadStream(file).pipe(res)
   }
 
-  private async body(req: http.IncomingMessage): Promise<unknown> {
+  private async body(req: http.IncomingMessage, max = BODY_MAX): Promise<unknown> {
     const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
     // a cross-site form can only send form types: JSON is required for every write
     if (type !== 'application/json') throw new HttpError(415, 'Send JSON')
@@ -446,7 +448,7 @@ export class RemoteServer {
     let n = 0
     for await (const c of req) {
       n += (c as Buffer).length
-      if (n > BODY_MAX) throw new HttpError(413, 'Too large')
+      if (n > max) throw new HttpError(413, max === BODY_MAX ? 'Too large' : 'Too large. Send fewer or smaller images.')
       chunks.push(c as Buffer)
     }
     const text = Buffer.concat(chunks).toString('utf8')
@@ -489,7 +491,8 @@ export class RemoteServer {
       if (method !== 'GET' && !who.bearer) {
         if (!this.o.auth.checkCsrf(device.id, req.headers[REMOTE_CSRF_HEADER] as string | undefined)) return this.json(req, res, 403, { message: 'Reload the page and try again.' })
       }
-      const body = method === 'GET' ? {} : await this.body(req)
+      const images = (REMOTE_IMAGE_ROUTES as readonly string[]).includes(route.name)
+      const body = method === 'GET' ? {} : await this.body(req, images ? IMAGE_BODY_MAX : BODY_MAX)
       if (route.name === 'signOut') {
         this.o.auth.revoke(device.id)
         this.closeDevice(device.id)

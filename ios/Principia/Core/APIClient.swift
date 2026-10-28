@@ -212,8 +212,8 @@ final class APIClient: @unchecked Sendable {
     func session(_ co: String, _ id: String) async throws -> PhoneSession { try await call(.session(co, sessionId: id)) }
     /// an agent's ended chat reopens in a new session (same conversation): the session to follow, when the Mac says
     @discardableResult
-    func sessionSend(_ co: String, _ id: String, text: String) async throws -> String? {
-        let r: Sent = try await call(.sessionSend(co, sessionId: id), body: ["text": text])
+    func sessionSend(_ co: String, _ id: String, text: String, images: [ChatAttachment] = []) async throws -> String? {
+        let r: Sent = try await call(.sessionSend(co, sessionId: id), body: Self.message(text, images))
         return r.sessionId
     }
     private struct Sent: Decodable { var sessionId: String? }
@@ -229,11 +229,15 @@ final class APIClient: @unchecked Sendable {
     }
     func agent(_ co: String, _ id: String) async throws -> PhoneAgent { try await call(.agent(co, agentId: id)) }
     /// the agent answers in its own chat: the session to follow there, when the Mac says
-    func agentSend(_ co: String, _ id: String, text: String) async throws -> String? {
-        let r: AgentSent = try await call(.agentSend(co, agentId: id), body: ["text": text])
+    func agentSend(_ co: String, _ id: String, text: String, images: [ChatAttachment] = []) async throws -> String? {
+        let r: AgentSent = try await call(.agentSend(co, agentId: id), body: Self.message(text, images))
         return r.sessionId
     }
     private struct AgentSent: Decodable { var sessionId: String? }
+    /// a chat message: its words, and its photos when it has any
+    static func message(_ text: String, _ images: [ChatAttachment]) -> [String: Any] {
+        images.isEmpty ? ["text": text] : ["text": text, "images": images.map(\.json)]
+    }
     func room(_ co: String, channelId: String?) async throws -> PhoneRoom { try await call(.room(co, channelId: channelId)) }
     func roomPost(_ co: String, channelId: String, text: String) async throws -> PhoneRoomMessage { try await call(.roomPost(co), body: ["channelId": channelId, "text": text]) }
 }

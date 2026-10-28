@@ -12,9 +12,10 @@ import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
 import { TASK_CARD_LABEL } from '../../shared/taskCard'
-import type { ChatSnapshot } from '../../shared/chat'
+import type { ChatImage, ChatSnapshot } from '../../shared/chat'
+import { CHAT_IMAGE_TYPES } from '../../shared/chat'
 import type { AgentNode } from '../../shared/live'
-import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
+import type { PhoneAgent, PhoneClientMsg, PhoneImage, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
 import { firstLine } from '../../renderer/src/lib/format'
 import { isIdleWaiting } from '../../renderer/src/lib/live'
@@ -61,12 +62,21 @@ export interface PhoneHost {
 const DAY = 86_400_000
 const notFound = (what: string): HttpError => new HttpError(404, `${what} not found`)
 const text = (max: number = REMOTE_LIMITS.text) => z.string().trim().min(1, 'Write something first').max(max)
+const image = z
+  .object({
+    mime: z.string().max(100),
+    data: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'An image did not come through. Try again.'),
+    thumb: z.string().max(60_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/, 'An image did not come through. Try again.').optional()
+  })
+  .strict()
 const BODIES = {
   pause: z.object({ paused: z.boolean() }).strict(),
   answerAsk: z.object({ optionId: z.string().min(1).max(64).optional(), text: z.string().max(REMOTE_LIMITS.answer).optional() }).strict(),
   sendBack: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   answerTask: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   text: z.object({ text: text() }).strict(),
+  /** a chat message: words, images, or both (phoneImages checks the images as the Mac's composer does) */
+  send: z.object({ text: z.string().trim().max(REMOTE_LIMITS.text).default(''), images: z.array(image).max(100).default([]) }).strict(),
   stop: z.object({ sendNow: z.boolean().optional() }).strict(),
   sessionAnswer: z
     .object({
@@ -88,6 +98,25 @@ function body<K extends keyof typeof BODIES>(k: K, raw: unknown): z.infer<(typeo
   const r = BODIES[k].safeParse(raw)
   if (!r.success) throw new HttpError(400, r.error.issues[0]?.message ?? 'Bad request')
   return r.data as z.infer<(typeof BODIES)[K]>
+}
+
+/** A chat message from the phone: its words and its images, checked like the Mac's composer (count, type, size). */
+export function phoneMessage(raw: unknown): { words: string; images: ChatImage[] } {
+  const b = body('send', raw)
+  const images = phoneImages(b.images)
+  if (!b.text && !images.length) throw new HttpError(400, 'Write something first')
+  return { words: b.text, images }
+}
+export function phoneImages(list: PhoneImage[]): ChatImage[] {
+  const max = REMOTE_LIMITS.images
+  if (list.length > max) throw new HttpError(400, `Up to ${max} images per message`)
+  return list.map((im) => {
+    const mediaType = CHAT_IMAGE_TYPES.find((t) => t === im.mime)
+    if (!mediaType) throw new HttpError(400, 'Use a PNG, JPEG, GIF or WebP image')
+    const bytes = Math.floor((im.data.length * 3) / 4) - (im.data.endsWith('==') ? 2 : im.data.endsWith('=') ? 1 : 0)
+    if (bytes > REMOTE_LIMITS.imageBytes) throw new HttpError(413, `An image is too large: each must be under ${REMOTE_LIMITS.imageBytes / 1024 / 1024} MB`)
+    return { mediaType, data: im.data, ...(im.thumb ? { thumb: im.thumb } : {}) }
+  })
 }
 
 interface Sub {
@@ -248,20 +277,22 @@ export class PhoneApi implements RemoteApi {
         return this.sessionView(d, companyId, params.sessionId)
       case 'sessionSend': {
         const s = this.session(d, companyId, params.sessionId)
-        const words = body('text', raw).text
+        const { words, images } = phoneMessage(raw)
         // AGENT CHAT: a message to an agent's chat goes through the agent (chat:sendAgent), which reopens its chat when
         // it ended (an app restart) and resumes the same conversation; the phone follows the session it lands in
         const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId && !a.archivedAt) : undefined
         if (agent) {
-          const r = await this.sendToAgent(d, agent, words)
+          const r = await this.sendToAgent(d, agent, words, images)
           return { ok: true, sessionId: r.sessionId }
         }
         const snap = await this.chatOf(s)
         if (!snap?.available) {
+          // a terminal takes typed words only
+          if (images.length) throw new HttpError(409, 'Images go into a chat. This one is a terminal: send words, or open it on your Mac.')
           await this.typeInto(d, s, words)
           return { ok: true }
         }
-        await this.h.invoke('chat:send', { id: s.id, text: words })
+        await this.h.invoke('chat:send', { id: s.id, text: words, ...(images.length ? { images } : {}) })
         return { ok: true }
       }
       case 'sessionContinue': {
@@ -302,7 +333,8 @@ export class PhoneApi implements RemoteApi {
         return this.agentView(d, this.agent(d, companyId, params.agentId))
       case 'agentSend': {
         const a = this.agent(d, companyId, params.agentId)
-        const r = await this.sendToAgent(d, a, body('text', raw).text)
+        const { words, images } = phoneMessage(raw)
+        const r = await this.sendToAgent(d, a, words, images)
         return { ...r, agent: await this.agentView(await this.load(), a) }
       }
       case 'room':
@@ -443,14 +475,14 @@ export class PhoneApi implements RemoteApi {
    * agent answers there and files board tasks itself when the work needs one. Returns the chat's session, which the
    * phone opens like any chat.
    */
-  async sendToAgent(_d: PhoneData, agent: CompanyAgent, text: string): Promise<{ sessionId: Id; merged: false; started: true }> {
+  async sendToAgent(_d: PhoneData, agent: CompanyAgent, text: string, images: ChatImage[] = []): Promise<{ sessionId: Id; merged: false; started: true }> {
     void _d
     const request = text.trim()
-    if (!request) throw new HttpError(400, 'Write something first')
+    if (!request && !images.length) throw new HttpError(400, 'Write something first')
     if (this.sending) throw new HttpError(409, 'Still sending the last one')
     this.sending = true
     try {
-      const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request })
+      const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request, ...(images.length ? { images } : {}) })
       return { sessionId: s.id, merged: false, started: true }
     } finally {
       this.sending = false

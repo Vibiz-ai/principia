@@ -194,10 +194,11 @@ export function registerChatHandlers(h: Hive): void {
     notQuitting()
     return agentChats().open(agentId)
   })
-  handle('chat:sendAgent', async ({ agentId, text }) => {
+  handle('chat:sendAgent', async ({ agentId, text, images }) => {
+    if (!text.trim() && !images?.length) throw new HiveError('bad_request', 'Write something first')
     notQuitting()
     const s = agentChats().open(agentId)
-    await hub().send(s.id, text)
+    await hub().send(s.id, text, images)
     h.statusChanged()
     return h.store.getSession(s.id) ?? s
   })

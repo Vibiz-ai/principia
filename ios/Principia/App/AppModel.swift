@@ -622,9 +622,10 @@ final class AppModel {
         if openRef?.kind == .agent { await reloadOpen() }
     }
 
-    func send(_ text: String) async -> Bool {
+    /// images: only where a chat takes them (a chat on the Mac or an agent, never a terminal)
+    func send(_ text: String, images: [ChatAttachment] = []) async -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, let co = companyId, let ref = openRef else { return false }
+        guard !t.isEmpty || !images.isEmpty, let co = companyId, let ref = openRef else { return false }
         var ok = false
         await run("send") {
             switch ref.kind {
@@ -635,7 +636,7 @@ final class AppModel {
                     self.say(self.replica?.busy == true ? "Sent. It reads it right after this step." : "Sent")
                 } else if self.replica != nil {
                     // an agent's ended chat reopens in a new session (same conversation): follow it there
-                    if let next = try await self.api.sessionSend(co, ref.id, text: t), next != ref.id, self.chatPath.last == ref {
+                    if let next = try await self.api.sessionSend(co, ref.id, text: t, images: images), next != ref.id, self.chatPath.last == ref {
                         self.chatPath = [PhoneChatRef(kind: .session, id: next)]
                     } else if self.replica?.turn == "ended" {
                         await self.reloadOpen()
@@ -643,7 +644,7 @@ final class AppModel {
                 } else { try await self.api.sessionReply(co, ref.id, text: t); await self.reloadOpen() }
             case .agent:
                 // it answers in its own chat: follow it there
-                if let sid = try await self.api.agentSend(co, ref.id, text: t), self.chatPath.last == ref {
+                if let sid = try await self.api.agentSend(co, ref.id, text: t, images: images), self.chatPath.last == ref {
                     self.chatPath = [PhoneChatRef(kind: .session, id: sid)]
                 } else {
                     await self.reloadOpen()

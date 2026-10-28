@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct ChatsTab: View {
@@ -77,6 +78,7 @@ struct ConversationView: View {
     @Environment(AppModel.self) private var app
     let ref: PhoneChatRef
     @State private var draft = ""
+    @State private var photos = PhotoDraft()
 
     var body: some View {
         Group {
@@ -104,11 +106,17 @@ struct ConversationView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if canWrite {
-                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send"), held: held, note: heldNote) {
+                Composer(text: $draft, placeholder: placeholder, busy: app.busy.contains("send"), held: held, note: heldNote, onSend: {
                     let t = draft
+                    let im = takesPhotos ? photos.take() : []
                     draft = ""
-                    Task { if !(await app.send(t)) { draft = t } }
-                }
+                    Task {
+                        if !(await app.send(t, images: im)) {
+                            draft = t
+                            photos.restore(im)
+                        }
+                    }
+                }, photos: takesPhotos ? photos : nil)
             }
         }
         .task(id: ref) { await app.load(ref) }
@@ -138,6 +146,15 @@ struct ConversationView: View {
             if let t = s.terminal, t.canType != nil { return t.composer(name: s.who?.name ?? "Claude") != nil }
             return app.replica != nil || s.terminal?.canReply == true
         case .agent: return app.agent?.ref.id == ref.id
+        }
+    }
+    /// photos go into a chat (one on the Mac, or an agent's), never typed into a terminal
+    private var takesPhotos: Bool {
+        switch ref.kind {
+        case .session:
+            guard let s = app.session, s.ref.id == ref.id else { return false }
+            return s.terminal == nil && app.replica != nil
+        case .agent: return true
         }
     }
     private var held: Bool {
@@ -595,17 +612,25 @@ struct Composer: View {
     var note: String? = nil
     var onSend: () -> Void
     var accessory: AnyView? = nil
+    /// the message's photos (nil: this one takes words only)
+    var photos: PhotoDraft? = nil
+
+    private var empty: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (photos?.items.isEmpty ?? true)
+    }
 
     var body: some View {
         VStack(spacing: 8) {
             if let accessory { accessory }
-            if let note {
+            if let note = note ?? photos?.note {
                 Text(note).font(.footnote).foregroundStyle(Theme.soft)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let photos, !photos.items.isEmpty || photos.loading > 0 { PhotoStrip(photos: photos) }
             GlassEffectContainer(spacing: 8) {
                 HStack(alignment: .bottom, spacing: 8) {
+                    if let photos { PhotoButton(photos: photos).disabled(busy || held) }
                     TextField(placeholder, text: $text, axis: .vertical)
                         .lineLimit(1...6)
                         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -619,7 +644,8 @@ struct Composer: View {
                     .tint(Theme.ink.opacity(0.92))
                     .foregroundStyle(Theme.page)
                     .buttonBorderShape(.circle)
-                    .disabled(busy || held || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    // a photo still being fitted goes with the message: Send waits for it
+                    .disabled(busy || held || empty || (photos?.loading ?? 0) > 0)
                     .accessibilityLabel("Send")
                 }
             }
@@ -631,5 +657,57 @@ struct Composer: View {
                 .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
         }
+    }
+}
+
+/// Photos for the message, from the library (picking needs no permission; no camera).
+struct PhotoButton: View {
+    let photos: PhotoDraft
+    @State private var picked: [PhotosPickerItem] = []
+
+    var body: some View {
+        PhotosPicker(selection: $picked, maxSelectionCount: max(1, photos.room), matching: .images) {
+            Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 26, height: 30)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .disabled(photos.room == 0)
+        .accessibilityLabel("Add photos")
+        .onChange(of: picked) { _, list in
+            guard !list.isEmpty else { return }
+            picked = []
+            Task { await photos.add(list) { try? await $0.loadTransferable(type: Data.self) } }
+        }
+    }
+}
+
+/// The photos going with the message, each with its remove button; a spinner for one still being fitted.
+struct PhotoStrip: View {
+    let photos: PhotoDraft
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(photos.items) { a in
+                    Image(uiImage: a.preview).resizable().scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(.rect(cornerRadius: 12))
+                        .overlay(alignment: .topTrailing) {
+                            Button { photos.remove(a.id) } label: {
+                                Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette)
+                                    .foregroundStyle(Theme.page, Theme.ink.opacity(0.9))
+                            }
+                            .offset(x: 6, y: -6)
+                            .accessibilityLabel("Remove photo")
+                        }
+                }
+                ForEach(0..<photos.loading, id: \.self) { _ in
+                    ProgressView().frame(width: 56, height: 56)
+                        .background(Theme.panel, in: .rect(cornerRadius: 12))
+                }
+            }
+            .padding(.top, 6).padding(.horizontal, 6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
