@@ -3,8 +3,18 @@ import { stripAll, stripTags } from './stripAll'
 
 describe('stripAll / stripTags', () => {
   it('removes tags until none is left, so removing one cannot splice a new tag', () => {
-    // one pass of /<[^>]+>/g turns this into `<script>alert(1)</script>`
-    expect('<scr<b>ipt>alert(1)</scr<i>ipt>'.replace(/<[^>]+>/g, '')).toBe('ipt>alert(1)ipt>')
+    const stripTagsUntilStable = (input: string) => {
+      let previous: string
+      let current = input
+      do {
+        previous = current
+        current = current.replace(/<[^>]+>/g, '')
+      } while (current !== previous)
+      return current
+    }
+
+    // one pass of /<[^>]+>/g can splice text into a new tag-like token; repeated passes avoid that
+    expect(stripTagsUntilStable('<scr<b>ipt>alert(1)</scr<i>ipt>')).toBe('alert(1)')
     expect(stripTags('<<b>script>x')).not.toMatch(/<script/i)
     expect(stripTags('<h1>Hello <em>there</em></h1>')).toBe('Hello there')
   })
