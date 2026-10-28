@@ -48,6 +48,7 @@ import {
   type PlanInputContext
 } from './onboarding'
 import { isPinned, prefsFor, prefsKey, resolveView, togglePin, viewFor, type NavTarget } from '../lib/nav'
+import { keptScreen, lastScreenKey, screenStillThere, screenToKeep } from '../lib/companyScreen'
 import { parseDeepLink } from '@shared/deepLink'
 import { deepLinkView, resolveTaskRef } from '../lib/deepLinkNav'
 import { DEEP_LINK_EVENT } from '../lib/inAppLink'
@@ -1571,13 +1572,29 @@ function setScope(id: ActiveCompany): void {
   reloadScoped()
 }
 
+/** The screen each company was left on, this session (also kept per Mac, so a restart keeps it too). */
+const lastScreens = new Map<ActiveCompany, ViewState>()
+function rememberScreen(scope: ActiveCompany, view: ViewState): void {
+  const kept = screenToKeep(view)
+  lastScreens.set(scope, kept)
+  saveJson(lastScreenKey(scope), kept)
+}
+/** Where switching to `id` lands: the screen it was left on, else Home. */
+export function lastScreen(id: ActiveCompany): ViewState {
+  const kept = lastScreens.get(id) ?? keptScreen(loadJson<unknown>(lastScreenKey(id), null))
+  return kept && screenStillThere(kept, { agents: state.companyAgents, departments: state.departments }) ? kept : { name: 'home' }
+}
+
 /**
- * §8.6 `enterCompany`: focus a company (or All), clear the back stack, re-run scoped loaders and go Home (or `view`).
+ * §8.6 `enterCompany`: focus a company (or All), clear the back stack, re-run scoped loaders and go to `view`, else
+ * the screen that company was left on (Home the first time). Clicking the company you are in goes Home.
  * The session grid and focused pane are kept: a pane may belong to any company and shows its chip.
  */
 export async function enterCompany(id: ActiveCompany, opts: { view?: NavTarget } = {}): Promise<boolean> {
-  const view = resolveView(opts.view ?? { name: 'home' })
+  const switching = state.activeCompanyId !== id
+  const view = resolveView(opts.view ?? (switching ? lastScreen(id) : { name: 'home' }))
   if (!(await passLeaveGuard(view))) return false
+  if (switching) rememberScreen(state.activeCompanyId, state.view)
   setScope(id)
   setState({ view, companyUndo: null })
   return true
@@ -1619,7 +1636,10 @@ export function enterCompanySlot(n: number): void {
  * user picked the company. Otherwise (Needs you, palette) focus follows a cross-company open with Undo.
  */
 export async function openLiveItem(item: { agentId: Id; askId: Id | null; companyId: Id; taskId?: Id | null }, opts: { enter?: boolean } = {}): Promise<void> {
-  if (opts.enter && multiCompany() && companyById(item.companyId)) setScope(item.companyId)
+  if (opts.enter && multiCompany() && companyById(item.companyId) && state.activeCompanyId !== item.companyId) {
+    rememberScreen(state.activeCompanyId, state.view)
+    setScope(item.companyId)
+  }
   // CHAT-UI.md §8.4: a task at work opens its live view, never the agent's resting chat
   if (item.taskId && !item.askId) return openTaskLive(item.taskId, item.companyId)
   const before = state.activeCompanyId

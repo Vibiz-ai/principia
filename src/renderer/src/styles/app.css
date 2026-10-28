@@ -20,6 +20,8 @@ img { -webkit-user-drag: none; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .view.is-drop::after, .sidebar.is-drop::after { content: ''; position: absolute; inset: 4px; border: 2px solid var(--accent); border-radius: var(--radius-lg); pointer-events: none; }
+/* a text box with files dragged over it takes them as @path mentions (lib/fieldDrop) */
+.field-drop-over { outline: 2px dashed var(--accent) !important; outline-offset: 1px; background-color: var(--accent-soft) !important; }
 .view__body { flex: 1; }
 
 .sidebar { position: relative; flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--sidebar-bg); border-right: 1px solid var(--border); min-width: 200px; max-width: 320px; }
