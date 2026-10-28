@@ -93,7 +93,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      # A healthy npm ci takes under a minute here; a stalled one (registry fetch or the electron-rebuild postinstall)
+      # used to sit until the 20-minute job limit. Each attempt gets 5 minutes, and a stall or failure is retried once.
+      - name: npm ci
+        id: npm-ci
+        timeout-minutes: 5
+        continue-on-error: true
+        run: npm ci
+      - name: npm ci (retry)
+        if: steps.npm-ci.outcome == 'failure'
+        timeout-minutes: 5
+        run: |
+          echo "::warning title=npm ci retried::The first npm ci failed or stalled for 5 minutes (see its log); retrying once."
+          npm ci
       - run: npm test
       - run: npm run build
       - run: npm run cloud:build
