@@ -154,11 +154,18 @@ export function collectTree(rows: ProcRow[], q: TreeQuery): ProcRow[] {
 }
 
 /**
- * Pure: tagged processes of this userData whose owner is not live and that do not descend from Hive itself.
+ * Pure: tagged processes of this userData whose owner is not live and that are not part of Hive's own process tree.
+ * Hive's own tree = itself, its ancestors (a dev copy's `node electron .` launcher), its descendants, and anything
+ * carrying the HIVE_SPAWN_ID Hive itself inherited (a dev copy started from an agent pane inherits that pane's tag, and
+ * so do helpers such as crashpad that re-parent to launchd). Untagged processes never count.
  * Children of a leftover (same tree) are folded into it: only the topmost tagged process is listed.
  */
-export function findLeftovers(rows: ProcRow[], o: { userData: string; live: ReadonlySet<string>; selfPid: number }): ProcRow[] {
+export function findLeftovers(rows: ProcRow[], o: { userData: string; live: ReadonlySet<string>; selfPid: number; selfSpawnId?: string | null }): ProcRow[] {
   const byPid = new Map(rows.map((r) => [r.pid, r]))
+  const self = byPid.get(o.selfPid)
+  const own = new Set<number>([o.selfPid, ...ancestors(rows, o.selfPid)])
+  // the tag Hive inherited from whoever launched it: never one of its own owners (children get their own tags)
+  const ownIds = new Set([o.selfSpawnId, spawnIdOf(self?.env ?? null)].filter((x): x is string => !!x))
   const descendsFromSelf = (r: ProcRow): boolean => {
     let cur: ProcRow | undefined = r
     const seen = new Set<number>()
@@ -170,9 +177,9 @@ export function findLeftovers(rows: ProcRow[], o: { userData: string; live: Read
     return false
   }
   const isLeft = (r: ProcRow): boolean => {
-    if (r.pid === o.selfPid) return false
+    if (own.has(r.pid)) return false
     const id = spawnIdOf(r.env)
-    if (!id || !ownedByUserData(r.env, o.userData) || o.live.has(id)) return false
+    if (!id || ownIds.has(id) || !ownedByUserData(r.env, o.userData) || o.live.has(id)) return false
     return !descendsFromSelf(r)
   }
   const left = rows.filter(isLeft)
@@ -257,6 +264,8 @@ export interface ReaperOptions {
   userData: string
   table?: ProcessTable
   selfPid?: number
+  /** The HIVE_SPAWN_ID this Hive inherited. Default: $HIVE_SPAWN_ID when selfPid is the real process. */
+  selfSpawnId?: string | null
   /** SIGTERM -> SIGKILL grace. Default 1500 ms. */
   graceMs?: number
   /** Descendant sampling period while owners run. Default 20 s; 0 = off. */
@@ -278,6 +287,8 @@ export class Reaper implements ProcessReaper {
   readonly userData: string
   private table: ProcessTable
   private selfPid: number
+  /** The HIVE_SPAWN_ID Hive itself inherited (started from an agent pane), or null. Never a leftover. */
+  private selfSpawnId: string | null
   private graceMs: number
   /** Running owners: leader pid + descendants seen by the sampler. */
   private owners = new Map<string, { rootPid: number; known: Map<number, string> }>()
@@ -288,6 +299,7 @@ export class Reaper implements ProcessReaper {
     this.userData = o.userData
     this.table = o.table ?? systemProcessTable
     this.selfPid = o.selfPid ?? process.pid
+    this.selfSpawnId = o.selfSpawnId !== undefined ? o.selfSpawnId : o.selfPid === undefined ? (process.env[SPAWN_ENV] ?? null) : null
     this.graceMs = o.graceMs ?? 1500
   }
 
@@ -412,7 +424,7 @@ export class Reaper implements ProcessReaper {
   async leftovers(live: ReadonlySet<string>): Promise<LeftoverRow[]> {
     const rows = await this.table.snapshot(true)
     const allLive = new Set([...live, ...this.owners.keys()])
-    const left = findLeftovers(rows, { userData: this.userData, live: allLive, selfPid: this.selfPid })
+    const left = findLeftovers(rows, { userData: this.userData, live: allLive, selfPid: this.selfPid, selfSpawnId: this.selfSpawnId })
     const cwds = await this.table.cwds(left.map((r) => r.pid)).catch(() => new Map<number, string>())
     return left.map((r) => ({ pid: r.pid, spawnId: spawnIdOf(r.env)!, command: r.command, cwd: cwds.get(r.pid) ?? null, etimeMs: r.etimeMs }))
   }
@@ -421,7 +433,7 @@ export class Reaper implements ProcessReaper {
   async stopLeftovers(pids: number[], live: ReadonlySet<string>): Promise<number> {
     const rows = await this.table.snapshot(true)
     const allLive = new Set([...live, ...this.owners.keys()])
-    const left = findLeftovers(rows, { userData: this.userData, live: allLive, selfPid: this.selfPid })
+    const left = findLeftovers(rows, { userData: this.userData, live: allLive, selfPid: this.selfPid, selfSpawnId: this.selfSpawnId })
     const want = new Set(pids)
     const chosen = left.filter((r) => want.has(r.pid))
     if (!chosen.length) return 0

@@ -89,6 +89,46 @@ describe('findLeftovers', () => {
     // 600/602 descend from Hive (500); 603 escaped to launchd so it is a leftover once s_aaa is not live
     expect(pids(l)).toEqual([603, 700])
   })
+
+  it("a dev copy started from an agent pane never lists its own launcher, helpers or untagged processes", () => {
+    // PR-27: `HIVE_USER_DATA=/tmp/dev node electron .` run from pane s_pane of the installed app. The launcher and the
+    // dev Electron (2100) inherit s_pane; crashpad re-parents to launchd but keeps the env; 2300 is a real leftover.
+    const DEV = '/tmp/dev hive'
+    const ps = `
+    1     0     1 10-01:02:03 /sbin/launchd
+ 2000   400  2000       05:00 node /x/node_modules/.bin/electron .
+ 2100  2000  2000       04:59 /x/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .
+ 2101  2100  2000       04:59 /x/Electron Helper (Renderer)
+ 2200     1  2200       04:59 /x/Electron.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+ 2300     1  2300       30:00 node old-dev.js
+ 2400     1  2400       30:00 node untagged.js
+`
+    const env = `
+ 2000 node /x/node_modules/.bin/electron . ${tag('s_pane', DEV)}
+ 2100 /x/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron . ${tag('s_pane', DEV)}
+ 2101 /x/Electron Helper (Renderer) ${tag('s_pane', DEV)}
+ 2200 /x/Electron.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler ${tag('s_pane', DEV)}
+ 2300 node old-dev.js ${tag('s_gone', DEV)}
+ 2400 node untagged.js HIVE_USER_DATA=${DEV} PATH=/usr/bin
+`
+    const r = attachEnv(parsePs(ps), env)
+    expect(pids(findLeftovers(r, { userData: DEV, live: new Set(), selfPid: 2100 }))).toEqual([2300])
+    // the inherited tag also counts when macOS hides Hive's own env from ps
+    const hidden = r.map((x) => (x.pid === 2100 ? { ...x, env: null } : x))
+    expect(pids(findLeftovers(hidden, { userData: DEV, live: new Set(), selfPid: 2100, selfSpawnId: 's_pane' }))).toEqual([2300])
+  })
+
+  it('Reaper.stopLeftovers never signals the dev copy’s own launcher or crashpad', async () => {
+    const DEV = '/tmp/dev hive'
+    const own = (pid: number, ppid: number, pgid: number, command: string): ProcRow => ({ pid, ppid, pgid, etimeMs: 1000, command, env: ` ${tag('s_pane', DEV)} ` })
+    const t = fakeTable([own(2000, 400, 2000, 'node electron .'), own(2200, 1, 2200, 'chrome_crashpad_handler'), { ...own(2300, 1, 2300, 'node old.js'), env: ` ${tag('s_gone', DEV)} ` }])
+    const reaper = new Reaper({ userData: DEV, table: t, selfPid: 2100, selfSpawnId: 's_pane', graceMs: 50, sampleMs: 0 })
+    expect((await reaper.leftovers(new Set())).map((l) => l.pid)).toEqual([2300])
+    expect(await reaper.stopLeftovers([2000, 2200, 2300], new Set())).toBe(1)
+    expect(t.signals.map(([p]) => Math.abs(p))).not.toContain(2000)
+    expect(t.signals.map(([p]) => Math.abs(p))).not.toContain(2200)
+    expect(t.alive.has(2000) && t.alive.has(2200) && !t.alive.has(2300)).toBe(true)
+  })
 })
 
 /** A process table in memory: signals record and (optionally) kill. */
