@@ -45,6 +45,10 @@ export interface ForumTaskCard {
   resultFor?: string | null
   /** the task is done or canceled: main stops following it */
   final?: boolean
+  /** the board ask the filer already put to the person in this conversation (taskAskKey): one question message per ask */
+  askKey?: string | null
+  /** that question: the filer's message in the conversation (the strip and the card's Answer point at it) */
+  askMessageId?: string | null
 }
 
 /** The task fields the state needs (CompanyTask, ForumTaskView). */
@@ -241,6 +245,71 @@ export function taskResultLine(c: { identifier: string; state: TaskCardState; re
         ? `${c.identifier} is ready for your review${res}`
         : `${c.identifier} is done${res}`
   return `${head}${c.prUrl ? `\nPull request: ${c.prUrl}` : ''}`
+}
+
+// ---------- the task's question, said by the agent in the conversation ----------
+
+/** The task waits for the person's answer to its board ask (tasks:answer, or the Forum's answer path, resumes it). */
+export function waitsForAnswer(t: { status: string; ask?: { prompt?: string; answer?: string | null } | null }): boolean {
+  return !!t.ask?.prompt && !t.ask.answer && t.status !== 'done' && t.status !== 'canceled' && t.status !== 'in_review'
+}
+
+/** One ask of one run: the same prompt asked again on another run is a new question. FNV-1a, 8 hex chars. */
+export function taskAskKey(taskId: string, runId: string | null | undefined, prompt: string): string {
+  let h = 0x811c9dc5
+  const s = `${taskId}\u0000${runId ?? ''}\u0000${prompt.trim()}`
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** Principia's blocker prefixes (orchestrator/apply.ts blockerLine), said in the agent's own voice. */
+const FIRST_PERSON: [RegExp, string][] = [
+  [/^Needs your decision:\s*/i, 'I need your decision: '],
+  [/^Needs access:\s*/i, 'I need access: '],
+  [/^Needs money \(nothing is spent without your yes\):\s*/i, 'I need money for this (nothing is spent without your yes): '],
+  [/^Needs a connection:\s*/i, 'I need a connection: '],
+  [/^Principia:\s*/i, '']
+]
+const firstPerson = (line: string): string => FIRST_PERSON.reduce((l, [re, to]) => l.replace(re, to), line.trim())
+
+/**
+ * The agent's message when a task it filed from this conversation stops for the person (CHAT-UI.md §8): the whole
+ * question in plain words, what it found so far, the options, and where to answer. Connect links stay in the text
+ * (`principia://connect/<tool>`): the conversation draws them as Connect buttons.
+ */
+export function taskAskSay(i: { identifier: string; prompt: string; options?: readonly string[] | null; summary?: string | null; where?: string }): string {
+  const lines = i.prompt.split('\n').map(firstPerson).filter(Boolean)
+  const summary = i.summary?.trim().split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+  const out = [`${i.identifier} is stuck and needs you.`]
+  if (summary && !lines.some((l) => l.includes(summary) || summary.includes(l))) out.push(`So far: ${summary.length > 300 ? `${summary.slice(0, 299)}…` : summary}`)
+  if (lines.length === 1) out.push(lines[0]!)
+  else out.push(...lines.map((l) => `- ${l}`))
+  const opts = (i.options ?? []).map((o) => o.trim()).filter(Boolean)
+  if (opts.length) out.push(`Options: ${opts.length === 1 ? opts[0] : `${opts.slice(0, -1).join(', ')} or ${opts[opts.length - 1]}`}.`)
+  out.push(i.where ?? `Reply here and I'll pass it on to ${i.identifier}.`)
+  return out.join('\n')
+}
+
+/** What the agent says once the answer went back to the task. */
+export function taskAskAck(identifier: string, elsewhere = false): string {
+  return elsewhere ? `Got your answer. Back on ${identifier}.` : `Got it, back on ${identifier}.`
+}
+
+/** A message that starts something new, not an answer: "also…", "btw", "another thing", "new task". */
+const NEW_TOPIC = /^\s*(also|btw|by the way|another thing|one more thing|unrelated|separately|new task|different question|can you also|and also|forget (that|it)|never ?mind|stop|cancel)\b/i
+
+/**
+ * The person's next message clearly answers the one open question: an option said back, or any message that does not
+ * start something new. Anything else goes to the agent, who decides (forum_reply answer_task).
+ */
+export function looksLikeAnswer(text: string, options?: readonly string[] | null): boolean {
+  const t = text.trim()
+  if (!t) return false
+  if (options?.some((o) => o.trim().toLowerCase() === t.toLowerCase().replace(/[.!]+$/, ''))) return true
+  return !NEW_TOPIC.test(t)
 }
 
 /** Lowercase words only: "Lift UGC conversion!" → "lift ugc conversion". */

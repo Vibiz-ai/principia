@@ -228,6 +228,11 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
     onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    taskAsks: (channelId) =>
+      service.openTaskAsks(channelId).flatMap((q) => {
+        const t = q.ask?.taskId ? view(q.ask.taskId) : null
+        return t?.ask ? [{ identifier: t.identifier, ref: q.ref, prompt: t.ask.prompt }] : []
+      }),
     log
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)

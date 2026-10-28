@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
 import type { ForumTaskCard } from '@shared/taskCard'
-import { cardsOfMessages, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
+import { cardsOfMessages, connectToolsIn, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -103,5 +103,17 @@ describe('the live tail and the working clock', () => {
     expect(taskCardView(card(), t as never, { now: NOW })).toMatchObject({ state: 'needs_you', result: 'Which funnel step first?' })
     // working tasks carry no result line
     expect(taskCardView(card(), { status: 'in_progress', runId: 'r1', updatedAt: T0 }, { now: NOW }).result).toBeNull()
+  })
+})
+
+describe("a task's question in the conversation", () => {
+  it('names the services to connect from its principia://connect links', () => {
+    expect(connectToolsIn('I need a connection: Set it up: principia://connect/posthog. And principia://connect/posthog?purpose=dashboard')).toEqual(['posthog'])
+    expect(connectToolsIn('No links here')).toEqual([])
+  })
+  it('is open while its ask is', () => {
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [], taskId: 't1' } })).toBe(true)
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'answered', to: [], taskId: 't1' } })).toBe(false)
+    expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [] } })).toBe(false)
   })
 })

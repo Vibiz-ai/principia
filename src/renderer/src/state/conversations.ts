@@ -90,7 +90,7 @@ export async function startConversation(companyId: Id, text: string, route: Team
 }
 
 /** A reply in a conversation. An @name of a teammate not in it adds them first (ChatGPT-style), then they answer. */
-export async function replyInConversation(companyId: Id, channelId: Id, text: string, agents: readonly DeskAgent[]): Promise<boolean> {
+export async function replyInConversation(companyId: Id, channelId: Id, text: string, agents: readonly DeskAgent[], threadId?: Id | null): Promise<boolean> {
   const t = text.trim()
   if (!t) return false
   try {
@@ -101,7 +101,8 @@ export async function replyInConversation(companyId: Id, channelId: Id, text: st
     const found = said.everyone ? everyone(agents) : said.found
     const add = found.map((a) => st?.members.find((m) => m.agentId === a.id && m.status === 'active')?.id).filter((id): id is string => !!id && !ch?.memberIds.includes(id))
     if (add.length) await hive.forum.membership({ op: 'add', channelId, memberIds: add })
-    await post({ companyId, channelId, text: t })
+    // CHAT-UI.md §8: a reply to a task's question goes in its thread, so it answers that question
+    await post({ companyId, channelId, text: t, ...(threadId ? { threadId } : {}) })
     void loadForum(companyId)
     return true
   } catch (e) {

@@ -225,8 +225,8 @@ describe('protocol (§4)', () => {
     expect(() => parseForumArgs('forum_create_channel', { name: 'Bad Name', purpose: 'long enough purpose' })).toThrow()
     expect(() => parseForumArgs('forum_ask', { question: 'ok?', wait_s: 601 })).toThrow()
     expect(FORUM_ARGS.forum_read.parse({})).toEqual({})
-    // budget: the tool list an agent pays for stays small
-    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(8000)
+    // budget: the tool list an agent pays for stays small (forum_reply carries task, a hire proposal and answer_task)
+    expect(JSON.stringify(forumSchema().tools).length).toBeLessThan(8100)
   })
   it('parses fenced blocks: ops object, arrays, single ops, junk and caps', () => {
     const out = [

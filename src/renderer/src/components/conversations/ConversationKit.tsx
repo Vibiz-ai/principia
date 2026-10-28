@@ -11,6 +11,8 @@
  *   the team fits (HireCard), "Marcus is working…" while an answer is on its way, and a reply box where @name (or
  *   @all) adds someone.
  * - RecentConversations: the last few conversations with who is in each, a shimmer while someone answers in it.
+ * - CHAT-UI.md §8: a task that stops for you asks here, as its filer's message (with Connect buttons for the services
+ *   it names and its options); you answer in the reply box ("Replying to VO-15's question" after the card's Answer).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
@@ -27,7 +29,9 @@ import { useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, whoLine } from '../../state/conversations'
 import { navigate, startSession, useStore } from '../../state/store'
-import { TaskCard, WorkingStrip } from './TaskCard'
+import { TASK_ASK_REPLY_EVENT, TaskCard, WorkingStrip, type TaskAskReply } from './TaskCard'
+import { ConnectionSlot } from '../connections/ConnectionSlot'
+import { connectToolsIn, isOpenTaskQuestion } from '../../lib/taskCardView'
 import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
 
@@ -420,6 +424,8 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   }
   const [busy, setBusy] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
+  // CHAT-UI.md §8: the reply answers a task's question (the card's Answer, the question's Reply)
+  const [replyTo, setReplyTo] = useState<{ messageId: string; identifier: string } | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const me = state?.me ?? null
@@ -438,7 +444,23 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   }, [msgs.length])
   useEffect(() => {
     input.current?.focus()
+    setReplyTo(null)
   }, [channelId])
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const r = (e as CustomEvent<TaskAskReply>).detail
+      if (!r || r.channelId !== channelId) return
+      setReplyTo({ messageId: r.messageId, identifier: r.identifier })
+      input.current?.focus()
+    }
+    window.addEventListener(TASK_ASK_REPLY_EVENT, on)
+    return () => window.removeEventListener(TASK_ASK_REPLY_EVENT, on)
+  }, [channelId])
+  // the question was answered (here, on the board, on the phone): the reply is an ordinary message again
+  const replyOpen = !!replyTo && msgs.some((m) => m.id === replyTo.messageId && isOpenTaskQuestion(m))
+  useEffect(() => {
+    if (replyTo && !replyOpen) setReplyTo(null)
+  }, [replyTo, replyOpen])
   const pending = usePending(msgs, agentMembers, busyMembers, (id) => display(id)?.kind === 'human')
   const said = mentionedAll(text, agents)
   const inIt = (a: DeskAgent): boolean => agentMembers.some((id) => state?.members.find((m) => m.id === id)?.agentId === a.id)
@@ -446,9 +468,12 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   const send = async (): Promise<void> => {
     if (busy || !text.trim()) return
     setBusy(true)
-    const ok = await replyInConversation(companyId, channelId, text, agents)
+    const ok = await replyInConversation(companyId, channelId, text, agents, replyOpen ? replyTo!.messageId : null)
     setBusy(false)
-    if (ok) setText('')
+    if (ok) {
+      setText('')
+      setReplyTo(null)
+    }
     input.current?.focus()
   }
   const mentions = useMentionPicker({ text, setText, input, agents })
@@ -510,7 +535,17 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           m.kind === 'proposal' && m.proposal?.kind === 'agent' ? (
             <HireCard key={m.id} m={m} companyId={companyId} display={display} />
           ) : (
-            <MessageBubble key={m.id} m={m} mine={m.authorId === me} head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'} display={display} />
+            <MessageBubble
+              key={m.id}
+              m={m}
+              mine={m.authorId === me}
+              head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'}
+              display={display}
+              onReply={(id, identifier) => {
+                setReplyTo({ messageId: id, identifier })
+                input.current?.focus()
+              }}
+            />
           )
         )}
         {channel?.picking && (
@@ -538,6 +573,15 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           void send()
         }}
       >
+        {replyOpen && (
+          <div className="cx-replyto" data-chatux="thread-replyto">
+            <Icon name="chat" size={11} />
+            <span>Replying to {replyTo!.identifier}&rsquo;s question</span>
+            <button type="button" className="cx-replyto__x" aria-label="Not a reply to the question" onClick={() => setReplyTo(null)}>
+              ×
+            </button>
+          </div>
+        )}
         <textarea
           ref={input}
           className="cx-composer__input"
@@ -546,7 +590,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           value={text}
           disabled={busy}
           maxLength={8000}
-          placeholder={row?.private ? `Message ${whoNames[0]?.name ?? ''}… (@someone brings them in)` : 'Reply, or @someone to add them…'}
+          placeholder={replyOpen ? `Your answer for ${replyTo!.identifier}…` : row?.private ? `Message ${whoNames[0]?.name ?? ''}… (@someone brings them in)` : 'Reply, or @someone to add them…'}
           aria-label="Reply"
           aria-autocomplete="list"
           aria-expanded={mentions.open}
@@ -556,6 +600,11 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           }}
           onKeyDown={(e) => {
             if (mentions.onKeyDown(e)) return
+            if (e.key === 'Escape' && replyOpen && !text) {
+              e.preventDefault()
+              setReplyTo(null)
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               void send()
@@ -593,12 +642,12 @@ function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<stri
   return expect.filter((id) => !answered.has(id) && (busy.has(id) || fresh)).map((id) => ({ id, state: busy.has(id) ? 'working' : 'reading' }))
 }
 
-function MessageBubble({ m, mine, head, display }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay> }): React.JSX.Element {
+function MessageBubble({ m, mine, head, display, onReply }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay>; onReply?: (messageId: string, identifier: string) => void }): React.JSX.Element {
   // CHAT-UI.md §8: a task started here is a live card, not a grey line
   if (m.kind === 'system' && m.task) return <TaskCard m={m} />
   if (m.kind === 'system')
     return (
-      <div className="cx-handoff cx-handoff--small" data-chatux="thread-msg" data-kind="system">
+      <div className="cx-handoff cx-handoff--small" data-chatux="thread-msg" data-kind="system" data-msg-id={m.id}>
         <span className="cx-handoff__mark" aria-hidden>
           ◆
         </span>
@@ -606,8 +655,9 @@ function MessageBubble({ m, mine, head, display }: { m: ForumMessage; mine: bool
       </div>
     )
   const d = display(m.authorId)
+  const question = m.kind === 'ask' && !!m.ask?.taskId
   return (
-    <div className={`cx-msg ${mine ? 'is-mine' : ''} ${head ? 'is-head' : ''}`} data-chatux="thread-msg" data-author={d?.name ?? ''}>
+    <div className={`cx-msg ${mine ? 'is-mine' : ''} ${head ? 'is-head' : ''} ${question ? 'is-question' : ''}`} data-chatux="thread-msg" data-author={d?.name ?? ''} data-msg-id={m.id} {...(question ? { 'data-question': m.ask!.status } : {})}>
       <div className="cx-msg__face">{head && !mine && <MemberAvatar display={d} size={26} />}</div>
       <div className="cx-msg__body">
         {head && (
@@ -620,6 +670,48 @@ function MessageBubble({ m, mine, head, display }: { m: ForumMessage; mine: bool
         <div className="cx-msg__bubble selectable">
           <MarkdownLite text={m.text} />
         </div>
+        {question && <TaskQuestionActions m={m} onReply={onReply} />}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Under a task's question: Connect for each service it names (the one connection UI, CONNECTIONS.md §4.1), its options
+ * as quick answers, and Reply (the composer answers it). Gone once it is answered.
+ */
+function TaskQuestionActions({ m, onReply }: { m: ForumMessage; onReply?: (messageId: string, identifier: string) => void }): React.JSX.Element | null {
+  const tools = useMemo(() => connectToolsIn(m.text), [m.text])
+  const known = useStore((s) => s.tasks.find((t) => t.id === m.ask?.taskId)?.identifier ?? null)
+  const identifier = known ?? /^([A-Z][A-Z0-9]{0,9}-\d+)\b/.exec(m.text)?.[1] ?? 'the task'
+  const [busy, setBusy] = useState(false)
+  if (!isOpenTaskQuestion(m)) return null
+  const options = m.ask?.options ?? []
+  return (
+    <div className="cx-question" data-chatux="task-question">
+      {tools.map((tool) => (
+        <ConnectionSlot key={tool} companyId={m.companyId} service={tool} variant="row" actions={false} />
+      ))}
+      <div className="cx-question__actions">
+        {options.map((o) => (
+          <Button
+            key={o}
+            size="sm"
+            disabled={busy}
+            data-chatux="task-question-option"
+            onClick={() => {
+              setBusy(true)
+              void replyInConversation(m.companyId, m.channelId, o, [], m.id).finally(() => setBusy(false))
+            }}
+          >
+            {o}
+          </Button>
+        ))}
+        {onReply && (
+          <button type="button" className="link-btn" data-chatux="task-question-reply" onClick={() => onReply(m.id, identifier)}>
+            Reply
+          </button>
+        )}
       </div>
     </div>
   )

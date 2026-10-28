@@ -9,6 +9,10 @@
  * run's root agent events (the same agent:events stream the run view's timeline reads). Show logs opens that run's
  * full log in place: the run view's Activity timeline (AgentTimeline) or its Output (StepLog), following the tail.
  * A queued card says why it waits and offers Run now (tasks:start, the Board drawer's Run now).
+ *
+ * Needs you: the card stays a compact status card (the reason on one line). The question itself is the filer's own
+ * message in the conversation (ForumService.followAsk), answered from the conversation's composer: **Answer** focuses
+ * it with "Replying to VO-15's question" (askReply), and the strip's line jumps to that message (jumpToMessage).
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
@@ -45,6 +49,22 @@ function watch(runId: string | null, taskId?: string | null): void {
   const t = taskId ? getState().tasks.find((x) => x.id === taskId) : undefined
   if (t && t.status === 'in_progress' && t.runId) return openTaskLive(t.id, t.companyId)
   if (runId) void navigate({ name: 'run', runId })
+}
+
+/** The conversation's composer replies to a task's question (ConversationThread listens). */
+export const TASK_ASK_REPLY_EVENT = 'principia:task-ask-reply'
+export interface TaskAskReply { channelId: string; messageId: string; identifier: string }
+export function askReply(r: TaskAskReply): void {
+  window.dispatchEvent(new CustomEvent<TaskAskReply>(TASK_ASK_REPLY_EVENT, { detail: r }))
+}
+/** Scrolls a conversation to one of its messages and marks it for a moment. */
+export function jumpToMessage(messageId: string): boolean {
+  const el = document.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(messageId)}"]`)
+  if (!el) return false
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  el.classList.add('is-flash')
+  setTimeout(() => el.classList.remove('is-flash'), 1600)
+  return true
 }
 
 /** "1m 12s", ticking every second; its own component so only the clock re-renders. */
@@ -141,11 +161,11 @@ function queueKey(s: State, task: CompanyTask, runLabel: string): string {
 
 /** A Forum message's card (Chats conversations, Forum channels). */
 export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
-  return m.task ? <TaskCardView card={m.task} companyId={m.companyId} /> : null
+  return m.task ? <TaskCardView card={m.task} companyId={m.companyId} channelId={m.channelId} /> : null
 }
 
 /** The live card for one task: a conversation's card message, or a chat's company_file_task / task_create call. */
-export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard; companyId?: Id | null }): React.JSX.Element | null {
+export function TaskCardView({ card: stored, companyId, channelId }: { card: ForumTaskCard; companyId?: Id | null; channelId?: Id | null }): React.JSX.Element | null {
   const card: ForumTaskCard | undefined = stored
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
@@ -155,7 +175,6 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
   const code = useStore((s) => (co ? reposOf(s.repos, co).length > 0 : true))
   const seat = useStore((s) => (card ? s.companyAgents.find((a) => a.id === (task?.agentId ?? card.agentId)) : undefined))
   const display = useAgentDisplay()(seat)
-  const [answer, setAnswer] = useState('')
   const [busy, setBusy] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
@@ -183,7 +202,6 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
     setBusy(true)
     await attempt(fn, label)
     setBusy(false)
-    setAnswer('')
   }
   const runNow = async (): Promise<void> => {
     if (busy || !task) return
@@ -234,7 +252,7 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
                 {queueText}
               </span>
             ) : v.state === 'needs_you' ? (
-              <span className="cx-task__activity" data-chatux="task-needs">
+              <span className="cx-task__activity" data-chatux="task-needs" title={v.needs?.prompt}>
                 {v.needs?.prompt}
               </span>
             ) : (
@@ -256,30 +274,6 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
       )}
       {v.state === 'working' && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)}
       {logOpen && logAgent && v.runId && <TaskLog agentId={logAgent.id} runId={v.runId} stepId={logAgent.stepId} live={rootLive} />}
-      {v.state === 'needs_you' && v.needs && !v.needs.live && task?.ask && !task.ask.answer && (
-        <form
-          className="cx-task__answer"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (answer.trim()) void act(() => hive.tasks.answer({ id: card.taskId, answer: answer.trim() }), 'Answer')
-          }}
-        >
-          {v.needs.options.length ? (
-            v.needs.options.map((o) => (
-              <Button key={o} size="sm" disabled={busy} data-chatux="task-option" onClick={() => void act(() => hive.tasks.answer({ id: card.taskId, answer: o }), 'Answer')}>
-                {o}
-              </Button>
-            ))
-          ) : (
-            <>
-              <input className="input input--sm cx-task__input" value={answer} disabled={busy} placeholder="Your answer…" aria-label={`Answer ${card.identifier}`} data-chatux="task-answer" onChange={(e) => setAnswer(e.target.value)} />
-              <Button type="submit" size="sm" variant="primary" disabled={busy || !answer.trim()}>
-                Send
-              </Button>
-            </>
-          )}
-        </form>
-      )}
       {runError && (
         <div className="cx-task__error" role="alert" data-chatux="task-run-error">
           {runError}
@@ -299,6 +293,21 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
         {v.needs?.live && (
           <Button size="sm" variant="primary" data-chatux="task-approve" onClick={() => watch(v.runId, card.taskId)}>
             Answer it
+          </Button>
+        )}
+        {v.state === 'needs_you' && v.needs && !v.needs.live && task?.ask && !task.ask.answer && (
+          <Button
+            size="sm"
+            variant="primary"
+            data-chatux="task-answer"
+            title={card.askMessageId && channelId ? 'Answer in the conversation' : 'Answer on the board'}
+            onClick={() => {
+              // the question is the filer's message here: answer it from the composer, like any reply
+              if (card.askMessageId && channelId) askReply({ channelId, messageId: card.askMessageId, identifier: card.identifier })
+              else if (co) openBoard(co, { taskId: card.taskId })
+            }}
+          >
+            Answer
           </Button>
         )}
         {v.state === 'in_review' && task && (
@@ -363,11 +372,22 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
   const runOf = (t: StripTask): Id | null => tasks.find((x) => x.id === t.taskId)?.runId ?? null
   const focusRun = runOf(strip.focus)
   const many = strip.tasks.length > 1
+  // "VO-15 needs you · Julia is waiting": the line goes to Julia's question in the conversation
+  const askOf = (t: StripTask): string | null => (t.state === 'needs_you' ? (list.find((c) => c.taskId === t.taskId)?.askMessageId ?? null) : null)
+  const focusAsk = !many ? askOf(strip.focus) : null
   return (
     <div className={`cx-strip ${strip.focus.state === 'needs_you' ? 'is-needs' : ''}`} data-chatux="working-strip" data-state={strip.focus.state} role="status">
       <div className="cx-strip__row">
         <span className={`cx-strip__mark is-${strip.focus.state}`} aria-hidden />
-        <button type="button" className={`cx-strip__line ${strip.focus.state === 'working' ? 'shimmer-text' : ''}`} aria-expanded={many ? open : undefined} disabled={!many} onClick={() => setOpen((o) => !o)} data-chatux="working-strip-line">
+        <button
+          type="button"
+          className={`cx-strip__line ${strip.focus.state === 'working' ? 'shimmer-text' : ''} ${focusAsk ? 'is-link' : ''}`}
+          aria-expanded={many ? open : undefined}
+          disabled={!many && !focusAsk}
+          title={focusAsk ? 'Go to the question' : undefined}
+          onClick={() => (focusAsk ? void jumpToMessage(focusAsk) : setOpen((o) => !o))}
+          data-chatux="working-strip-line"
+        >
           {strip.line}
           {many && <span className="cx-strip__chev">{open ? ' ▴' : ' ▾'}</span>}
         </button>
@@ -387,6 +407,11 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
               <span className="cx-strip__who">{t.who ?? 'Nobody yet'}</span>
               <span className="cx-strip__who">· {t.state === 'working' ? 'working' : t.state === 'needs_you' ? 'needs you' : 'queued'}</span>
               <span className="flex1" />
+              {askOf(t) && (
+                <button type="button" className="link-btn" data-chatux="working-strip-question" onClick={() => void jumpToMessage(askOf(t)!)}>
+                  See the question
+                </button>
+              )}
               {runOf(t) && (
                 <button type="button" className="link-btn" onClick={() => watch(runOf(t), t.taskId)}>
                   Watch

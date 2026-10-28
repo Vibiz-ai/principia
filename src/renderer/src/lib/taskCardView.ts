@@ -8,6 +8,7 @@ import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { CompanyTask } from '@shared/company'
 import type { ForumMessage } from '@shared/forum'
 import { elapsedLabel, isFinishedCard, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
+import { parseDeepLink } from '@shared/deepLink'
 import { plainActivity } from './plainActivity'
 
 export interface TaskCardView {
@@ -103,6 +104,21 @@ export function tailLines(events: readonly AgentEvent[], opts: { n?: number; cod
     out.push({ key: e.seq, kind: e.kind, text: clipLine(text), state: e.state })
   }
   return out.reverse()
+}
+
+/** The services a message's principia://connect/<tool> links name (a task's question draws them as Connect buttons). */
+export function connectToolsIn(text: string): string[] {
+  const out: string[] = []
+  for (const raw of text.match(/principia:\/\/connect\/[^\s)>\]]+/gi) ?? []) {
+    const l = parseDeepLink(raw.replace(/[.,;:!?]+$/, ''))
+    if (l?.kind === 'connect' && l.tool !== 'mcp' && !out.includes(l.tool)) out.push(l.tool)
+  }
+  return out
+}
+
+/** A task's question in its conversation (the filer's message, ForumService.followAsk) that still waits for the person. */
+export function isOpenTaskQuestion(m: Pick<ForumMessage, 'kind' | 'ask'>): boolean {
+  return m.kind === 'ask' && !!m.ask?.taskId && m.ask.status === 'open'
 }
 
 /** The task cards of a conversation's messages, newest card per task, in order. */

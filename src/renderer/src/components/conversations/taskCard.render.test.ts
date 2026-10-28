@@ -34,7 +34,7 @@ beforeAll(async () => {
     companies: [co],
     companiesLoaded: true,
     companyAgents: [julia],
-    tasks: [task('vo-14', { status: 'todo' }), task('vo-15', { status: 'in_progress', runId: 'run_w' }), task('vo-16', { status: 'done', runId: 'run_d', report: { outcome: 'review', summary: 'Rewrote the hero', evidence: [], at: T } } as Partial<CompanyTask>)],
+    tasks: [task('vo-14', { status: 'todo' }), task('vo-15', { status: 'in_progress', runId: 'run_w' }), task('vo-16', { status: 'done', runId: 'run_d', report: { outcome: 'review', summary: 'Rewrote the hero', evidence: [], at: T } } as Partial<CompanyTask>), task('vo-17', { status: 'blocked', blockReason: 'needs_input', runId: 'run_n', ask: { kind: 'question', prompt: "Needs access: Can't read production rows (social_post) to see who created those posts" } } as Partial<CompanyTask>)],
     agents: { n_run: root, n_done: { ...root, id: 'n_done', rootId: 'n_done', runId: 'run_d', status: 'done' } as AgentNode }
   })
 })
@@ -77,5 +77,27 @@ describe('the task card in a chat', () => {
     expect(one).toMatch(/>\w+ is working on VO-15 · 1m</)
     const two = renderToStaticMarkup(createElement(WorkingStrip, { cards: [card('vo-15'), card('vo-14')] }))
     expect(two).toContain('2 tasks · 1 working · 1 queued')
+  })
+  it('needs you: a compact card, no answer box; Answer points at the question in the conversation', async () => {
+    const { TaskCardView } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(TaskCardView, { card: card('vo-17', { state: 'needs_you', askMessageId: 'msg_q' }), channelId: 'ch_1' }))
+    expect(html).toContain('data-state="needs_you"')
+    expect(html).toContain("Needs access: Can&#x27;t read production rows")
+    expect(html).not.toContain('<input')
+    expect(html).not.toContain('<form')
+    expect(html).toContain('data-chatux="task-answer"')
+    expect(html).toContain('title="Answer in the conversation"')
+    // a chat session's card has no question message: Answer opens the task instead
+    const bare = renderToStaticMarkup(createElement(TaskCardView, { card: card('vo-17', { state: 'needs_you' }) }))
+    expect(bare).toContain('title="Answer on the board"')
+  })
+  it('the strip’s "needs you" line goes to the question', async () => {
+    const { WorkingStrip } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(WorkingStrip, { cards: [card('vo-17', { state: 'needs_you', askMessageId: 'msg_q' })] }))
+    expect(html).toMatch(/VO-17 needs you · \w+ is waiting/)
+    expect(html).toMatch(/class="cx-strip__line\s+is-link"[^>]*title="Go to the question"/)
+    expect(html).not.toMatch(/data-chatux="working-strip-line"[^>]*disabled/)
+    const plain = renderToStaticMarkup(createElement(WorkingStrip, { cards: [card('vo-15')] }))
+    expect(plain).toMatch(/disabled=""[^>]*data-chatux="working-strip-line"/)
   })
 })

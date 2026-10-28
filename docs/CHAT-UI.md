@@ -430,9 +430,10 @@ to wait… it should show the task within the thing while its doing it so i can 
     (canceled, or blocked because the run failed, was interrupted, gave no report or hit a limit);
   - the latest activity line of its run (the run's root agent, `plainActivity`, so a company without code reads
     "Working on it", not "Bash"), live; elapsed time since it started, frozen when it came back;
-  - actions: **Watch** (the run's live view), **Open task** (the Board drawer), and when it needs you the answer in
-    place (the ask's options as buttons, or a one-line answer box), **Answer it** for a live permission ask (opens the
-    run), **Approve** when it is in review;
+  - actions: **Watch** (the run's live view), **Open task** (the Board drawer), and when it needs you **Answer** (the
+    question is the agent's own message in the conversation, answered from the composer: see "When the task needs
+    you" below; there is no answer box in the card), **Answer it** for a live permission ask (opens the run),
+    **Approve** when it is in review;
   - once it came back: **Done** (or In review / Failed) with the one-line result and the **Pull request** when the task
     has one.
 - **The card is one message**, updated in place: a `system` Forum message with a `task` payload
@@ -523,6 +524,59 @@ follow the same rules:
   the same chat's second call for the same message, another chat, and an agent in a conversation; matches use
   `sameRequest` (equal titles, or a long title inside the other). The repeat is not drawn as a second card.
 
+### When the task needs you: the agent asks in the conversation (2026-10-28)
+
+The founder asked Julia to check something; she filed VO-15, which stopped with "Needs access: Can't read production
+rows (social_post, vagent_autopilot_proposals) to co…". All the conversation showed was that truncated line in the card
+and a tiny "Your answer… [Send]" box inside it. His words: "it should give it to the agent, not that shit within the
+task. It should come back and reply to the parent so the parent tells what it needs". Now:
+
+- **The parent asks.** When a task filed from a conversation waits for the founder's answer (`waitsForAnswer`: an
+  unanswered board ask, set by `task_ask`, `forum_ask` on the task, or Principia from the run report's founder
+  questions and blockers, `orchestrator/apply.ts beforeSync`), the agent who filed it posts one message in the
+  conversation (`ForumService.followAsk`, inside `reconcileTaskCards {post:true}`, a moment after the board write): the
+  whole question in the first person, what the run found so far and where to answer (`shared/taskCard.ts taskAskSay`):
+
+  > VO-15 is stuck and needs you.
+  > So far: The posts were made by the autopilot, but I could not see which workspace member turned it on
+  > I need access: Can't read production rows (social_post, vagent_autopilot_proposals) to see who created those posts
+  > Reply here and I'll pass it on to VO-15.
+
+  It is an `ask` message (`ask.taskId`, to the owner) posted for the agent with origin `principia:ask:<run>` (never
+  `principia:<run>`, which means "the result came back"), opKey `card:<task>:ask:<taskAskKey>`: **one message per ask**
+  (task, run and prompt), across restarts. An agent's own `forum_ask` for the task in the same conversation is used
+  instead of a second one. The card records it (`ForumTaskCard.askKey`, `askMessageId`). Principia's run-report update
+  is not posted on top of it (`apply.ts` step 1 skips a blocked task whose question goes to its conversation), and the
+  Forum's ask badge does not count it (the task is in Needs you already).
+- **Connect in place.** A blocker that needs a connection carries `principia://connect/<tool>`; the conversation draws
+  each one under the question as the shared `ConnectionSlot` row (CONNECTIONS.md §4.1, "Connect once, everywhere"), and
+  the ask's options as quick answers. **Reply** under the question, or **Answer** on the card, puts the composer in
+  reply mode: "Replying to VO-15's question" (× or Esc clears it); the reply goes in the question's thread.
+- **The answer goes back through the conversation** (`handlers/forum.ts forum:post`, the desktop composer and the
+  phone's room post alike):
+  1. a reply in the question's thread answers it (the existing ask path, `ForumService.answer`);
+  2. else `ForumService.routeTaskReply`: exactly one task question open in the conversation, this is the founder's
+     first message since it was asked, no @mention, and it does not start something new (`looksLikeAnswer`: "also…",
+     "btw", "another thing", "new task"… do not count; an option said back always does). Then it answers the task
+     straight away and no reply run starts;
+  3. otherwise the agents get the message as usual, and the reply run's rules list the open questions
+     (`responder.ts taskAskRule`): if the message answers one, `forum_reply {…, "answer_task": {"task": "VO-15",
+     "answer"?: "…"}}` passes it on; if it is about something else they answer it and leave the question open.
+  The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do, the same agent
+  resumes with "Answer: …"; while its run still runs, it is held and applied when it parks). The parent then says
+  "Got it, back on VO-15." (or, for `answer_task`, its own reply is the confirmation). Answered elsewhere (the drawer,
+  the phone's Needs you), the question closes and the parent says "Got your answer. Back on VO-15." once.
+- **The result** comes back as before (Principia's update from the run report, else the card's result line), posted as
+  the agent: in a conversation a task in review reads "VO-15 is ready for your review. <summary>" with "What I checked:
+  …" instead of "Evidence: …".
+- **The card** stays a compact status card: NEEDS YOU · the reason on one line · Show logs · Answer · Open task.
+- **The strip** "VO-15 needs you · Julia is waiting" is a link to Julia's question (it scrolls there and marks it);
+  with several tasks, each needs-you row has "See the question".
+- **The phone** gets the question as an ordinary room message, and a reply from the phone's room box goes through the
+  same `forum:post` routing.
+- **A chat session** (company_file_task, task_create): the question is said in that chat as a notice, once per ask
+  (`ChatTaskNotes`); Answer on its card opens the task's drawer, since a chat's reply goes to its model, not the board.
+
 ### The phone
 
 `PhoneRoomMessage.task` (`shared/remote.ts PhoneTaskCard`: identifier, title, state, label, result, PR, times) is
@@ -541,7 +595,14 @@ wording rule in the chat rules and the reply prompt), `cloud/phone/phone.test.ts
 phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `data-task`), `task-state`,
 `task-activity`, `task-needs`, `task-result`, `task-watch`, `task-open`, `task-approve`, `task-option`, `task-answer`,
 `task-pr`, `working-strip`, `working-strip-line`, `working-strip-watch`, `task-clock`, `task-tail`, `task-logs`,
-`task-log`, `task-why`, `task-run`, `task-run-error`. Live tail, log, Run now and the queued reasons:
+`task-log`, `task-why`, `task-run`, `task-run-error`; the question (§ When the task needs you): `thread-msg` with
+`data-question` (open, answered, closed) and `data-msg-id`, `task-question`, `task-question-option`,
+`task-question-reply`, `thread-replyto`, `working-strip-question`. Tests: `orchestrator/taskAsk.test.ts` (one question
+as the filer with what it found, no update on top, never twice; the next message routed to the task with one
+confirmation and the result back as the agent; a thread reply; something else through the agent's answer_task; two
+open questions never guessed; answered on the board), `shared/taskCard.test.ts` (`taskAskSay`, `taskAskKey`,
+`looksLikeAnswer`), `taskCardView.test.ts` (`connectToolsIn`), `conversations/taskCard.render.test.ts` (no answer box,
+Answer, the strip's link), `chat/chatTasks.test.ts` (a chat's question notice once per ask). Live tail, log, Run now and the queued reasons:
 `conversations/taskCard.render.test.ts`, `taskCardView.test.ts` (tail, run clock), `shared/taskCard.test.ts`
 (`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).
 

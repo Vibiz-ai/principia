@@ -58,6 +58,11 @@ export interface ForumAgentDeps {
   team?: TeamTools | null
   /** forum_reply `task`: files a person's message as a Board task for the replying agent (null when already filed) */
   fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string; existing?: { by: string | null }; card?: () => void } | null
+  /**
+   * forum_reply answer_task (CHAT-UI.md §8): the person's message (`from`) answers the open question of a task in that
+   * conversation; returns the note for the agent (" · passed the answer on to VO-15")
+   */
+  answerTask?: (me: ForumMember, from: ForumMessage, task: string, answer: string | undefined) => string
   now?: () => Date
 }
 
@@ -288,7 +293,11 @@ export class ForumAgentApi {
     } catch {
       /* bookkeeping only */
     }
-    const woke = this.wakeMentions(c, me, m) + filing.note
+    let woke = this.wakeMentions(c, me, m) + filing.note
+    if (a.answer_task) {
+      const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
+      woke += !from ? ' · no such message: nothing passed on' : this.d.answerTask ? this.d.answerTask(me, from, a.answer_task.task, a.answer_task.answer) : ' · no Board here: nothing passed on'
+    }
     if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
       try {
         this.d.answerAsk(t.root.id, me.id, text, m.id)

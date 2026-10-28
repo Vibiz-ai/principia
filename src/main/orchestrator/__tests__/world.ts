@@ -157,6 +157,12 @@ export class OrchWorld {
       start: (input) => this.startReplyRun(input),
       onWakeStarted: (ids, runId) => this.forum.collab.noteStarted(ids, runId),
       onWakeFailed: (ids, reason) => this.forum.collab.noteFailed(ids, reason),
+      // as forum/wire.ts: the open questions of tasks in the conversation, for the reply run's rules
+      taskAsks: (channelId) =>
+        this.forum.openTaskAsks(channelId).flatMap((q) => {
+          const t = q.ask?.taskId ? c().task(q.ask.taskId) : null
+          return t?.ask ? [{ identifier: t.identifier, ref: q.ref, prompt: t.ask.prompt }] : []
+        }),
       now: () => this.clock
     })
     this.forum.collabWake = (req) => this.responder.wakeForAgent(req.target, req.message.companyId, req.message.id, { handle: req.asker.handle, label: null, depth: req.depth, maxHops: req.maxHops, why: req.why }, req.wakeId)

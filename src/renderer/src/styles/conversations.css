@@ -143,8 +143,6 @@
 .cx-task__activity { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cx-task__result { color: var(--text-primary); white-space: normal; }
 .cx-task__age { flex: none; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.cx-task__answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 30px; }
-.cx-task__input { flex: 1; min-width: 160px; }
 .cx-task__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 24px; }
 .cx-task__head.is-toggle { cursor: pointer; }
 .cx-task__why { color: var(--text-secondary); }
@@ -181,3 +179,15 @@
 .cx-task__log--fill { flex: 1; min-height: 0; margin-left: 0; }
 .cx-task__log--fill > .cx-task__logbox { flex: 1; height: auto; max-height: none; }
 .tl__summary--plain { color: var(--text-primary); }
+
+/* CHAT-UI.md §8: a task's question in its conversation, and the reply box answering it (white line art, no warm tones) */
+.cx-msg.is-question .cx-msg__bubble { border-left: 1px solid var(--text-secondary); }
+.cx-msg[data-question='answered'] .cx-msg__bubble, .cx-msg[data-question='closed'] .cx-msg__bubble { border-left-color: var(--border); }
+.cx-question { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; max-width: 560px; }
+.cx-question__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cx-replyto { display: flex; align-items: center; gap: 6px; padding: 2px 2px 6px; color: var(--text-secondary); font-size: var(--text-xs); }
+.cx-replyto__x { margin-left: auto; padding: 0 4px; border: 0; background: none; color: var(--text-tertiary); cursor: pointer; font-size: var(--text-sm); line-height: 1; }
+.cx-replyto__x:hover { color: var(--text-primary); }
+.cx-strip__line.is-link { cursor: pointer; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
+.cx-strip__line.is-link:hover { text-decoration-color: var(--text-secondary); }
+[data-msg-id].is-flash { outline: 1px solid var(--text-secondary); outline-offset: 4px; border-radius: 6px; transition: outline-color 0.6s; }

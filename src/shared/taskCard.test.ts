@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatTaskCard, chatTaskCards, clockLabel, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
+import { chatTaskCard, chatTaskCards, clockLabel, looksLikeAnswer, taskAskAck, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
 import { buildBlocks } from './chatView'
 
 describe('taskCardState (CHAT-UI.md §8)', () => {
@@ -158,5 +158,40 @@ describe('chat-filed tasks (company_file_task, task_create)', () => {
     expect(sameRequest('Lift UGC conversion', 'Lift UGC conversion from PostHog')).toBe(true)
     expect(sameRequest('Fix', 'Fix the checkout')).toBe(false)
     expect(sameRequest('Write the newsletter', 'Lift UGC conversion')).toBe(false)
+  })
+})
+
+describe("a task's question, said by its agent (CHAT-UI.md §8)", () => {
+  it('waits for an answer only while the board ask is open and the task is not back', () => {
+    expect(waitsForAnswer({ status: 'blocked', ask: { prompt: 'Which one?' } })).toBe(true)
+    expect(waitsForAnswer({ status: 'in_progress', ask: { prompt: 'Which one?' } })).toBe(true)
+    expect(waitsForAnswer({ status: 'blocked', ask: { prompt: 'Which one?', answer: 'Blue' } })).toBe(false)
+    expect(waitsForAnswer({ status: 'in_review', ask: { prompt: 'Which one?' } })).toBe(false)
+    expect(waitsForAnswer({ status: 'blocked', ask: null })).toBe(false)
+  })
+  it('keys one ask of one run', () => {
+    const k = taskAskKey('t1', 'r1', 'Which one?')
+    expect(k).toMatch(/^[0-9a-f]{8}$/)
+    expect(taskAskKey('t1', 'r1', ' Which one? ')).toBe(k)
+    expect(taskAskKey('t1', 'r2', 'Which one?')).not.toBe(k)
+    expect(taskAskKey('t1', 'r1', 'Which other one?')).not.toBe(k)
+  })
+  it('says the whole question in the first person, with what it found, the options and where to answer', () => {
+    expect(taskAskSay({ identifier: 'VO-15', prompt: "Needs access: Can't read production rows (social_post)", summary: 'The autopilot made them' })).toBe(
+      "VO-15 is stuck and needs you.\nSo far: The autopilot made them\nI need access: Can't read production rows (social_post)\nReply here and I'll pass it on to VO-15."
+    )
+    const many = taskAskSay({ identifier: 'VO-15', prompt: 'Which workspace?\nNeeds a connection: PostHog is not connected. Set it up: principia://connect/posthog', options: ['Acme', 'Vibiz', 'Both'] })
+    expect(many).toContain('- Which workspace?\n- I need a connection: PostHog is not connected. Set it up: principia://connect/posthog')
+    expect(many).toContain('Options: Acme, Vibiz or Both.')
+    // a summary the question already says is not said twice
+    expect(taskAskSay({ identifier: 'X-1', prompt: 'Which one?', summary: 'Which one?' })).not.toContain('So far')
+    expect(taskAskAck('VO-15')).toBe('Got it, back on VO-15.')
+  })
+  it('an answer, or something new', () => {
+    expect(looksLikeAnswer('Use the PostHog events instead')).toBe(true)
+    expect(looksLikeAnswer('both.', ['Acme', 'Both'])).toBe(true)
+    expect(looksLikeAnswer('also, check the signup funnel')).toBe(false)
+    expect(looksLikeAnswer('btw what about the ads?')).toBe(false)
+    expect(looksLikeAnswer('  ')).toBe(false)
   })
 })

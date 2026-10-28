@@ -20,7 +20,7 @@ import { formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
-import { isFinishedCard, taskCardLine, taskCardResult, taskCardState, taskResultLine, type ForumTaskCard } from '../../shared/taskCard'
+import { isFinishedCard, looksLikeAnswer, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
 import type { ConversationPilot } from './conversationPilot'
 import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
@@ -31,7 +31,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 
 /** A board task as the Forum needs it. */
 export interface ForumTaskView {
-  id: string; companyId: string; identifier: string; status: string; blockReason: string | null; runId: string | null; ask: { prompt: string; answer?: string } | null; report: unknown
+  id: string; companyId: string; identifier: string; status: string; blockReason: string | null; runId: string | null; ask: { prompt: string; options?: string[]; answer?: string } | null; report: unknown
   /** CHAT-UI.md §8 (the task card): optional, older callers leave them out */
   title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string
 }
@@ -167,7 +167,8 @@ export class ForumService implements ForumBridge {
         const m = this.store.member(memberId)
         return m?.agentId ? (d.company?.seatLabel(m.agentId) ?? null) : null
       },
-      fileTask: d.tasks ? (c, me, from, title) => this.fileFromReply(c.companyId, me, from, title) : undefined
+      fileTask: d.tasks ? (c, me, from, title) => this.fileFromReply(c.companyId, me, from, title) : undefined,
+      answerTask: d.tasks ? (me, from, task, answer) => this.answerTaskFromReply(me, from, task, answer) : undefined
     })
     this.http = new ForumHttpServer({ call: (token, tool, args, signal) => this.httpCall(token, tool, args, signal) })
   }
@@ -403,7 +404,7 @@ export class ForumService implements ForumBridge {
    * A human (or an asked agent) answers an ask: from an option button, the answer field or a thread reply
    * (`replyId` = that reply, so no second reply is posted). Wakes waiting tools; a parked task gets tasks:answer.
    */
-  answer(messageId: string, byId: string, answer: string, replyId?: string): ForumMessage {
+  answer(messageId: string, byId: string, answer: string, replyId?: string, opts: { ack?: boolean } = {}): ForumMessage {
     const msg = this.store.message(messageId)
     if (msg.kind !== 'ask' || !msg.ask) fail('That message is not an ask')
     const by = this.store.mustMember(byId)
@@ -430,8 +431,139 @@ export class ForumService implements ForumBridge {
     if (ask.taskId && this.d.tasks && !hadWaiter) {
       const r = this.applyTaskAnswer(ask.taskId, next.answer!)
       if (r === 'running') updated = this.store.patchPayload(msg.id, { ask: { ...next, pendingTaskAnswer: true } })
+      // CHAT-UI.md §8: the agent who asked in the conversation says the answer went back to the task
+      if (r !== 'skip' && opts.ack !== false && by.kind === 'human' && isCardAsk(msg)) this.ackTaskAnswer(msg, false)
     }
     return updated
+  }
+
+  /** "Got it, back on VO-15.": the asking agent's line once the person's answer reached the task. Once per question. */
+  private ackTaskAnswer(q: ForumMessage, elsewhere: boolean): void {
+    try {
+      const t = q.ask?.taskId ? this.d.tasks?.get(q.ask.taskId) : null
+      if (!t) return
+      const key = this.opKeyOf(q.id)
+      this.store.post(q.authorId, { channelId: q.channelId, text: taskAskAck(t.identifier, elsewhere), origin: q.origin, ...(key ? { opKey: `${key}:ack` } : {}) })
+    } catch (e) {
+      this.d.log?.warn('forum: task answer ack failed', { messageId: q.id, error: String(e) })
+    }
+  }
+  private opKeyOf(messageId: string): string | null {
+    const row = this.d.db.prepare("SELECT json_extract(data,'$.opKey') AS k FROM forum_messages WHERE id=?").get(messageId) as { k: string | null } | undefined
+    return row?.k ?? null
+  }
+
+  // ---------- a task's question in its conversation (CHAT-UI.md §8) ----------
+
+  /** The open questions of tasks in a conversation (the filer's question, or an agent's own forum_ask for its task), oldest first. */
+  openTaskAsks(channelId: string): ForumMessage[] {
+    const rows = this.d.db
+      .prepare("SELECT seq FROM forum_messages WHERE channel_id=? AND kind='ask' AND deleted_at IS NULL AND json_extract(data,'$.ask.status')='open' AND json_extract(data,'$.ask.taskId') IS NOT NULL ORDER BY seq LIMIT 20")
+      .all(channelId) as { seq: number }[]
+    return rows.map((r) => this.store.message(r.seq))
+  }
+
+  /**
+   * forum:post (desktop and phone): the person's message in a conversation goes straight to a task's question when it
+   * clearly answers it: exactly one question open there, this is the person's first message since it was asked, no
+   * @mention, and it does not start something new (looksLikeAnswer). Returns the answered question, or null (the
+   * agents get the message as usual and can pass it on with forum_reply answer_task). Never throws.
+   */
+  routeTaskReply(msg: ForumMessage, byId: string): ForumMessage | null {
+    try {
+      if (!this.d.tasks || msg.threadId || msg.kind !== 'text' || msg.mentions.length || msg.mentionDepartments.length) return null
+      const by = this.store.member(byId)
+      if (!by || by.kind !== 'human') return null
+      // a conversation only: in a Forum room the question has its own thread (reply there to answer it)
+      if (!isConversationChannel(this.store.channel(msg.channelId))) return null
+      const open = this.openTaskAsks(msg.channelId).filter((q) => q.seq < msg.seq)
+      if (open.length !== 1) return null
+      const q = open[0]!
+      if (!(q.ask!.to.includes(by.id) || by.role === 'owner' || by.role === 'admin')) return null
+      const between = this.d.db
+        .prepare("SELECT COUNT(*) AS n FROM forum_messages m JOIN forum_members p ON p.id=m.author_id WHERE m.channel_id=? AND m.seq>? AND m.seq<? AND m.kind!='system' AND p.kind='human'")
+        .get(msg.channelId, q.seq, msg.seq) as { n: number }
+      if (between.n > 0) return null
+      if (!looksLikeAnswer(msg.text, q.ask!.options)) return null
+      return this.answer(q.id, by.id, msg.text, msg.id)
+    } catch (e) {
+      this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })
+      return null
+    }
+  }
+
+  /** forum_reply answer_task: the agent passes the person's message on to the open question of a task in that conversation. */
+  private answerTaskFromReply(me: ForumMember, from: ForumMessage, task: string, answer: string | undefined): string {
+    const author = this.store.member(from.authorId)
+    if (author?.kind !== 'human') return ' · only a person’s message answers a task’s question: not passed on'
+    const id = task.trim().toLowerCase()
+    const q = this.openTaskAsks(from.channelId).find((m) => {
+      const t = this.d.tasks!.get(m.ask!.taskId!)
+      return !!t && (t.identifier.toLowerCase() === id || t.id === task)
+    })
+    if (!q) return ` · ${task} has no open question in this conversation: nothing passed on`
+    try {
+      this.answer(q.id, author.id, (answer?.trim() || from.text).slice(0, 4000), from.id, { ack: false })
+      return ` · passed the answer on to ${this.d.tasks!.get(q.ask!.taskId!)?.identifier ?? task}`
+    } catch (e) {
+      return ` · not passed on: ${clip(e instanceof Error ? e.message : String(e), 160)}`
+    }
+  }
+
+  /**
+   * reconcileTaskCards (post): a task that stops for the person gets its question said in its conversation by the agent
+   * who filed it (the parent), once per ask; answered anywhere else (the drawer, the phone's Needs you) or moved on,
+   * that question closes. Mutates `next` (askKey, askMessageId).
+   */
+  private followAsk(m: ForumMessage, next: ForumTaskCard, t: ForumTaskView): void {
+    const prev = next.askMessageId ? this.messageOrNull(next.askMessageId) : null
+    if (t.ask && waitsForAnswer(t)) {
+      const key = taskAskKey(t.id, t.runId, t.ask.prompt)
+      if (next.askKey === key) return
+      if (prev?.ask?.status === 'open') this.closeQuestion(prev, null)
+      // the agent already asked in this conversation itself (forum_ask on its task): that is the question
+      const own = this.openTaskAsks(m.channelId).find((q) => q.ask!.taskId === t.id)
+      if (own) {
+        next.askKey = key
+        next.askMessageId = own.id
+        return
+      }
+      const filer = next.filedBy ? this.store.member(next.filedBy) : null
+      const agentId = filer?.kind === 'agent' && filer.agentId ? filer.agentId : (next.agentId ?? t.agentId ?? null)
+      if (!agentId) return
+      const owner = this.store.owner(m.companyId)
+      const summary = (t.report as { summary?: string } | null)?.summary ?? null
+      const text = taskAskSay({ identifier: t.identifier, prompt: t.ask.prompt, options: t.ask.options ?? null, summary })
+      const posted = this.postAsAgent({
+        companyId: m.companyId,
+        agentId,
+        runId: t.runId ?? t.id,
+        text,
+        channelId: m.channelId,
+        ask: { status: 'open', to: [owner.id], taskId: t.id, runId: t.runId, ...(t.ask.options?.length ? { options: t.ask.options } : {}) },
+        opKey: `card:${t.id}:ask:${key}`,
+        // not principia:<runId>: that origin says the run's result came back (resultPosted)
+        origin: `principia:ask:${t.runId ?? t.id}`
+      })
+      if (posted) {
+        next.askKey = key
+        next.askMessageId = posted.id
+      }
+      return
+    }
+    if (prev?.ask?.status === 'open') this.closeQuestion(prev, t.ask?.answer ?? null)
+  }
+  private closeQuestion(q: ForumMessage, answer: string | null): void {
+    const owner = this.store.owner(q.companyId)
+    this.store.patchPayload(q.id, { ask: { ...q.ask!, ...(answer ? { status: 'answered' as const, answer: clip(answer, 4000), answeredBy: owner.id, answeredAt: this.now().toISOString() } : { status: 'closed' as const }) } })
+    if (answer) this.ackTaskAnswer(q, true)
+  }
+  private messageOrNull(id: string): ForumMessage | null {
+    try {
+      return this.store.message(id)
+    } catch {
+      return null
+    }
   }
 
   /** 'answered' | 'running' (applied later) | 'skip' (the task moved on). */
@@ -727,6 +859,7 @@ export class ForumService implements ForumBridge {
           prUrl: t.prUrl ?? card.prUrl ?? null,
           finishedAt: finished ? (card.state === state && card.finishedAt ? card.finishedAt : (t.updatedAt ?? this.now().toISOString())) : null
         }
+        if (opts.post) this.followAsk(m, next, t)
         if (opts.post && finished && t.runId && card.resultFor !== t.runId) {
           if (!this.resultPosted(t.id, t.runId)) this.postResult(m, next, t)
           next.resultFor = t.runId
@@ -840,7 +973,7 @@ export class ForumService implements ForumBridge {
    * the message reads "via Principia" and is never mistaken for the agent's own tool call. Default channel: the seat's
    * department channel, else #general. `opKey` makes it idempotent. Returns null when the seat has no active member.
    */
-  postAsAgent(input: { companyId: string; agentId: string; runId: string; text: string; channelId?: string | null; threadId?: string | null; ask?: ForumAsk; opKey: string }): ForumMessage | null {
+  postAsAgent(input: { companyId: string; agentId: string; runId: string; text: string; channelId?: string | null; threadId?: string | null; ask?: ForumAsk; opKey: string; origin?: string }): ForumMessage | null {
     this.store.sync(input.companyId)
     const member = this.store.memberForAgent(input.agentId)
     if (!member || member.companyId !== input.companyId || member.status !== 'active') return null
@@ -853,7 +986,7 @@ export class ForumService implements ForumBridge {
       text,
       ...(input.threadId ? { threadId: input.threadId } : {}),
       ...(input.ask ? { kind: 'ask' as const, ask: input.ask } : {}),
-      origin: `principia:${input.runId}`,
+      origin: input.origin ?? `principia:${input.runId}`,
       opKey: input.opKey
     })
   }
@@ -905,7 +1038,8 @@ export class ForumService implements ForumBridge {
       channels,
       presence: this.presenceOf(companyId),
       // asks between agents are their conversation (AGENT-COLLAB.md), not something the owner must answer
-      openAsks: this.store.openAsks(companyId).filter((m) => m.ask?.to.some((id) => this.store.member(id)?.kind !== 'agent')).length,
+      // a task's question in its conversation is the task's Needs you already: not counted twice
+      openAsks: this.store.openAsks(companyId).filter((m) => m.ask?.to.some((id) => this.store.member(id)?.kind !== 'agent') && !isCardAsk(m)).length,
       openProposals: this.store.openProposals(companyId).length
     }
   }
@@ -927,6 +1061,11 @@ export class ForumService implements ForumBridge {
     this.store.sync(companyId)
     return this.store.owner(companyId)
   }
+}
+
+/** The question Principia posted for a task's filer in its conversation (followAsk). */
+function isCardAsk(m: ForumMessage): boolean {
+  return m.kind === 'ask' && !!m.ask?.taskId && m.origin.startsWith('principia:ask:')
 }
 
 function safeBool(f: () => boolean): boolean {

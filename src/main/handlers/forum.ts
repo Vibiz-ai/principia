@@ -68,6 +68,8 @@ export function registerForumHandlers(h: Hive): void {
         }
       }
     }
+    // CHAT-UI.md §8: the person's next message in a conversation answers a task's one open question there
+    if (!answered && !proposal && !ask) answered = !!s.routeTaskReply(msg, me)
     // §6.4: everything else a person writes wakes the agents it is for
     if (!answered && !proposal) s.humanPosted(msg)
     return msg
