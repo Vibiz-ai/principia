@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { PassportClient, harvestNotes, notesBody } from '../passport'
 import { fakePassportHost, type FakeHost } from './fakes'
+import { budget } from '../../../test/timing'
 
 let host: FakeHost | null = null
 afterEach(async () => {
@@ -33,10 +34,10 @@ describe('passport L0 card', () => {
   it('a slow or down host never blocks a run: null without a card, the last card otherwise', async () => {
     host = await fakePassportHost()
     const c = new PassportClient({ timeoutMs: 100 })
-    host.delayMs = 400
+    host.delayMs = budget(400) // scaled with the limit, so it still proves we gave up at the timeout, not the reply
     const t = Date.now()
     expect(await c.card(material(host))).toBeNull()
-    expect(Date.now() - t).toBeLessThan(350)
+    expect(Date.now() - t).toBeLessThan(budget(350))
     host.delayMs = 0
     expect(await c.card(material(host))).toContain('Acme sells')
     host.delayMs = 400

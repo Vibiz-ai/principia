@@ -32,7 +32,7 @@ npm test
 npm run build
 ```
 
-Run tests relevant to your change. Some database tests require native modules built for the test runtime; report skipped tests rather than treating them as verified. Real agent and connector checks can consume subscription quota or contact external services: use an isolated test setup and describe those checks explicitly.
+Run tests relevant to your change. Some database tests require native modules built for the test runtime; report skipped tests rather than treating them as verified. Time limits in tests go through `src/test/timing.ts`: scale waits with `budget()`, and write "runs in under N ms" checks with `expectFast()`, which only `npm run test:perf` enforces (run it on an idle machine), so `npm test` doesn't fail just because the machine is busy. Real agent and connector checks can consume subscription quota or contact external services: use an isolated test setup and describe those checks explicitly.
 
 ## Project map
 
