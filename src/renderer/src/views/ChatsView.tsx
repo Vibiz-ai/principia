@@ -10,7 +10,7 @@
  * - With nothing picked (or "New conversation") a company opens New conversation: To: Principia picks ▾, the line
  *   that says who will answer, and your recent conversations. All companies opens the last chat you had open.
  * - Empty: the company's own empty state ("No chats in Harbor Dental Group yet…").
- * - `task:<id>` (CHAT-UI.md §8.4): a task at work, its run streaming here (TaskLiveView). Every LIVE entry opens it.
+ * - `task:<id>` (CHAT-UI.md §8.4): a task as a chat (TaskLiveView): its brief, what the agent says, its steps folded, a note box.
  */
 import { useEffect } from 'react'
 import type { Session } from '@shared/types'
@@ -80,6 +80,7 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
 function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): React.JSX.Element {
   if (row.kind === 'agent') return <AgentConversation agent={row.agent} />
   if (row.kind === 'session') return <DirectChat session={row.session} code={code} />
+  if (row.kind === 'task') return <TaskLiveView taskId={row.task.id} />
   if (row.kind === 'conv')
     return (
       <div className="view convo-view">

@@ -1,4 +1,6 @@
-import { companyName, navigate, openTaskLive, resumeCompanyAsked, scopeCompanyId, useStore } from '../state/store'
+import { companyName, navigate, openChatsIn, openTaskLive, resumeCompanyAsked, scopeCompanyId, useStore } from '../state/store'
+import { useTaskChannels } from '../state/conversations'
+import { workingTarget } from '../lib/convWork'
 import { useNeeds, useWorking } from '../state/live'
 import { RelativeTime } from '../components/ui'
 import { statusNext } from '../lib/statusNext'
@@ -18,8 +20,17 @@ export function StatusBar(): React.JSX.Element {
   const paused = useStore((s) => (companyId ? (s.companies.find((c) => c.id === companyId)?.pausedAt ?? null) : null))
   const workingSlice = useWorking(companyId ?? 'all')
   const working = workingSlice.count
-  // CHAT-UI.md §8.4: one task at work opens its live view; more open Chats › Live, one row each
-  const only = working === 1 ? workingSlice.items[0] : undefined
+  // CHAT-UI.md §8.6: work that all belongs to one conversation opens that conversation (its tasks are docked there),
+  // one task with no conversation opens its task chat, anything else Chats › Live only
+  const tasks = useStore((s) => s.tasks)
+  const taskChannels = useTaskChannels(companyId)
+  const target = workingTarget(workingSlice.items, { tasks, taskChannels })
+  const targetCompany = workingSlice.items[0]?.companyId ?? companyId ?? null
+  const openWorking = (): void => {
+    if (target.kind === 'conv' && targetCompany) openChatsIn(targetCompany, `conv:${target.channelId}`)
+    else if (target.kind === 'task') openTaskLive(target.taskId, targetCompany)
+    else void navigate({ name: 'chats', filter: 'live' })
+  }
   const needs = useNeeds(companyId ?? 'all').count
   const own = companyId && status?.activeByCompany ? (status.activeByCompany[companyId] ?? { running: 0, queued: 0 }) : null
   const queued = own ? own.queued : (status?.queuedRuns ?? 0)
@@ -37,7 +48,7 @@ export function StatusBar(): React.JSX.Element {
           <span className="glyph" aria-hidden>‖</span> {name ?? 'Paused'}{name ? ' is paused' : ''} · <span className="statusbar__action">Resume</span>
         </button>
       )}
-      <button type="button" className="statusbar__item" onClick={() => (only?.taskId ? openTaskLive(only.taskId, only.companyId) : void navigate({ name: 'chats', filter: 'live' }))} title={only?.taskId ? 'Watch it work' : 'Open Chats › Live (⇧⌘A)'}>
+      <button type="button" className="statusbar__item" onClick={openWorking} title={target.kind === 'conv' ? 'Open the conversation it is for' : target.kind === 'task' ? 'Watch it work' : 'Open Chats › Live (⇧⌘A)'}>
         {working > 0 ? (
           <>
             <span className="glyph glyph--running status-dot--running">●</span> {working} working

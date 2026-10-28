@@ -13,10 +13,13 @@
  * - RecentConversations: the last few conversations with who is in each, a shimmer while someone answers in it.
  * - CHAT-UI.md §8: a task that stops for you asks here, as its filer's message (with Connect buttons for the services
  *   it names and its options); you answer in the reply box ("Replying to VO-15's question" after the card's Answer).
+ * - CHAT-UI.md §8.5: while a task filed here is queued, working or needs you, its live card is docked right above the
+ *   reply box (TaskDock) and its card in the history is a one-line reference; the message list scrolls above the dock.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
+import type { TaskCardState } from '@shared/taskCard'
 import { Button } from '../ui'
 import { Icon } from '../Icon'
 import { MemberAvatar, useMemberDisplay } from '../forum/Avatar'
@@ -27,11 +30,13 @@ import { mentionAtCaret, mentionedAll, mentionOptions, names, routeLine, routeTe
 import { age } from '../../lib/time'
 import { useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
-import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, whoLine } from '../../state/conversations'
+import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, useTaskChannels, whoLine } from '../../state/conversations'
+import { byWork, workLine, workOf, workRank } from '../../lib/convWork'
+import { useIsCode } from '../desk/Desk'
 import { navigate, startSession, useStore } from '../../state/store'
-import { TASK_ASK_REPLY_EVENT, TaskCard, WorkingStrip, type TaskAskReply } from './TaskCard'
+import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
-import { connectToolsIn, isOpenTaskQuestion } from '../../lib/taskCardView'
+import { cardsOfMessages, connectToolsIn, dockedTasks, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
 import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
 
@@ -427,6 +432,9 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   // CHAT-UI.md §8: the reply answers a task's question (the card's Answer, the question's Reply)
   const [replyTo, setReplyTo] = useState<{ messageId: string; identifier: string } | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const body = useRef<HTMLDivElement>(null)
+  // the list follows new messages while you are at its end (also when the dock above the composer grows or shrinks)
+  const atEnd = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
   const me = state?.me ?? null
   const agentMembers = (channel?.memberIds ?? []).filter((id) => display(id)?.kind === 'agent')
@@ -436,12 +444,38 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
     setViewing({ companyId, channelId })
     return () => setViewing(null)
   }, [companyId, channelId])
+  // CHAT-UI.md §8.6: what came back while you were away (a task's result, its question) is where the view opens, under a
+  // "New" line; opening the conversation marks it read
+  const readUpTo = useRef<number | null>(null)
+  if (readUpTo.current === null && channel) readUpTo.current = channel.unread > 0 ? channel.lastReadSeq : -1
+  const firstNew = readUpTo.current !== null && readUpTo.current >= 0 ? (msgs.find((m) => !m.threadId && m.seq > readUpTo.current! && m.authorId !== me && m.kind !== 'system') ?? null) : null
+  const jumped = useRef(false)
   useEffect(() => {
     if (channel?.unread) void markRead(companyId, channelId)
   }, [companyId, channelId, channel?.unread])
   useEffect(() => {
+    if (!jumped.current && firstNew && body.current) {
+      jumped.current = true
+      body.current.querySelector(`[data-msg-id="${firstNew.id}"]`)?.scrollIntoView({ block: 'center' })
+      return
+    }
     bottom.current?.scrollIntoView({ block: 'end' })
+    atEnd.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msgs.length])
+  useEffect(() => {
+    const el = body.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (atEnd.current) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  // CHAT-UI.md §8.5: the tasks filed here that are still open sit in the dock above the composer
+  const cards = useMemo(() => cardsOfMessages(msgs), [msgs])
+  const cardItems = useStripItems(cards)
+  const docked = useMemo(() => new Map(dockedTasks(cardItems).map((t) => [t.taskId, t.state])), [cardItems])
   useEffect(() => {
     input.current?.focus()
     setReplyTo(null)
@@ -521,8 +555,15 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           ))}
         </span>
       </header>
-      <WorkingStrip msgs={msgs} />
-      <div className="cx-thread__body scroll">
+      <WorkingStrip cards={cards} dock />
+      <div
+        className="cx-thread__body scroll"
+        ref={body}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+      >
         {channel?.purpose && (
           <div className="cx-handoff" data-chatux="handoff">
             <span className="cx-handoff__mark" aria-hidden>
@@ -535,17 +576,24 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           m.kind === 'proposal' && m.proposal?.kind === 'agent' ? (
             <HireCard key={m.id} m={m} companyId={companyId} display={display} />
           ) : (
+            <Fragment key={m.id}>
+            {firstNew?.id === m.id && (
+              <div className="cx-new" data-chatux="thread-new" role="separator">
+                <span>New</span>
+              </div>
+            )}
             <MessageBubble
-              key={m.id}
               m={m}
               mine={m.authorId === me}
-              head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'}
+              head={startsGroup(msgs, i)}
+              docked={m.task ? (docked.get(m.task.taskId) ?? null) : null}
               display={display}
               onReply={(id, identifier) => {
                 setReplyTo({ messageId: id, identifier })
                 input.current?.focus()
               }}
             />
+            </Fragment>
           )
         )}
         {channel?.picking && (
@@ -566,6 +614,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
         ))}
         <div ref={bottom} />
       </div>
+      <TaskDock items={cardItems} cards={cards} companyId={companyId} channelId={channelId} />
       <form
         className="cx-thread__reply"
         onSubmit={(e) => {
@@ -642,9 +691,20 @@ function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<stri
   return expect.filter((id) => !answered.has(id) && (busy.has(id) || fresh)).map((id) => ({ id, state: busy.has(id) ? 'working' : 'reading' }))
 }
 
-function MessageBubble({ m, mine, head, display, onReply }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay>; onReply?: (messageId: string, identifier: string) => void }): React.JSX.Element {
-  // CHAT-UI.md §8: a task started here is a live card, not a grey line
-  if (m.kind === 'system' && m.task) return <TaskCard m={m} />
+/**
+ * A message opens a new group (its author's name and time over it) after someone else's message or a system line,
+ * and always for a task's question: "Got it, back on VO-15." and the next question from the same agent read as two
+ * messages, not one paragraph.
+ */
+export function startsGroup(msgs: readonly Pick<ForumMessage, 'authorId' | 'kind' | 'ask'>[], i: number): boolean {
+  const m = msgs[i]!
+  const prev = msgs[i - 1]
+  return !prev || prev.authorId !== m.authorId || prev.kind === 'system' || (m.kind === 'ask' && !!m.ask?.taskId)
+}
+
+export function MessageBubble({ m, mine, head, display, onReply, docked = null }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay>; onReply?: (messageId: string, identifier: string) => void; docked?: TaskCardState | null }): React.JSX.Element {
+  // CHAT-UI.md §8: a task started here is a live card, not a grey line; while it is docked, a one-line reference (§8.5)
+  if (m.kind === 'system' && m.task) return docked ? <TaskCardRef card={m.task} state={docked} /> : <TaskCard m={m} />
   if (m.kind === 'system')
     return (
       <div className="cx-handoff cx-handoff--small" data-chatux="thread-msg" data-kind="system" data-msg-id={m.id}>
@@ -657,20 +717,30 @@ function MessageBubble({ m, mine, head, display, onReply }: { m: ForumMessage; m
   const d = display(m.authorId)
   const question = m.kind === 'ask' && !!m.ask?.taskId
   return (
-    <div className={`cx-msg ${mine ? 'is-mine' : ''} ${head ? 'is-head' : ''} ${question ? 'is-question' : ''}`} data-chatux="thread-msg" data-author={d?.name ?? ''} data-msg-id={m.id} {...(question ? { 'data-question': m.ask!.status } : {})}>
-      <div className="cx-msg__face">{head && !mine && <MemberAvatar display={d} size={26} />}</div>
+    <Bubble mine={mine} head={head} face={<MemberAvatar display={d} size={26} />} who={d?.name ?? ''} role={d?.role ?? null} at={m.createdAt} className={question ? 'is-question' : ''} data={{ 'data-chatux': 'thread-msg', 'data-author': d?.name ?? '', 'data-msg-id': m.id, ...(question ? { 'data-question': m.ask!.status } : {}) }} after={question ? <TaskQuestionActions m={m} onReply={onReply} /> : null}>
+      <MarkdownLite text={question ? questionText(m.text, m.ask?.options) : m.text} />
+    </Bubble>
+  )
+}
+
+/**
+ * One chat bubble (CHAT-UI.md §7): the face and "Name role · 2m" on the first of a group, yours on the right. The
+ * conversation's messages and the task chat's (§8.4) are both drawn with it.
+ */
+export function Bubble({ mine, head, face, who, role, at, className = '', data, after, children }: { mine: boolean; head: boolean; face?: React.ReactNode; who: string; role?: string | null; at?: string | null; className?: string; data?: Record<string, string>; after?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className={`cx-msg ${mine ? 'is-mine' : ''} ${head ? 'is-head' : ''} ${className}`} {...data}>
+      <div className="cx-msg__face">{head && !mine && face}</div>
       <div className="cx-msg__body">
         {head && (
           <div className="cx-msg__who">
-            {mine ? 'You' : d?.name}
-            {!mine && d?.role && <span className="cx-msg__role">{d.role}</span>}
-            <span className="cx-msg__time">{age(m.createdAt)}</span>
+            {mine ? 'You' : who}
+            {!mine && role && <span className="cx-msg__role">{role}</span>}
+            {at && <span className="cx-msg__time">{age(at)}</span>}
           </div>
         )}
-        <div className="cx-msg__bubble selectable">
-          <MarkdownLite text={m.text} />
-        </div>
-        {question && <TaskQuestionActions m={m} onReply={onReply} />}
+        <div className="cx-msg__bubble selectable">{children}</div>
+        {after}
       </div>
     </div>
   )
@@ -685,8 +755,23 @@ function TaskQuestionActions({ m, onReply }: { m: ForumMessage; onReply?: (messa
   const known = useStore((s) => s.tasks.find((t) => t.id === m.ask?.taskId)?.identifier ?? null)
   const identifier = known ?? /^([A-Z][A-Z0-9]{0,9}-\d+)\b/.exec(m.text)?.[1] ?? 'the task'
   const [busy, setBusy] = useState(false)
-  if (!isOpenTaskQuestion(m)) return null
   const options = m.ask?.options ?? []
+  if (!isOpenTaskQuestion(m)) {
+    // answered: the options stay as a record of what was picked (the bubble no longer lists them in its text)
+    if (!options.length || m.ask?.status !== 'answered') return null
+    const picked = (m.ask?.answer ?? '').trim().toLowerCase()
+    return (
+      <div className="cx-question" data-chatux="task-question" data-answered="">
+        <div className="cx-question__actions">
+          {options.map((o) => (
+            <span key={o} className={`cx-question__opt ${picked && o.trim().toLowerCase() === picked ? 'is-picked' : ''}`} data-chatux="task-question-option-done">
+              {o}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="cx-question" data-chatux="task-question">
       {tools.map((tool) => (
@@ -720,21 +805,37 @@ function TaskQuestionActions({ m, onReply }: { m: ForumMessage; onReply?: (messa
 // ---------- recents ----------
 
 export function RecentConversations({ companyId, limit = 5, onOpen, selected, compact = false, empty }: { companyId: Id; limit?: number; onOpen: (id: Id) => void; selected?: Id | null; compact?: boolean; empty?: string }): React.JSX.Element | null {
-  const rows = useConversations(companyId).slice(0, limit)
+  const all = useConversations(companyId)
+  const tasks = useStore((s) => s.tasks)
+  const taskChannels = useTaskChannels(companyId)
+  const code = useIsCode(companyId)
+  // CHAT-UI.md §8.6: the conversation whose tasks need you or are at work comes first, so the eye goes there
+  const rows = useMemo(() => byWork(all.map((r) => {
+    const work = workOf(r.id, tasks, taskChannels, r.unreadTasks)
+    return { r, work, rank: Math.max(workRank(work, r.working), r.unread > 0 ? 1 : 0), at: r.lastAt }
+  })).slice(0, limit), [all, tasks, taskChannels, limit])
   if (!rows.length) return empty ? <div className="cx-recent__empty">{empty}</div> : null
   return (
     <div className={`cx-recent ${compact ? 'cx-recent--compact' : ''}`} data-chatux="recent">
-      {rows.map((r) => (
-        <button key={r.id} type="button" className={`cx-recent__row ${r.working ? 'is-shimmering' : ''} ${selected === r.id ? 'is-selected' : ''}`} data-chatux="recent-row" data-title={r.title} title={`${r.title}\n${whoLine(r)}${r.working ? ' · answering…' : ''}`} onClick={() => onOpen(r.id)}>
-          <span className={`cx-recent__dot ${r.working ? 'is-working' : r.unread ? 'is-unread' : ''}`} aria-hidden />
-          <span className="cx-recent__text">
-            <span className={`cx-recent__title ${r.working ? 'shimmer-text' : ''}`}>{r.title}</span>
-            {compact && <span className="cx-recent__sub">{r.working ? `${r.who.filter((_, i) => r.workingIds.includes(r.agentMemberIds[i]!)).join(', ')} answering…` : whoLine(r)}</span>}
-          </span>
-          {!compact && <span className="cx-recent__who">{whoLine(r)}</span>}
-          <span className="cx-recent__age">{age(r.lastAt)}</span>
-        </button>
-      ))}
+      {rows.map(({ r, work }) => {
+        const open = selected === r.id
+        const line = workLine(open ? { ...work, unread: [] } : work, { code })
+        const live = r.working || work.working.length > 0
+        const needs = work.needs.length > 0
+        const unread = !open && (r.unread > 0 || work.unread.length > 0)
+        const sub = line ?? (r.working ? `${r.who.filter((_, i) => r.workingIds.includes(r.agentMemberIds[i]!)).join(', ')} answering…` : whoLine(r))
+        return (
+          <button key={r.id} type="button" className={`cx-recent__row ${live ? 'is-shimmering' : ''} ${open ? 'is-selected' : ''} ${unread || needs ? 'is-unread' : ''}`} data-chatux="recent-row" data-title={r.title} data-work={line ?? undefined} title={`${r.title}\n${whoLine(r)}${line ? ` · ${line}` : r.working ? ' · answering…' : ''}`} onClick={() => onOpen(r.id)}>
+            <span className={`cx-recent__dot ${needs ? 'is-needs' : live ? 'is-working' : unread ? 'is-unread' : ''}`} aria-hidden />
+            <span className="cx-recent__text">
+              <span className={`cx-recent__title ${live ? 'shimmer-text' : ''}`}>{r.title}</span>
+              {compact && <span className={`cx-recent__sub ${needs ? 'is-needs' : ''}`}>{sub}</span>}
+            </span>
+            {!compact && <span className={`cx-recent__who ${line ? 'is-work' : ''}`}>{line ?? whoLine(r)}</span>}
+            <span className="cx-recent__age">{age(r.lastAt)}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }

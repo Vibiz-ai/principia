@@ -162,7 +162,8 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect((await surface('Agent desk')).toLowerCase()).toContain('ledgerline launch plan')
     const chats = await surface('Sidebar in Chats')
     expect(chats).toContain('aria-label="Back to the menu"')
-    expect(chats.toLowerCase()).toContain('ledgerline writer')
+    // CHAT-UI.md §8.6: its working task (no conversation filed it) is a row of its own, not the agent's resting chat
+    expect(chats.toLowerCase()).toContain('ledgerline launch plan')
     expect(chats.toLowerCase()).toContain('ledgerline chat')
     store.setState({ view: { name: 'home' } })
     // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it

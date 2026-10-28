@@ -20,8 +20,10 @@ import { formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
-import { isFinishedCard, looksLikeAnswer, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
+import { isFinishedCard, matchesOption, notAnAnswer, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
 import type { ConversationPilot } from './conversationPilot'
+import type { ModelCall } from '../company/router'
+import { classifyReply } from './replyKind'
 import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
 const fail = (m: string): never => {
@@ -35,6 +37,10 @@ export interface ForumTaskView {
   /** CHAT-UI.md §8 (the task card): optional, older callers leave them out */
   title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string
 }
+
+/** Dispatcher.goAhead's result: whether the task's run started, and the true state in one line. */
+export interface TaskGo { state: 'started' | 'running' | 'queued' | 'refused'; line: string }
+const resumed = (go: TaskGo | null | undefined): boolean => !go || go.state === 'started' || go.state === 'running'
 
 export interface ForumServiceDeps {
   db: Database.Database
@@ -51,7 +57,13 @@ export interface ForumServiceDeps {
     /** tasks:answer (wakes the same agent) */
     answer(taskId: string, answer: string): void
     create(input: { companyId: string; title: string; description: string; departmentId: string | null; agentId: string | null }): { id: string; identifier: string }
+    /** the founder's go-ahead: a consented start now (Dispatcher.goAhead). Absent = tasks wait for autopilot or Start. */
+    start?(taskId: string, why: string): TaskGo
+    /** the founder's latest answer to the task's question (its activity), once its next run cleared the ask */
+    lastAnswer?(taskId: string): string | null
   }
+  /** CHAT-UI.md §8: the cheap model tier (routeCall.ts) that tells an answer from a status question. null/absent = none. */
+  replyKind?: () => ModelCall | null
   /** the same paths as departments:save / companyAgents:save (they emit data:changed) */
   company?: {
     saveDepartment(input: { companyId: string; name: string; key?: string; does: string; doesNot: string }): { id: string; key: string; name: string }
@@ -168,7 +180,8 @@ export class ForumService implements ForumBridge {
         return m?.agentId ? (d.company?.seatLabel(m.agentId) ?? null) : null
       },
       fileTask: d.tasks ? (c, me, from, title) => this.fileFromReply(c.companyId, me, from, title) : undefined,
-      answerTask: d.tasks ? (me, from, task, answer) => this.answerTaskFromReply(me, from, task, answer) : undefined
+      answerTask: d.tasks ? (me, from, task, answer) => this.answerTaskFromReply(me, from, task, answer) : undefined,
+      startTask: d.tasks ? (me, from, task) => this.startTaskFromReply(me, from, task) : undefined
     })
     this.http = new ForumHttpServer({ call: (token, tool, args, signal) => this.httpCall(token, tool, args, signal) })
   }
@@ -429,21 +442,30 @@ export class ForumService implements ForumBridge {
     for (const w of [...(this.waiters.get(msg.id) ?? [])]) w.resolve(updated)
     // the board: a parked task wakes with the answer; a running one gets it when it parks (unless a tool was waiting)
     if (ask.taskId && this.d.tasks && !hadWaiter) {
-      const r = this.applyTaskAnswer(ask.taskId, next.answer!)
+      const { r, go } = this.applyTaskAnswer(ask.taskId, next.answer!)
       if (r === 'running') updated = this.store.patchPayload(msg.id, { ask: { ...next, pendingTaskAnswer: true } })
-      // CHAT-UI.md §8: the agent who asked in the conversation says the answer went back to the task
-      if (r !== 'skip' && opts.ack !== false && by.kind === 'human' && isCardAsk(msg)) this.ackTaskAnswer(msg, false)
+      this.lastGo = r === 'skip' ? null : r === 'running' ? this.heldGo(ask.taskId) : go
+      // CHAT-UI.md §8: the agent who asked in the conversation says the answer went back to the task (only "back on
+      // VO-15" when its run really started; else what holds it)
+      if (r !== 'skip' && opts.ack !== false && by.kind === 'human' && isCardAsk(msg)) this.ackTaskAnswer(msg, false, this.lastGo)
     }
     return updated
   }
+  /** what the last answer() did to its task (answerTaskFromReply reads it right after) */
+  private lastGo: TaskGo | null = null
+  /** a running task keeps the answer until its turn ends */
+  private heldGo(taskId: string): TaskGo {
+    const id = this.d.tasks?.get(taskId)?.identifier ?? 'The task'
+    return { state: 'queued', line: `${id} is still on its current turn; your answer goes to it as soon as that ends.` }
+  }
 
   /** "Got it, back on VO-15.": the asking agent's line once the person's answer reached the task. Once per question. */
-  private ackTaskAnswer(q: ForumMessage, elsewhere: boolean): void {
+  private ackTaskAnswer(q: ForumMessage, elsewhere: boolean, go?: TaskGo | null): void {
     try {
       const t = q.ask?.taskId ? this.d.tasks?.get(q.ask.taskId) : null
       if (!t) return
       const key = this.opKeyOf(q.id)
-      this.store.post(q.authorId, { channelId: q.channelId, text: taskAskAck(t.identifier, elsewhere), origin: q.origin, ...(key ? { opKey: `${key}:ack` } : {}) })
+      this.store.post(q.authorId, { channelId: q.channelId, text: taskAskAck(t.identifier, elsewhere, go), origin: q.origin, ...(key ? { opKey: `${key}:ack` } : {}) })
     } catch (e) {
       this.d.log?.warn('forum: task answer ack failed', { messageId: q.id, error: String(e) })
     }
@@ -464,12 +486,10 @@ export class ForumService implements ForumBridge {
   }
 
   /**
-   * forum:post (desktop and phone): the person's message in a conversation goes straight to a task's question when it
-   * clearly answers it: exactly one question open there, this is the person's first message since it was asked, no
-   * @mention, and it does not start something new (looksLikeAnswer). Returns the answered question, or null (the
-   * agents get the message as usual and can pass it on with forum_reply answer_task). Never throws.
+   * The task question the person's message may answer: exactly one open in this conversation, asked before it, this is
+   * the person's first message since, no @mention, not in a thread. Null otherwise. Never throws.
    */
-  routeTaskReply(msg: ForumMessage, byId: string): ForumMessage | null {
+  taskReplyCandidate(msg: ForumMessage, byId: string): ForumMessage | null {
     try {
       if (!this.d.tasks || msg.threadId || msg.kind !== 'text' || msg.mentions.length || msg.mentionDepartments.length) return null
       const by = this.store.member(byId)
@@ -483,31 +503,114 @@ export class ForumService implements ForumBridge {
       const between = this.d.db
         .prepare("SELECT COUNT(*) AS n FROM forum_messages m JOIN forum_members p ON p.id=m.author_id WHERE m.channel_id=? AND m.seq>? AND m.seq<? AND m.kind!='system' AND p.kind='human'")
         .get(msg.channelId, q.seq, msg.seq) as { n: number }
-      if (between.n > 0) return null
-      if (!looksLikeAnswer(msg.text, q.ask!.options)) return null
-      return this.answer(q.id, by.id, msg.text, msg.id)
+      return between.n > 0 ? null : q
     } catch (e) {
       this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })
       return null
     }
   }
 
+  /**
+   * The deterministic route: the person said one of the question's options back. Returns the answered question, or
+   * null. Never throws. Anything else is routeHumanPost's (the cheap classifier, else the agent).
+   */
+  routeTaskReply(msg: ForumMessage, byId: string): ForumMessage | null {
+    const q = this.taskReplyCandidate(msg, byId)
+    if (!q || !matchesOption(msg.text, q.ask!.options)) return null
+    return this.answerQuietly(q, byId, msg)
+  }
+  private answerQuietly(q: ForumMessage, byId: string, msg: ForumMessage): ForumMessage | null {
+    try {
+      return this.answer(q.id, byId, msg.text, msg.id)
+    } catch (e) {
+      this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })
+      return null
+    }
+  }
+
+  /**
+   * forum:post (desktop and phone), for a person's message that is not a thread reply to an open ask: it goes straight
+   * to a task's one open question only when it plausibly answers it: one of the options said back, or the cheap
+   * classifier (replyKind.ts) says "answer". A status question ("are you working on it?"), something new, a failure or a
+   * timeout go to the agents (humanPosted), who answer it or pass it on with forum_reply answer_task. Never throws.
+   */
+  async routeHumanPost(msg: ForumMessage, byId: string): Promise<'answered' | 'agents'> {
+    try {
+      const q = this.taskReplyCandidate(msg, byId)
+      if (q && matchesOption(msg.text, q.ask!.options) && this.answerQuietly(q, byId, msg)) return 'answered'
+      if (q && !notAnAnswer(msg.text)) {
+        const t = this.d.tasks?.get(q.ask!.taskId!)
+        const call = (() => {
+          try {
+            return this.d.replyKind?.() ?? null
+          } catch {
+            return null
+          }
+        })()
+        const kind = call && t?.ask ? await classifyReply(call, { question: t.ask.prompt, options: q.ask!.options ?? t.ask.options ?? null, reply: msg.text }, { redact: this.d.redact }) : null
+        // still the one open question and still unanswered once the model is back
+        const now = this.messageOrNull(q.id)
+        if (kind === 'answer' && now?.ask?.status === 'open' && this.answerQuietly(now, byId, msg)) return 'answered'
+      }
+    } catch (e) {
+      this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })
+    }
+    this.humanPosted(msg)
+    return 'agents'
+  }
+
   /** forum_reply answer_task: the agent passes the person's message on to the open question of a task in that conversation. */
-  private answerTaskFromReply(me: ForumMember, from: ForumMessage, task: string, answer: string | undefined): string {
+  private answerTaskFromReply(me: ForumMember, from: ForumMessage, task: string, answer: string | undefined): { note: string; identifier?: string; go?: TaskGo | null } {
     const author = this.store.member(from.authorId)
-    if (author?.kind !== 'human') return ' · only a person’s message answers a task’s question: not passed on'
+    if (author?.kind !== 'human') return { note: ' · only a person’s message answers a task’s question: not passed on' }
     const id = task.trim().toLowerCase()
     const q = this.openTaskAsks(from.channelId).find((m) => {
       const t = this.d.tasks!.get(m.ask!.taskId!)
       return !!t && (t.identifier.toLowerCase() === id || t.id === task)
     })
-    if (!q) return ` · ${task} has no open question in this conversation: nothing passed on`
+    if (!q) return { note: ` · ${task} has no open question in this conversation: nothing passed on` }
     try {
+      this.lastGo = null
       this.answer(q.id, author.id, (answer?.trim() || from.text).slice(0, 4000), from.id, { ack: false })
-      return ` · passed the answer on to ${this.d.tasks!.get(q.ask!.taskId!)?.identifier ?? task}`
+      const identifier = this.d.tasks!.get(q.ask!.taskId!)?.identifier ?? task
+      const go = this.lastGo as TaskGo | null
+      return { identifier, go, note: ` · passed the answer on to ${identifier}${resumed(go) ? '' : ` · it did not resume: ${go!.line} (said so in your reply)`}` }
     } catch (e) {
-      return ` · not passed on: ${clip(e instanceof Error ? e.message : String(e), 160)}`
+      return { note: ` · not passed on: ${clip(e instanceof Error ? e.message : String(e), 160)}` }
     }
+  }
+
+  /**
+   * forum_reply start_task: the person told the agent to go ahead with a task of this conversation ("go ahead", "start
+   * it"). Only on a person's message, only a task filed in this conversation by this agent or assigned to it; the start
+   * is theirs (Dispatcher.goAhead).
+   */
+  private startTaskFromReply(me: ForumMember, from: ForumMessage, task: string): { note: string; identifier?: string; go?: TaskGo | null } {
+    const author = this.store.member(from.authorId)
+    if (author?.kind !== 'human') return { note: ' · only a person’s go-ahead starts a task: not started' }
+    if (!this.d.tasks?.start) return { note: ' · tasks cannot be started from here: not started' }
+    const want = task.trim().toLowerCase()
+    const card = this.conversationCards(from.channelId).find((c) => c.identifier.toLowerCase() === want || c.taskId === task)
+    const t = card ? this.d.tasks.get(card.taskId) : null
+    if (!card || !t) return { note: ` · ${task} was not filed in this conversation: not started` }
+    const mine = card.filedBy === me.id || (!!me.agentId && (t.agentId ?? card.agentId) === me.agentId)
+    if (!mine) return { note: ` · ${t.identifier} is not yours: not started` }
+    const go = this.d.tasks.start(t.id, `${author.name} said go in the conversation`)
+    return { identifier: t.identifier, go, note: resumed(go) ? ` · ${t.identifier} ${go.state === 'running' ? 'was already running' : 'started'}` : ` · ${t.identifier} did not start: ${go.line} (said so in your reply)` }
+  }
+
+  /** The task cards of a conversation, newest first (distinct tasks, at most 8). */
+  conversationCards(channelId: string): ForumTaskCard[] {
+    const rows = this.d.db
+      .prepare("SELECT seq FROM forum_messages WHERE channel_id=? AND kind='system' AND deleted_at IS NULL AND json_extract(data,'$.task.taskId') IS NOT NULL ORDER BY seq DESC LIMIT 40")
+      .all(channelId) as { seq: number }[]
+    const out: ForumTaskCard[] = []
+    for (const r of rows) {
+      const card = this.store.message(r.seq).task
+      if (card && !out.some((c) => c.taskId === card.taskId)) out.push(card)
+      if (out.length >= 8) break
+    }
+    return out
   }
 
   /**
@@ -551,12 +654,23 @@ export class ForumService implements ForumBridge {
       }
       return
     }
-    if (prev?.ask?.status === 'open') this.closeQuestion(prev, t.ask?.answer ?? null)
+    // answered on the board or the phone and already resumed (its new run cleared the ask): the answer is in its activity
+    if (prev?.ask?.status === 'open') this.closeQuestion(prev, t.ask?.answer ?? (t.status === 'in_progress' && t.runId !== prev.ask.runId ? this.lastAnswerOf(t.id) : null))
+  }
+  private lastAnswerOf(taskId: string): string | null {
+    try {
+      return this.d.tasks?.lastAnswer?.(taskId) ?? null
+    } catch {
+      return null
+    }
   }
   private closeQuestion(q: ForumMessage, answer: string | null): void {
     const owner = this.store.owner(q.companyId)
     this.store.patchPayload(q.id, { ask: { ...q.ask!, ...(answer ? { status: 'answered' as const, answer: clip(answer, 4000), answeredBy: owner.id, answeredAt: this.now().toISOString() } : { status: 'closed' as const }) } })
-    if (answer) this.ackTaskAnswer(q, true)
+    if (!answer) return
+    // answered on the board or the phone (tasks:answer already gave the go-ahead): say where the task really is
+    const t = q.ask?.taskId ? this.d.tasks?.get(q.ask.taskId) : null
+    this.ackTaskAnswer(q, true, t && t.status !== 'in_progress' ? this.goAhead(t.id, 'you answered its question') : null)
   }
   private messageOrNull(id: string): ForumMessage | null {
     try {
@@ -566,20 +680,23 @@ export class ForumService implements ForumBridge {
     }
   }
 
-  /** 'answered' | 'running' (applied later) | 'skip' (the task moved on). */
-  private applyTaskAnswer(taskId: string, answer: string): 'answered' | 'running' | 'skip' {
+  /**
+   * 'answered' (and `go`: the answer is the founder's go-ahead, so the same agent resumes now, autopilot or not) |
+   * 'running' (applied when the turn ends) | 'skip' (the task moved on).
+   */
+  private applyTaskAnswer(taskId: string, answer: string): { r: 'answered' | 'running' | 'skip'; go: TaskGo | null } {
     const t = this.d.tasks?.get(taskId)
-    if (!t) return 'skip'
+    if (!t) return { r: 'skip', go: null }
     if (t.status === 'blocked' && t.blockReason === 'needs_input' && t.ask && !t.ask.answer) {
       try {
         this.d.tasks!.answer(taskId, answer)
-        return 'answered'
       } catch (e) {
         this.d.log?.warn('forum: task answer failed', { taskId, error: String(e) })
-        return 'skip'
+        return { r: 'skip', go: null }
       }
+      return { r: 'answered', go: this.goAhead(taskId, 'you answered its question') }
     }
-    return t.status === 'in_progress' ? 'running' : 'skip'
+    return { r: t.status === 'in_progress' ? 'running' : 'skip', go: null }
   }
 
   /**
@@ -601,7 +718,7 @@ export class ForumService implements ForumBridge {
         this.store.patchPayload(m.id, { ask: { ...ask, status: 'answered', answer: t.ask.answer, answeredBy: owner.id, answeredAt: this.now().toISOString() } })
         this.store.systemPost(m.channelId, `Answered on the board (${t.identifier}): ${clip(t.ask.answer, 300)}`, m.seq)
       } else if (ask.pendingTaskAnswer && ask.answer) {
-        const r = this.applyTaskAnswer(t.id, ask.answer)
+        const { r } = this.applyTaskAnswer(t.id, ask.answer)
         if (r !== 'running') this.store.patchPayload(m.id, { ask: { ...ask, pendingTaskAnswer: false } })
       }
     }
@@ -740,13 +857,16 @@ export class ForumService implements ForumBridge {
     try {
       const msg = this.store.message(messageId)
       const by = task.agentId ? this.store.memberForAgent(task.agentId) : null
-      this.postCard(msg, { id: task.id, identifier: task.identifier, title: task.title ?? task.identifier, agentId: task.agentId ?? null }, by ?? { id: null, name: agentName })
+      // the person asked for it in that message: it starts now (their go-ahead); the card says if it cannot
+      const go = this.store.member(msg.authorId)?.kind === 'human' ? this.goAhead(task.id, 'you asked for it in the conversation') : null
+      const card = this.postCard(msg, { id: task.id, identifier: task.identifier, title: task.title ?? task.identifier, agentId: task.agentId ?? null }, by ?? { id: null, name: agentName })
+      if (go && !resumed(go)) this.store.systemPost(msg.channelId, go.line, card?.seq ?? msg.seq)
     } catch {
       /* the card is a courtesy */
     }
   }
   /** forum_reply `task`: the person's message as a Board task for the agent who replied (like Make task). */
-  private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string; existing?: { by: string | null }; card?: () => void } | null {
+  private fileFromReply(companyId: string, me: ForumMember, msg: ForumMessage, title: string): { id: string; identifier: string; existing?: { by: string | null }; card?: () => void; go?: TaskGo | null } | null {
     if (msg.companyId !== companyId || me.companyId !== companyId) fail('That message is not in your company')
     // one task per message, whoever files it: a second agent in the same conversation hears who is already on it
     const prior = this.cardFor(msg.id)
@@ -768,8 +888,19 @@ export class ForumService implements ForumBridge {
     })
     this.filed.set(msg.id, t.id)
     if (this.filed.size > 2000) for (const k of [...this.filed.keys()].slice(0, 1000)) this.filed.delete(k)
+    // the person asked for this work in that message: it starts now, autopilot or not (their go-ahead)
+    const go = this.goAhead(t.id, `${author?.name ?? 'The person'} asked for it in the conversation`)
     // the caller posts the agent's reply first, then the card under it
-    return { ...t, card: () => void this.postCard(msg, { ...t, title: clip(title.trim(), 120), agentId: me.agentId ?? null }, me) }
+    return { ...t, go, card: () => void this.postCard(msg, { ...t, title: clip(title.trim(), 120), agentId: me.agentId ?? null }, me) }
+  }
+  /** tasks.start, never throwing; null without one */
+  private goAhead(taskId: string, why: string): TaskGo | null {
+    try {
+      return this.d.tasks?.start ? this.d.tasks.start(taskId, why) : null
+    } catch (e) {
+      this.d.log?.warn('forum: go-ahead failed', { taskId, error: String(e) })
+      return null
+    }
   }
 
   // ---------- the live task card (CHAT-UI.md §8) ----------
@@ -1040,7 +1171,8 @@ export class ForumService implements ForumBridge {
       // asks between agents are their conversation (AGENT-COLLAB.md), not something the owner must answer
       // a task's question in its conversation is the task's Needs you already: not counted twice
       openAsks: this.store.openAsks(companyId).filter((m) => m.ask?.to.some((id) => this.store.member(id)?.kind !== 'agent') && !isCardAsk(m)).length,
-      openProposals: this.store.openProposals(companyId).length
+      openProposals: this.store.openProposals(companyId).length,
+      taskChannels: this.store.taskChannels(companyId)
     }
   }
 

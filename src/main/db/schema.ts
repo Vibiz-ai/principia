@@ -275,7 +275,9 @@ export const V2_ADDED_COLUMNS: [table: string, column: string, ddl: string][] = 
   ['agents', 'stop_reason', "TEXT CHECK (stop_reason IN ('rate_limited'))"],
   ['agents', 'reset_at', 'TEXT'],
   ['agents', 'retry_at', 'TEXT'],
-  ['agents', 'stalled_since', 'TEXT']
+  ['agents', 'stalled_since', 'TEXT'],
+  // CHAT-UI.md §8.4: a tool call's own description ("Run the unit tests"), the task chat's words for it
+  ['agent_events', 'description', 'TEXT']
 ]
 
 /**

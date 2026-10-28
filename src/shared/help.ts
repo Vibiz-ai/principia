@@ -52,6 +52,14 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     links: [L('Chats', 'principia://chats'), L('Settings › Team & autonomy', 'principia://settings/team')]
   },
   {
+    id: 'task-chat',
+    title: 'Watch a task work, and add a note',
+    how:
+      'A task an agent starts from a conversation belongs to that conversation: its row in the sidebar (RECENT, LIVE) and in Chats says "2 tasks working" or "1 needs you", and sorts first, so you know where to look; the working tasks are docked above its reply box. When one comes back, the row says "VO-16 finished · unread" with a dot until you open it, and the view opens on the new result. Watch on a task opens its own chat: the brief, what the agent says, its steps folded ("Ran 6 commands · read 3 files", click to see each), its questions, and a box to add a note: the agent gets it as soon as its current turn ends; with an open question, the note is the answer. From: goes back to the conversation. Tasks from autopilot or Run now are rows of their own. An agent\'s own chat is live only while it answers there.',
+    keywords: ['watch', 'watch a task', 'task chat', 'live', 'working', 'what is it doing', 'add a note', 'comment on a task', 'tell the agent', 'unread', 'finished', 'result', 'subagent', 'progress', 'logs', 'steps'],
+    links: [L('Chats › Live only', 'principia://chats'), L('The Board', 'principia://board')]
+  },
+  {
     id: 'navigation',
     title: 'Find your way around (shortcuts)',
     how:

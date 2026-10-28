@@ -7,7 +7,7 @@
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { CompanyTask } from '@shared/company'
 import type { ForumMessage } from '@shared/forum'
-import { elapsedLabel, isFinishedCard, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
+import { elapsedLabel, isFinishedCard, isOpenCard, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
 import { parseDeepLink } from '@shared/deepLink'
 import { plainActivity } from './plainActivity'
 
@@ -136,6 +136,39 @@ export function stripTasks(cards: readonly ForumTaskCard[], tasks: readonly Live
     const runId = t?.runId ?? card.runId ?? null
     return { taskId: card.taskId, identifier: card.identifier, who: who(t?.agentId ?? card.agentId), state, startedAt: card.startedAt, since: state === 'working' && runId ? runSince(runId) : null }
   })
+}
+
+/**
+ * CHAT-UI.md §8.5: the tasks docked above a conversation's composer, from the strip's live states: queued, working and
+ * needs you (so the open question stays reachable). Oldest first, so the newest sits right above the reply box. In
+ * review, done and failed leave the dock; their card in the history is the full outcome card again.
+ */
+export function dockedTasks(items: readonly StripTask[]): StripTask[] {
+  return items.filter((t) => isOpenCard(t.state)).sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))
+}
+/** At most this many docked rows show at once; the rest are "+N more". */
+export const DOCK_VISIBLE = 3
+/** The rows the dock shows and how many more wait behind "+N more" (all of them once expanded). */
+export function dockRows<T>(docked: readonly T[], expanded: boolean, max = DOCK_VISIBLE): { shown: T[]; more: number } {
+  if (expanded || docked.length <= max) return { shown: [...docked], more: 0 }
+  // the newest stay in view (closest to the composer); the oldest fold behind "+N more"
+  return { shown: docked.slice(docked.length - max), more: docked.length - max }
+}
+/** The one-line reference the history keeps while its task is docked: "VO-15 · working · see below". */
+export function dockRefLine(identifier: string, state: TaskCardState): string {
+  return `${identifier} · ${state === 'needs_you' ? 'needs you' : state === 'working' ? 'working' : 'queued'} · see below`
+}
+
+/**
+ * A task question's text without its "Options: A, B or C." line when the options show as quick-answer buttons under
+ * it (the line stays in the stored text for search, notifications and older clients).
+ */
+export function questionText(text: string, options: readonly string[] | null | undefined): string {
+  if (!options?.length) return text
+  return text
+    .split('\n')
+    .filter((l) => !/^\s*Options:\s/.test(l))
+    .join('\n')
 }
 
 /** "runId=startedAt;…" for the runs of open cards: a primitive the strip can select without re-rendering on every agent change. */

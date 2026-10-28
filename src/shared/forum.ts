@@ -58,6 +58,8 @@ export interface ForumChannel {
   lastReadSeq: number
   unread: number
   mentions: number
+  /** CHAT-UI.md §8.6: tasks whose result or question is among the unread messages ("VO-16 finished · unread") */
+  unreadTasks?: string[]
   /**
    * CHAT-UI.md §7.1, conversations only: who set the title. 'first' = the first message's words (the fallback),
    * 'ai' = Principia named it, 'you' = renamed by a person (never overwritten). Absent on older conversations.
@@ -199,6 +201,8 @@ export interface ForumState {
   presence: ForumPresence[]
   openAsks: number
   openProposals: number
+  /** CHAT-UI.md §8.6: the conversation each task was filed from (task id → channel id): its work shows on that row */
+  taskChannels?: Record<string, string>
 }
 
 export interface ForumSearchHit { message: ForumMessage; channelId: string }

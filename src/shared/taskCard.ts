@@ -293,23 +293,69 @@ export function taskAskSay(i: { identifier: string; prompt: string; options?: re
   return out.join('\n')
 }
 
-/** What the agent says once the answer went back to the task. */
-export function taskAskAck(identifier: string, elsewhere = false): string {
+/**
+ * What the agent says once the answer went back to the task. "Back on VO-15" only when the task really resumed (`go`
+ * absent, or its run started / was already running); otherwise the true state ("Got it. Julia is running 3 tasks; VO-15
+ * starts when one finishes.").
+ */
+export function taskAskAck(identifier: string, elsewhere = false, go?: { state: string; line: string } | null): string {
+  if (go && go.state !== 'started' && go.state !== 'running') return `${elsewhere ? 'Got your answer.' : 'Got it.'} ${go.line}`
   return elsewhere ? `Got your answer. Back on ${identifier}.` : `Got it, back on ${identifier}.`
 }
 
 /** A message that starts something new, not an answer: "also…", "btw", "another thing", "new task". */
 const NEW_TOPIC = /^\s*(also|btw|by the way|another thing|one more thing|unrelated|separately|new task|different question|can you also|and also|forget (that|it)|never ?mind|stop|cancel)\b/i
+/** A question about how the work is going, never an answer to the task's question ("are u working on it? or what?"). */
+const STATUS_QUESTION = /\b(are (yo)?u (still )?(working|on it|doing it|there)|is it (done|working|running|ready)|did (yo)?u (start|finish)|(any|an) update|what'?s (the )?(status|happening|going on)|how'?s it going|how is it going|where are (yo)?u at|still (waiting|working)|eta)\b|\b(status|progress|or what)\s*\?*\s*$/i
 
-/**
- * The person's next message clearly answers the one open question: an option said back, or any message that does not
- * start something new. Anything else goes to the agent, who decides (forum_reply answer_task).
- */
-export function looksLikeAnswer(text: string, options?: readonly string[] | null): boolean {
+/** The person said one of the ask's options back ("both." for Both). */
+export function matchesOption(text: string, options?: readonly string[] | null): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!]+$/, '')
+  return !!t && !!options?.some((o) => o.trim().toLowerCase() === t)
+}
+
+/** Surely not an answer: it starts something new, or asks how the work is going. Anything else may be one. */
+export function notAnAnswer(text: string): boolean {
   const t = text.trim()
-  if (!t) return false
-  if (options?.some((o) => o.trim().toLowerCase() === t.toLowerCase().replace(/[.!]+$/, ''))) return true
-  return !NEW_TOPIC.test(t)
+  return !t || NEW_TOPIC.test(t) || STATUS_QUESTION.test(t)
+}
+
+/** How a task in a conversation stands right now, for the agent asked about it (CHAT-UI.md §8: status questions). */
+export interface TaskStatusInput {
+  identifier: string
+  title?: string | null
+  status: string
+  blockReason?: string | null
+  ask?: { prompt?: string | null; answer?: string | null } | null
+  /** who is on it */
+  who?: string | null
+  /** when its current run started (working), else when it last moved */
+  since?: string | null
+  /** its newest activity line */
+  latest?: { at: string; text: string } | null
+  /** why a queued task has not started (queuedReason) */
+  waiting?: string | null
+}
+
+const cut = (s: string, n: number): string => {
+  const f = s.replace(/\s+/g, ' ').trim()
+  return f.length > n ? `${f.slice(0, n - 1)}…` : f
+}
+
+/** One line: "VO-16 “Landing page”: working now (Julia), for 12m; latest: Opened a PR (2m ago)". */
+export function taskStatusLine(t: TaskStatusInput, now: number = Date.now()): string {
+  const state = taskCardState(t)
+  const head = `${t.identifier}${t.title ? ` “${cut(t.title, 80)}”` : ''}`
+  const ago = (iso: string) => elapsedLabel(iso, null, now)
+  let body: string
+  if (state === 'working') body = `working now${t.who ? ` (${t.who})` : ''}${t.since ? `, for ${ago(t.since)}` : ''}`
+  else if (state === 'needs_you') body = t.ask?.prompt && !t.ask.answer ? `waiting for the person's answer: “${cut(t.ask.prompt, 200)}”` : `blocked (${t.blockReason ?? 'needs the person'})`
+  else if (state === 'queued') body = `not started yet: ${t.waiting ? cut(t.waiting, 160) : 'waiting for its turn'}`
+  else if (state === 'in_review') body = 'finished, waiting for the person to review it'
+  else if (state === 'done') body = 'done'
+  else body = `stopped${t.blockReason ? ` (${t.blockReason})` : t.status === 'canceled' ? ' (canceled)' : ''}`
+  const latest = t.latest?.text ? `; latest: ${cut(t.latest.text, 160)} (${ago(t.latest.at)} ago)` : ''
+  return `${head}: ${body}${latest}`
 }
 
 /** Lowercase words only: "Lift UGC conversion!" → "lift ugc conversion". */

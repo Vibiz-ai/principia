@@ -319,7 +319,8 @@ export const COMPANY_TOOL_DEFS: Record<CompanyTool, ToolDef> = {
         departmentKey: { type: 'string', maxLength: 80, description: 'Department key from company_departments (e.g. marketing).' },
         departmentId: { type: 'string', maxLength: 64, description: 'Or the department id.' },
         agent: { type: 'string', maxLength: 80, description: 'Optional: an agent of that department (id or name). Omit to let the board pick.' },
-        reason: { type: 'string', minLength: 1, maxLength: COMPANY_LIMITS.reason, description: 'Why it belongs to this department (shown on the task).' }
+        reason: { type: 'string', minLength: 1, maxLength: COMPANY_LIMITS.reason, description: 'Why it belongs to this department (shown on the task).' },
+        start: { type: 'boolean', description: 'true when the user asked for this work now: it starts at once, even with autopilot off.' }
       },
       required: ['title', 'reason'],
       additionalProperties: false

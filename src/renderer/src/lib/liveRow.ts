@@ -59,9 +59,14 @@ export function workingTasksOf<T extends LiveTask>(seatId: Id, companyId: Id, ta
   return tasks.filter((t) => t.agentId === seatId && t.companyId === companyId && t.status === 'in_progress' && !!t.runId).sort((a, b) => ((a.updatedAt ?? '') < (b.updatedAt ?? '') ? -1 : 1))
 }
 
-/** The Chats list row a task's live view belongs to (its agent's row), so the list keeps it selected. */
-export function rowKeyOfLive(chat: string | null | undefined, tasks: readonly LiveTask[]): string | null {
+/**
+ * The Chats list row a task's chat belongs to, so the list keeps it selected: the conversation that filed it (its
+ * parent, CHAT-UI.md §8.6), else its own task row. Never the agent's resting chat.
+ */
+export function rowKeyOfLive(chat: string | null | undefined, tasks: readonly LiveTask[], taskChannels: Readonly<Record<string, string>> = {}): string | null {
   const id = taskOfChatKey(chat)
   const t = id ? tasks.find((x) => x.id === id) : undefined
-  return t?.agentId ? `agent:${t.agentId}` : null
+  if (!t) return null
+  const ch = taskChannels[t.id]
+  return ch ? `conv:${ch}` : liveTaskKey(t.id)
 }

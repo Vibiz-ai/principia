@@ -555,21 +555,47 @@ task. It should come back and reply to the parent so the parent tells what it ne
 - **The answer goes back through the conversation** (`handlers/forum.ts forum:post`, the desktop composer and the
   phone's room post alike):
   1. a reply in the question's thread answers it (the existing ask path, `ForumService.answer`);
-  2. else `ForumService.routeTaskReply`: exactly one task question open in the conversation, this is the founder's
-     first message since it was asked, no @mention, and it does not start something new (`looksLikeAnswer`: "also…",
-     "btw", "another thing", "new task"… do not count; an option said back always does). Then it answers the task
-     straight away and no reply run starts;
+  2. else `ForumService.routeHumanPost`: exactly one task question open in the conversation, this is the founder's
+     first message since it was asked, no @mention (`taskReplyCandidate`), and it plausibly answers it: one of the
+     ask's options said back (`matchesOption`, `routeTaskReply`: no model call), or the cheap classifier
+     (`forum/replyKind.ts` on `routeModelCall`, the cheap tier: question + options + message → answer |
+     status_question | new_request | other) says "answer". Something new ("also…", "btw", "new task"…) or a status
+     question ("are u working on it? or what?", "any update?": `notAnAnswer`) never reaches the classifier; a failed or
+     timed-out call, or no Claude CLI, never routes. Then it answers the task straight away and no reply run starts;
   3. otherwise the agents get the message as usual, and the reply run's rules list the open questions
      (`responder.ts taskAskRule`): if the message answers one, `forum_reply {…, "answer_task": {"task": "VO-15",
-     "answer"?: "…"}}` passes it on; if it is about something else they answer it and leave the question open.
-  The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do, the same agent
-  resumes with "Answer: …"; while its run still runs, it is held and applied when it parks). The parent then says
-  "Got it, back on VO-15." (or, for `answer_task`, its own reply is the confirmation). Answered elsewhere (the drawer,
-  the phone's Needs you), the question closes and the parent says "Got your answer. Back on VO-15." once.
+     "answer"?: "…"}}` passes it on; if it is about something else (a status question included) they answer it and
+     leave the question open.
+  The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do with "Answer: …";
+  while its run still runs, it is held and applied when it parks), and **the answer is the founder's go-ahead**:
+  `Dispatcher.goAhead` resumes the same agent at once, with autopilot off or a manual seat, past the company's in-flight
+  limit, never on a paused or archived company or seat, a session seat, or past AGENT_MAX_PARALLEL (it then keeps a
+  "Go ahead: …" wake, `startsWithoutAutopilot`, and the pump starts it when the reason clears). The drawer and the
+  phone's `tasks:answer` do the same. The parent says "Got it, back on VO-15." only when the run really started (or was
+  running); otherwise the true state ("Got it. Julia is running 3 tasks; VO-15 starts when one finishes.",
+  `taskAskAck`). For `answer_task` its own reply is the confirmation, rewritten the same way when the task did not resume
+  (`agentApi.ts notStarted`). Answered elsewhere, the question closes and the parent says "Got your answer. Back on
+  VO-15." (or the true state) once.
+- **Asked for, it starts.** A task an agent files from the founder's message in a conversation (`forum_reply` `task`,
+  or Principia from the reply run's report) gets the same go-ahead at once; when it cannot start, the reply says "I
+  filed VO-16" and what holds it instead of "I started". A chat's `company_file_task {start: true}` (the user asked for
+  it now) does the same. The founder's own Make task waits for their word.
+- **Status and "go ahead".** The reply run's rules carry the live state of the conversation's tasks
+  (`forum/taskStatus.ts`, `taskStatusLine`: working since when and its latest step, not started and why, waiting for
+  the person, blocked, in review, done), so "are you working on it?" gets a real answer. When the founder says go
+  ahead with a task of that conversation, the agent calls `forum_reply {…, "start_task": "VO-16"}`: only on a person's
+  message, only a task filed in that conversation by that agent or assigned to it; a consented start through
+  `Dispatcher.goAhead`, and when it cannot start the posted reply is the true state instead of "Starting VO-16 now."
 - **The result** comes back as before (Principia's update from the run report, else the card's result line), posted as
   the agent: in a conversation a task in review reads "VO-15 is ready for your review. <summary>" with "What I checked:
   …" instead of "Evidence: …".
 - **The card** stays a compact status card: NEEDS YOU · the reason on one line · Show logs · Answer · Open task.
+- **Its options are buttons.** The question's options (`ForumAsk.options`) are quick answers under the message; the
+  bubble drops the "Options: A, B or C." line of the stored text while the buttons say it (`taskCardView.ts
+  questionText`; the line stays for search, notifications and older clients). Once answered, the options stay as quiet
+  chips with the one picked marked. A question always opens its own message group (name and time over it,
+  `ConversationKit.startsGroup`), so after "Got it, back on VO-15." from the same agent it does not read as part of the
+  confirmation; consecutive messages from one person keep a small gap between them.
 - **The strip** "VO-15 needs you · Julia is waiting" is a link to Julia's question (it scrolls there and marks it);
   with several tasks, each needs-you row has "See the question".
 - **The phone** gets the question as an ordinary room message, and a reply from the phone's room box goes through the
@@ -600,32 +626,122 @@ phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `dat
 `task-question-reply`, `thread-replyto`, `working-strip-question`. Tests: `orchestrator/taskAsk.test.ts` (one question
 as the filer with what it found, no update on top, never twice; the next message routed to the task with one
 confirmation and the result back as the agent; a thread reply; something else through the agent's answer_task; two
-open questions never guessed; answered on the board), `shared/taskCard.test.ts` (`taskAskSay`, `taskAskKey`,
-`looksLikeAnswer`), `taskCardView.test.ts` (`connectToolsIn`), `conversations/taskCard.render.test.ts` (no answer box,
+open questions never guessed; answered on the board), `orchestrator/answerStarts.test.ts` (the answer resumes with
+autopilot off, the drawer too, a full or paused seat says why, a status question goes to the agent with the live state,
+an option routes without a model call, a failed classifier leaves it to the agent, `start_task` on "go ahead"),
+`forum/replyKind.test.ts`, `shared/taskCard.test.ts` (`taskAskSay`, `taskAskKey`, `taskAskAck`, `matchesOption`,
+`notAnAnswer`, `taskStatusLine`), `taskCardView.test.ts` (`connectToolsIn`), `conversations/taskCard.render.test.ts` (no answer box,
 Answer, the strip's link), `chat/chatTasks.test.ts` (a chat's question notice once per ask). Live tail, log, Run now and the queued reasons:
 `conversations/taskCard.render.test.ts`, `taskCardView.test.ts` (tail, run clock), `shared/taskCard.test.ts`
 (`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).
 
 
-### 8.4 Live opens the work itself (2026-10-28)
+### 8.4 Live opens the work itself (2026-10-28), and the task is a chat
 
-"If it says live and I click it, I should see it working within the chat, not on the right."
+"If it says live and I click it, I should see it working within the chat, not on the right." Then, trying it: a wall
+of "Running a command" rows and raw `ToolSearch select:mcp__hivemem__task_get,…` lines. "Why don't we just see a chat,
+so I can add or comment more stuff if I want?"
 
-- **The live view** (Chats, `task:<id>`, `components/chats/TaskLiveView.tsx`): the header names who and what
-  ("Julia · VO-15 Check why…", the title alone in a company with no code), "Working · 4m 12s" ticking from the run's
-  start, Pause, Chat with Julia, Open task. Under it, what it is doing now in words; an open ask shows as its AskCard;
-  then the run's log fills the pane: the task card's TaskLog (AgentTimeline Activity / StepLog Output), following the
-  tail. Tool rows read in words ("Running a SQL query in PostHog"); the raw call and its input open on click. A task
-  that came back keeps its log with the result line; Pause goes.
-- **Every live entry opens it**: LIVE rows, the status bar's "1 working" (more than one opens Chats › Live), Home's
-  Open, the rail popover and palette rows (`openLiveItem` with a `taskId`), a working agent's row in Chats (its line
-  says what it is working on, not its old chat; on several tasks at once it opens their chat, whose banner has one
-  Watch per task), the right panel's working box ("Watch it work"; on several tasks, one "Watch VO-15" per task in
-  flight, from the seat's `working` list), and the task card's
-  and strip's Watch while the task is in progress (a finished run still opens the run view).
-- **Labelled by what runs**: one LIVE row per running task (an agent on two tasks is two rows): "Julia · VO-15 Check
-  why…" over the activity (`lib/liveRow.ts`). Connector calls are words (`lib/plainActivity.ts`: `posthog.exec call
-  execute-sql {…}` → "Running a SQL query in PostHog", "Looking up data in PostHog" without code; `mcp__google_drive__
-  search` → "Searching Google Drive"; memory lines → "Checking memory").
-- **The resting chat says so**: an agent's own chat, while it works on a task, carries a slim line on top: "Julia is
-  working on VO-15 now · Watch" (several: "working on 2 tasks now", one Watch each).
+- **The task chat** (Chats, `task:<id>`, `components/chats/TaskLiveView.tsx`, thread built by `lib/taskThread.ts`):
+  - header: who and what ("Julia · VO-15 Check why…", the title alone in a company with no code), the state with
+    "Working · 4m 12s" ticking from the run's start, **From: <conversation>** back to the conversation that filed it,
+    Pause, Open task;
+  - body, a conversation thread in time order: the task's brief as the first message ("The task"), the agent's text
+    and thoughts as bubbles (the conversation's `Bubble`, so it reads like the team chat; thoughts dimmed), the task's
+    activity (your notes and answers on the right; the agent's comments, reports and questions), quiet lines for
+    started / paused / stopped, and **tool calls folded** between the bubbles: one line per run of calls, "Ran 6
+    commands · read 3 files · checked memory" (`toolsLabel`; one call reads as itself). A click opens each call in
+    words ("Run the unit tests", "Reading taskCard.ts", "Loading tools"), its duration and state; a click on a call
+    shows the raw call and its output. An open permission ask shows as its AskCard; an open board question as the
+    agent's question bubble with its options as quick answers; a task that came back ends with its outcome line;
+    while it works, the activity in words under the last message. **Full log** opens the run's TaskLog (Activity /
+    Output) in place;
+  - composer: "Add a note for Julia…". Send posts a task comment (`tasks:comment`, by you): it is in the thread at once
+    (optimistic, replaced by the stored row) and reaches the agent through the task's wake, the same inbox a
+    teammate's question uses (`orchestrator/mailbox.ts` → `pendingWake`): coalesced while the run works, so the agent
+    picks it up as soon as the running turn ends; a task not running gets it as its next turn's wake. With an open
+    question, Send answers it (`tasks:answer`). The line under the box says which (`noteHint`).
+- **Words, never raw calls**: a Bash call uses its own `description` ("Run the unit tests"; stored with the event,
+  `agent_events.description`, from the call's input in `engine/live/tracker.ts`); `ToolSearch` reads "Loading tools";
+  Principia's task tools on the memory server read as what they do (`mcp__hivemem__task_get` "Reading the task",
+  `task_comment` "Commenting on the task", `task_report` "Reporting back"…; `lib/plainActivity.ts`). Connector calls
+  stay words ("Running a SQL query in PostHog").
+- **Who opens it**: Watch on a task card and in the dock, the right panel's working box, Home's Open, a task row in
+  Chats (§8.6), LIVE rows of tasks with no conversation, the status bar when its one working item is such a task.
+  LIVE rows of tasks filed from a conversation open the conversation instead (§8.6).
+- **The resting chat is not live**: an agent's own chat shows live only while it answers there; its row keeps its own
+  last message (never "Working on 2 tasks…") and the "Julia is working on 2 tasks now · Watch …" banner is gone: the
+  eye goes to the conversation that filed the work.
+
+### 8.5 Working tasks stay at the bottom: the dock (2026-10-28)
+
+The founder: the task card sits where it was first posted; as the chat goes on (Julia's question, his answer, "Got it,
+back on VO-15") the live card scrolls away to the top and the work is "hidden". Now, in a team conversation:
+
+- **The dock** (`TaskCard.tsx TaskDock`), right above the composer, outside the message list: the compact live card
+  (`TaskCardView dock`) of every task filed from this conversation that is **queued, working or needs you**
+  (`taskCardView.ts dockedTasks`, from the strip's live states, oldest first so the newest sits next to the reply box).
+  One head line: face, identifier, title, who, the state and its clock ("WORKING · 1m 12s"); under it the 2 latest
+  activity lines (the live tail), or why it waits, or what it needs; then Run now / Answer, Show logs, Watch, Open task.
+  **Show logs** opens the run's log above the card (the dock grows upward), 240 px capped at 35vh, scrollable. More than
+  three: the newest three and "+N more" (`dockRows`, `DOCK_VISIBLE`), which expands them all. The dock is capped at 55vh
+  and scrolls.
+- **It never covers messages**: the list is a flex sibling above it, so it shrinks as the dock grows. The list follows
+  new messages while you are at its end, also when the dock grows or shrinks (a `ResizeObserver` on the list).
+- **The history keeps a reference**: while its task is docked, the original card is one line, "VO-15 · working · see
+  below" (`TaskCardRef`, `dockRefLine`; a click marks the docked card). When the task comes back (in review, done,
+  failed) it leaves the dock with a short fade, the reference turns back into the full outcome card, and the result
+  message comes into the stream as before.
+- **The header strip** stays; with one task its line marks the docked card (`jumpToDockedTask`) instead of being inert,
+  except needs you, which still goes to the question. With several, each identifier in the list marks its docked card.
+  A chat session's strip (ChatPane) has no dock and is unchanged.
+- **The phone** (`cloud/phone/render.ts roomDocked`, `roomTaskRef`): the room's queued, working and needs-you cards
+  are pinned (sticky) above the reply box, the newest three and "+N more"; the stream shows "VO-15 · working · see
+  below" in their place. The iPhone app (`RoomView.swift`) is not changed yet.
+- CDP selectors: `task-dock`, `task-dock-card` (with `data-dock-task`), `task-dock-more`, `task-card-ref`,
+  `working-strip-dock`, `task-question-option-done`.
+- Tests: `taskCardView.test.ts` (dock membership by status, order, "+N more", the reference line, `questionText`),
+  `conversations/taskCard.render.test.ts` (the dock's cards, the compact working and needs-you cards, the history's
+  reference and the full card once done, the options as buttons without the "Options:" line, `startsGroup`, the strip's
+  link to the dock), `cloud/phone/phone.test.ts` (pinned cards, references, "+N more").
+
+### 8.6 Tasks are the conversation's subagents (2026-10-28)
+
+"At the end these tasks are like subagents, and I was working within the other chat. That chat should show as live, or
+with X tasks being done, so I can focus my eyes there." `lib/convWork.ts`:
+
+- **Which conversation**: main's Forum state carries `taskChannels` (task id → the channel of its newest card,
+  `ForumStore.taskChannels`); `workOf` sorts a conversation's tasks into working, needs you, queued.
+- **The row says it**: in the sidebar's RECENT, Chats › With the team / One-on-one and New conversation's Recent
+  conversations, a conversation with work shows the live shimmer and "Julia · 2 tasks working" or "1 needs you"
+  (`workLine`), with the needs dot; such rows sort first (`workRank`, `byWork`: needs you, working or answering,
+  unread news, the rest).
+- **LIVE lists conversations**: the one live source's working items are grouped (`groupLive`): every task filed from a
+  conversation, and an agent answering in one, joins that conversation's row ("Launch plan" over "Julia · 2 tasks
+  working · Running the tests"), which opens the conversation (its working tasks are docked, §8.5). Tasks with no
+  conversation (autopilot, Board › Run now, routines), your own chats and workflow steps stay rows of their own; such
+  a task opens its task chat. Chats › Live only counts the same: conversations with work, live sessions, task rows.
+- **Task rows** (Chats › Tasks): a task with no conversation while it works, needs you, or came back unread; it opens
+  the task chat. Its sessions ("Open as session", a restart of one) are not listed again under Claude.
+- **Unread results**: when a task finishes (in review, done, failed) or stops for you, its result or question is posted
+  in the parent conversation (§8). The Forum's own read state (`last_read_seq`, persisted) already counts it unread;
+  each channel now also names the tasks behind its unread messages (`ForumChannel.unreadTasks`, from the message's ask,
+  its `card:<taskId>:…` key or the run it came from), so the row reads "VO-16 finished · unread" ("2 results to read"
+  for more) with a dot and the bright title until the conversation is opened. Opening it marks it read (`forum:markRead`)
+  and the view opens on the first new message under a "New" line. A task with no conversation is unread from its last
+  change until its chat is opened (`state.taskSeen`, kept in local storage; only results after the first launch with
+  this, and from the last week, light up).
+- **Status bar**: "2 working" opens the conversation when every working item belongs to one, the task chat when it is
+  one task with no conversation, else Chats › Live only (`workingTarget`).
+- **One row per chat with Claude**: Restart, Hand off and Open as session make a new session row that continues the same
+  agent conversation, and the old exited one stayed, so "VO-15 · Check why…" was listed twice under Claude.
+  `lib/sessionRows.ts dedupeSessions` keeps one per board task (sessions now carry `taskId`), else per agent-side
+  conversation id, the running one or else the newest.
+- CDP selectors: `task-chat`, `task-chat-brief`, `task-chat-msg` (`data-by`), `task-chat-tools` (`data-count`),
+  `task-chat-tools-label`, `task-chat-step`, `task-chat-composer`, `task-chat-input`, `task-chat-hint`,
+  `task-chat-send`, `task-chat-from`, `task-chat-fulllog`, `task-row`, `thread-new`; rows carry `data-work`.
+- Tests: `lib/convWork.test.ts` (work by conversation, lines, ranks, LIVE grouping, orphan tasks, the status bar's
+  target, orphan unread), `lib/taskThread.test.ts` (thread order, folding, labels, Bash descriptions, ToolSearch,
+  the note hint), `lib/sessionRows.test.ts`, `lib/plainActivity.test.ts`, `components/chats/taskLive.render.test.ts`
+  (the task chat, its composer and its comment delivery), `components/chats/chats.render.test.ts` (rows),
+  `main/forum` (`unreadTasks`, `taskChannels`), `main/engine/live` (the stored description).

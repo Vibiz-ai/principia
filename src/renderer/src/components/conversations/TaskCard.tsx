@@ -13,17 +13,22 @@
  * Needs you: the card stays a compact status card (the reason on one line). The question itself is the filer's own
  * message in the conversation (ForumService.followAsk), answered from the conversation's composer: **Answer** focuses
  * it with "Replying to VO-15's question" (askReply), and the strip's line jumps to that message (jumpToMessage).
+ *
+ * Docked (CHAT-UI.md §8.5): while a task filed from a conversation is queued, working or needs you, its compact live
+ * card sits in the dock right above the composer (TaskDock), and its card in the history is a one-line reference
+ * ("VO-15 · working · see below", TaskCardRef). Once it came back it leaves the dock (a short fade) and the history's
+ * card is the full outcome card again.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
 import { agentActive, startsWithoutAutopilot, type CompanyTask } from '@shared/company'
-import { clockLabel, queuedReason, workingStrip, type ForumTaskCard, type StripTask } from '@shared/taskCard'
+import { clockLabel, queuedReason, workingStrip, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
 import { Button, Segmented } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
 import { AgentTimeline } from '../agents/AgentTimeline'
 import { StepLog } from '../StepLog'
-import { cardsOfMessages, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from '../../lib/taskCardView'
+import { cardsOfMessages, DOCK_VISIBLE, dockedTasks, dockRefLine, dockRows, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
 import { eventGlyph } from '../../lib/live'
@@ -67,6 +72,16 @@ export function jumpToMessage(messageId: string): boolean {
   return true
 }
 
+/** Marks a task's docked card for a moment (the strip's line, the history's reference). */
+export function jumpToDockedTask(identifier: string): boolean {
+  const el = document.querySelector<HTMLElement>(`[data-dock-task="${CSS.escape(identifier)}"]`)
+  if (!el) return false
+  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  el.classList.add('is-flash')
+  setTimeout(() => el.classList.remove('is-flash'), 1600)
+  return true
+}
+
 /** "1m 12s", ticking every second; its own component so only the clock re-renders. */
 export function WorkClock({ since }: { since: string }): React.JSX.Element {
   const now = useNow(true, 1000)
@@ -78,9 +93,9 @@ export function WorkClock({ since }: { since: string }): React.JSX.Element {
 }
 
 /** The last few lines of what the agent is doing (tool calls, its latest message), live from its events. */
-function TaskTail({ agentId, code, fallback }: { agentId: Id; code: boolean; fallback: string }): React.JSX.Element {
+function TaskTail({ agentId, code, fallback, n = 4 }: { agentId: Id; code: boolean; fallback: string; n?: number }): React.JSX.Element {
   const { events } = useAgentEvents(agentId, 30)
-  const lines = useMemo(() => tailLines(events, { n: 4, code }), [events, code])
+  const lines = useMemo(() => tailLines(events, { n, code }), [events, code, n])
   return (
     <div className="cx-task__tail" data-chatux="task-tail" aria-live="polite">
       {lines.length === 0 ? (
@@ -164,8 +179,12 @@ export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
   return m.task ? <TaskCardView card={m.task} companyId={m.companyId} channelId={m.channelId} /> : null
 }
 
-/** The live card for one task: a conversation's card message, or a chat's company_file_task / task_create call. */
-export function TaskCardView({ card: stored, companyId, channelId }: { card: ForumTaskCard; companyId?: Id | null; channelId?: Id | null }): React.JSX.Element | null {
+/**
+ * The live card for one task: a conversation's card message, or a chat's company_file_task / task_create call.
+ * `dock`: the compact card of the dock above a conversation's composer (CHAT-UI.md §8.5): one head line with the
+ * state and clock, the 1–2 latest activity lines, its links; Show logs opens the log above it, capped and scrollable.
+ */
+export function TaskCardView({ card: stored, companyId, channelId, dock = false }: { card: ForumTaskCard; companyId?: Id | null; channelId?: Id | null; dock?: boolean }): React.JSX.Element | null {
   const card: ForumTaskCard | undefined = stored
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
@@ -218,6 +237,94 @@ export function TaskCardView({ card: stored, companyId, channelId }: { card: For
   const toggleLog = (): void => {
     if (logAgent) setLogOpen((o) => !o)
   }
+  const answer =
+    v.state === 'needs_you' && v.needs && !v.needs.live && task?.ask && !task.ask.answer
+      ? () => {
+          // the question is the filer's message here: answer it from the composer, like any reply
+          if (card.askMessageId && channelId) askReply({ channelId, messageId: card.askMessageId, identifier: card.identifier })
+          else if (co) openBoard(co, { taskId: card.taskId })
+        }
+      : null
+  if (dock)
+    return (
+      <div className={`cx-task cx-task--dock is-${v.state} ${logOpen ? 'is-open' : ''}`} data-chatux="task-dock-card" data-state={v.state} data-task={card.identifier} data-dock-task={card.identifier} role="group" aria-label={`${card.identifier}: ${card.title}, ${v.label}`}>
+        {logOpen && logAgent && v.runId && <TaskLog agentId={logAgent.id} runId={v.runId} stepId={logAgent.stepId} live={rootLive} />}
+        <div className={`cx-task__head ${logAgent ? 'is-toggle' : ''}`} onClick={toggleLog}>
+          <span className="cx-task__face" aria-hidden>
+            <AgentFace persona={display?.persona ?? null} label={display?.role || seat?.name || who} color={null} size={18} />
+          </span>
+          <span className="cx-task__id">{card.identifier}</span>
+          <span className="cx-task__title" title={card.title}>
+            {card.title}
+          </span>
+          <span className="cx-task__who">{who}</span>
+          <span className="flex1" />
+          <span className={`cx-task__state is-${v.state}`} data-chatux="task-state">
+            <span className="cx-task__mark" aria-hidden />
+            <span className={v.state === 'working' ? 'shimmer-text' : ''}>{v.label}</span>
+          </span>
+          <span className="cx-task__sep">·</span>
+          {v.state === 'working' ? (
+            <WorkClock since={v.since} />
+          ) : (
+            <span className="cx-task__age" title="Since it started">
+              {v.elapsed}
+            </span>
+          )}
+        </div>
+        <div className="cx-task__dockrow">
+          {v.state === 'working' ? (
+            !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)
+          ) : v.state === 'needs_you' ? (
+            <span className="cx-task__activity cx-task__dockline" data-chatux="task-needs" title={v.needs?.prompt}>
+              {v.needs?.prompt}
+            </span>
+          ) : (
+            <span className="cx-task__activity cx-task__why cx-task__dockline" data-chatux="task-why" title={queueText}>
+              {queueText}
+            </span>
+          )}
+          <span className="flex1" />
+          <span className="cx-task__docklinks">
+            {canRun && (
+              <Button size="sm" variant="primary" icon="play" disabled={busy} data-chatux="task-run" onClick={() => void runNow()}>
+                {runLabel}
+              </Button>
+            )}
+            {v.needs?.live && (
+              <Button size="sm" variant="primary" data-chatux="task-approve" onClick={() => watch(v.runId, card.taskId)}>
+                Answer it
+              </Button>
+            )}
+            {answer && (
+              <Button size="sm" variant="primary" data-chatux="task-answer" title={card.askMessageId && channelId ? 'Answer in the conversation' : 'Answer on the board'} onClick={answer}>
+                Answer
+              </Button>
+            )}
+            {logAgent && (
+              <button type="button" className="link-btn cx-task__link" data-chatux="task-logs" aria-expanded={logOpen} onClick={toggleLog}>
+                {logOpen ? 'Hide logs' : 'Show logs'}
+              </button>
+            )}
+            {v.runId && (
+              <button type="button" className="link-btn cx-task__link" data-chatux="task-watch" onClick={() => watch(v.runId, card.taskId)}>
+                Watch
+              </button>
+            )}
+            {v.onBoard && (
+              <button type="button" className="link-btn cx-task__link" data-chatux="task-open" onClick={() => co && openBoard(co, { taskId: card.taskId })}>
+                Open task
+              </button>
+            )}
+          </span>
+        </div>
+        {runError && (
+          <div className="cx-task__error" role="alert" data-chatux="task-run-error">
+            {runError}
+          </div>
+        )}
+      </div>
+    )
   return (
     <div className={`cx-task is-${v.state} ${logOpen ? 'is-open' : ''}`} data-chatux="task-card" data-state={v.state} data-task={card.identifier} role="group" aria-label={`${card.identifier}: ${card.title}, ${v.label}`}>
       <div className={`cx-task__head ${logAgent ? 'is-toggle' : ''}`} onClick={toggleLog}>
@@ -295,18 +402,8 @@ export function TaskCardView({ card: stored, companyId, channelId }: { card: For
             Answer it
           </Button>
         )}
-        {v.state === 'needs_you' && v.needs && !v.needs.live && task?.ask && !task.ask.answer && (
-          <Button
-            size="sm"
-            variant="primary"
-            data-chatux="task-answer"
-            title={card.askMessageId && channelId ? 'Answer in the conversation' : 'Answer on the board'}
-            onClick={() => {
-              // the question is the filer's message here: answer it from the composer, like any reply
-              if (card.askMessageId && channelId) askReply({ channelId, messageId: card.askMessageId, identifier: card.identifier })
-              else if (co) openBoard(co, { taskId: card.taskId })
-            }}
-          >
+        {answer && (
+          <Button size="sm" variant="primary" data-chatux="task-answer" title={card.askMessageId && channelId ? 'Answer in the conversation' : 'Answer on the board'} onClick={answer}>
             Answer
           </Button>
         )}
@@ -341,30 +438,11 @@ export function TaskCardView({ card: stored, companyId, channelId }: { card: For
  * working on VO-9 · 2m · Watch", "2 tasks running"). Click the line to list them. A working task's clock counts from
  * its run's start, like its card.
  */
-export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; cards?: readonly ForumTaskCard[] }): React.JSX.Element | null {
+export function WorkingStrip({ msgs, cards, dock = false }: { msgs?: readonly ForumMessage[]; cards?: readonly ForumTaskCard[]; dock?: boolean }): React.JSX.Element | null {
   const tasks = useStore((s) => s.tasks)
-  const asks = useStore((s) => s.asks)
-  const seats = useStore((s) => s.companyAgents)
-  const agentDisplay = useAgentDisplay()
   const [open, setOpen] = useState(false)
   const list = useMemo(() => cards ?? cardsOfMessages(msgs ?? []), [cards, msgs])
-  const runIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const c of list) {
-      const r = tasks.find((t) => t.id === c.taskId)?.runId ?? c.runId
-      if (r) ids.add(r)
-    }
-    return ids
-  }, [list, tasks])
-  const starts = useStore((s) => runStartsKey(Object.values(s.agents), runIds))
-  const items = useMemo(() => {
-    const who = (agentId: string | null): string | null => {
-      const seat = agentId ? seats.find((a) => a.id === agentId) : undefined
-      return seat ? (agentDisplay(seat)?.name ?? seat.name) : null
-    }
-    const since = parseRunStarts(starts)
-    return stripTasks(list, tasks, who, openAskRuns(asks), (r) => since.get(r) ?? null)
-  }, [list, tasks, seats, agentDisplay, asks, starts])
+  const items = useStripItems(list)
   const anyOpen = items.some((t) => t.state === 'queued' || t.state === 'working' || t.state === 'needs_you')
   const now = useNow(anyOpen)
   const strip = workingStrip(items, now)
@@ -375,17 +453,19 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
   // "VO-15 needs you · Julia is waiting": the line goes to Julia's question in the conversation
   const askOf = (t: StripTask): string | null => (t.state === 'needs_you' ? (list.find((c) => c.taskId === t.taskId)?.askMessageId ?? null) : null)
   const focusAsk = !many ? askOf(strip.focus) : null
+  // a conversation docks its open tasks above the composer: the line marks the docked card (CHAT-UI.md §8.5)
+  const focusDock = !many && !focusAsk && dock
   return (
     <div className={`cx-strip ${strip.focus.state === 'needs_you' ? 'is-needs' : ''}`} data-chatux="working-strip" data-state={strip.focus.state} role="status">
       <div className="cx-strip__row">
         <span className={`cx-strip__mark is-${strip.focus.state}`} aria-hidden />
         <button
           type="button"
-          className={`cx-strip__line ${strip.focus.state === 'working' ? 'shimmer-text' : ''} ${focusAsk ? 'is-link' : ''}`}
+          className={`cx-strip__line ${strip.focus.state === 'working' ? 'shimmer-text' : ''} ${focusAsk || focusDock ? 'is-link' : ''}`}
           aria-expanded={many ? open : undefined}
-          disabled={!many && !focusAsk}
-          title={focusAsk ? 'Go to the question' : undefined}
-          onClick={() => (focusAsk ? void jumpToMessage(focusAsk) : setOpen((o) => !o))}
+          disabled={!many && !focusAsk && !focusDock}
+          title={focusAsk ? 'Go to the question' : focusDock ? 'Show it above the reply box' : undefined}
+          onClick={() => (focusAsk ? void jumpToMessage(focusAsk) : focusDock ? void jumpToDockedTask(strip.focus.identifier) : setOpen((o) => !o))}
           data-chatux="working-strip-line"
         >
           {strip.line}
@@ -403,7 +483,13 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
           {strip.tasks.map((t) => (
             <li key={t.taskId} className="cx-strip__item">
               <span className={`cx-strip__mark is-${t.state}`} aria-hidden />
-              <span className="cx-strip__id">{t.identifier}</span>
+              {dock ? (
+                <button type="button" className="link-btn cx-strip__id" data-chatux="working-strip-dock" title="Show it above the reply box" onClick={() => void jumpToDockedTask(t.identifier)}>
+                  {t.identifier}
+                </button>
+              ) : (
+                <span className="cx-strip__id">{t.identifier}</span>
+              )}
               <span className="cx-strip__who">{t.who ?? 'Nobody yet'}</span>
               <span className="cx-strip__who">· {t.state === 'working' ? 'working' : t.state === 'needs_you' ? 'needs you' : 'queued'}</span>
               <span className="flex1" />
@@ -421,6 +507,96 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+/** The live state of each card (the strip's and the dock's): the board task, its open asks, its run's start. */
+export function useStripItems(list: readonly ForumTaskCard[]): StripTask[] {
+  const tasks = useStore((s) => s.tasks)
+  const asks = useStore((s) => s.asks)
+  const seats = useStore((s) => s.companyAgents)
+  const agentDisplay = useAgentDisplay()
+  const runIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const c of list) {
+      const r = tasks.find((t) => t.id === c.taskId)?.runId ?? c.runId
+      if (r) ids.add(r)
+    }
+    return ids
+  }, [list, tasks])
+  const starts = useStore((s) => runStartsKey(Object.values(s.agents), runIds))
+  const items = useMemo(() => {
+    const who = (agentId: string | null): string | null => {
+      const seat = agentId ? seats.find((a) => a.id === agentId) : undefined
+      return seat ? (agentDisplay(seat)?.name ?? seat.name) : null
+    }
+    const since = parseRunStarts(starts)
+    return stripTasks(list, tasks, who, openAskRuns(asks), (r) => since.get(r) ?? null)
+  }, [list, tasks, seats, agentDisplay, asks, starts])
+  return items
+}
+
+/** The history's card while its task is docked: one line that points at the dock ("VO-15 · working · see below"). */
+export function TaskCardRef({ card, state }: { card: ForumTaskCard; state: TaskCardState }): React.JSX.Element {
+  return (
+    <button type="button" className={`cx-taskref is-${state}`} data-chatux="task-card-ref" data-state={state} data-task={card.identifier} title={`${card.title} · show it above the reply box`} onClick={() => void jumpToDockedTask(card.identifier)}>
+      <span className={`cx-strip__mark is-${state}`} aria-hidden />
+      <span className="cx-taskref__line">{dockRefLine(card.identifier, state)}</span>
+      <span className="cx-taskref__title">{card.title}</span>
+    </button>
+  )
+}
+
+/**
+ * The dock above a conversation's composer (CHAT-UI.md §8.5): the compact live card of each task filed here that is
+ * queued, working or needs you; at most three, then "+N more". A task that came back fades out of it.
+ */
+export function TaskDock({ items, cards, companyId, channelId }: { items: readonly StripTask[]; cards: readonly ForumTaskCard[]; companyId: Id; channelId: Id }): React.JSX.Element | null {
+  const docked = useMemo(() => dockedTasks(items), [items])
+  const [expanded, setExpanded] = useState(false)
+  const [leaving, setLeaving] = useState<StripTask[]>([])
+  const prev = useRef<StripTask[]>(docked)
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  const ids = docked.map((t) => t.taskId).join(',')
+  useEffect(() => {
+    const here = new Set(docked.map((t) => t.taskId))
+    const gone = prev.current.filter((t) => !here.has(t.taskId))
+    prev.current = docked
+    if (!gone.length) return
+    const goneIds = new Set(gone.map((t) => t.taskId))
+    setLeaving((l) => [...l.filter((x) => !goneIds.has(x.taskId)), ...gone])
+    timers.current.push(setTimeout(() => setLeaving((l) => l.filter((x) => !goneIds.has(x.taskId))), 600))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids])
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+  const { shown, more } = dockRows(docked, expanded)
+  const fading = leaving.filter((t) => !docked.some((d) => d.taskId === t.taskId))
+  if (!shown.length && !fading.length) return null
+  const cardOf = (taskId: string): ForumTaskCard | undefined => cards.find((c) => c.taskId === taskId)
+  return (
+    <div className="cx-dock" data-chatux="task-dock" aria-label="Work in progress from this conversation">
+      {(more > 0 || (expanded && docked.length > DOCK_VISIBLE)) && (
+        <button type="button" className="link-btn cx-dock__more" data-chatux="task-dock-more" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+          {expanded ? 'Show fewer' : `+${more} more`}
+        </button>
+      )}
+      {fading.map((t) => {
+        const c = cardOf(t.taskId)
+        return c ? (
+          <div key={t.taskId} className="cx-dock__item is-leaving" aria-hidden>
+            <TaskCardView card={c} companyId={companyId} channelId={channelId} dock />
+          </div>
+        ) : null
+      })}
+      {shown.map((t) => {
+        const c = cardOf(t.taskId)
+        return c ? (
+          <div key={t.taskId} className="cx-dock__item">
+            <TaskCardView card={c} companyId={companyId} channelId={channelId} dock />
+          </div>
+        ) : null
+      })}
     </div>
   )
 }

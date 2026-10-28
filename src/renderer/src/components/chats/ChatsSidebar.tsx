@@ -13,6 +13,7 @@ import { IconButton, Kbd, useTick } from '../ui'
 import { CompanyTagged, useScope } from '../CompanyChip'
 import { navigate, openNewChat, useStore } from '../../state/store'
 import { rowKeyOfLive } from '../../lib/liveRow'
+import { useTaskChannels } from '../../state/conversations'
 import { pausedChatsLine } from '../../state/desk'
 import { PRIMARY, viewFor } from '../../lib/nav'
 import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, useChatRows } from './ChatList'
@@ -31,8 +32,9 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: a company opens Chats on "New conversation" until you pick one (chat=new…); All companies keeps the last
   const pane = !!scope && (!picked || picked.startsWith('new'))
-  // a task's live view keeps its agent's row selected (CHAT-UI.md §8.4)
-  const liveOwner = rowKeyOfLive(picked, tasks)
+  // a task's chat keeps its parent conversation (or its own task row) selected (CHAT-UI.md §8.6)
+  const taskChannels = useTaskChannels(scope)
+  const liveOwner = rowKeyOfLive(picked, tasks, taskChannels)
   const cur = pane ? null : liveOwner || (picked && rows.find((r) => r.key === picked)?.key) || (remembered && rows.find((r) => r.key === remembered)?.key) || rows[0]?.key || null
   const counts = { live: rows.filter((r) => r.live).length, all: rows.length }
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))

@@ -49,8 +49,10 @@ function setup(opts: { reply?: (turn: Turn, w: OrchWorld, n: number) => Promise<
   })
   const jm = w.forum.store.memberForAgent(julia.id)!
   const conv = w.forum.store.createChannel(owner.id, { name: 'chat-posts-ab12', kind: 'private', memberIds: [jm.id] })
+  // the cheap classifier says "answer" unless a test says otherwise (never a real model call)
+  w.replyKind = async () => '{"kind":"answer"}'
   // as handlers/forum.ts forum:post does (the desktop composer and the phone both post through it)
-  const say = (text: string, threadId?: string): ForumMessage => {
+  const say = async (text: string, threadId?: string): Promise<ForumMessage> => {
     const msg = w.forum.store.post(owner.id, { channelId: conv.id, text, ...(threadId ? { threadId } : {}) })
     let answered = false
     if (msg.threadId) {
@@ -60,17 +62,17 @@ function setup(opts: { reply?: (turn: Turn, w: OrchWorld, n: number) => Promise<
         answered = true
       }
     }
-    if (!answered) answered = !!w.forum.routeTaskReply(msg, owner.id)
-    if (!answered) w.forum.humanPosted(msg)
+    if (!answered) await w.forum.routeHumanPost(msg, owner.id)
     return msg
   }
   const inConv = (): ForumMessage[] => (w.db.prepare('SELECT seq FROM forum_messages WHERE channel_id=? ORDER BY seq').all(conv.id) as { seq: number }[]).map((r) => w.forum.store.message(r.seq))
   /** the task blocked on its first run, its question in the conversation */
   const stuck = async () => {
-    say('can you check who created the social posts for maria@example.com?')
+    await say('can you check who created the social posts for maria@example.com?')
     await w.drain()
     const t = w.c.listTasks(co.id).find((x) => /who created/.test(x.title))!
-    await w.runNow(t.id)
+    // filed from the person's request, it started right away (their go-ahead), even on a manual seat
+    expect(w.c.task(t.id).status).not.toBe('todo')
     await w.drain()
     w.forum.reconcileTaskCards(co.id, { post: true })
     return t
@@ -113,10 +115,11 @@ describe('a task that stops for the founder asks in its conversation', () => {
     const { w, co, jm, say, stuck, questions, inConv, taskAnswers, replyTurns } = setup()
     const t = await stuck()
     const before = replyTurns()
-    say('Use the PostHog events instead')
-    // straight to the task: no reply run for the agent, one confirmation line from it
+    await say('Use the PostHog events instead')
+    // straight to the task: no reply run for the agent, one confirmation line from it, and the task resumed at once
     expect(replyTurns()).toBe(before)
-    expect(w.c.task(t.id)).toMatchObject({ status: 'todo', ask: { answer: 'Use the PostHog events instead' } })
+    expect(w.c.task(t.id).status).toBe('in_progress')
+    expect(w.c.detail(t.id).activity.some((a) => a.kind === 'answered' && a.message === 'Answer: Use the PostHog events instead')).toBe(true)
     expect(questions(t.id)[0]!.ask).toMatchObject({ status: 'answered', answer: 'Use the PostHog events instead' })
     const acks = inConv().filter((m) => m.authorId === jm.id && m.text === `Got it, back on ${t.identifier}.`)
     expect(acks).toHaveLength(1)
@@ -139,8 +142,9 @@ describe('a task that stops for the founder asks in its conversation', () => {
   it('a reply in the question’s thread (the card’s Answer) answers it too', async () => {
     const { w, say, stuck, questions } = setup()
     const t = await stuck()
-    say('Paste: ana@example.com made both', questions(t.id)[0]!.id)
-    expect(w.c.task(t.id).ask?.answer).toBe('Paste: ana@example.com made both')
+    await say('Paste: ana@example.com made both', questions(t.id)[0]!.id)
+    expect(questions(t.id)[0]!.ask?.answer).toBe('Paste: ana@example.com made both')
+    expect(w.c.detail(t.id).activity.some((a) => a.message === 'Answer: Paste: ana@example.com made both')).toBe(true)
   })
 
   it('something else goes to the agent, who passes the answer on with forum_reply answer_task', async () => {
@@ -161,14 +165,15 @@ describe('a task that stops for the founder asks in its conversation', () => {
     })
     const t = await stuck()
     const before = replyTurns()
-    say('also, can you check the signup funnel? and for the posts just check the PostHog events instead')
+    await say('also, can you check the signup funnel? and for the posts just check the PostHog events instead')
     // not clearly an answer: the agent gets it, told about the open question
     expect(w.c.task(t.id).ask?.answer).toBeUndefined()
     await w.drain()
     expect(replyTurns()).toBe(before + 1)
     expect(prompt).toContain(`Still waiting for the person in this conversation: ${t.identifier}`)
     expect(prompt).toContain('"answer_task":{"task":')
-    expect(w.c.task(t.id)).toMatchObject({ status: 'todo', ask: { answer: 'Check the PostHog events instead' } })
+    expect(w.c.detail(t.id).activity.some((a) => a.message === 'Answer: Check the PostHog events instead')).toBe(true)
+    expect(w.c.task(t.id).status).not.toBe('blocked')
     expect(questions(t.id)[0]!.ask?.status).toBe('answered')
     // the agent's own reply is the confirmation: no second line from Principia
     expect(inConv().filter((m) => m.authorId === jm.id && /back on/.test(m.text))).toHaveLength(1)
@@ -180,7 +185,7 @@ describe('a task that stops for the founder asks in its conversation', () => {
     // a second task of the same conversation waiting too
     const q1 = questions(t.id)[0]!
     w.forum.store.post(q1.authorId, { channelId: q1.channelId, text: 'Second question', kind: 'ask', ask: { status: 'open', to: [w.forum.store.owner(co.id).id], taskId: t.id } })
-    expect(w.forum.routeTaskReply(say('Use PostHog'), w.forum.store.owner(co.id).id)).toBeNull()
+    await say('Use PostHog')
     expect(w.c.task(t.id).ask?.answer).toBeUndefined()
   })
 

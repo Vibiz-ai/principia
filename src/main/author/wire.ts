@@ -195,6 +195,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // a handed-off task wakes its auto target now (null until startDispatcher; the tick covers it then)
     pump: (companyId) => void h.dispatcher?.pump(companyId),
+    // company_file_task {start}: the user's go-ahead in the chat starts the filed task now (null until startDispatcher)
+    goAhead: (taskId, why) => h.dispatcher?.goAhead(taskId, why) ?? null,
     // §9 company_create_department: the UI's departments:save path (department note), then the sidebar refreshes
     createDepartment: (input) => {
       const dep = departmentActions(h).save({ companyId: input.companyId, name: input.name, ...(input.key ? { key: input.key } : {}), data: { charter: { does: input.does, doesNot: input.doesNot } } })

@@ -191,3 +191,57 @@
 .cx-strip__line.is-link { cursor: pointer; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
 .cx-strip__line.is-link:hover { text-decoration-color: var(--text-secondary); }
 [data-msg-id].is-flash { outline: 1px solid var(--text-secondary); outline-offset: 4px; border-radius: 6px; transition: outline-color 0.6s; }
+
+/* CHAT-UI.md §8.5: the dock above the composer, the history's one-line reference, the answered options */
+.cx-dock { flex: none; display: flex; flex-direction: column; gap: 4px; max-height: 55vh; overflow: auto; margin: 4px 12px 0; }
+.cx-dock__more { align-self: flex-start; padding: 0 4px; font-size: var(--text-xs); color: var(--text-secondary); }
+.cx-dock__item { animation: cx-dock-in 0.18s ease-out; }
+.cx-dock__item.is-leaving { animation: cx-dock-out 0.6s ease-in forwards; pointer-events: none; }
+@keyframes cx-dock-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes cx-dock-out { from { opacity: 1; } to { opacity: 0; } }
+.cx-task--dock { max-width: none; margin: 0; padding: 6px 10px; gap: 4px; }
+.cx-task--dock.is-needs_you { box-shadow: none; }
+.cx-task--dock .cx-task__title { font-size: var(--text-sm); }
+.cx-task--dock .cx-task__who { font-size: var(--text-sm); color: var(--text-secondary); }
+.cx-task__dockrow { display: flex; align-items: flex-start; gap: 6px; min-width: 0; padding-left: 26px; font-size: var(--text-sm); color: var(--text-secondary); }
+.cx-task--dock .cx-task__tail { margin-left: 0; min-width: 0; flex: 1 1 auto; }
+.cx-task__dockline { flex: 1 1 auto; line-height: 22px; }
+.cx-task__docklinks { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+/* Show logs opens above the card (the dock grows upward, the list shrinks), capped and scrollable */
+.cx-task--dock .cx-task__log { margin-left: 0; }
+.cx-task--dock .cx-task__logbox { height: 240px; max-height: 35vh; }
+.cx-taskref { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 640px; margin: 4px 0 4px 36px; padding: 3px 10px; border: 1px dashed var(--border-strong); border-radius: 999px; background: none; color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer; }
+.cx-taskref:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.cx-taskref__line { flex: none; font-family: var(--font-mono, ui-monospace, monospace); }
+.cx-taskref__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
+.cx-question__opt { padding: 2px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.cx-question__opt.is-picked { border-color: var(--text-secondary); color: var(--text-primary); }
+/* consecutive messages from one person stay separate messages, each with its own small gap */
+.cx-msg:not(.is-head) { margin-top: 4px; }
+[data-dock-task].is-flash { outline: 1px solid var(--text-secondary); outline-offset: 2px; transition: outline-color 0.6s; }
+
+/* ---------- CHAT-UI.md §8.6: work on the conversation's row, unread results ---------- */
+.cx-recent__row.is-unread .cx-recent__title { font-weight: var(--weight-semibold); }
+.cx-recent__dot.is-needs { background: var(--status-needs); box-shadow: 0 0 0 3px var(--status-needs-soft); }
+.cx-recent__sub.is-needs, .cx-recent__row.is-unread .cx-recent__sub, .cx-recent__who.is-work { color: var(--text-secondary); }
+.cx-new { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; color: var(--text-secondary); font-size: var(--text-xs); letter-spacing: .06em; text-transform: uppercase; }
+.cx-new::before, .cx-new::after { content: ''; flex: 1; border-top: 1px solid var(--border-strong); }
+
+/* ---------- CHAT-UI.md §8.4: the task chat ---------- */
+.task-chat .task-chat__body { padding-top: 12px; }
+.task-chat__from { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.task-chat__brief { max-width: 760px; margin: 2px 0 6px; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface-1); font-size: var(--text-md); line-height: 1.55; color: var(--text-primary); }
+.task-chat__brief-label { margin-bottom: 4px; font-size: var(--text-xs); letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+.cx-msg.is-thought .cx-msg__bubble { color: var(--text-secondary); font-style: italic; }
+.task-chat__tools { max-width: 760px; margin: 4px 0 4px 36px; }
+.task-chat__tools-head { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px 3px 4px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer; }
+.task-chat__tools-head:hover, .task-chat__tools.is-open .task-chat__tools-head { border-color: var(--border); color: var(--text-primary); }
+.task-chat__tools-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-chat__tools-n { flex: none; color: var(--text-tertiary); font-size: var(--text-xs); }
+.task-chat__steps { display: flex; flex-direction: column; gap: 1px; margin: 4px 0 2px 10px; padding-left: 10px; border-left: 1px solid var(--border); }
+.task-chat__step-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 2px 4px; border: 0; background: none; color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: pointer; }
+.task-chat__step-head:hover { color: var(--text-primary); }
+.task-chat__step-words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-chat__step-dur { flex: none; color: var(--text-tertiary); font-size: var(--text-xs); }
+.task-chat__log { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.task-chat__log .cx-task__log { max-height: 360px; }

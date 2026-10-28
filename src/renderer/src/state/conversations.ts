@@ -17,7 +17,7 @@ import { conversationRows, conversationSlug, conversationTitle, everyone, handof
 
 export { conversationRows, conversationText, privateWith, whoLine, type ConversationRow } from '../lib/conversations'
 import { getForum, initForumEvents, loadChannel, loadForum, loadThread, post, useForum } from './forum'
-import { openChatsIn, toast } from './store'
+import { getState, openChatsIn, openTaskLive, toast } from './store'
 
 // ---------- the list ----------
 
@@ -37,6 +37,18 @@ export function useConversations(companyId: Id | null | undefined): Conversation
   return useMemo(() => (state && companyId ? conversationRows(state, companyId) : []), [state, companyId])
 }
 
+const NO_TASK_CHANNELS: Record<string, string> = {}
+/** CHAT-UI.md §8.6: task id → the conversation it was filed from, for one company (or every loaded one). */
+export function useTaskChannels(companyId: Id | null | undefined): Record<string, string> {
+  const by = useForum((s) => s.byCompany)
+  return useMemo(() => {
+    if (companyId) return by[companyId]?.state?.taskChannels ?? NO_TASK_CHANNELS
+    const all: Record<string, string> = {}
+    for (const c of Object.values(by)) Object.assign(all, c?.state?.taskChannels ?? {})
+    return all
+  }, [by, companyId])
+}
+
 /**
  * "Message Marcus" (Team, the agent page, ⌘K): your private conversation with them, or New conversation already
  * addressed to them. One kind of one-on-one everywhere.
@@ -46,6 +58,20 @@ export async function messageAgent(companyId: Id, agentId: Id): Promise<void> {
   const st = getForum().byCompany[companyId]?.state
   const mine = st ? privateWith(conversationRows(st, companyId), agentId) : null
   openChatsIn(companyId, mine ? `conv:${mine.id}` : `new:agent:${agentId}`)
+}
+
+/** CHAT-UI.md §8.6: the conversation a task was filed from (its live work shows there), or null. */
+export function conversationOfTask(taskId: Id, companyId?: Id | null): Id | null {
+  const co = companyId ?? getState().tasks.find((t) => t.id === taskId)?.companyId ?? null
+  return (co ? getForum().byCompany[co]?.state?.taskChannels?.[taskId] : null) ?? null
+}
+
+/** The task's own task chat; the founder's eyes go to the parent conversation, so LIVE and the status bar open that instead. */
+export function openTaskWork(taskId: Id, companyId?: Id | null): void {
+  const co = companyId ?? getState().tasks.find((t) => t.id === taskId)?.companyId ?? null
+  const conv = conversationOfTask(taskId, co)
+  if (conv && co) openChatsIn(co, `conv:${conv}`)
+  else openTaskLive(taskId, co)
 }
 
 // ---------- start, reply ----------

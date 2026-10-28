@@ -26,6 +26,8 @@ export interface BoardDispatcher {
   takeover?(taskId: string, size: PtySize): Awaitable<{ task: CompanyTask; session: Session }>
   /** stops a task held by an interactive session (no run to cancel) */
   stop?(taskId: string): Awaitable<unknown>
+  /** the founder's go-ahead: a consented start now (Dispatcher.goAhead); never throws */
+  goAhead?(taskId: string, why: string): { state: string; line: string }
 }
 /** The slice of Hive the board uses (tests pass a fake). */
 export interface BoardHost {
@@ -77,7 +79,13 @@ export function boardActions(h: BoardHost, onChange: (companyId: string) => void
       if (t.routing?.by === 'model') c.departments.assertTaskRefs(t.companyId, { departmentId: t.routing.departmentId ?? null, agentId: t.routing.agentId ?? null }, t)
       return c.acceptRoute(q.id)
     }),
-    answer: (q: { id: string; answer: string }) => act(q.id, () => c.answer(q.id, h.vault ? h.vault.redact(q.answer) : q.answer)),
+    /** The founder's answer is their go-ahead too: the same agent resumes now, autopilot or not (Dispatcher.goAhead). */
+    answer: (q: { id: string; answer: string }) => {
+      const out = act(q.id, () => c.answer(q.id, h.vault ? h.vault.redact(q.answer) : q.answer))
+      if (!h.dispatcher?.goAhead) return out
+      h.dispatcher.goAhead(q.id, 'you answered its question')
+      return c.task(q.id)
+    },
     approve: (q: { id: string; doneNote?: string }) => {
       const note = q.doneNote?.trim() ?? ''
       const done = act(q.id, () => c.approve(q.id, h.vault && note ? h.vault.redact(note) : note, 'human'))

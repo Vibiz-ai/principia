@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatTaskCard, chatTaskCards, clockLabel, looksLikeAnswer, taskAskAck, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
+import { chatTaskCard, chatTaskCards, clockLabel, matchesOption, notAnAnswer, taskAskAck, taskStatusLine, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
 import { buildBlocks } from './chatView'
 
 describe('taskCardState (CHAT-UI.md §8)', () => {
@@ -187,11 +187,30 @@ describe("a task's question, said by its agent (CHAT-UI.md §8)", () => {
     expect(taskAskSay({ identifier: 'X-1', prompt: 'Which one?', summary: 'Which one?' })).not.toContain('So far')
     expect(taskAskAck('VO-15')).toBe('Got it, back on VO-15.')
   })
-  it('an answer, or something new', () => {
-    expect(looksLikeAnswer('Use the PostHog events instead')).toBe(true)
-    expect(looksLikeAnswer('both.', ['Acme', 'Both'])).toBe(true)
-    expect(looksLikeAnswer('also, check the signup funnel')).toBe(false)
-    expect(looksLikeAnswer('btw what about the ads?')).toBe(false)
-    expect(looksLikeAnswer('  ')).toBe(false)
+  it('says "back on" only when the task resumed, else the true state', () => {
+    expect(taskAskAck('VO-15', false, { state: 'started', line: 'VO-15 is starting.' })).toBe('Got it, back on VO-15.')
+    expect(taskAskAck('VO-15', false, { state: 'running', line: 'VO-15 is already running.' })).toBe('Got it, back on VO-15.')
+    expect(taskAskAck('VO-15', false, { state: 'queued', line: 'Julia is running 3 tasks; VO-15 starts when one finishes.' })).toBe('Got it. Julia is running 3 tasks; VO-15 starts when one finishes.')
+    expect(taskAskAck('VO-15', true, { state: 'refused', line: 'Vibiz is paused; VO-15 starts when you resume it.' })).toBe('Got your answer. Vibiz is paused; VO-15 starts when you resume it.')
+  })
+  it('an option said back; never a status question or something new', () => {
+    expect(matchesOption('both.', ['Acme', 'Both'])).toBe(true)
+    expect(matchesOption('Use the PostHog events instead', ['Acme', 'Both'])).toBe(false)
+    expect(matchesOption('Both', null)).toBe(false)
+    expect(notAnAnswer('Use the PostHog events instead')).toBe(false)
+    expect(notAnAnswer('main app bro and lets make it a new one')).toBe(false)
+    expect(notAnAnswer('also, check the signup funnel')).toBe(true)
+    expect(notAnAnswer('btw what about the ads?')).toBe(true)
+    expect(notAnAnswer('  ')).toBe(true)
+    for (const q of ['are u working on it? or what?', 'Are you working on it?', 'any update?', "what's the status?", 'status?', 'is it done?', "how's it going"]) expect(notAnAnswer(q), q).toBe(true)
+  })
+  it('a task in a conversation, as the agent asked about it sees it', () => {
+    const now = Date.parse('2026-10-28T12:00:00Z')
+    expect(taskStatusLine({ identifier: 'VO-16', title: 'New landing page', status: 'in_progress', who: 'Julia', since: '2026-10-28T11:48:00Z', latest: { at: '2026-10-28T11:58:00Z', text: 'Julia started run r_1' } }, now)).toBe(
+      'VO-16 “New landing page”: working now (Julia), for 12m; latest: Julia started run r_1 (2m ago)'
+    )
+    expect(taskStatusLine({ identifier: 'VO-16', status: 'todo', waiting: 'Autopilot is off in Vibiz: it waits for you to press Start' }, now)).toBe('VO-16: not started yet: Autopilot is off in Vibiz: it waits for you to press Start')
+    expect(taskStatusLine({ identifier: 'VO-16', status: 'blocked', blockReason: 'needs_input', ask: { prompt: 'Which app?' } }, now)).toBe("VO-16: waiting for the person's answer: “Which app?”")
+    expect(taskStatusLine({ identifier: 'VO-16', status: 'in_review' }, now)).toBe('VO-16: finished, waiting for the person to review it')
   })
 })

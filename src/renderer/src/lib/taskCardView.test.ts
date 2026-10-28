@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
-import type { ForumTaskCard } from '@shared/taskCard'
-import { cardsOfMessages, connectToolsIn, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
+import type { ForumTaskCard, StripTask } from '@shared/taskCard'
+import { cardsOfMessages, connectToolsIn, dockedTasks, dockRefLine, dockRows, questionText, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -115,5 +115,35 @@ describe("a task's question in the conversation", () => {
     expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [], taskId: 't1' } })).toBe(true)
     expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'answered', to: [], taskId: 't1' } })).toBe(false)
     expect(isOpenTaskQuestion({ kind: 'ask', ask: { status: 'open', to: [] } })).toBe(false)
+  })
+})
+
+describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
+  const st = (id: string, state: StripTask['state'], at: string): StripTask => ({ taskId: id, identifier: id.toUpperCase(), who: 'Julia', state, startedAt: at })
+  it('docks queued, working and needs-you tasks; in review, done and failed leave it', () => {
+    const items = [st('vo-1', 'done', '2026-10-28T10:00:00Z'), st('vo-2', 'working', '2026-10-28T10:05:00Z'), st('vo-3', 'needs_you', '2026-10-28T10:01:00Z'), st('vo-4', 'in_review', '2026-10-28T10:02:00Z'), st('vo-5', 'queued', '2026-10-28T10:09:00Z'), st('vo-6', 'failed', '2026-10-28T10:03:00Z')]
+    // oldest first: the newest sits right above the composer
+    expect(dockedTasks(items).map((t) => t.identifier)).toEqual(['VO-3', 'VO-2', 'VO-5'])
+    expect(dockedTasks([st('vo-1', 'done', '2026-10-28T10:00:00Z')])).toEqual([])
+  })
+  it('shows at most three, the newest, then "+N more"; all once expanded', () => {
+    const five = [1, 2, 3, 4, 5]
+    expect(dockRows(five, false)).toEqual({ shown: [3, 4, 5], more: 2 })
+    expect(dockRows(five, true)).toEqual({ shown: five, more: 0 })
+    expect(dockRows([1, 2], false)).toEqual({ shown: [1, 2], more: 0 })
+  })
+  it('the history keeps a one-line reference while docked', () => {
+    expect(dockRefLine('VO-15', 'working')).toBe('VO-15 · working · see below')
+    expect(dockRefLine('VO-15', 'needs_you')).toBe('VO-15 · needs you · see below')
+    expect(dockRefLine('VO-15', 'queued')).toBe('VO-15 · queued · see below')
+  })
+  it('a question with options drops its "Options:" line (the buttons say it); without options the text stays', () => {
+    const text = "VO-15 is stuck and needs you.\nShould I cancel the Oct 28 posts?\nOptions: Cancel both, Cancel only Oct 28 or Leave them, I'll ask her first.\nReply here and I'll pass it on to VO-15."
+    const out = questionText(text, ['Cancel both', 'Cancel only Oct 28', "Leave them, I'll ask her first"])
+    expect(out).not.toContain('Options:')
+    expect(out).toContain('Should I cancel the Oct 28 posts?')
+    expect(out).toContain("Reply here and I'll pass it on to VO-15.")
+    expect(questionText(text, [])).toBe(text)
+    expect(questionText(text, undefined)).toBe(text)
   })
 })
