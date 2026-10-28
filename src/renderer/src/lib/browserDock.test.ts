@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserState } from '@shared/browser'
 import { addressToUrl } from '@shared/browser'
 import { formatDeepLink, parseDeepLink } from '@shared/deepLink'
-import { activityLine, autoOpen, clampDockWidth, dockLayout, overlaps, PAGE_MIN } from './browserDock'
+import { activityLine, autoOpen, clampDockWidth, dockLayout, overlaps, PAGE_MIN, shownBeside } from './browserDock'
 
 const state = (companyId: string, sessionKey: string | null, scope = sessionKey ?? 'founder'): BrowserState => ({
   companyId,
@@ -15,6 +15,21 @@ const state = (companyId: string, sessionKey: string | null, scope = sessionKey 
   downloads: []
 })
 const base = { activeCompany: 'co_a', pageScope: 'pane:1', open: false, opened: new Set<string>(), sinceTyping: 10_000 }
+
+describe('shownBeside', () => {
+  const dock = { open: true, companyId: 'co_a', scope: 'pane:1' }
+  it('names the browsing session when the open panel shows that chat or task', () => {
+    expect(shownBeside({ ...dock, state: state('co_a', 'pane:1') })).toBe('pane:1')
+    expect(shownBeside({ ...dock, scope: 'task:t9', state: state('co_a', 'task:t9') })).toBe('task:t9')
+  })
+  it('names nothing when the panel is shut, shows another chat or company, or nobody browses', () => {
+    expect(shownBeside({ ...dock, open: false, state: state('co_a', 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_a', 'pane:2') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_b', 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_a', null, 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: undefined })).toBeNull()
+  })
+})
 
 describe('autoOpen', () => {
   it('opens once per chat or task when its agent starts browsing while that chat is on screen', () => {

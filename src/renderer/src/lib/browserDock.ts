@@ -32,6 +32,16 @@ export function autoOpen(i: AutoOpenInput): AutoOpen {
   return 'open'
 }
 
+/**
+ * The session whose browsing the open panel already shows: the panel is open on this chat's or task's tabs. It counts
+ * as opened for that session, so the founder closing the panel there sticks and it does not come back by itself.
+ */
+export function shownBeside(i: { state: BrowserState | undefined; open: boolean; companyId: string | null; scope: BrowserScope }): string | null {
+  const a = i.state?.activity
+  if (!a || !i.open || i.state!.companyId !== i.companyId || i.state!.scope !== i.scope) return null
+  return a.sessionKey
+}
+
 export const DOCK_MIN = 360
 export const DOCK_MAX_SHARE = 0.7
 export const DOCK_DEFAULT = 560

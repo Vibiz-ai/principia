@@ -6,7 +6,7 @@
 import { useSyncExternalStore } from 'react'
 import { browserStateKey, FOUNDER_SCOPE, type BrowserScope, type BrowserState } from '@shared/browser'
 import { hive } from '../lib/hive'
-import { autoOpen, clampDockWidth, DOCK_DEFAULT, TYPING_QUIET_MS } from '../lib/browserDock'
+import { autoOpen, clampDockWidth, DOCK_DEFAULT, shownBeside, TYPING_QUIET_MS } from '../lib/browserDock'
 import { activeCompany, getState as appState, scopeCompanyId, toast } from './store'
 
 interface DockState {
@@ -95,6 +95,8 @@ export function setPageCompany(companyId: string | null, scope: BrowserScope | n
   }
 }
 export function closeBrowser(): void {
+  // closed beside a chat or task whose agent is browsing: it stays closed for that browsing
+  markShown(stateOf(st, st.companyId, st.scope))
   set({ open: false })
 }
 export function toggleBrowser(): void {
@@ -124,7 +126,14 @@ const opened = new Set<string>()
 let lastTyping = 0
 let retry: ReturnType<typeof setTimeout> | null = null
 
+/** The panel already shows this browsing (open beside its chat or task): it never opens for it by itself again. */
+function markShown(s: BrowserState | undefined): void {
+  const key = shownBeside({ state: s, open: st.open, companyId: st.companyId, scope: st.scope })
+  if (key) opened.add(key)
+}
+
 function consider(s: BrowserState): void {
+  markShown(s)
   const a = activeCompany()
   const verdict = autoOpen({ state: s, activeCompany: a === 'all' ? null : a, pageScope: st.pageScope, open: st.open, opened, sinceTyping: performance.now() - lastTyping })
   if (verdict === 'open') {
