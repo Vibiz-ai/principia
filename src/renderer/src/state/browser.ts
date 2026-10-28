@@ -11,6 +11,8 @@ interface DockState {
   open: boolean
   companyId: string | null
   width: number
+  /** the founder dragged the width (kept as chosen, over the page when it does not fit beside it) */
+  picked: boolean
   states: Record<string, BrowserState>
   /** an address to open once the panel has mounted */
   pendingUrl: string | null
@@ -19,15 +21,16 @@ interface DockState {
 }
 
 const WIDTH_KEY = 'principia.browser.width'
-const readWidth = (): number => {
+const readWidth = (): Pick<DockState, 'width' | 'picked'> => {
   try {
-    return Number(localStorage.getItem(WIDTH_KEY)) || DOCK_DEFAULT
+    const saved = Number(localStorage.getItem(WIDTH_KEY))
+    return saved ? { width: saved, picked: true } : { width: DOCK_DEFAULT, picked: false }
   } catch {
-    return DOCK_DEFAULT
+    return { width: DOCK_DEFAULT, picked: false }
   }
 }
 
-let st: DockState = { open: false, companyId: null, width: DOCK_DEFAULT, states: {}, pendingUrl: null, pageCompany: null }
+let st: DockState = { open: false, companyId: null, width: DOCK_DEFAULT, picked: false, states: {}, pendingUrl: null, pageCompany: null }
 const listeners = new Set<() => void>()
 const set = (p: Partial<DockState>): void => {
   st = { ...st, ...p }
@@ -81,7 +84,7 @@ export function toggleBrowser(): void {
 }
 export function setDockWidth(w: number): void {
   const width = clampDockWidth(w, window.innerWidth)
-  set({ width })
+  set({ width, picked: true })
   try {
     localStorage.setItem(WIDTH_KEY, String(width))
   } catch {
@@ -122,7 +125,7 @@ let wired = false
 export function wireBrowser(): () => void {
   if (wired) return () => undefined
   wired = true
-  set({ width: readWidth() })
+  set(readWidth())
   const onKey = (e: KeyboardEvent): void => {
     const t = e.target as HTMLElement | null
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) lastTyping = performance.now()

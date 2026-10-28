@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserState } from '@shared/browser'
 import { addressToUrl } from '@shared/browser'
 import { formatDeepLink, parseDeepLink } from '@shared/deepLink'
-import { activityLine, autoOpen, clampDockWidth, dockLayout, overlaps, PAGE_MIN } from './browserDock'
+import { activityLine, autoOpen, clampDockWidth, DOCK_PEEK, dockLayout, overlaps, PAGE_MIN } from './browserDock'
 
 const state = (companyId: string, sessionKey: string | null): BrowserState => ({
   companyId,
@@ -33,7 +33,9 @@ describe('autoOpen', () => {
 describe('dock bits', () => {
   it('clamps the width', () => {
     expect(clampDockWidth(100, 1400)).toBe(360)
-    expect(clampDockWidth(5000, 1400)).toBe(980)
+    // all but DOCK_PEEK of the window
+    expect(clampDockWidth(5000, 1400)).toBe(1240)
+    expect(clampDockWidth(5000, 400)).toBe(360)
     expect(clampDockWidth(Number.NaN, 1400)).toBe(560)
   })
   it('says who is browsing', () => {
@@ -78,5 +80,24 @@ describe('dockLayout', () => {
     const tiny = dockLayout(560, 800, 288)
     expect(tiny.mode).toBe('over')
     expect(tiny.width).toBe(360)
+  })
+  it('keeps a width the founder dragged: beside the page when it fits, over the page when it does not', () => {
+    // 1728 wide, rail 56 + sidebar 232: 560 fits beside the page
+    expect(dockLayout(500, 1728, 288, 232, true)).toEqual({ mode: 'side', width: 500 })
+    expect(dockLayout(560, 1728, 288, 232, true)).toEqual({ mode: 'side', width: 560 })
+    // wider than fits beside: no longer stuck at 560, it floats over the page at the dragged width
+    expect(dockLayout(561, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 561 })
+    expect(dockLayout(1200, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 1200 })
+    // as wide as the window allows, leaving DOCK_PEEK of it (the rail and a strip of the page) visible
+    expect(dockLayout(5000, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 1728 - DOCK_PEEK })
+    expect(dockLayout(5000, 1440, 288, 232, true)).toEqual({ mode: 'over', width: 1440 - DOCK_PEEK })
+  })
+  it('a dragged width on a small window: the sidebar steps aside when that is enough, over the page when not', () => {
+    expect(dockLayout(420, 1360, 288, 232, true)).toEqual({ mode: 'tight', width: 420 })
+    expect(dockLayout(900, 1360, 288, 232, true)).toEqual({ mode: 'over', width: 900 })
+    expect(dockLayout(5000, 800, 288, 232, true).width).toBe(800 - DOCK_PEEK)
+  })
+  it('the default width still adapts to the window', () => {
+    expect(dockLayout(560, 1600, 288, 232, false)).toEqual({ mode: 'side', width: 1600 - 288 - PAGE_MIN })
   })
 })

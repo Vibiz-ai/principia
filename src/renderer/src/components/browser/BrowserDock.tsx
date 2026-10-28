@@ -13,6 +13,7 @@ export function BrowserDock(): React.JSX.Element | null {
   const open = useDock((s) => s.open)
   const companyId = useDock((s) => s.companyId)
   const width = useDock((s) => s.width)
+  const picked = useDock((s) => s.picked)
   const company = useStore((s) => (companyId ? s.companies.find((c) => c.id === companyId) : undefined))
   const pageCompany = useDock((s) => s.pageCompany)
   const railCompany = useStore((s) => scopeCompanyId(s) ?? null)
@@ -45,7 +46,7 @@ export function BrowserDock(): React.JSX.Element | null {
   }, [open])
 
   // the page keeps a readable width: beside it when there is room, over its right side when not
-  const [layout, setLayout] = useState<DockLayout>(() => dockLayout(width, window.innerWidth, 0))
+  const [layout, setLayout] = useState<DockLayout>(() => dockLayout(width, window.innerWidth, 0, 0, picked))
   const sidebarWidth = useRef(0)
   useEffect(() => {
     if (!open) return
@@ -57,7 +58,7 @@ export function BrowserDock(): React.JSX.Element | null {
       if (sb && getComputedStyle(sb).display !== 'none') sidebarWidth.current = sbWidth
       const pageLeft = (main?.getBoundingClientRect().left ?? 0) + (sb && getComputedStyle(sb).display === 'none' ? sbWidth : 0)
       setLayout((old) => {
-        const next = dockLayout(width, window.innerWidth, pageLeft, sbWidth)
+        const next = dockLayout(width, window.innerWidth, pageLeft, sbWidth, picked)
         return old.mode === next.mode && old.width === next.width ? old : next
       })
     }
@@ -71,7 +72,7 @@ export function BrowserDock(): React.JSX.Element | null {
       window.removeEventListener('resize', measure)
       document.body.classList.remove('has-browser-dock')
     }
-  }, [open, width])
+  }, [open, width, picked])
   // a small window: the sidebar steps aside while the browser is open (nothing saved; it is back on close)
   useEffect(() => {
     const tight = open && layout.mode === 'tight'
