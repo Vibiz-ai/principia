@@ -223,7 +223,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'board',
     title: 'The Board, tasks and approvals',
     how:
-      'The Board (⌘3) holds every task. New task (or C) files one; a task\'s details have Run now, Open as session, Take over, Pause this task, Try again, Approve as done (with a done note) and Send back with note. Agents never mark a task done: you approve. Needs you on Home (⌘J jumps to the next) collects approvals, questions and permission requests.',
+      'The Board (⌘3) holds every task. New task (or C) files one; a task\'s details have Run now, Open as session, Take over, Pause this task, Try again, Approve as done and Send back with note; dropping a card on Done marks it done too (the note is optional). Agents never mark a task done: you do. Needs you on Home (⌘J jumps to the next) collects approvals, questions and permission requests.',
     keywords: ['board', 'task', 'tasks', 'kanban', 'todo', 'ticket', 'approve', 'approval', 'review', 'send back', 'needs you', 'done', 'assign'],
     links: [L('The Board', 'principia://board'), L('New task (prefilled)', 'principia://board?new=Write%20the%20newsletter')]
   },
