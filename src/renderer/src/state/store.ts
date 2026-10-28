@@ -66,7 +66,7 @@ export type ViewState =
   /** PLANS.md §3: the plans list, one plan's page, or the New Plan sheet */
   | { name: 'plans'; planId?: Id; create?: boolean; nonce?: number }
   /** DEPARTMENTS.md §9: department page (charter, passport section, agents, recurring, routing, filtered board). */
-  | { name: 'department'; id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }
+  | { name: 'department'; id: Id; focus?: 'charter' | 'agents' | 'dashboards'; /** an installed dashboard to scroll to and open */ dashboard?: Id; nonce?: number }
   /** DEPARTMENTS.md §9: one agent seat (current task, queue, run history, instructions). */
   /** Five doors step 3: the agent's desk. `focus`: Message was clicked, so the composer takes the keyboard. */
   | { name: 'agentSeat'; id: Id; focus?: boolean; nonce?: number }
@@ -1452,8 +1452,8 @@ export function openDepartmentPassport(d: Department): void {
   } else void openDepartment(d, 'charter')
 }
 /** Department pages and seats always open inside their company (the Board and passport are the active company's). */
-export function openDepartment(d: Pick<Department, 'id' | 'companyId'>, focus?: 'charter' | 'agents'): void {
-  const view: ViewState = { name: 'department', id: d.id, focus, nonce: Date.now() }
+export function openDepartment(d: Pick<Department, 'id' | 'companyId'>, focus?: 'charter' | 'agents' | 'dashboards', dashboard?: Id): void {
+  const view: ViewState = { name: 'department', id: d.id, focus, ...(dashboard ? { dashboard } : {}), nonce: Date.now() }
   if (activeCompany() === d.companyId || !multiCompany()) void navigate(view)
   else void enterCompany(d.companyId, { view })
 }

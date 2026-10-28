@@ -63,7 +63,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'navigation',
     title: 'Find your way around (shortcuts)',
     how:
-      'The sidebar has five doors: Home ⌘1 (what needs you, what is running), Team ⌘2, Board ⌘3, Chats ⌘4, Knowledge ⌘5. Everything else is under More (Automations, Add-ons, Files, Forum, Slack, Plans, Activity, Spend); right-click the sidebar for Customize Sidebar. ⌘K searches and runs any command, ⌘J jumps to the next thing that needs you, ⌘, opens Settings, ⌥⌘N starts a new conversation, ⌘N a new session, ⌘O adds a repository, ⇧⌘F opens the Forum, ⌘B hides the sidebar.',
+      'The sidebar has five doors: Home ⌘1 (what needs you, what is running), Team ⌘2, Board ⌘3, Chats ⌘4, Knowledge ⌘5. Team unfolds (its chevron, or → on the row) into your departments, each with its open tasks, and each department into its dashboards. Everything else is under More (Automations, Add-ons, Files, Forum, Slack, Plans, Activity, Spend); right-click the sidebar for Customize Sidebar. ⌘K searches and runs any command, ⌘J jumps to the next thing that needs you, ⌘, opens Settings, ⌥⌘N starts a new conversation, ⌘N a new session, ⌘O adds a repository, ⇧⌘F opens the Forum, ⌘B hides the sidebar.',
     keywords: ['shortcut', 'keyboard', 'settings', 'preferences', 'hotkey', 'where is', 'find', 'navigate', 'sidebar', 'menu', 'command palette', '⌘k', 'cmd k', 'more', 'hidden', 'customize sidebar', 'needs you', 'home', 'team page'],
     links: [L('Home', 'principia://home')]
   },
@@ -135,7 +135,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'dashboards',
     title: 'Dashboards',
     how:
-      'Dashboards live on each department\'s page (Team › a department), in its Dashboards card: "The numbers it watches", which its agents read. Add one from "Recommended for …" (Add, or Add your keys) or Browse marketplace: SEO (Search Console), GEO (AI visibility), Plausible, PostHog, Revenue (Stripe, a restricted key only) and Engineering (GitHub). Check and add tests the key read-only before saving; each dashboard\'s ⋯ has Settings and keys…, Refresh now, Remove. Departments must be on (Settings › Experimental, or Turn on departments on Team).',
+      'Dashboards live on each department\'s page, in its Dashboards card ("The numbers it watches", which its agents read), and are listed under Team in the sidebar: unfold Team, then a department, and click a dashboard (or Add a dashboard) to open the page right at it. Add one from "Recommended for …" (Add, or Add your keys) or Browse marketplace: SEO (Search Console), GEO (AI visibility), Plausible, PostHog, Revenue (Stripe, a restricted key only) and Engineering (GitHub). Check and add tests the key read-only before saving; each dashboard\'s ⋯ has Settings and keys…, Refresh now, Remove. Departments must be on (Settings › Experimental, or Turn on departments on Team or under it in the sidebar).',
     keywords: ['dashboard', 'metric', 'numbers', 'kpi', 'analytics', 'chart', 'stats', 'search console', 'seo', 'plausible', 'revenue'],
     links: [L('Connect PostHog for a dashboard', 'principia://connect/posthog?purpose=dashboard')]
   },

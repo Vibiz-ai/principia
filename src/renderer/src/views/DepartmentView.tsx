@@ -53,7 +53,7 @@ const ROUTABLE_SOURCES: TaskSource[] = ['github', 'sentry', 'posthog', 'slack']
 /** cool accents only (VOICE.md §5: no orange, amber or brown) */
 const COLORS = ['var(--accent)', 'var(--series-2)', 'var(--status-success)', 'var(--status-scheduled)', 'var(--status-idle)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
 
-export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter' | 'agents' | 'dashboards'; nonce?: number }): React.JSX.Element {
+export function DepartmentView({ id, focus, dashboard, nonce }: { id: Id; focus?: 'charter' | 'agents' | 'dashboards'; dashboard?: Id; nonce?: number }): React.JSX.Element {
   const dep = useStore((s) => departmentById(id, s))
   const allAgents = useStore((s) => s.companyAgents)
   const tasks = useStore((s) => s.tasks)
@@ -61,10 +61,11 @@ export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter'
   const [adding, setAdding] = useState(false)
   const copy = useCopy()
   useEffect(() => {
-    if (!focus) return
+    // a dashboard row in the sidebar: the Dashboards card scrolls to that dashboard once the list has loaded
+    if (!focus || dashboard) return
     // deep link from the sidebar menu ("Edit charter…"): bring the section into view
     requestAnimationFrame(() => document.getElementById(`dep-${focus}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
-  }, [focus, nonce])
+  }, [focus, dashboard, nonce])
   if (!dep)
     return (
       <div className="view">
@@ -98,7 +99,7 @@ export function DepartmentView({ id, focus, nonce }: { id: Id; focus?: 'charter'
       </Toolbar>
       <div className="dep-page">
         {/* DASHBOARDS.md §9: installed and recommended dashboards first, the numbers this department watches */}
-        <DepartmentDashboards key={`d:${dep.id}`} dep={dep} />
+        <DepartmentDashboards key={`d:${dep.id}`} dep={dep} target={dashboard ? { id: dashboard, nonce: nonce ?? 0 } : null} />
         {/* each editor resets only when its own saved fields change, so saving one card never drops edits in another */}
         <CharterCard key={`c:${dep.id}:${JSON.stringify([dep.name, dep.color, dep.data.charter])}`} dep={dep} />
         <PassportCard key={`p:${dep.id}:${dep.data.contextFallback}`} dep={dep} />
