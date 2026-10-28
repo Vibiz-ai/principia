@@ -71,6 +71,53 @@ describe('company focus', () => {
     expect(m.getState().view).toEqual({ name: 'chats', filter: 'live' })
   })
 
+  it('switching back to a company opens the screen it was left on, not Home', async () => {
+    await m.enterCompany('co_a')
+    await m.navigate({ name: 'chats', chat: 'session:s_1' })
+    await m.enterCompany('co_b')
+    // Beta was never left on anything: Home
+    expect(m.getState().view).toEqual({ name: 'home' })
+    await m.navigate({ name: 'forum', channelId: 'ch_1' })
+    await m.enterCompany('co_a')
+    expect(m.getState().view).toEqual({ name: 'chats', chat: 'session:s_1' })
+    await m.enterCompany('co_b')
+    expect(m.getState().view).toEqual({ name: 'forum', channelId: 'ch_1' })
+    // the rail's ⌃N and All keep it too
+    m.enterCompanySlot(1)
+    await Promise.resolve()
+    expect(m.getState().view).toEqual({ name: 'chats', chat: 'session:s_1' })
+  })
+
+  it('clicking the company you are in still goes Home; an explicit view still wins', async () => {
+    await m.enterCompany('co_a')
+    await m.navigate({ name: 'workflows' })
+    await m.enterCompany('co_a')
+    expect(m.getState().view).toEqual({ name: 'home' })
+    await m.navigate({ name: 'workflows' })
+    await m.enterCompany('co_b', { view: { name: 'tasks' } })
+    expect(m.getState().view).toEqual({ name: 'tasks' })
+    await m.enterCompany('co_a')
+    expect(m.getState().view).toEqual({ name: 'workflows' })
+  })
+
+  it('coming back does not replay a one-shot ask (quick add, create sheet)', async () => {
+    await m.enterCompany('co_a')
+    await m.navigate({ name: 'tasks', departmentId: 'd_1', quick: { title: 'x', nonce: 1 } })
+    await m.enterCompany('co_b')
+    await m.enterCompany('co_a')
+    expect(m.getState().view).toEqual({ name: 'tasks', departmentId: 'd_1' })
+  })
+
+  it('an agent desk removed since lands on Home', async () => {
+    m.setState({ companyAgents: [{ id: 'ag_1', archivedAt: null } as never], departments: [] })
+    await m.enterCompany('co_a')
+    await m.navigate({ name: 'agentSeat', id: 'ag_1' })
+    await m.enterCompany('co_b')
+    m.setState({ companyAgents: [] })
+    await m.enterCompany('co_a')
+    expect(m.getState().view).toEqual({ name: 'home' })
+  })
+
   it('⌃N picks the Nth company in rail order, ⌃0 picks All', async () => {
     m.enterCompanySlot(2)
     await Promise.resolve()
