@@ -11,7 +11,7 @@ import type { AdapterId, Id } from '@shared/types'
 import { Sheet } from '../ui'
 import { ChatServiceStarters } from '../connections/ConnectionSlot'
 import { addDroppedFiles, DropHint } from '../conversations/ConversationKit'
-import { useFileDrop } from '../../lib/dropFiles'
+import { useFileDrop, usePendingAttachments } from '../../lib/dropFiles'
 import { reposOf } from '../../lib/companyModel'
 import { taskTitleFor } from '../../lib/desk'
 import { sendToAgent, useDeskAgents } from '../../state/desk'
@@ -35,22 +35,32 @@ function NewChat({ companyId }: { companyId: Id }): React.JSX.Element {
   const direct: AdapterId[] = code ? providers.map((p) => p.id) : providers.some((p) => p.id === 'claude') ? ['claude'] : providers.slice(0, 1).map((p) => p.id)
   const [withWho, setWith] = useState<With>(agents[0] ? { kind: 'agent', id: agents[0].id } : { kind: 'direct', adapter: direct[0] ?? 'claude' })
   const [where, setWhere] = useState<Id | null>(null)
-  const [text, setText] = useState('')
+  const [text, setTextRaw] = useState('')
+  // the latest text, for a Send that waited for an attachment (the render with it may not have happened yet)
+  const latest = useRef(text)
+  const setText = (t: string): void => {
+    latest.current = t
+    setTextRaw(t)
+  }
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLTextAreaElement>(null)
   // images and files dropped or pasted in go in by their path (the agent, or Claude, opens them)
+  const attaching = usePendingAttachments()
   const attach = (files: FileList | File[]): void => {
-    void addDroppedFiles(files, () => box.current?.value ?? text, setText).then(() => box.current?.focus())
+    if (busy) return
+    void attaching.track(addDroppedFiles(files, () => latest.current, setText)).then(() => box.current?.focus())
   }
   const drop = useFileDrop(attach, busy)
   const agent = withWho.kind === 'agent' ? agents.find((a) => a.id === withWho.id) : undefined
   // an agent needs to hear what you want; a direct chat in a company with no code starts from your message (no terminal)
   const needsText = withWho.kind === 'agent' || !code
   const go = async (): Promise<void> => {
-    const t = text.trim()
-    if (busy || (needsText && !t)) return
+    if (busy || (needsText && !text.trim())) return
     setBusy(true)
     try {
+      // a screenshot pasted just before Send is still being saved: wait, so its @path goes with the message
+      await attaching.settled()
+      const t = latest.current.trim()
       if (withWho.kind === 'agent') {
         const res = await sendToAgent(withWho.id, t, { open: true })
         if (res) {

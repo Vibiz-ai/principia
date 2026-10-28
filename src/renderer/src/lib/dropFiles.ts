@@ -79,3 +79,39 @@ export function useFileDrop(onFiles: (files: FileList) => void, off = false): { 
     }
   }
 }
+
+/**
+ * Attachments still being saved (a pasted screenshot is written to disk before its @path exists). Send waits for
+ * them (`settled`), so a message sent right after a paste carries the image, and the late @path never lands in the
+ * box after it was cleared.
+ */
+export interface PendingAttachments {
+  /** tracks `p` until it settles; returns it */
+  track<T>(p: Promise<T>): Promise<T>
+  readonly size: number
+  /** resolves once nothing is pending (attachments added while waiting are waited for too); never rejects */
+  settled(): Promise<void>
+}
+
+export function pendingAttachments(): PendingAttachments {
+  const pending = new Set<Promise<unknown>>()
+  return {
+    track(p) {
+      pending.add(p)
+      const done = (): void => void pending.delete(p)
+      p.then(done, done)
+      return p
+    },
+    get size() {
+      return pending.size
+    },
+    async settled() {
+      while (pending.size) await Promise.allSettled([...pending])
+    }
+  }
+}
+
+/** One PendingAttachments for a box, kept across renders. */
+export function usePendingAttachments(): PendingAttachments {
+  return useState(pendingAttachments)[0]
+}

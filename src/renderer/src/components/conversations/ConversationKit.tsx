@@ -35,7 +35,7 @@ import { byWork, workLine, workOf, workRank } from '../../lib/convWork'
 import { useIsCode } from '../desk/Desk'
 import { navigate, startSession, toast, useStore } from '../../state/store'
 import { hive } from '../../lib/hive'
-import { dropMentions, useFileDrop, withMentions } from '../../lib/dropFiles'
+import { dropMentions, useFileDrop, usePendingAttachments, withMentions } from '../../lib/dropFiles'
 import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
 import { cardsOfMessages, connectToolsIn, dockedTasks, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
@@ -105,7 +105,10 @@ export function TeamComposer({
   const convs = useConversations(companyId)
   const draftKey = `new:${companyId}`
   const [text, setTextRaw] = useState(() => loadDraft(draftKey))
+  // the latest text, for a Send that waited for an attachment (the render with it may not have happened yet)
+  const latest = useRef(text)
   const setText = (t: string): void => {
+    latest.current = t
     setTextRaw(t)
     saveDraft(draftKey, t)
   }
@@ -123,9 +126,10 @@ export function TeamComposer({
   useEffect(() => {
     if (autoFocus) ref.current?.focus()
   }, [autoFocus])
+  const attaching = usePendingAttachments()
   const attach = (files: FileList | File[]): void => {
     if (busy) return
-    void addDroppedFiles(files, () => ref.current?.value ?? text, setText).then(() => ref.current?.focus())
+    void attaching.track(addDroppedFiles(files, () => latest.current, setText)).then(() => ref.current?.focus())
   }
   if (dropRef) dropRef.current = attach
   // with a dropRef the page around takes the drop (and shows where it goes); else this box does
@@ -154,10 +158,12 @@ export function TeamComposer({
   const why = route?.by === 'words' ? Object.entries(route.why).map(([id, w]) => `${agents.find((a) => a.id === id)?.name}: ${w.map((x) => `“${x}”`).join(', ')}`).join(' · ') : ''
 
   const send = async (): Promise<void> => {
-    const t = text.trim()
-    if (!t || busy) return
+    if (!text.trim() || busy) return
     setBusy(true)
     try {
+      // a screenshot pasted just before Send is still being saved: wait, so its @path goes with the message
+      await attaching.settled()
+      const t = latest.current.trim()
       if (to.kind === 'claude' || to.kind === 'repo') {
         const s = await startSession({ repoId: to.kind === 'repo' ? to.id : null, forceNew: true, companyId, adapter: 'claude', initialPrompt: t, title: taskTitleFor(t).slice(0, 80), focus: to.kind === 'repo' })
         if (s) {
