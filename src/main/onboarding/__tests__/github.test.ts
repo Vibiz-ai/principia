@@ -12,7 +12,9 @@ import {
   ghStatus,
   GH_LIST_FIELDS,
   GH_LIST_TIMEOUT_MS,
+  GH_ORG_CONCURRENCY,
   listRepos,
+  parseOrgList,
   parseProgressLine,
   parseRepoList,
   remoteIdentity,
@@ -21,6 +23,7 @@ import {
   type GhRunOpts,
   type GhRunResult
 } from '../github'
+import { githubRefFromQuery } from '../../../shared/onboarding'
 
 const GH = path.join(__dirname, 'fixtures', 'gh')
 const read = (f: string): string => fs.readFileSync(path.join(GH, f), 'utf8')
@@ -104,6 +107,127 @@ describe('listRepos', () => {
     await expect(listRepos(undefined, { exec: fake(() => ENOENT), env: {} })).rejects.toThrow(/not installed/)
     await expect(listRepos(undefined, { exec: fake(() => ({ code: 1, stderr: 'auth' })), env: {} })).rejects.toThrow(/gh auth login/)
     await expect(listRepos(undefined, { exec: fake(() => ({ code: null, timedOut: true })), env: {} })).rejects.toThrow(/too long/)
+  })
+})
+
+describe('listRepos with organisations', () => {
+  const repo = (owner: string, name: string, pushedAt: string): Record<string, unknown> => ({
+    name,
+    owner: { login: owner },
+    description: null,
+    url: `https://github.com/${owner}/${name}`,
+    homepageUrl: null,
+    primaryLanguage: null,
+    isPrivate: true,
+    pushedAt
+  })
+  /** gh by args: the founder's list, user/orgs, one list per org, repo view. */
+  function ghWorld(opts: { orgs: string[]; lists: Record<string, unknown[] | 'fail'>; views?: Record<string, unknown> }): (c: Call) => Partial<GhRunResult> {
+    return (c) => {
+      const a = c.args
+      if (a[0] === 'api') return a.includes('user/orgs?per_page=100') ? { stdout: JSON.stringify(opts.orgs.map((login) => ({ login, id: 1 }))) } : { code: 1 }
+      if (a[0] === 'repo' && a[1] === 'list') {
+        const owner = a[2] === '--limit' ? '@me' : a[2]
+        const l = opts.lists[owner]
+        return l === undefined || l === 'fail' ? { code: 1, stderr: 'HTTP 403: Resource protected by organization SAML enforcement' } : { stdout: JSON.stringify(l) }
+      }
+      if (a[0] === 'repo' && a[1] === 'view') {
+        const v = opts.views?.[a[2]]
+        return v ? { stdout: JSON.stringify(v) } : { code: 1, stderr: 'GraphQL: Could not resolve to a Repository' }
+      }
+      return { code: 1 }
+    }
+  }
+
+  it("lists the founder's repos and each org's, newest push first", async () => {
+    const calls: Call[] = []
+    const exec = fake(
+      ghWorld({
+        orgs: ['Acme-ai', 'example'],
+        lists: { '@me': [repo('octocat', 'dotfiles', '2026-08-01T00:00:00Z')], 'Acme-ai': [repo('Acme-ai', 'api', '2026-10-02T00:00:00Z'), repo('Acme-ai', 'web', '2026-07-01T00:00:00Z')], example: [repo('example', 'site', '2026-09-01T00:00:00Z')] }
+      }),
+      calls
+    )
+    const repos = await listRepos(undefined, { exec, env: {} })
+    expect(repos.map((r) => r.fullName)).toEqual(['Acme-ai/api', 'example/site', 'octocat/dotfiles', 'Acme-ai/web'])
+    expect(calls.map((c) => c.args.slice(0, 3).join(' '))).toEqual(['repo list --limit', 'api --hostname github.com', 'repo list Acme-ai', 'repo list example'])
+    expect(calls.find((c) => c.args[2] === 'Acme-ai')!.args).toEqual(['repo', 'list', 'Acme-ai', '--limit', '100', '--json', GH_LIST_FIELDS])
+    expect(calls.every((c) => c.opts.timeoutMs === GH_LIST_TIMEOUT_MS && c.opts.env.GH_PROMPT_DISABLED === '1')).toBe(true)
+    // the search filters across orgs too
+    expect((await listRepos('acme-ai/', { exec, env: {} })).map((r) => r.fullName)).toEqual(['Acme-ai/api', 'Acme-ai/web'])
+  })
+
+  it('skips an org that fails, and an org listing that fails; only the own list failing is an error', async () => {
+    const own = [repo('octocat', 'dotfiles', '2026-08-01T00:00:00Z')]
+    const repos = await listRepos(undefined, { exec: fake(ghWorld({ orgs: ['Acme-ai', 'example'], lists: { '@me': own, 'Acme-ai': 'fail', example: [repo('example', 'site', '2026-09-01T00:00:00Z')] } })), env: {} })
+    expect(repos.map((r) => r.fullName)).toEqual(['example/site', 'octocat/dotfiles'])
+    const noOrgs = fake((c) => (c.args[0] === 'api' ? { code: 1, stderr: 'HTTP 403' } : { stdout: JSON.stringify(own) }))
+    expect((await listRepos(undefined, { exec: noOrgs, env: {} })).map((r) => r.fullName)).toEqual(['octocat/dotfiles'])
+    await expect(listRepos(undefined, { exec: fake(ghWorld({ orgs: ['Acme-ai'], lists: { 'Acme-ai': [repo('Acme-ai', 'api', '2026-10-02T00:00:00Z')] } })), env: {} })).rejects.toThrow(/gh auth login/)
+  })
+
+  it('dedupes by owner/name (case-insensitive) and runs org lists a few at a time', async () => {
+    const orgs = Array.from({ length: 10 }, (_, i) => `example${i}`)
+    let running = 0
+    let peak = 0
+    const world = ghWorld({
+      orgs: ['Acme-ai', ...orgs],
+      lists: {
+        '@me': [repo('Acme-ai', 'api', '2026-10-02T00:00:00Z'), repo('octocat', 'dotfiles', '2026-08-01T00:00:00Z')],
+        'Acme-ai': [repo('acme-AI', 'API', '2026-10-02T00:00:00Z'), repo('Acme-ai', 'web', '2026-07-01T00:00:00Z')],
+        ...Object.fromEntries(orgs.map((o) => [o, [repo(o, 'site', '2026-01-01T00:00:00Z')]]))
+      }
+    })
+    const exec = fake(async (c) => {
+      running++
+      peak = Math.max(peak, running)
+      await new Promise((r) => setTimeout(r, 5))
+      running--
+      return world(c)
+    })
+    const repos = await listRepos(undefined, { exec, env: {} })
+    expect(repos.filter((r) => r.fullName.toLowerCase() === 'acme-ai/api')).toHaveLength(1)
+    expect(repos).toHaveLength(13)
+    expect(peak).toBe(GH_ORG_CONCURRENCY)
+  })
+
+  it('looks up owner/name or a github.com link that is not listed with gh repo view', async () => {
+    const calls: Call[] = []
+    const exec = fake(
+      ghWorld({ orgs: [], lists: { '@me': [repo('octocat', 'dotfiles', '2026-08-01T00:00:00Z')] }, views: { 'Acme-ai/secret': repo('Acme-ai', 'secret', '2026-10-03T00:00:00Z') } }),
+      calls
+    )
+    expect((await listRepos('Acme-ai/secret', { exec, env: {} })).map((r) => r.fullName)).toEqual(['Acme-ai/secret'])
+    expect(calls.at(-1)!.args).toEqual(['repo', 'view', 'Acme-ai/secret', '--json', GH_LIST_FIELDS])
+    expect((await listRepos('https://github.com/Acme-ai/secret.git', { exec, env: {} })).map((r) => r.fullName)).toEqual(['Acme-ai/secret'])
+    // a listed repo needs no lookup; a missing one is just no match
+    const before = calls.length
+    expect((await listRepos('github.com/octocat/dotfiles', { exec, env: {} })).map((r) => r.fullName)).toEqual(['octocat/dotfiles'])
+    expect(calls.length).toBe(before)
+    expect(await listRepos('example/nope', { exec, env: {} })).toEqual([])
+  })
+
+  it('reuses the merged list while the founder types', async () => {
+    const calls: Call[] = []
+    let t = 0
+    const exec = fake(ghWorld({ orgs: ['Acme-ai'], lists: { '@me': [], 'Acme-ai': [repo('Acme-ai', 'api', '2026-10-02T00:00:00Z')] } }), calls)
+    await listRepos('a', { exec, env: {}, now: () => t })
+    await listRepos('ap', { exec, env: {}, now: () => t })
+    expect(calls).toHaveLength(3)
+    t = 61_000
+    await listRepos('api', { exec, env: {}, now: () => t })
+    expect(calls).toHaveLength(6)
+  })
+
+  it('parses orgs and repo refs', () => {
+    expect(parseOrgList(JSON.stringify([{ login: 'Acme-ai' }, { login: '-bad' }, { name: 'x' }, { login: 'Acme-ai' }, { login: 'example' }]))).toEqual(['Acme-ai', 'example'])
+    expect(parseOrgList('nope')).toEqual([])
+    expect(githubRefFromQuery('Acme-ai/api')).toBe('Acme-ai/api')
+    expect(githubRefFromQuery(' https://github.com/Acme-ai/api/tree/main?x=1 ')).toBe('Acme-ai/api')
+    expect(githubRefFromQuery('git@github.com:Acme-ai/api.git')).toBe('Acme-ai/api')
+    expect(githubRefFromQuery('api')).toBeNull()
+    expect(githubRefFromQuery('https://gitlab.com/Acme-ai/api')).toBeNull()
+    expect(githubRefFromQuery('Acme-ai/..')).toBeNull()
   })
 })
 
