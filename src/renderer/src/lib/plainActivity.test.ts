@@ -48,6 +48,15 @@ describe('plainActivity: LIVE says what the agent does in words, never a raw too
     expect(plainActivity('[memory] search "acme"')).toBe('Checking memory')
     expect(plainActivity('[memory] write Stripe (2 facts)')).toBe('Saving to memory')
   })
+  it('loading tools and Principia’s task tools on the memory server read as what they do (CHAT-UI.md §8.4)', () => {
+    expect(plainActivity('ToolSearch select:mcp__hivemem__task_get,mcp__hivemem__task_comment')).toBe('Loading tools')
+    expect(plainActivity('hivemem.task_get VO-15')).toBe('Reading the task')
+    expect(plainActivity('mcp__hivemem__task_comment')).toBe('Commenting on the task')
+    expect(plainActivity('hivemem.task_report review')).toBe('Reporting back')
+    expect(plainActivity('hivemem.task_ask choice')).toBe('Asking you a question')
+    expect(plainActivity('hivemem.task_something_new')).toBe('Working on the task')
+    expect(plainActivity('hivemem.memory_search maria')).toBe('Checking memory')
+  })
   it('a file name or an abbreviation is not a connector call', () => {
     expect(plainActivity('notes.md')).toBe('notes.md')
     expect(plainActivity('index.ts is next')).toBe('index.ts is next')

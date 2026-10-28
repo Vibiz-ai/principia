@@ -27,7 +27,9 @@ const TOOLS: Record<string, (rest: string) => string> = {
   WebFetch: () => 'Reading a web page',
   Task: () => 'Working with a helper',
   Agent: () => 'Working with a helper',
-  TodoWrite: () => 'Planning the next steps'
+  TodoWrite: () => 'Planning the next steps',
+  // Claude loads a deferred tool's schema before calling it ("ToolSearch select:mcp__hivemem__task_get,…")
+  ToolSearch: () => 'Loading tools'
 }
 
 /** pm-review C7: a company with no code never reads "command" or "file" (Maya's agents are working, not running bash). */
@@ -70,6 +72,22 @@ export function connectorCall(line: string): { server: string; tool: string; res
   return null
 }
 
+/** Principia's task tools (main/company/taskTools.ts), in words. */
+const TASK_TOOL: Record<string, string> = {
+  task_get: 'Reading the task',
+  task_list: 'Looking at the board',
+  task_comment: 'Commenting on the task',
+  task_update: 'Updating the task',
+  task_create: 'Filing a task',
+  task_report: 'Reporting back',
+  task_ask: 'Asking you a question',
+  task_handoff: 'Handing the task over',
+  task_brief_edit: 'Updating the brief',
+  task_criterion: 'Checking off the brief',
+  task_attach_proof: 'Attaching proof',
+  task_decide: 'Recording a decision'
+}
+
 /** The connected tool by its own name ("PostHog", "Google Drive"); Principia's own servers by what they are. */
 const SERVICE: Record<string, string> = {
   posthog: 'PostHog',
@@ -102,6 +120,8 @@ export function connectorPhrase(server: string, tool: string, rest = '', code = 
   const head = rest.split(/[{["']/)[0] ?? ''
   const words = new Set(`${tool} ${head}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean))
   const has = (...w: string[]): boolean => w.some((x) => words.has(x))
+  // the task tools live on Principia's memory server too (mcp__hivemem__task_get): they are about the task, not memory
+  if (s === 'hivemem' && /^task_/.test(tool)) return TASK_TOOL[tool] ?? 'Working on the task'
   if (s === 'hivemem') return has('write', 'save', 'remember', 'add', 'update', 'forget', 'delete', 'invalidate') ? 'Saving to memory' : 'Checking memory'
   if (s === 'hive' || s === 'principia') {
     if (has('create', 'file') && has('task')) return 'Filing a task'

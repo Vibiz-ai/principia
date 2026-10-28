@@ -19,7 +19,6 @@ import { useCompanyShortName } from '../../lib/company'
 import { AgentChat, useAgentStatus, useIsCode } from './Desk'
 import { AgentPanel, PanelToggle, SessionPanel, usePanel } from './AgentPanel'
 import { BrowserToggle } from '../browser/BrowserToggle'
-import { TaskLiveBanner } from '../chats/TaskLiveView'
 
 export function AgentConversation({ agent, crumb = false, nonce }: { agent: CompanyAgent; crumb?: boolean; nonce?: number }): React.JSX.Element {
   const who = useDeskWho(agent)
@@ -66,8 +65,6 @@ export function AgentConversation({ agent, crumb = false, nonce }: { agent: Comp
       </Toolbar>
       <div ref={area} className={`convo ${panel.docked ? 'has-panel' : ''}`}>
         <section className="convo__chat" aria-label={`Conversation with ${who.name}`}>
-          {/* CHAT-UI.md §8.4: while it works on a task, its resting chat says so and Watch opens the live view */}
-          <TaskLiveBanner agent={agent} name={who.name} />
           <AgentChat key={nonce ?? 0} agent={agent} chat={chat} />
         </section>
         {panel.open && <AgentPanel agent={agent} session={chat.session} overlay={!panel.docked} onClose={panel.close} />}

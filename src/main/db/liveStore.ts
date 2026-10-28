@@ -103,6 +103,7 @@ interface EventRow {
   summary: string
   detail: string | null
   state: string | null
+  description?: string | null
 }
 interface AskRow {
   id: string
@@ -183,7 +184,8 @@ export const eventFromRow = (r: EventRow): AgentEvent => ({
   name: r.name,
   summary: r.summary,
   detail: r.detail,
-  state: r.state as AgentEvent['state']
+  state: r.state as AgentEvent['state'],
+  ...(r.description ? { description: r.description } : {})
 })
 export const askFromRow = (r: AskRow): Ask & CompanyStamped => ({
   id: r.id,
@@ -460,7 +462,7 @@ export class LiveStore {
   appendAgentEvents(agentId: Id, events: Omit<AgentEvent, 'seq' | 'agentId'>[]): AgentEvent[] {
     if (!events.length) return []
     const ins = this.db.prepare(
-      `INSERT INTO agent_events(agent_id, ts, kind, tool_use_id, name, summary, detail, state) VALUES (?,?,?,?,?,?,?,?)`
+      `INSERT INTO agent_events(agent_id, ts, kind, tool_use_id, name, summary, detail, state${this.eventDescription() ? ', description' : ''}) VALUES (?,?,?,?,?,?,?,?${this.eventDescription() ? ',?' : ''})`
     )
     const seqs: number[] = []
     this.db.transaction(() => {
@@ -473,13 +475,21 @@ export class LiveStore {
           this.red(e.name, 200),
           this.red(e.summary, 200) ?? '',
           this.red(e.detail, 4096),
-          e.state ?? null
+          e.state ?? null,
+          ...(this.eventDescription() ? [this.red(e.description ?? null, 200)] : [])
         )
         seqs.push(Number(r.lastInsertRowid))
       }
       this.enforceCap(agentId)
     })()
     return this.eventsBySeq(seqs)
+  }
+
+  private descCol: boolean | undefined
+  /** agent_events.description exists (healed in by migrate; an older test db may lack it) */
+  private eventDescription(): boolean {
+    if (this.descCol === undefined) this.descCol = (this.db.prepare('PRAGMA table_info(agent_events)').all() as { name: string }[]).some((c) => c.name === 'description')
+    return this.descCol
   }
 
   private enforceCap(agentId: Id): void {

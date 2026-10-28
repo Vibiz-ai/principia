@@ -153,6 +153,8 @@ export interface Session extends CompanyStamped {
    * the agent's conversation (Chats, the agent page). Absent / null = not one.
    */
   companyAgentId?: Id | null
+  /** DEPARTMENTS.md: the board task this session is a run of ("Open as session", a lease). Absent / null = not one. */
+  taskId?: Id | null
 }
 
 // ---------- workflows ----------

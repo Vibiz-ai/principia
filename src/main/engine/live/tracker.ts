@@ -232,7 +232,7 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
   const appendEvent = (
     n: Node,
     ops: LiveOp[],
-    e: { kind: 'tool' | 'text' | 'thinking' | 'status' | 'ask' | 'answer' | 'error'; summary: string; detail?: string | null; name?: string | null; toolUseId?: string | null; state?: 'running' | 'ok' | 'error' | 'denied' | null }
+    e: { kind: 'tool' | 'text' | 'thinking' | 'status' | 'ask' | 'answer' | 'error'; summary: string; detail?: string | null; name?: string | null; toolUseId?: string | null; state?: 'running' | 'ok' | 'error' | 'denied' | null; description?: string | null }
   ): void => {
     ops.push({
       op: 'event.append',
@@ -244,7 +244,8 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
         name: e.name ?? null,
         summary: clip(e.summary, SUMMARY_MAX) || e.kind,
         detail: clipDetail(e.detail ?? null),
-        state: e.state ?? null
+        state: e.state ?? null,
+        ...(e.description ? { description: clip(e.description, SUMMARY_MAX) } : {})
       }
     })
   }
@@ -265,7 +266,7 @@ export function createAgentTracker(o: TrackerOptions): AgentTracker {
     if (isMemoryRead(provider, name)) n.memReads++
     addFilesTo(n, editedFiles(provider, name, input, o.root.cwd))
     setActivity(n, line)
-    appendEvent(n, ops, { kind: 'tool', summary: line, detail: detail ?? (input == null ? null : safeJson(input)), name, toolUseId: id, state })
+    appendEvent(n, ops, { kind: 'tool', summary: line, detail: detail ?? (input == null ? null : safeJson(input)), name, toolUseId: id, state, description: toolDescription(input) })
     if (n !== root && root.filesTouched.length) upsert(root, ops)
     upsert(n, ops)
   }
@@ -997,4 +998,11 @@ function safeJson(v: unknown): string | null {
   } catch {
     return null
   }
+}
+
+/** CHAT-UI.md §8.4: the call's own one-line description (Claude's Bash `description`, "Run the unit tests"), if any. */
+export function toolDescription(input: unknown): string | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+  const d = (input as Record<string, unknown>).description
+  return typeof d === 'string' && d.trim() ? d.replace(/\s+/g, ' ').trim() : null
 }

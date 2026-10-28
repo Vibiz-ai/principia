@@ -199,6 +199,8 @@ export interface ConversationRow {
   workingIds: string[]
   lastAt: string
   unread: number
+  /** CHAT-UI.md §8.6: tasks whose result or question is among the unread messages */
+  unreadTasks?: string[]
   /** someone is answering in it now */
   working: boolean
   /** one agent, you picked them: your private conversation with them */
@@ -229,6 +231,7 @@ export function conversationRows(state: Pick<ForumState, 'members' | 'presence' 
         workingIds,
         lastAt: c.lastMessageAt ?? c.createdAt,
         unread: c.unread,
+        unreadTasks: c.unreadTasks ?? [],
         working: workingIds.length > 0,
         private: agentMemberIds.length === 1 && c.purpose.startsWith(PRIVATE_HANDOFF),
         picking: !!c.picking,
