@@ -16,6 +16,8 @@ import type { Id } from '@shared/types'
 import { TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
 import { Button, EmptyState, Toolbar } from '../ui'
 import { Icon } from '../Icon'
+import { BrowserToggle } from '../browser/BrowserToggle'
+import { taskScope } from '@shared/browser'
 import { AskCard } from '../agents/AskCard'
 import { AgentGlyph } from '../agents/AgentBits'
 import { AgentBust } from '../../shell/DepartmentGroup'
@@ -172,6 +174,8 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
         <Button size="sm" variant="ghost" onClick={() => openBoard(task.companyId, { taskId: task.id })}>
           Open task
         </Button>
+        {/* BROWSER.md §6: this task's own browser tabs (the same across its wakes); they open beside it, never elsewhere */}
+        <BrowserToggle companyId={task.companyId} scope={taskScope(task.id)} />
       </Toolbar>
       <div
         className="cx-thread__body scroll task-chat__body"

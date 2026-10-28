@@ -1,10 +1,10 @@
 /** CONTRACT §13: spawn tagging + reaper. Pure tree math on a ps fixture, a fake process table, and real fake processes. */
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { Reaper, attachEnv, collectTree, findLeftovers, parseEtime, parsePs, spawnIdOf, systemProcessTable, type ProcRow, type ProcessTable } from '../reaper'
+import { Reaper, attachEnv, collectTree, findLeftovers, ownedByUserData, parseEtime, parsePs, spawnIdOf, systemProcessTable, type ProcRow, type ProcessTable } from '../reaper'
 
 const UD = '/Users/u/Library/Application Support/Hive'
 const tag = (id: string, ud = UD): string => `PATH=/usr/bin HIVE_SPAWN_ID=${id} HIVE_USER_DATA=${ud} TERM=xterm-256color`
@@ -89,6 +89,46 @@ describe('findLeftovers', () => {
     // 600/602 descend from Hive (500); 603 escaped to launchd so it is a leftover once s_aaa is not live
     expect(pids(l)).toEqual([603, 700])
   })
+
+  it("a dev copy started from an agent pane never lists its own launcher, helpers or untagged processes", () => {
+    // PR-27: `HIVE_USER_DATA=/tmp/dev node electron .` run from pane s_pane of the installed app. The launcher and the
+    // dev Electron (2100) inherit s_pane; crashpad re-parents to launchd but keeps the env; 2300 is a real leftover.
+    const DEV = '/tmp/dev hive'
+    const ps = `
+    1     0     1 10-01:02:03 /sbin/launchd
+ 2000   400  2000       05:00 node /x/node_modules/.bin/electron .
+ 2100  2000  2000       04:59 /x/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .
+ 2101  2100  2000       04:59 /x/Electron Helper (Renderer)
+ 2200     1  2200       04:59 /x/Electron.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+ 2300     1  2300       30:00 node old-dev.js
+ 2400     1  2400       30:00 node untagged.js
+`
+    const env = `
+ 2000 node /x/node_modules/.bin/electron . ${tag('s_pane', DEV)}
+ 2100 /x/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron . ${tag('s_pane', DEV)}
+ 2101 /x/Electron Helper (Renderer) ${tag('s_pane', DEV)}
+ 2200 /x/Electron.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler ${tag('s_pane', DEV)}
+ 2300 node old-dev.js ${tag('s_gone', DEV)}
+ 2400 node untagged.js HIVE_USER_DATA=${DEV} PATH=/usr/bin
+`
+    const r = attachEnv(parsePs(ps), env)
+    expect(pids(findLeftovers(r, { userData: DEV, live: new Set(), selfPid: 2100 }))).toEqual([2300])
+    // the inherited tag also counts when macOS hides Hive's own env from ps
+    const hidden = r.map((x) => (x.pid === 2100 ? { ...x, env: null } : x))
+    expect(pids(findLeftovers(hidden, { userData: DEV, live: new Set(), selfPid: 2100, selfSpawnId: 's_pane' }))).toEqual([2300])
+  })
+
+  it('Reaper.stopLeftovers never signals the dev copy’s own launcher or crashpad', async () => {
+    const DEV = '/tmp/dev hive'
+    const own = (pid: number, ppid: number, pgid: number, command: string): ProcRow => ({ pid, ppid, pgid, etimeMs: 1000, command, env: ` ${tag('s_pane', DEV)} ` })
+    const t = fakeTable([own(2000, 400, 2000, 'node electron .'), own(2200, 1, 2200, 'chrome_crashpad_handler'), { ...own(2300, 1, 2300, 'node old.js'), env: ` ${tag('s_gone', DEV)} ` }])
+    const reaper = new Reaper({ userData: DEV, table: t, selfPid: 2100, selfSpawnId: 's_pane', graceMs: 50, sampleMs: 0 })
+    expect((await reaper.leftovers(new Set())).map((l) => l.pid)).toEqual([2300])
+    expect(await reaper.stopLeftovers([2000, 2200, 2300], new Set())).toBe(1)
+    expect(t.signals.map(([p]) => Math.abs(p))).not.toContain(2000)
+    expect(t.signals.map(([p]) => Math.abs(p))).not.toContain(2200)
+    expect(t.alive.has(2000) && t.alive.has(2200) && !t.alive.has(2300)).toBe(true)
+  })
 })
 
 /** A process table in memory: signals record and (optionally) kill. */
@@ -168,15 +208,26 @@ describe('Reaper (fake process table)', () => {
 
 // ---------- real fake processes (macOS ps -E; skipped where env is not visible, e.g. a sandbox) ----------
 
+// PR-28: every fake below exits on its own after LIFE_S, so a runner that is killed mid-test (no afterAll) can't leave
+// them running forever; afterAll also sweeps every process tagged with a test's userData, not just the pids it saw.
+const LIFE_S = 60
 const spawned: number[] = []
+const userDatas: string[] = []
+const testUserData = (prefix: string): string => {
+  const ud = mkdtempSync(join(tmpdir(), prefix))
+  userDatas.push(ud)
+  return ud
+}
 afterAll(() => {
-  for (const p of spawned) {
+  const tagged = systemProcessTable.snapshotSync(true).filter((r) => userDatas.some((ud) => ownedByUserData(` ${r.env ?? ''} `, ud)))
+  for (const p of new Set([...spawned, ...tagged.map((r) => r.pid)])) {
     try {
       process.kill(p, 'SIGKILL')
     } catch {
       /* gone */
     }
   }
+  for (const ud of userDatas) rmSync(ud, { recursive: true, force: true })
 })
 
 function envVisible(): boolean {
@@ -216,16 +267,16 @@ const waitFor = async (f: () => boolean, ms = 5000): Promise<boolean> => {
 const LEADER = `
 const { spawn } = require('child_process')
 const fs = require('fs')
-const a = spawn('/bin/sleep', ['600'], { stdio: 'ignore' })                         // same group
-const b = spawn(process.execPath, ['-e', "require('child_process').spawn('/bin/sleep',['601'],{stdio:'ignore'}); setInterval(()=>{},1000)"], { stdio: 'ignore', detached: true }) // escapes the group
+const a = spawn('/bin/sleep', ['${LIFE_S}'], { stdio: 'ignore' })                   // same group
+const b = spawn(process.execPath, ['-e', "require('child_process').spawn('/bin/sleep',['${LIFE_S + 1}'],{stdio:'ignore'}); setTimeout(()=>{},${LIFE_S * 1000})"], { stdio: 'ignore', detached: true }) // escapes the group
 b.unref()
 setTimeout(() => fs.writeFileSync(process.argv[1], JSON.stringify({ a: a.pid, b: b.pid })), 300)
-setInterval(() => {}, 1000)
+setTimeout(() => {}, ${LIFE_S * 1000})
 `
 
 describe.runIf(process.platform === 'darwin' && envVisible())('Reaper (real processes)', () => {
   it('kills a leader, its group, and a tagged escapee (+ its group) after the leader is gone', async () => {
-    const ud = mkdtempSync(join(tmpdir(), 'hive reaper '))
+    const ud = testUserData('hive reaper ')
     const out = join(ud, 'pids.json')
     const spawnId = `st_test${process.pid}`
     const r = new Reaper({ userData: ud, selfPid: process.pid, graceMs: 800, sampleMs: 0 })
@@ -252,10 +303,10 @@ describe.runIf(process.platform === 'darwin' && envVisible())('Reaper (real proc
   }, 20_000)
 
   it('lists a tagged orphan as a leftover (never killed on its own) and Stop kills it', async () => {
-    const ud = mkdtempSync(join(tmpdir(), 'hive leftover '))
+    const ud = testUserData('hive leftover ')
     const r = new Reaper({ userData: ud, selfPid: process.pid, graceMs: 800, sampleMs: 0 })
     // an "earlier Hive run" left this behind: detached, re-parented to launchd once its parent shell exits
-    const sh = spawn('/bin/sh', ['-c', `"${process.execPath}" -e "setInterval(()=>{},1000)" >/dev/null 2>&1 &`], { env: { ...process.env, ...r.tag('s_gone') }, stdio: 'ignore' })
+    const sh = spawn('/bin/sh', ['-c', `"${process.execPath}" -e "setTimeout(()=>{},${LIFE_S * 1000})" >/dev/null 2>&1 &`], { env: { ...process.env, ...r.tag('s_gone') }, stdio: 'ignore' })
     await new Promise((res) => sh.on('exit', res))
     let orphan = 0
     await waitFor(() => {

@@ -898,7 +898,7 @@ stalledSince?: ISODate | null   // set while a working root shows no output and 
 |---|---|---|---|
 | `runs:retryAt` | `{id, when: 'reset' \| 'cancel'}` | `Run` | `reset`: `retryAt = resetAt + 1 min` (never in the past; unknown reset = now + 1 h). `conflict` while the run is active or once its retry fired. |
 | `sessions:retry` | `{id, when: 'now' \| 'reset' \| 'cancel'}` | `V` | live rate-limited session: `now` types `continue` then Return (separate writes); `reset` does that at `resetAt + 1 min` (the root carries `retryAt`); `cancel` drops it. `conflict` when the session ended (or, for `reset`, is not limited). |
-| `processes:leftovers` | V | `LeftoverProcess[]` | tagged processes of this userData whose owner is not live; never killed on their own |
+| `processes:leftovers` | V | `LeftoverProcess[]` | tagged processes of this userData whose owner is not live, outside Hive's own tree (itself, its ancestors, descendants, and its own inherited HIVE_SPAWN_ID); never killed on their own |
 | `processes:stop` | `{pids: number[]}` (1..500) | `{stopped}` | re-verified as leftovers first, then their whole trees (SIGTERM, SIGKILL after 1.5 s) |
 
 | Event | Payload | When |

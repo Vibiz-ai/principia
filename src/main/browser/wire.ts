@@ -65,40 +65,41 @@ export function registerBrowserHandlers(h: Hive): void {
     if (!companyExists(h, id)) throw new HiveError('not_found', 'No such company')
     return id
   }
-  const wrap = async (f: () => Promise<unknown> | unknown, companyId: string): Promise<BrowserState> => {
+  const wrap = async (f: () => Promise<unknown> | unknown, companyId: string, scope: string): Promise<BrowserState> => {
     try {
       await f()
     } catch (e) {
       if (e instanceof BrowserError) throw new HiveError('bad_request', e.message)
       throw e
     }
-    return host().state(companyId)
+    return host().state(companyId, scope)
   }
-  handle('browser:state', ({ companyId }) => host().state(company(companyId)))
-  handle('browser:bounds', ({ companyId, bounds }) => {
-    host().setBounds(company(companyId), bounds)
+  // every call names the chat or task on screen (its scope): the panel only reaches that chat's tabs
+  handle('browser:state', ({ companyId, scope }) => host().state(company(companyId), scope))
+  handle('browser:bounds', ({ companyId, scope, bounds }) => {
+    host().setBounds(company(companyId), scope, bounds)
   })
-  handle('browser:navigate', ({ companyId, url }) => wrap(() => host().navigate(company(companyId), addressToUrl(url)), companyId))
-  handle('browser:nav', ({ companyId, action }) => wrap(() => host().nav(company(companyId), action), companyId))
-  handle('browser:tab', ({ companyId, op, tabId, url }) =>
+  handle('browser:navigate', ({ companyId, scope, url }) => wrap(() => host().navigate(company(companyId), scope, addressToUrl(url)), companyId, scope))
+  handle('browser:nav', ({ companyId, scope, action }) => wrap(() => host().nav(company(companyId), scope, action), companyId, scope))
+  handle('browser:tab', ({ companyId, scope, op, tabId, url }) =>
     wrap(() => {
       const id = company(companyId)
       if (op === 'new') {
         const v = url ? host().check(addressToUrl(url)) : null
         if (v && !v.ok) throw new BrowserError(v.reason)
-        host().openTab(id, v?.ok ? v.url : undefined)
-      } else if (op === 'select') host().selectTab(id, tabId ?? '')
-      else host().closeTab(id, tabId ?? '')
-    }, companyId)
+        host().openTab(id, scope, v?.ok ? v.url : undefined)
+      } else if (op === 'select') host().selectTab(id, scope, tabId ?? '')
+      else host().closeTab(id, scope, tabId ?? '')
+    }, companyId, scope)
   )
-  handle('browser:takeover', ({ companyId, on }) => wrap(() => host().setTakeover(company(companyId), on), companyId))
+  handle('browser:takeover', ({ companyId, scope, on }) => wrap(() => host().setTakeover(company(companyId), scope, on), companyId, scope))
   handle('browser:openShot', async ({ companyId, id }) => {
     const p = host().shotPath(company(companyId), id)
     if (!p) throw new HiveError('not_found', 'That screenshot is gone')
     const err = await shell.openPath(p)
     if (err) throw new HiveError('internal', err)
   })
-  handle('browser:clear', ({ companyId }) => wrap(() => host().clear(company(companyId)), companyId))
+  handle('browser:clear', ({ companyId, scope }) => wrap(() => host().clear(company(companyId)), companyId, scope))
 }
 
 function companyExists(h: Hive, id: string): boolean {

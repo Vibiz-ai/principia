@@ -63,6 +63,18 @@ page's right panel can host it the same way.
 (its Browser button says so), else the company picked in the rail. Switching company switches the panel; the panel
 also shows the company's name beside its tabs.
 
+**Whose tabs.** Every tab belongs to the chat or task that opened it (its scope, `src/main/browser/scopes.ts`):
+
+- `pane:<session id>` for a chat, `task:<task id>` for a board task (the same across its wakes), `run:<run id>` for a
+  run with no task, and `founder` for tabs the founder opens from a page that is no chat or task.
+- The spawn's token carries the scope (`sessionKey`). `browser_tabs` lists, selects and closes only that scope's tabs,
+  and an agent's actions run in its own active tab. Another chat's tab id is "no tab" there.
+- The panel shows the tabs of the chat or task on screen. Switching chats switches the panel's tabs with it. An address
+  the founder types opens in that chat's tabs, so its agent can use it.
+- Take over, the activity line, screenshots and downloads are per scope too.
+- Cookies and sign-ins stay per company: a sign-in done once works in every chat of that company.
+- At most 12 tabs per scope and 30 per company. Past 30, the tab used longest ago in a chat not on screen closes.
+
 **Room for the page.** The page beside the dock keeps at least 880 px (an agent's page has three columns). The dock
 takes what is left, up to the width the founder chose. Too little left: the sidebar steps aside while the dock is open
 (nothing is saved; it comes back on close). Still too little: the dock floats over the page's right side.
@@ -121,21 +133,23 @@ Content:
 - JS dialogs never block: alerts are accepted, confirm and prompt dialogs are dismissed, and both are logged to the
   console buffer.
 
-Calls for one company run one at a time.
+Calls for one chat or task run one at a time; two chats browse side by side.
 
 ## 4. Takeover and activity
 
-- **Take over** pauses agents. Every tool that acts (navigate, click, type, press, select, back, forward, reload,
+- **Take over** pauses the agents of the chat or task on screen. Every tool that acts (navigate, click, type, press, select, back, forward, reload,
   opening or closing tabs) returns a plain message telling the agent to wait or ask. Snapshot, screenshot, console,
   network, the tab list and timed waits still work. **Hand back** resumes. A timed `browser_wait` during a takeover
   returns as soon as the founder hands back, so the agent waits instead of ending its turn (its rules line says so).
 - Each call sets the activity line in plain words ("Codex is browsing: Clicking “Join”"). The line clears 6 s after the
   last call.
-- The panel opens by itself **once per chat or run** when an agent starts browsing in the company on screen. It waits
+- The panel opens by itself **once per chat or task** when its agent starts browsing, and **only while that chat or
+  task is on screen**. An agent browsing in another chat never opens it over the page the founder is on; that chat's
+  tabs are waiting when the founder opens it (the panel opens then if the agent is still browsing). It waits
   while the founder is typing in a field, and it never takes focus. Esc closes it (unless a field outside the panel is
   being edited, or a sheet is open).
 - `principia://browser[?url=https://…][&company=co_…]` opens the panel, optionally on that page. The **Browser**
-  button in the session and agent toolbars toggles it.
+  button in the session, agent and task toolbars toggles it, on that chat's or task's tabs.
 
 ## 5. Security checklist
 
@@ -182,8 +196,11 @@ Calls for one company run one at a time.
   - screenshots come back as image blocks, big snapshots as a file;
   - a token reaches only its company;
   - HTTP needs a token and refuses `Origin`;
-  - one token per spawn, calls for one company run one at a time.
-- `src/renderer/src/lib/browserDock.test.ts`: when the panel opens by itself, the dock width, addresses,
+  - one token per spawn, calls for one chat run one at a time, two chats side by side;
+  - a token reaches only its own chat's or task's tabs.
+- `src/main/browser/__tests__/scopes.test.ts`: tabs and active tab per scope, no tab of another scope, the caps and
+  which old tab closes, the scope names the IPC accepts.
+- `src/renderer/src/lib/browserDock.test.ts`: when the panel opens by itself (only beside the browsing chat), the dock width, addresses,
   `principia://browser`.
 - Live, checked in a separate dev instance with the real `claude` and `codex` CLIs:
   - example.com: opened, read and screenshotted;

@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserState } from '@shared/browser'
 import { addressToUrl } from '@shared/browser'
 import { formatDeepLink, parseDeepLink } from '@shared/deepLink'
-import { activityLine, autoOpen, clampDockWidth, dockLayout, overlaps, PAGE_MIN } from './browserDock'
+import { activityLine, autoOpen, clampDockWidth, DOCK_PEEK, dockLayout, overlaps, PAGE_MIN, shownBeside } from './browserDock'
 
-const state = (companyId: string, sessionKey: string | null): BrowserState => ({
+const state = (companyId: string, sessionKey: string | null, scope = sessionKey ?? 'founder'): BrowserState => ({
   companyId,
+  scope,
   tabs: [],
   activeTabId: null,
   takeover: false,
@@ -13,27 +14,53 @@ const state = (companyId: string, sessionKey: string | null): BrowserState => ({
   shots: [],
   downloads: []
 })
+const base = { activeCompany: 'co_a', pageScope: 'pane:1', open: false, opened: new Set<string>(), sinceTyping: 10_000 }
+
+describe('shownBeside', () => {
+  const dock = { open: true, companyId: 'co_a', scope: 'pane:1' }
+  it('names the browsing session when the open panel shows that chat or task', () => {
+    expect(shownBeside({ ...dock, state: state('co_a', 'pane:1') })).toBe('pane:1')
+    expect(shownBeside({ ...dock, scope: 'task:t9', state: state('co_a', 'task:t9') })).toBe('task:t9')
+  })
+  it('names nothing when the panel is shut, shows another chat or company, or nobody browses', () => {
+    expect(shownBeside({ ...dock, open: false, state: state('co_a', 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_a', 'pane:2') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_b', 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: state('co_a', null, 'pane:1') })).toBeNull()
+    expect(shownBeside({ ...dock, state: undefined })).toBeNull()
+  })
+})
 
 describe('autoOpen', () => {
-  it('opens once per chat or run when an agent starts browsing in the company on screen', () => {
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('open')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(['pane:1']), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: null, open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('open')
+  it('opens once per chat or task when its agent starts browsing while that chat is on screen', () => {
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1') })).toBe('open')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), opened: new Set(['pane:1']) })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), activeCompany: null })).toBe('open')
+    expect(autoOpen({ ...base, state: state('co_a', 'task:t9'), pageScope: 'task:t9' })).toBe('open')
+  })
+  it('never opens beside another chat or task, or on a page that is no chat', () => {
+    // the agent of chat 2 browses while the founder reads chat 1: the panel stays shut, chat 2 keeps its tabs
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:2') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'task:t9') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), pageScope: null })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1', 'pane:2'), pageScope: 'pane:2' })).toBe('no')
   })
   it('never opens for another company, when already open, or without an agent', () => {
-    expect(autoOpen({ state: state('co_b', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: true, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
-    expect(autoOpen({ state: state('co_a', null), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 10_000 })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_b', 'pane:1') })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), open: true })).toBe('no')
+    expect(autoOpen({ ...base, state: state('co_a', null) })).toBe('no')
   })
   it('waits while the founder is typing', () => {
-    expect(autoOpen({ state: state('co_a', 'pane:1'), activeCompany: 'co_a', open: false, opened: new Set(), sinceTyping: 200 })).toBe('later')
+    expect(autoOpen({ ...base, state: state('co_a', 'pane:1'), sinceTyping: 200 })).toBe('later')
   })
 })
 
 describe('dock bits', () => {
   it('clamps the width', () => {
     expect(clampDockWidth(100, 1400)).toBe(360)
-    expect(clampDockWidth(5000, 1400)).toBe(980)
+    // all but DOCK_PEEK of the window
+    expect(clampDockWidth(5000, 1400)).toBe(1240)
+    expect(clampDockWidth(5000, 400)).toBe(360)
     expect(clampDockWidth(Number.NaN, 1400)).toBe(560)
   })
   it('says who is browsing', () => {
@@ -78,5 +105,24 @@ describe('dockLayout', () => {
     const tiny = dockLayout(560, 800, 288)
     expect(tiny.mode).toBe('over')
     expect(tiny.width).toBe(360)
+  })
+  it('keeps a width the founder dragged: beside the page when it fits, over the page when it does not', () => {
+    // 1728 wide, rail 56 + sidebar 232: 560 fits beside the page
+    expect(dockLayout(500, 1728, 288, 232, true)).toEqual({ mode: 'side', width: 500 })
+    expect(dockLayout(560, 1728, 288, 232, true)).toEqual({ mode: 'side', width: 560 })
+    // wider than fits beside: no longer stuck at 560, it floats over the page at the dragged width
+    expect(dockLayout(561, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 561 })
+    expect(dockLayout(1200, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 1200 })
+    // as wide as the window allows, leaving DOCK_PEEK of it (the rail and a strip of the page) visible
+    expect(dockLayout(5000, 1728, 288, 232, true)).toEqual({ mode: 'over', width: 1728 - DOCK_PEEK })
+    expect(dockLayout(5000, 1440, 288, 232, true)).toEqual({ mode: 'over', width: 1440 - DOCK_PEEK })
+  })
+  it('a dragged width on a small window: the sidebar steps aside when that is enough, over the page when not', () => {
+    expect(dockLayout(420, 1360, 288, 232, true)).toEqual({ mode: 'tight', width: 420 })
+    expect(dockLayout(900, 1360, 288, 232, true)).toEqual({ mode: 'over', width: 900 })
+    expect(dockLayout(5000, 800, 288, 232, true).width).toBe(800 - DOCK_PEEK)
+  })
+  it('the default width still adapts to the window', () => {
+    expect(dockLayout(560, 1600, 288, 232, false)).toEqual({ mode: 'side', width: 1600 - 288 - PAGE_MIN })
   })
 })
