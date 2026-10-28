@@ -82,7 +82,7 @@ export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
   },
   forum_reply: {
     name: 'forum_reply',
-    description: 'Reply in a message\'s thread (m3fk). task: file the person\'s request as your Board task (one per message). proposal: a hire they confirm. answer_task: their message answers a task\'s question (VO-15).',
+    description: 'Reply in a message\'s thread (m3fk). task: file the person\'s request as your Board task (one per message). proposal: a hire they confirm. answer_task: their message answers a task\'s question (VO-15). start_task: they said start your task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,7 +91,8 @@ export const FORUM_TOOL_DEFS: Record<ForumTool, ForumToolDef> = {
         refs: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 8 },
         task: { type: 'object', properties: { title: { type: 'string', minLength: 3, maxLength: 120 } }, required: ['title'], additionalProperties: false },
         proposal: HIRE_SCHEMA,
-        answer_task: { type: 'object', properties: { task: { type: 'string' }, answer: { type: 'string' } }, required: ['task'] }
+        answer_task: { type: 'object', properties: { task: { type: 'string' }, answer: { type: 'string' } }, required: ['task'] },
+        start_task: { type: 'string' }
       },
       required: ['to', 'text'],
       additionalProperties: false
@@ -231,7 +232,7 @@ export const FORUM_ARGS = {
     refs: z.array(z.string().max(300)).max(8).optional(),
     proposal: proposalArgZ.optional()
   }),
-  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional(), task: z.strictObject({ title: z.string().trim().min(3).max(120) }).optional(), proposal: proposalArgZ.refine((p) => p.kind === 'agent', { message: 'a reply proposes a hire (kind "agent")' }).optional(), answer_task: z.strictObject({ task: z.string().trim().min(1).max(40), answer: z.string().trim().max(4000).optional() }).optional() }),
+  forum_reply: z.strictObject({ to: refZ, text: z.string().trim().min(1).max(FORUM_LIMITS.agentText), refs: z.array(z.string().max(300)).max(8).optional(), task: z.strictObject({ title: z.string().trim().min(3).max(120) }).optional(), proposal: proposalArgZ.refine((p) => p.kind === 'agent', { message: 'a reply proposes a hire (kind "agent")' }).optional(), answer_task: z.strictObject({ task: z.string().trim().min(1).max(40), answer: z.string().trim().max(4000).optional() }).optional(), start_task: z.string().trim().min(1).max(40).optional() }),
   forum_ask: z.strictObject({
     question: z.string().trim().min(3).max(1000),
     to: handleList.max(5).optional(),

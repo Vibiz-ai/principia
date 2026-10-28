@@ -36,6 +36,12 @@ export interface ForumTaskHooks {
   clearAsk(taskId: string, runId: string | null): void
 }
 
+/** A task's go-ahead (Dispatcher.goAhead): did its run start, and the true state in one line. */
+export interface TaskGoLine { state: 'started' | 'running' | 'queued' | 'refused'; line: string }
+/** answer_task / start_task: the note for the agent, and when the task did not resume, what to say instead. */
+export interface TaskReplyOutcome { note: string; identifier?: string; go?: TaskGoLine | null }
+const goStarted = (go: TaskGoLine | null | undefined): boolean => !go || go.state === 'started' || go.state === 'running'
+
 export interface ForumAgentDeps {
   store: () => ForumStore
   tasks?: ForumTaskHooks | null
@@ -57,12 +63,14 @@ export interface ForumAgentDeps {
   /** AGENT-COLLAB.md §3: team_activity, team_usage, team_board */
   team?: TeamTools | null
   /** forum_reply `task`: files a person's message as a Board task for the replying agent (null when already filed) */
-  fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string; existing?: { by: string | null }; card?: () => void } | null
+  fileTask?: (c: ForumCaller, me: ForumMember, from: ForumMessage, title: string) => { identifier: string; existing?: { by: string | null }; card?: () => void; go?: TaskGoLine | null } | null
   /**
    * forum_reply answer_task (CHAT-UI.md §8): the person's message (`from`) answers the open question of a task in that
    * conversation; returns the note for the agent (" · passed the answer on to VO-15")
    */
-  answerTask?: (me: ForumMember, from: ForumMessage, task: string, answer: string | undefined) => string
+  answerTask?: (me: ForumMember, from: ForumMessage, task: string, answer: string | undefined) => TaskReplyOutcome
+  /** forum_reply start_task: the person's message (`from`) says go ahead with this agent's task in that conversation */
+  startTask?: (me: ForumMember, from: ForumMessage, task: string) => TaskReplyOutcome
   now?: () => Date
 }
 
@@ -279,7 +287,19 @@ export class ForumAgentApi {
     }
     // the task first, so "I started {task}" can name it; its card goes under the reply (CHAT-UI.md §8)
     const filing = this.fileFromReply(c, me, t, seq!, a.task?.title)
-    const text = filing.identifier ? fillTask(a.text, filing.identifier, filing.already) : a.text
+    let text = filing.identifier ? fillTask(a.text, filing.identifier, filing.already) : a.text
+    if (filing.identifier && !filing.already && !goStarted(filing.go)) text = notStarted(text, filing.identifier, filing.go!.line)
+    // answer_task / start_task before the reply is posted: "back on VO-15" / "starting it" only when its run really started
+    const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
+    let passed = ''
+    for (const out of [
+      a.answer_task ? (!from ? { note: ' · no such message: nothing passed on' } : this.d.answerTask ? this.d.answerTask(me, from, a.answer_task.task, a.answer_task.answer) : { note: ' · no Board here: nothing passed on' }) : null,
+      a.start_task ? (!from ? { note: ' · no such message: not started' } : this.d.startTask ? this.d.startTask(me, from, a.start_task) : { note: ' · no Board here: not started' }) : null
+    ]) {
+      if (!out) continue
+      passed += out.note
+      if (out.identifier && !goStarted(out.go)) text = notStarted(text, out.identifier, out.go!.line)
+    }
     const m = this.s.post(me.id, { channelId: t.root.channelId, threadId: t.root.id, text, refs: a.refs, origin, opKey })
     try {
       filing.card?.()
@@ -293,11 +313,7 @@ export class ForumAgentApi {
     } catch {
       /* bookkeeping only */
     }
-    let woke = this.wakeMentions(c, me, m) + filing.note
-    if (a.answer_task) {
-      const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
-      woke += !from ? ' · no such message: nothing passed on' : this.d.answerTask ? this.d.answerTask(me, from, a.answer_task.task, a.answer_task.answer) : ' · no Board here: nothing passed on'
-    }
+    const woke = this.wakeMentions(c, me, m) + filing.note + passed
     if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
       try {
         this.d.answerAsk(t.root.id, me.id, text, m.id)
@@ -310,7 +326,7 @@ export class ForumAgentApi {
   }
 
   /** forum_reply `task`: only a person's message becomes a task, once, assigned to the agent who replied. */
-  private fileFromReply(c: ForumCaller, me: ForumMember, t: { root: ForumMessage; replies: ForumMessage[] }, seq: number, title: string | undefined): { note: string; identifier?: string; card?: () => void; already?: string } {
+  private fileFromReply(c: ForumCaller, me: ForumMember, t: { root: ForumMessage; replies: ForumMessage[] }, seq: number, title: string | undefined): { note: string; identifier?: string; card?: () => void; already?: string; go?: TaskGoLine | null } {
     if (!title) return { note: '' }
     if (!this.d.fileTask) return { note: ' · no Board here: the task was not filed' }
     const from = t.root.seq === seq ? t.root : t.replies.find((r) => r.seq === seq)
@@ -321,7 +337,7 @@ export class ForumAgentApi {
       if (!made) return { note: ' · already filed for this message: do not file another' }
       // CHAT-UI.md §8: never a second task for the same request (two agents in one conversation)
       if (made.existing) return { identifier: made.identifier, already: made.existing.by && made.existing.by !== me.name ? made.existing.by : 'A teammate', note: ` · already filed as ${made.identifier}${made.existing.by && made.existing.by !== me.name ? ` by ${made.existing.by}` : ''}: not filed again. Say who is on it; do not start the same work` }
-      return { identifier: made.identifier, card: made.card, note: ` · filed ${made.identifier}` }
+      return { identifier: made.identifier, card: made.card, go: made.go ?? null, note: ` · filed ${made.identifier}${goStarted(made.go) ? (made.go ? ' · started' : '') : ` · not started: ${made.go!.line} (said so in your reply)`}` }
     } catch (e) {
       return { note: ` · task not filed: ${clip(e instanceof Error ? e.message : String(e), 160)}` }
     }
@@ -637,6 +653,23 @@ function withRootRef(s: ForumStore, m: ForumMessage): ForumMessage & { rootRef?:
  * CHAT-UI.md §8: `{task}` in a forum_reply becomes the task's identifier. When a teammate had already filed it, the
  * reply must not claim the work: "I started {task}" reads "Julia already started VO-9".
  */
+/**
+ * The agent's reply when the task it names did not resume: "Got it, back on VO-16." / "Starting VO-16 now." give way to
+ * the true state (Dispatcher.goAhead's line), "I started VO-16" reads "I filed VO-16" with the state after it, and a
+ * reply that claims none of these gets the state added.
+ */
+export function notStarted(text: string, identifier: string, line: string): string {
+  const id = identifier.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
+  let said = false
+  const say = (): string => (said ? '' : ((said = true), line))
+  let out = text
+    .replace(new RegExp(`Got it,? (?:I'm |I am )?back on ${id}\\.?`, 'gi'), say)
+    .replace(new RegExp(`\\b(?:I'm starting|I am starting|Starting|Back on|I'm back on|I'm on) ${id}(?: now)?\\.?`, 'gi'), say)
+    .replace(new RegExp(`\\bI(?:'ve|’ve| have)? started ${id}\\b`, 'gi'), `I filed ${identifier}`)
+  if (!said) out = `${out.trim()} ${line}`
+  return out.replace(/[ \t]{2,}/g, ' ').trim()
+}
+
 export function fillTask(text: string, identifier: string, alreadyBy?: string): string {
   const named = alreadyBy ? text.replace(/\bI(?:'ve|’ve| have)? started \{task\}/gi, `${alreadyBy} already started ${identifier}`).replace(/\bI'll post the result here\.?/gi, `${alreadyBy} will post the result here.`) : text
   return named.replace(/\{task\}/g, identifier)

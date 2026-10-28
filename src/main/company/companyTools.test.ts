@@ -110,6 +110,19 @@ describe('company_file_task', () => {
     expect(c.detail(t.id).activity.some((a) => a.kind === 'routed' && a.message.startsWith('Filed from a chat into Development'))).toBe(true)
   })
 
+  it('start:true (the user asked for it now) gives the go-ahead at once and says what holds it; without it the task waits', () => {
+    const b = board()
+    const went: string[] = []
+    tools = new TaskTools({ company: () => c, redact, enabled: () => true, goAhead: (id, why) => (went.push(`${c.task(id).identifier}: ${why}`), { state: 'queued', line: 'Bug fixer is running 3 tasks; it starts when one finishes.' }) })
+    const now = call(b.chat(), 'company_file_task', { title: 'Fix the login crash', departmentKey: 'development', reason: 'A bug', start: true }) as { task: { identifier: string }; started: boolean; detail: string }
+    expect(went).toEqual([`${now.task.identifier}: you asked for it in the chat`])
+    expect(now.started).toBe(false)
+    expect(now.detail).toContain('It has not started: Bug fixer is running 3 tasks')
+    const later = call(b.chat('session_chat2'), 'company_file_task', { title: 'Fix the signup crash', departmentKey: 'development', reason: 'Another bug' }) as { detail: string; started?: boolean }
+    expect(went).toHaveLength(1)
+    expect(later.started).toBeUndefined()
+  })
+
   it('takes a named agent of that department, leaves several manual agents to the human, and replays a repeated call', () => {
     const b = board()
     const owner = b.chat()

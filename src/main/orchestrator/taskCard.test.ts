@@ -3,7 +3,7 @@
  * started it, a second agent never files the same request again, and the result comes back into the conversation.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { OrchWorld, report, type Turn } from './__tests__/world'
+import { OrchWorld, report, settle, type Turn } from './__tests__/world'
 import type { ForumMessage } from '../../shared/forum'
 
 const worlds: OrchWorld[] = []
@@ -34,14 +34,22 @@ function setup(opts: { taskOutput?: string } = {}) {
   const conv = w.forum.store.createChannel(owner.id, { name: 'chat-ugc-conversion-ab12', kind: 'private', memberIds: [jm.id, um.id] })
   const say = (text: string) => w.forum.humanPosted(w.forum.store.post(owner.id, { channelId: conv.id, text }))
   const inConv = (): ForumMessage[] => (w.db.prepare('SELECT seq FROM forum_messages WHERE channel_id=? ORDER BY seq').all(conv.id) as { seq: number }[]).map((r) => w.forum.store.message(r.seq))
-  return { w, co, mkt, owner, julia, junia, jm, um, conv, say, inConv, results }
+  /** only the agents' replies: the task they filed is queued to start, not played yet */
+  const replies = async () => {
+    await settle()
+    for (let t = w.live.find((x) => x.kind === 'reply'); t; t = w.live.find((x) => x.kind === 'reply')) {
+      await w.play(t)
+      await settle()
+    }
+  }
+  return { w, co, mkt, owner, julia, junia, jm, um, conv, say, inConv, results, replies }
 }
 
 describe('a task started from a conversation', () => {
   it('is said plainly, carded under the reply, and filed once even when two agents answer', async () => {
-    const { w, co, jm, um, say, inConv, results } = setup()
+    const { w, co, jm, um, say, inConv, results, replies } = setup()
     say('we need to get more conversion in vibiz ugc… check posthog')
-    await w.drain()
+    await replies()
     const tasks = w.c.listTasks(co.id).filter((t) => /UGC conversion/.test(t.title))
     expect(tasks).toHaveLength(1)
     const t = tasks[0]!
@@ -55,7 +63,9 @@ describe('a task started from a conversation', () => {
     expect(said.text).toBe(`I started ${t.identifier}: Lift UGC conversion. I'll post the result here.`)
     expect(cards[0]!.seq).toBeGreaterThan(said.seq)
     expect(cards[0]!.text).toBe(`${filer.name} started ${t.identifier}: Lift UGC conversion`)
-    expect(cards[0]!.task).toMatchObject({ taskId: t.id, identifier: t.identifier, agentId: filer.agentId, state: 'queued' })
+    expect(cards[0]!.task).toMatchObject({ taskId: t.id, identifier: t.identifier, agentId: filer.agentId, state: 'working' })
+    // the person asked for it: it started on their word (manual seats), one run
+    expect(w.live.filter((x) => x.kind === 'task' && x.taskId === t.id)).toHaveLength(1)
     // the second agent hears who is on it and files nothing
     expect(results[other.name]).toMatch(new RegExp(`already filed as ${t.identifier} by ${filer.name}: not filed again`))
     // and its reply does not claim the work
@@ -66,12 +76,11 @@ describe('a task started from a conversation', () => {
   })
 
   it('posts the result back into the conversation, not the department channel, and the card updates in place', async () => {
-    const { w, co, mkt, owner, say, inConv } = setup()
+    const { w, co, mkt, owner, say, inConv, replies } = setup()
     say('we need to get more conversion in vibiz ugc… check posthog')
-    await w.drain()
+    await replies()
     const t = w.c.listTasks(co.id).find((x) => /UGC conversion/.test(x.title))!
     const card = inConv().find((m) => m.task)!
-    await w.runNow(t.id)
     // working: the stored card follows the task
     w.forum.reconcileTaskCards(co.id)
     expect(w.forum.store.message(card.seq).task).toMatchObject({ state: 'working', runId: w.c.task(t.id).runId })
@@ -127,8 +136,6 @@ describe('a task started from a conversation', () => {
     say('we need to get more conversion in vibiz ugc… check posthog')
     await w.drain()
     const t = w.c.listTasks(co.id).find((x) => /UGC conversion/.test(x.title))!
-    await w.runNow(t.id)
-    await w.drain()
     const runId = w.c.task(t.id).runId!
     w.forum.reconcileTaskCards(co.id, { post: true })
     const back = inConv().filter((m) => m.kind !== 'system' && m.createdAt && m.text.includes('Rewrote the hero'))

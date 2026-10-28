@@ -38,13 +38,15 @@ describe('the Forum reply rules', () => {
 describe('a person asks an agent for work in the Forum', () => {
   it('an agent without Forum tools: Principia files its report follow-up for that agent, in To do, once', async () => {
     const { w, co, mkt, room, say } = setup()
-    const marcus = w.seat(co.id, mkt, 'Brand Voice Writer', 'codex', 'manual', () => ({
-      output: `On it: a post about the autumn sale is on the Board.\n\n${report({ outcome: 'answered', summary: 'Said I will write it', followUps: [{ title: 'Write a post about the autumn sale', goal: 'One Instagram post, warm and plain' }] }).replace(/^Done\.\n\n/, '')}`
+    const marcus = w.seat(co.id, mkt, 'Brand Voice Writer', 'codex', 'manual', (turn) => ({
+      output: turn.kind === 'task' ? report({ outcome: 'review', summary: 'Wrote the post' }) : `On it: a post about the autumn sale is on the Board.\n\n${report({ outcome: 'answered', summary: 'Said I will write it', followUps: [{ title: 'Write a post about the autumn sale', goal: 'One Instagram post, warm and plain' }] }).replace(/^Done\.\n\n/, '')}`
     }))
     say(`@${w.handle(marcus.id)} put a post about the autumn sale on the board`)
     await w.drain()
     const t = w.c.listTasks(co.id).find((x) => x.title === 'Write a post about the autumn sale')!
-    expect(t).toMatchObject({ agentId: marcus.id, status: 'todo' })
+    expect(t).toMatchObject({ agentId: marcus.id })
+    // the person asked for it: it started on their word (a manual seat), it did not wait for Start
+    expect(w.turns.filter((x) => x.kind === 'task' && x.taskId === t.id)).toHaveLength(1)
     expect(t.description).toContain('a request in the Forum')
     expect(t.description).toContain('autumn sale on the board')
     const lines = (w.db.prepare('SELECT text FROM forum_messages WHERE channel_id=?').all(room.id) as { text: string }[]).map((m) => m.text)
@@ -56,6 +58,7 @@ describe('a person asks an agent for work in the Forum', () => {
   it('an agent that filed it with forum_reply: the same request in its report is not filed twice', async () => {
     const { w, co, mkt, say } = setup()
     const marcus = w.seat(co.id, mkt, 'Brand Voice Writer', 'claude', 'manual', async (turn, world) => {
+      if (turn.kind === 'task') return { output: report({ outcome: 'review', summary: 'Wrote the post' }) }
       const me = world.forum.store.memberForAgent(turn.agentId)!
       const ask = world.posts(co.id).find((m) => m.text.includes('autumn sale'))!
       await world.forum.api.call({ companyId: co.id, memberId: me.id, runId: turn.run.id, stepId: turn.owner.stepId, taskId: null }, 'forum_reply', { to: ask.ref, text: 'On the Board.', task: { title: 'Autumn sale post' } })

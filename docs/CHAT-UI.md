@@ -555,17 +555,37 @@ task. It should come back and reply to the parent so the parent tells what it ne
 - **The answer goes back through the conversation** (`handlers/forum.ts forum:post`, the desktop composer and the
   phone's room post alike):
   1. a reply in the question's thread answers it (the existing ask path, `ForumService.answer`);
-  2. else `ForumService.routeTaskReply`: exactly one task question open in the conversation, this is the founder's
-     first message since it was asked, no @mention, and it does not start something new (`looksLikeAnswer`: "also…",
-     "btw", "another thing", "new task"… do not count; an option said back always does). Then it answers the task
-     straight away and no reply run starts;
+  2. else `ForumService.routeHumanPost`: exactly one task question open in the conversation, this is the founder's
+     first message since it was asked, no @mention (`taskReplyCandidate`), and it plausibly answers it: one of the
+     ask's options said back (`matchesOption`, `routeTaskReply`: no model call), or the cheap classifier
+     (`forum/replyKind.ts` on `routeModelCall`, the cheap tier: question + options + message → answer |
+     status_question | new_request | other) says "answer". Something new ("also…", "btw", "new task"…) or a status
+     question ("are u working on it? or what?", "any update?": `notAnAnswer`) never reaches the classifier; a failed or
+     timed-out call, or no Claude CLI, never routes. Then it answers the task straight away and no reply run starts;
   3. otherwise the agents get the message as usual, and the reply run's rules list the open questions
      (`responder.ts taskAskRule`): if the message answers one, `forum_reply {…, "answer_task": {"task": "VO-15",
-     "answer"?: "…"}}` passes it on; if it is about something else they answer it and leave the question open.
-  The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do, the same agent
-  resumes with "Answer: …"; while its run still runs, it is held and applied when it parks). The parent then says
-  "Got it, back on VO-15." (or, for `answer_task`, its own reply is the confirmation). Answered elsewhere (the drawer,
-  the phone's Needs you), the question closes and the parent says "Got your answer. Back on VO-15." once.
+     "answer"?: "…"}}` passes it on; if it is about something else (a status question included) they answer it and
+     leave the question open.
+  The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do with "Answer: …";
+  while its run still runs, it is held and applied when it parks), and **the answer is the founder's go-ahead**:
+  `Dispatcher.goAhead` resumes the same agent at once, with autopilot off or a manual seat, past the company's in-flight
+  limit, never on a paused or archived company or seat, a session seat, or past AGENT_MAX_PARALLEL (it then keeps a
+  "Go ahead: …" wake, `startsWithoutAutopilot`, and the pump starts it when the reason clears). The drawer and the
+  phone's `tasks:answer` do the same. The parent says "Got it, back on VO-15." only when the run really started (or was
+  running); otherwise the true state ("Got it. Julia is running 3 tasks; VO-15 starts when one finishes.",
+  `taskAskAck`). For `answer_task` its own reply is the confirmation, rewritten the same way when the task did not resume
+  (`agentApi.ts notStarted`). Answered elsewhere, the question closes and the parent says "Got your answer. Back on
+  VO-15." (or the true state) once.
+- **Asked for, it starts.** A task an agent files from the founder's message in a conversation (`forum_reply` `task`,
+  or Principia from the reply run's report) gets the same go-ahead at once; when it cannot start, the reply says "I
+  filed VO-16" and what holds it instead of "I started". A chat's `company_file_task {start: true}` (the user asked for
+  it now) does the same. The founder's own Make task waits for their word.
+- **Status and "go ahead".** The reply run's rules carry the live state of the conversation's tasks
+  (`forum/taskStatus.ts`, `taskStatusLine`: working since when and its latest step, not started and why, waiting for
+  the person, blocked, in review, done), so "are you working on it?" gets a real answer. When the founder says go
+  ahead with a task of that conversation, the agent calls `forum_reply {…, "start_task": "VO-16"}`: only on a person's
+  message, only a task filed in that conversation by that agent or assigned to it; a consented start through
+  `Dispatcher.goAhead`, and when it cannot start the posted reply is the true state instead of "Starting VO-16 now."
 - **The result** comes back as before (Principia's update from the run report, else the card's result line), posted as
   the agent: in a conversation a task in review reads "VO-15 is ready for your review. <summary>" with "What I checked:
   …" instead of "Evidence: …".
@@ -606,8 +626,11 @@ phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `dat
 `task-question-reply`, `thread-replyto`, `working-strip-question`. Tests: `orchestrator/taskAsk.test.ts` (one question
 as the filer with what it found, no update on top, never twice; the next message routed to the task with one
 confirmation and the result back as the agent; a thread reply; something else through the agent's answer_task; two
-open questions never guessed; answered on the board), `shared/taskCard.test.ts` (`taskAskSay`, `taskAskKey`,
-`looksLikeAnswer`), `taskCardView.test.ts` (`connectToolsIn`), `conversations/taskCard.render.test.ts` (no answer box,
+open questions never guessed; answered on the board), `orchestrator/answerStarts.test.ts` (the answer resumes with
+autopilot off, the drawer too, a full or paused seat says why, a status question goes to the agent with the live state,
+an option routes without a model call, a failed classifier leaves it to the agent, `start_task` on "go ahead"),
+`forum/replyKind.test.ts`, `shared/taskCard.test.ts` (`taskAskSay`, `taskAskKey`, `taskAskAck`, `matchesOption`,
+`notAnAnswer`, `taskStatusLine`), `taskCardView.test.ts` (`connectToolsIn`), `conversations/taskCard.render.test.ts` (no answer box,
 Answer, the strip's link), `chat/chatTasks.test.ts` (a chat's question notice once per ask). Live tail, log, Run now and the queued reasons:
 `conversations/taskCard.render.test.ts`, `taskCardView.test.ts` (tail, run clock), `shared/taskCard.test.ts`
 (`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).

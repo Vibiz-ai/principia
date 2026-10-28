@@ -17,6 +17,8 @@ import { Dispatcher, HookedCompanyStore } from '../../company/dispatcher'
 import { TaskTools, type TaskCaller, type TaskTool } from '../../company/taskTools'
 import { ForumService } from '../../forum/service'
 import { ForumResponder } from '../../forum/responder'
+import { conversationTaskLines } from '../../forum/taskStatus'
+import type { ModelCall } from '../../company/router'
 import { resolvePersonas } from '../../../shared/personas'
 import type { BoardTask, CompanyAgent, CompanyTaskInput, Department } from '../../../shared/company'
 import type { LiveOwner, StartRunOptions, StepOutputEvent } from '../../../shared/engine'
@@ -84,6 +86,8 @@ export class OrchWorld {
   /** the debounce timers the coordinator set (tests flush by hand) */
   readonly timers: { fn: () => void; ms: number }[] = []
   pumps: string[] = []
+  /** the answer-or-status classifier the Forum uses (null = none, the agent decides) */
+  replyKind: ModelCall | null = null
   private seq = 0
 
   constructor() {
@@ -130,11 +134,19 @@ export class OrchWorld {
         },
         setAsk: (taskId, ask) => void c().patchInFlight(taskId, ask ? { ask, report: null } : { ask: null }),
         answer: (taskId, answer) => void c().answer(taskId, answer),
+        // as forum/wire.ts: the founder's go-ahead is the dispatcher's consented start
+        start: (taskId, why) => this.d.goAhead(taskId, why),
+        lastAnswer: (taskId) => {
+          const a = c().detail(taskId).activity.filter((x) => x.kind === 'answered').pop()
+          return a ? a.message.replace(/^Answer: /, '') : null
+        },
         create: (input) => {
           const t = c().createTask({ companyId: input.companyId, title: input.title, description: input.description, repoId: null, status: input.departmentId || input.agentId ? 'todo' : 'triage', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: input.departmentId, agentId: input.agentId })
           return { id: t.id, identifier: t.identifier }
         }
       },
+      // the cheap classifier (routeCall.ts in the app): a test sets `replyKind`; never a real model call
+      replyKind: () => this.replyKind,
       board: (companyId) => c().listTasks(companyId).map((t) => ({ identifier: t.identifier, title: t.title, status: t.status, blockReason: t.blockReason ?? null, agentId: t.agentId ?? null, departmentId: t.departmentId ?? null, priority: t.priority, updatedAt: t.updatedAt })),
       seats: {
         departmentOf: (agentId) => c().departments.getAgent(agentId)?.departmentId ?? null,
@@ -157,7 +169,8 @@ export class OrchWorld {
       start: (input) => this.startReplyRun(input),
       onWakeStarted: (ids, runId) => this.forum.collab.noteStarted(ids, runId),
       onWakeFailed: (ids, reason) => this.forum.collab.noteFailed(ids, reason),
-      // as forum/wire.ts: the open questions of tasks in the conversation, for the reply run's rules
+      // as forum/wire.ts: the live state of the conversation's tasks, and their open questions, for the reply run's rules
+      taskStates: (channelId) => conversationTaskLines(c(), this.forum.conversationCards(channelId).map((card) => card.taskId), (agentId) => this.forum.store.memberForAgent(agentId)?.name ?? null, this.clock.getTime()),
       taskAsks: (channelId) =>
         this.forum.openTaskAsks(channelId).flatMap((q) => {
           const t = q.ask?.taskId ? c().task(q.ask.taskId) : null

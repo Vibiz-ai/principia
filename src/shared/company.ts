@@ -370,15 +370,18 @@ export interface CompanyAgentSaveInput {
 /** An agent can take a task: active (not archived, not paused). Autonomy is a separate gate (§3.2). */
 /**
  * Work the founder already said go to, which the dispatcher starts with autopilot off and on a manual seat: a schedule's
- * standing card with a fire queued on it (they turned the schedule on), a task whose question they just answered, and
- * a task an agent just handed to a teammate (the same work, carried on).
+ * standing card with a fire queued on it (they turned the schedule on), a task whose question they just answered, a
+ * task an agent just handed to a teammate (the same work, carried on), and a task they said go to in its conversation
+ * that could not start right then (a GO_AHEAD wake: Dispatcher.goAhead).
  */
 export function startsWithoutAutopilot(t: Pick<BoardTask, 'source' | 'status' | 'pendingWake' | 'plan' | 'ask' | 'handoffs'>): boolean {
   if (t.status !== 'todo' || !t.pendingWake?.count || t.plan) return false
   // a handoff carries on work already under way (capped by MAX_HANDOFFS and the wake guard)
   const handedOn = t.handoffs > 0 && /^Handed off to you:/.test(t.pendingWake.reasons.at(-1) ?? '')
-  return t.source === 'schedule' || !!t.ask?.answer || handedOn
+  return t.source === 'schedule' || !!t.ask?.answer || handedOn || t.pendingWake.reasons.some((r) => r.startsWith(GO_AHEAD))
 }
+/** The wake a founder's go-ahead leaves on a task (Dispatcher.goAhead): "Go ahead: …". */
+export const GO_AHEAD = 'Go ahead: '
 
 export const agentActive = (a: Pick<CompanyAgent, 'archivedAt' | 'pausedAt'>): boolean => !a.archivedAt && !a.pausedAt
 
