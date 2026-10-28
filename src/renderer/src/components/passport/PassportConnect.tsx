@@ -106,6 +106,11 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
                   </button>
                 ))}
               </div>
+              {tab === 'local' && info.location && (
+                <div className="company-error" role="alert">
+                  {info.location === 'dmg' ? 'Principia is running from the disk image.' : 'macOS is running Principia from a temporary copy.'} Apps set up from here stop finding it once the disk image is ejected or the Mac restarts. Drag Principia to your Applications folder, open it from there, then come back to connect apps.
+                </div>
+              )}
               {current && (
                 <div className="op-connect-snippet">
                   <p className="company-help">
@@ -124,12 +129,12 @@ export function PassportConnect({ companyId }: { companyId: string }): React.JSX
                       Copy
                     </Button>
                     {current.action === 'install' && (
-                      <Button size="sm" disabled={busy} title={`Adds ${info.serverName} to ${info.claudeDesktop.configPath} (the previous file is kept as .bak)`} onClick={() => void act(current)}>
+                      <Button size="sm" disabled={busy || !!info.location} title={`Adds ${info.serverName} to ${info.claudeDesktop.configPath} (the previous file is kept as .bak)`} onClick={() => void act(current)}>
                         {info.claudeDesktop.installed ? 'Update in Claude Desktop' : 'Add to Claude Desktop'}
                       </Button>
                     )}
                     {current.action === 'open' && (
-                      <Button size="sm" disabled={busy} icon="external" onClick={() => void act(current)}>
+                      <Button size="sm" disabled={busy || (tab === 'local' && !!info.location)} icon="external" onClick={() => void act(current)}>
                         Open in {current.app === 'cursor' ? 'Cursor' : 'VS Code'}
                       </Button>
                     )}

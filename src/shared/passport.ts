@@ -533,6 +533,8 @@ export interface PassportConnectSnippet {
   /** a one-click action Principia offers for it (only ever on the user's click): write the config, or open the app's install link */
   action: 'install' | 'open' | null
 }
+/** 'dmg': running from the mounted disk image; 'translocated': macOS App Translocation. Both paths go away. */
+export type AppLocationProblem = 'dmg' | 'translocated'
 export interface PassportConnectInfo {
   /** the server name other apps show, `<slug>-passport` */
   serverName: string
@@ -542,6 +544,8 @@ export interface PassportConnectInfo {
   /** with Cloud sync on: the host's MCP URL, for ChatGPT and Claude.ai */
   hosted: { mcpUrl: string; snippets: PassportConnectSnippet[] } | null
   claudeDesktop: { configPath: string; installed: boolean }
+  /** Principia runs from the DMG or translocated (main/appLocation.ts): the local configs would break, installs are off */
+  location: AppLocationProblem | null
   /** writes other apps queued that are not in the Inbox yet */
   queued: number
 }
