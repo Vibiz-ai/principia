@@ -5,9 +5,11 @@
  *   will answer (lib/conversations.ts routeTeam, the same rules Principia uses). Typing @ opens a picker of the team
  *   with each role. Send starts a conversation (state/conversations.ts) and the caller opens it in Chats; a person you
  *   already talk to privately gets the message in that same private conversation (one thread per person).
- * - ConversationThread: one conversation: title (rename), who is in it (and "Private" when it is just you and them),
- *   Principia's handoff line, every message, "Marcus is working…" while an answer is on its way, and a reply box
- *   where @name (or @all) adds someone.
+ * - ConversationThread: one conversation: title (Principia names it from the first message and answer; click to
+ *   rename, and your name is kept), who is in it (and "Private" when it is just you and them), Principia's handoff
+ *   line, "Principia is reading your request…" while it picks, every message, a new-specialist card when nobody on
+ *   the team fits (HireCard), "Marcus is working…" while an answer is on its way, and a reply box where @name (or
+ *   @all) adds someone.
  * - RecentConversations: the last few conversations with who is in each, a shimmer while someone answers in it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -26,6 +28,7 @@ import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, whoLine } from '../../state/conversations'
 import { navigate, startSession, useStore } from '../../state/store'
 import { TaskCard, WorkingStrip } from './TaskCard'
+import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
 
 /** Opens a conversation in Chats (the one destination after Send, from Home, ⌘K or New conversation). */
@@ -503,9 +506,21 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
             <span>{channel.purpose}</span>
           </div>
         )}
-        {msgs.map((m, i) => (
-          <MessageBubble key={m.id} m={m} mine={m.authorId === me} head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'} display={display} />
-        ))}
+        {msgs.map((m, i) =>
+          m.kind === 'proposal' && m.proposal?.kind === 'agent' ? (
+            <HireCard key={m.id} m={m} companyId={companyId} display={display} />
+          ) : (
+            <MessageBubble key={m.id} m={m} mine={m.authorId === me} head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'} display={display} />
+          )
+        )}
+        {channel?.picking && (
+          <div className="cx-pending" data-chatux="thread-picking">
+            <span className="cx-handoff__mark" aria-hidden>
+              ◆
+            </span>
+            <span className="shimmer-text">Principia is reading your request to bring in the right people…</span>
+          </div>
+        )}
         {pending.map((p) => (
           <div key={p.id} className="cx-pending" data-chatux="thread-pending">
             <MemberAvatar display={display(p.id)} size={20} working />

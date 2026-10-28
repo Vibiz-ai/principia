@@ -3,7 +3,7 @@
  * with a caller resolved from the step token (never from the arguments). Results are the compact text of §4.3; a
  * refusal throws ForumRefusal with the one line the agent sees. Rate limits (§2.3) are enforced here.
  */
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, parseSeqRef, type ForumAsk, type ForumChannel, type ForumMember, type ForumMessage, type ForumProposal } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, parseSeqRef, type ForumAsk, type ForumChannel, type ForumMember, type ForumMessage, type ForumProposal } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumArgError, parseForumArgs, type ForumArgs, type ForumTool, type ProposalArg } from './protocol'
 import { flat, formatDigest, formatList, messageLine, type FormatLookup } from './format'
@@ -264,6 +264,14 @@ export class ForumAgentApi {
     this.checkRate(c, me, origin)
     const seq = parseSeqRef(a.to, 'm') ?? refuse('Bad message ref')
     const t = this.safeThread(c, me, seq!)
+    // CHAT-UI.md §7.2: a hire proposed mid-conversation is a card in the thread; once created, the hire answers this message
+    if (a.proposal) {
+      const ch = this.s.channel(t.root.channelId, me.id)
+      const from = t.root.seq === seq ? t.root : (t.replies.find((r) => r.seq === seq) ?? t.root)
+      const p = this.propose(c, me, ch, a.text, a.proposal, origin, opKey, { threadId: t.root.id, forMessageId: this.s.member(from.authorId)?.kind === 'human' ? from.id : t.root.id })
+      this.d.presence?.(c, 'working', null)
+      return `ok ${p.ref} ↳${t.root.ref} · proposal open: the person decides (Create & bring in, Edit, or not now)`
+    }
     // the task first, so "I started {task}" can name it; its card goes under the reply (CHAT-UI.md §8)
     const filing = this.fileFromReply(c, me, t, seq!, a.task?.title)
     const text = filing.identifier ? fillTask(a.text, filing.identifier, filing.already) : a.text
@@ -381,7 +389,7 @@ export class ForumAgentApi {
     return `ok #${ch.name}${tail}`
   }
 
-  private propose(c: ForumCaller, me: ForumMember, ch: ForumChannel, text: string, p: ProposalArg, origin: string, opKey?: string): ForumMessage {
+  private propose(c: ForumCaller, me: ForumMember, ch: ForumChannel, text: string, p: ProposalArg, origin: string, opKey?: string, at: { threadId?: string; forMessageId?: string } = {}): ForumMessage {
     const dayAgo = new Date(this.now().getTime() - DAY).toISOString()
     const n = this.s.countProposals(c.companyId, dayAgo)
     if (n >= FORUM_LIMITS.proposalsPerDay) refuse(`${n} proposals were made in this company today (limit ${FORUM_LIMITS.proposalsPerDay}).`)
@@ -390,8 +398,8 @@ export class ForumAgentApi {
     const proposal: ForumProposal =
       p.kind === 'department'
         ? { kind: 'department', status: 'open', reason: p.reason, department: { name: p.name!.trim(), does: p.does ?? '', doesNot: p.doesNot ?? '' } }
-        : { kind: 'agent', status: 'open', reason: p.reason, agent: { departmentKey: p.department ?? null, role: p.role!.trim(), instructions: p.instructions ?? '', capabilities: p.capabilities ?? '', ...(p.adapter ? { adapter: p.adapter } : {}) } }
-    const m = this.s.post(me.id, { channelId: ch.id, text, kind: 'proposal', proposal, origin, opKey })
+        : { kind: 'agent', status: 'open', reason: p.reason, agent: { departmentKey: p.department ?? null, role: p.role!.trim(), instructions: p.instructions ?? '', capabilities: p.capabilities ?? '', ...(p.adapter ? { adapter: p.adapter } : {}) }, ...(at.forMessageId && isConversationChannel(ch) ? { forMessageId: at.forMessageId } : {}) }
+    const m = this.s.post(me.id, { channelId: ch.id, threadId: at.threadId ?? null, text, kind: 'proposal', proposal, origin, opKey })
     const proposals = this.s.channels(c.companyId, me.id).find((x) => x.system === 'proposals')
     if (proposals && proposals.id !== ch.id) {
       const what = proposal.kind === 'department' ? `a new department, "${proposal.department!.name}"` : `a new agent, "${proposal.agent!.role}"`

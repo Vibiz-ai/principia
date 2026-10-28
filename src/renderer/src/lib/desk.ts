@@ -50,7 +50,11 @@ const ROUTES: [RegExp, RegExp][] = [
 const ROLE_GENERIC = new Set('analyst builder specialist agent assistant lead manager officer helper partner expert person team member'.split(' '))
 
 /** Words of a seat's description that say nothing about the work ("Does not publish without approval"). */
-const ABOUT_GENERIC = new Set('doe not never without approval each every our their client clients customer customers thing things work help'.split(' '))
+const ABOUT_GENERIC = new Set(
+  // …and everyday verbs: "Checks the repo for leaks" must not catch "check whats the status of the posts" (CHAT-UI.md §7.2)
+  ('doe not never without approval each every our their client clients customer customers thing things work help ' +
+    'check look see find know tell show give take keep need want use run what whats how why when where which there here now let bro hey thank thanks good great').split(' ')
+)
 
 const MENTION = /(^|\s)@([\p{L}\p{N}_-]+)/u
 

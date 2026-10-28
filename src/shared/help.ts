@@ -44,6 +44,14 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     links: [L('Chats', 'principia://chats'), L('Home', 'principia://home')]
   },
   {
+    id: 'conversation-titles',
+    title: 'Conversation titles, who answers, and new specialists',
+    how:
+      'Principia names each conversation in a few words ("Onboarding flow fixes") from your first message, and once more after the first answer; until then it shows your first words. Rename it by clicking the title in the conversation, or right-click it in the Chats list › Rename… (F2): your name is kept for good. With "Principia picks", Principia reads the request against each agent\'s role, department and instructions and brings in the best fit. When nobody on the team does that kind of work it suggests a new specialist in the conversation: Create & bring in (it joins and answers), Edit…, or Use <someone> instead. Nothing is hired without your click; agents can suggest one mid-conversation the same way.',
+    keywords: ['title', 'rename', 'rename conversation', 'conversation name', 'name a chat', 'who answers', 'principia picks', 'routing', 'wrong agent', 'new specialist', 'create agent', 'hire from chat', 'nobody fits', 'suggest agent'],
+    links: [L('Chats', 'principia://chats'), L('Settings › Team & autonomy', 'principia://settings/team')]
+  },
+  {
     id: 'navigation',
     title: 'Find your way around (shortcuts)',
     how:
@@ -207,7 +215,7 @@ export const HELP_ENTRIES: readonly HelpEntry[] = [
     id: 'departments',
     title: 'Departments and hiring agents',
     how:
-      'Team (⌘2) shows one section per department and its agents. Hire adds a department from presets (Development, Marketing, Sales, Support, Ops, Finance); a department page has Add agent ("Add an agent to …": pick a profile, then role, instructions, autonomy and limits). Each agent card has Message; an agent\'s page has its chat plus Details, Queue, History, Instructions, Library, Computer. Agents can also propose a new department or agent in the Forum for your Approve or Reject. Departments are an Experimental switch (Settings › Experimental), or Turn on departments on Team.',
+      'Team (⌘2) shows one section per department and its agents. Hire adds a department from presets (Development, Marketing, Sales, Support, Ops, Finance); a department page has Add agent ("Add an agent to …": pick a profile, then role, instructions, autonomy and limits). Each agent card has Message; an agent\'s page has its chat plus Details, Queue, History, Instructions, Library, Computer. Agents can also propose a new department or agent in the Forum for your Approve or Reject, and in a conversation Principia suggests a new specialist when nobody on the team fits (Create & bring in). Departments are an Experimental switch (Settings › Experimental), or Turn on departments on Team.',
     keywords: ['department', 'hire', 'hiring', 'new agent', 'add agent', 'add an agent', 'team', 'employee', 'staff', 'role', 'agent instructions', 'org chart', 'marketing team', 'sales team'],
     links: [L('Settings › Team & autonomy', 'principia://settings/team'), L('Settings › Experimental', 'principia://settings/experimental')]
   },

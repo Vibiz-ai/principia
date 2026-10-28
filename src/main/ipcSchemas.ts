@@ -680,6 +680,11 @@ export const REQUEST_SCHEMAS = {
   'forum:react': z.object({ messageId: id, emoji: z.string().min(1).max(16) }).strict(),
   'forum:markRead': z.object({ channelId: id, seq: z.number().int().min(0).optional() }).strict(),
   'forum:createChannel': z.object({ companyId: id, name: z.string().trim().min(2).max(60), kind: z.enum(['public', 'private']), purpose: z.string().max(300).optional(), memberIds: z.array(id).max(50).optional() }).strict(),
+  'forum:startConversation': z.object({
+    companyId: id, text: z.string().trim().min(1, 'The message is empty').max(8000), title: z.string().trim().min(1).max(250),
+    name: z.string().trim().min(2).max(60), purpose: z.string().max(300), agentIds: z.array(id).max(8).optional(),
+    pick: z.object({ agentIds: z.array(id).max(8), handoff: z.string().max(300) }).strict().optional()
+  }).strict().refine((r) => !!r.agentIds?.length || !!r.pick, 'Pick who the conversation is with'),
   'forum:updateChannel': z.object({ channelId: id, topic: z.string().max(250).optional(), purpose: z.string().max(300).optional(), archived: z.boolean().optional() }).strict(),
   'forum:membership': z.discriminatedUnion('op', [
     z.object({ op: z.enum(['join', 'leave']), channelId: id }).strict(),
@@ -692,6 +697,7 @@ export const REQUEST_SCHEMAS = {
     messageId: id,
     decision: z.enum(['approve', 'reject']),
     note: z.string().max(1000).optional(),
+    useAgentId: id.optional(),
     edits: z.object({
       name: z.string().trim().min(1).max(80).optional(), key: z.string().trim().max(40).optional(), role: z.string().trim().min(1).max(80).optional(),
       departmentKey: z.string().trim().max(80).nullable().optional(), profileId: id.optional(), instructions: z.string().max(4000).optional(),

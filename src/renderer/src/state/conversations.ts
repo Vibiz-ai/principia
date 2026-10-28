@@ -52,8 +52,11 @@ export async function messageAgent(companyId: Id, agentId: Id): Promise<void> {
 
 let starting = false
 /**
- * Starts a conversation: the channel with the routed agents, its title and handoff line, then your message (which
- * wakes them). Returns the conversation id, or null (the error is a toast).
+ * Starts a conversation (main: forum:startConversation): the channel titled by your first words, the handoff line,
+ * your message. People you picked (To: a person, @names, Everyone) answer at once; with "Principia picks" (route by
+ * words, or no clear fit) main reads the request against the team and brings in the best fit, or proposes a new
+ * specialist in the conversation (CHAT-UI.md §7.2); this route is its fallback without a model. Principia renames it
+ * from the first message and answer (§7.1). Returns the conversation id, or null (the error is a toast).
  */
 export async function startConversation(companyId: Id, text: string, route: TeamRoute, left: readonly DeskAgent[] = []): Promise<Id | null> {
   const t = text.trim()
@@ -63,12 +66,19 @@ export async function startConversation(companyId: Id, text: string, route: Team
     await loadForum(companyId)
     const st = getForum().byCompany[companyId]?.state
     if (!st) throw new Error(getForum().byCompany[companyId]?.error ?? 'Conversations need Companies and Departments (Settings › Experimental)')
-    const memberIds = route.agents.map((a) => st.members.find((m) => m.agentId === a.id && m.status === 'active')?.id).filter((x): x is string => !!x)
-    if (!memberIds.length) throw new Error(`${route.agents.map((a) => a.name).join(', ')} cannot join a conversation yet`)
+    const ids = route.agents.filter((a) => st.members.some((m) => m.agentId === a.id && m.status === 'active')).map((a) => a.id)
+    if (!ids.length) throw new Error(`${route.agents.map((a) => a.name).join(', ')} cannot join a conversation yet`)
     const title = conversationTitle(t)
-    const ch = await hive.forum.createChannel({ companyId, name: conversationSlug(title, Math.random().toString(36).slice(2, 6)), kind: 'private', purpose: handoffLine(route, left), memberIds })
-    await hive.forum.updateChannel({ channelId: ch.id, topic: title })
-    await post({ companyId, channelId: ch.id, text: t })
+    const picks = route.by === 'words' || route.by === 'lead'
+    const purpose = handoffLine(route, left)
+    const ch = await hive.forum.startConversation({
+      companyId,
+      text: t,
+      title,
+      name: conversationSlug(title, Math.random().toString(36).slice(2, 6)),
+      purpose,
+      ...(picks ? { pick: { agentIds: ids, handoff: purpose } } : { agentIds: ids })
+    })
     void loadForum(companyId)
     return ch.id
   } catch (e) {
@@ -100,9 +110,11 @@ export async function replyInConversation(companyId: Id, channelId: Id, text: st
   }
 }
 
+/** Your name for a conversation: Principia never renames it after this (CHAT-UI.md §7.1). */
 export async function renameConversation(companyId: Id, channelId: Id, title: string): Promise<void> {
   const t = title.trim().slice(0, 80)
-  if (!t) return
+  const cur = getForum().byCompany[companyId]?.state?.channels.find((c) => c.id === channelId)
+  if (!t || t === cur?.topic) return
   try {
     await hive.forum.updateChannel({ channelId, topic: t })
     void loadForum(companyId)

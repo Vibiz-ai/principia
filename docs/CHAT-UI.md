@@ -323,9 +323,57 @@ send, who will answer; the composer in the first week too; drafts kept. Taken fr
 3. Else the words, scored against each seat's role, department and **what it does** (its capabilities and its
    department's charter, the words the Team page shows): the best match plus anyone close, at most three.
    "Customers" alone no longer means support; pricing, margins and staffing go to operations.
-4. Else "No clear fit · Principia starts with Marcus (first on the team) · @someone to change".
+4. Else "No clear fit · Principia reads it and picks, or suggests a new specialist · @someone to choose".
 
-A model triage (coordinator) is the next step; the rules keep it instant and offline.
+Everyday verbs in a seat's description ("Checks the repo…") no longer score: "check whats the status of the posts"
+went to the Repo auditor. Rules 3 and 4 are only the preview and the fallback: with "Principia picks", main reads the
+request on Send (§7.2).
+
+### 7.1 Titles (2026-10-28)
+
+The founder: the list read "Bro now lets also …", "Check hola@exam…", "Check whats the …". Each conversation now gets
+a short title (3-6 words: "Unscheduled posts on Acme workspace", "Onboarding flow fixes").
+
+- Until Principia names it, the title is the first message's own words (`conversationTitle`), so nothing is ever
+  blank. Right after Send, one call on the cheap tier names it; after the first agent answer, one more call refines it
+  with the answer in view. A failed call, a timeout, no Claude CLI or a nonsense answer (`cleanTitle`) keeps what is
+  there. Calls run one at a time.
+- Rename: click the title in the conversation, or right-click a row in Chats › Rename… (F2). A person's rename sets
+  `titleBy: 'you'` in the channel's data, and ForumStore.autoTitle checks it inside its own write, so a rename made
+  while the model was thinking still wins and the generator never touches it again.
+- The title shows in the Chats list, Recent conversations and the conversation header (channel topic). Older
+  conversations (no `titleBy`) are named once per app run when their company's conversations load (at most twelve,
+  newest first); one with a second "set the topic" line was renamed by hand and keeps its title.
+- Tasks filed from a conversation keep their own titles. The phone lists sessions and agents, not team
+  conversations, so it has nothing to rename yet.
+
+### 7.2 Principia picks, and new specialists on demand (2026-10-28)
+
+The founder: "almost everything lands on Julia (Repo auditor), even marketing, social and support questions".
+
+- **Send** (To: Principia picks, by words or no fit) calls `forum:startConversation`: main creates the conversation
+  with only you in it, posts your message, shows "Principia is reading your request to bring in the right people…",
+  and asks the cheap tier to pick (`conversationPilot.ts`: the team as s1, s2… with role, department and charter,
+  capabilities and instructions; pick by meaning, never by one shared word). The pick joins quietly, the handoff line
+  says who and why ("Principia brought in Marcus (Content writer): they run the posts."), and they answer. To: a
+  person, @names and Everyone skip the model and answer at once.
+- **Nobody fits** (`fit: "none"`): no one is brought in. Principia posts a hire card in the conversation: "No one on
+  the team handles social media scheduling yet. Create “Social scheduler” in Marketing?" with the role, department,
+  AI tool (the default profile of Settings' default provider) and short instructions. **Create & bring in** hires it
+  through the Forum proposal path (ForumService.decide → `departmentActions.saveAgent`, the same validation as Team ›
+  Add agent), adds it to the conversation and wakes it on your message; **Edit…** opens the hire sheet first; **Use
+  Marcus instead** brings in the closest existing agent. A role someone already has is brought in instead of proposed.
+- **Mid-conversation**: an agent whose reply needs a specialist answers with `forum_reply` + `proposal`
+  (`{"kind":"agent","role",…}`, also as a fenced `reply` op); it renders the same card, in the thread, and the hire
+  answers the person's message. The conversation reply prompt says when and how.
+- **Never on its own**: there is no setting for autonomous hiring; every hire is the founder's click (owner or admin,
+  checked in decide).
+- **No model** (no Claude CLI, failure, timeout, an answer naming nobody real): the deterministic route the composer
+  showed, with its handoff line; nobody fits → the first active agent, as before.
+
+Both calls use the app's one cheap tier for small text jobs, `company/routeCall.ts` `routeModelCall`: one headless
+Claude turn on `--model haiku`, no tools, no MCP, an empty cwd, the founder's own login, the text redacted and framed
+as data. One model; a failure never swaps in another model.
 
 ### How it works
 
@@ -344,7 +392,7 @@ stays, because there it is the only way in. The keyboard-first developer persona
 
 - iPhone / web phone app: the same To: (Principia picks / a person), New conversation and Recent (ChatsView.swift,
   remote/views.ts `phoneChats`), and a route over the conversation's channel.
-- A model triage for routing; a cheap rename of the title after the first answers.
+- The phone app's conversations (when it lists them, the same title and hire card).
 - A conversation that turns into work already becomes a Board task when the agent files it; show that link in the thread. Done in §8: the live task card.
 - The agent page's composer is the agent's work session (model, permissions); it is listed as Agent sessions.
 
@@ -359,7 +407,8 @@ HIVE_USER_DATA=<dir> HIVE_NO_SCHEDULER=1 HIVE_CLAUDE_BIN=$PWD/scripts/fake-claud
 ("Demo reply: no model ran."); routing, reply runs, presence and posts are real. CDP selectors: `data-chatux` =
 `new-conversation`, `composer-input`, `composer-send`, `route-line`, `to-pill`, `to-option[data-value=team|everyone|
 agent:<Name>|claude|repo:<name>]`, `mention-option`, `new-topic`, `thread`, `handoff`, `thread-msg`,
-`thread-pending`, `thread-input`, `private`, `recent-row`, `chat-row`, `new-pane`, `needs-more`.
+`thread-pending`, `thread-input`, `private`, `recent-row`, `chat-row`, `new-pane`, `needs-more`, `thread-picking`,
+`hire-card` (`hire-create`, `hire-edit`, `hire-instead`, `hire-dismiss`, `hire-outcome`), `chat-row-rename`.
 
 ## 8. Work started from a conversation: the live task card (2026-10-27)
 

@@ -10,7 +10,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AdapterId } from '../../shared/types'
 import type { ForumBridge, ForumSpawn, McpServerSpec } from '../../shared/engine'
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumStore, type ForumDirectory } from './store'
 import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
@@ -21,6 +21,7 @@ import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
 import { isFinishedCard, taskCardLine, taskCardResult, taskCardState, taskResultLine, type ForumTaskCard } from '../../shared/taskCard'
+import type { ConversationPilot } from './conversationPilot'
 import { collabSettings, type AgentCollabSettings, type CollabState, type RunConversation } from '../../shared/collab'
 
 const fail = (m: string): never => {
@@ -113,6 +114,10 @@ export class ForumService implements ForumBridge {
    * of the step's final answer is skipped (reply runs always keep theirs: it answers the message). Set by its wire.
    */
   deferAutoPost: ((e: { runId: string; stepId: string; output: string }) => boolean) | null = null
+  /** CHAT-UI.md §7.1, §7.2: conversation titles and "Principia picks" (conversationPilot.ts). Set by wire.ts. */
+  pilot: ConversationPilot | null = null
+  /** responder.ts wakeOne: one agent answers one person's message (a new hire, or "Use Julia instead"). Set by wire.ts. */
+  wakeOne: ((memberId: string, message: ForumMessage) => void) | null = null
   /** ORCHESTRATOR.md §2: an ask was answered (the mailbox wakes a blocked asker). Set by its wire. */
   onAskAnswered: ((m: ForumMessage, opts: { waited: boolean }) => void) | null = null
 
@@ -183,6 +188,11 @@ export class ForumService implements ForumBridge {
 
   private onStoreEvent(e: ForumEvent): void {
     this.d.emit(e)
+    // the first agent answer in a conversation refines its title (after the write that emitted this)
+    if (e.kind === 'message' && this.pilot) {
+      const pilot = this.pilot
+      setImmediate(() => pilot.onMessage(e.message))
+    }
   }
 
   // ---------- engine bridge (§3) ----------
@@ -477,9 +487,15 @@ export class ForumService implements ForumBridge {
     if (p.status !== 'open') fail(`This proposal was already ${p.status}`)
     const at = this.now().toISOString()
     const author = this.store.member(msg.authorId)
+    // the decision lines go in the proposal's thread (a proposal made in a reply is in its root's thread)
+    const lineSeq = msg.threadId ? this.store.message(msg.threadId).seq : msg.seq
     if (req.decision === 'reject') {
-      const out = this.store.patchPayload(msg.id, { proposal: { ...p, status: 'rejected', decidedBy: by.id, decidedAt: at, note: req.note?.trim() || undefined, error: undefined } })
-      this.store.systemPost(msg.channelId, `${by.name} rejected the proposal${req.note?.trim() ? `: ${clip(req.note.trim(), 300)}` : '.'}`, msg.seq)
+      // CHAT-UI.md §7.2: "Use Julia instead": an existing agent joins the conversation and answers instead of a hire
+      const used = req.useAgentId ? this.useInstead(msg, req.useAgentId, by) : null
+      const out = this.store.patchPayload(msg.id, { proposal: { ...p, status: 'rejected', decidedBy: by.id, decidedAt: at, note: req.note?.trim() || undefined, error: undefined, ...(used ? { usedAgentId: req.useAgentId } : {}) } })
+      if (used) this.store.systemPost(msg.channelId, `${by.name} brought in ${used.name} instead of a new specialist.`, lineSeq)
+      else this.store.systemPost(msg.channelId, `${by.name} rejected the proposal${req.note?.trim() ? `: ${clip(req.note.trim(), 300)}` : '.'}`, lineSeq)
+      if (used && p.forMessageId) this.answerIn(msg.channelId, used.id, p.forMessageId)
       return out
     }
     const c = this.d.company ?? fail('Departments are not available')
@@ -512,10 +528,44 @@ export class ForumService implements ForumBridge {
       throw err instanceof HiveError ? err : new HiveError('bad_request', message)
     }
     const out = this.store.patchPayload(msg.id, { proposal: { ...p, status: 'approved', decidedBy: by.id, decidedAt: at, note: req.note?.trim() || undefined, result, error: undefined } })
-    this.store.systemPost(msg.channelId, line, msg.seq)
+    this.store.systemPost(msg.channelId, line, lineSeq)
+    // CHAT-UI.md §7.2: a hire proposed in a conversation joins it and answers the message it was proposed for
+    if (p.kind === 'agent' && result?.agentId) {
+      const hired = this.joinConversation(msg.channelId, result.agentId, by)
+      if (hired && p.forMessageId) this.answerIn(msg.channelId, hired.id, p.forMessageId)
+    }
     const proposals = this.store.channels(msg.companyId, by.id).find((x) => x.system === 'proposals')
     if (proposals && proposals.id !== msg.channelId) this.store.systemPost(proposals.id, `${line} (${msg.ref})`)
     return out
+  }
+
+  /** An agent joins a conversation (quietly: the decide line says so) and becomes its handoff line. null: not a conversation. */
+  private joinConversation(channelId: string, agentId: string, by: ForumMember): ForumMember | null {
+    const ch = this.store.channel(channelId)
+    if (!isConversationChannel(ch)) return null
+    const m = this.store.memberForAgent(agentId)
+    if (!m || m.status !== 'active' || m.companyId !== ch.companyId) return null
+    this.store.addMembers(by.id, channelId, [m.id], { quiet: true })
+    const role = this.d.company?.seatLabel(agentId)?.split(',')[0] ?? null
+    const others = this.store.channelMemberIds(channelId).filter((id) => id !== m.id && this.store.member(id)?.kind === 'agent').length
+    if (!others) this.store.updateChannel(by.id, channelId, { purpose: `Principia brought in ${m.name}${role && role !== m.name ? ` (${role})` : ''}, new on the team.` })
+    this.store.setConversationMeta(channelId, { picking: false })
+    return m
+  }
+  private useInstead(msg: ForumMessage, agentId: string, by: ForumMember): ForumMember | null {
+    const m = this.store.memberForAgent(agentId)
+    if (!m || m.companyId !== msg.companyId || m.status !== 'active') fail('That agent is not on this team')
+    return this.joinConversation(msg.channelId, agentId, by)
+  }
+  /** `memberId` answers the person's message `messageId` (in its thread), as if it had been there when it was sent. */
+  private answerIn(channelId: string, memberId: string, messageId: string): void {
+    try {
+      const m = this.store.message(messageId)
+      if (m.channelId !== channelId || m.deletedAt) return
+      this.wakeOne?.(memberId, m)
+    } catch (e) {
+      this.d.log?.warn('forum: wake after hire failed', { messageId, error: String(e) })
+    }
   }
 
   // ---------- make task (§6) ----------

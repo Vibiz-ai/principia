@@ -28,8 +28,19 @@ describe('routeTeam (CHAT-UI.md §7)', () => {
     const r = routeTeam('whats a good name for my dog', team)!
     expect(r.by).toBe('lead')
     expect(r.agents.map((a) => a.name)).toEqual(['Marcus'])
-    expect(routeLine('whats a good name for my dog', r)).toMatch(/No clear fit · Principia starts with Marcus \(first on the team\)/)
+    expect(routeLine('whats a good name for my dog', r)).toMatch(/No clear fit · Principia reads it and picks, or suggests a new specialist/)
     expect(routeTeam('@Livia look at this', team)!.unknown).toBe('Livia')
+  })
+  it('an everyday verb in a seat’s description never wins the route (Julia, Repo auditor, caught every “check”)', () => {
+    const acme: DeskAgent[] = [
+      { id: 'j', name: 'Julia', role: 'Repo auditor', department: 'Development', about: 'Checks the repo for leaked keys and broken builds.' },
+      { id: 'm', name: 'Marcus', role: 'Social media manager', department: 'Marketing', about: 'Plans and schedules the posts.' }
+    ]
+    const r = routeTeam('Check whats the status of the unscheduled posts on the Acme workspace', acme)!
+    expect(r.agents.map((a) => a.name)).toEqual(['Marcus'])
+    expect(r.why.m).toContain('post')
+    // nothing about the work at all: no fit (Principia reads it on Send, or suggests a specialist)
+    expect(routeTeam('check hola@example.com and tell me what you see', acme)!.by).toBe('lead')
   })
   it('left-out agents never come back by words', () => {
     expect(routeTeam('a post and replies to reviews', team, { exclude: ['a2'] })!.agents.map((a) => a.name)).toEqual(['Marcus'])
