@@ -19,11 +19,10 @@ Principia is a Mac app where your AI agents work like a team. Claude Code, Codex
 
 [Download for Mac](https://github.com/Vibiz-ai/principia/releases/latest/download/Principia-arm64.dmg) · [Website](https://useprincipia.com) · [Quick start](#desktop-quick-start) · [Contribute](CONTRIBUTING.md) · [Cloud setup](cloud/README.md) · [Report a vulnerability](SECURITY.md)
 
-<!-- DEMO_GIF: replace the screenshot below with the 45–60 s demo recording (docs/GTM.md, "first demo") once it exists,
-     e.g. ![Principia demo](website/public/principia-demo.gif). Keep it under ~10 MB so it loads on GitHub. -->
-![Principia agent canvas — example workspace](website/public/principia-agents.png)
+<!-- DEMO_GIF: 45 s recording on the synthetic demo data (scripts/seed-demo.mjs). Keep it under 10 MB so it loads on GitHub. -->
+![Principia demo: approve a draft, pick how to connect a service for one company, ask an agent, open its task on the Board, switch company](website/public/principia-demo.gif)
 
-*Current interface with sample data. See also [the workflow canvas](website/public/principia-canvas.png) and [the connection catalog](website/public/principia-connections.png).*
+*Recorded on sample data from `scripts/seed-demo.mjs` with a stand-in agent, so no model ran. Stills: [agents](website/public/principia-agents.png), [the workflow canvas](website/public/principia-canvas.png) and [the connection catalog](website/public/principia-connections.png).*
 
 ## Who it is for
 
