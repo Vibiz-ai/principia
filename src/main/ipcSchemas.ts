@@ -11,6 +11,7 @@ import { CHAT_REQUEST_SCHEMAS } from './chat/chatSchemas'
 import { REMOTE_REQUEST_SCHEMAS } from './remote/remoteSchemas'
 import { BROWSER_REQUEST_SCHEMAS } from './browser/schemas'
 import { siteOrigin } from '../shared/remote'
+import { SIGN_IN_CODE_RE } from '../shared/providerAuth'
 import { ADAPTER_IDS, ARTIFACT_KINDS, SCRIPT_LANGS } from '../shared/types'
 import { MEMORY_FACT_KINDS, MEMORY_MODES, MEMORY_SCOPES, MEMORY_STATUSES } from '../shared/memory'
 import { PASTED_IMAGE_TYPES, type InvokeChannel } from '../shared/ipc'
@@ -521,6 +522,10 @@ export const REQUEST_SCHEMAS = {
   'settings:update': settingsPatch,
   'providers:list': optObj({ refresh: z.boolean().optional() }),
   'providers:claudeAuth': optObj({ refresh: z.boolean().optional() }),
+  'providers:claudeSignIn': none,
+  'providers:claudeSignInWait': none,
+  'providers:claudeSignInCode': z.object({ code: z.string().trim().regex(SIGN_IN_CODE_RE) }).strict(),
+  'providers:claudeSignInCancel': none,
   'repos:list': optObj({ companyId }),
   'repos:pick': optObj({ companyId }),
   'repos:add': z.object({ paths: z.array(absPath).min(1).max(200), companyId }),

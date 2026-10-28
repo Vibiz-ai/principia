@@ -1,6 +1,9 @@
+import { spawn } from 'node:child_process'
+import os from 'node:os'
 import type { Hive } from '../hive'
+import { ClaudeSignIn, type SignInProc } from '../claudeSignIn'
 import { emit, handle } from '../ipc'
-import { baseChildEnv, resolveLoginEnv } from '../loginEnv'
+import { RECHECK_ENV_TIMEOUT_MS, baseChildEnv, loginEnvState, resolveLoginEnv } from '../loginEnv'
 import { defaultGhExec } from '../onboarding/github'
 import { parseClaudeAuth, type ClaudeAuthStatus } from '../../shared/providerAuth'
 
@@ -25,7 +28,7 @@ export function registerProfileHandlers(h: Hive): void {
   handle('providers:list', async (req) => {
     if (req?.refresh) {
       // Settings "Recheck": re-resolve the login env first so newly installed CLIs are found (SPEC A14)
-      await resolveLoginEnv()
+      await resolveLoginEnv(RECHECK_ENV_TIMEOUT_MS)
     }
     const list = await h.engine.providers.list({ refresh: !!req?.refresh })
     h.ensureSeeds()
@@ -35,6 +38,9 @@ export function registerProfileHandlers(h: Hive): void {
   let authMemo: { at: number; v: ClaudeAuthStatus } | null = null
   handle('providers:claudeAuth', async (req) => {
     if (!req?.refresh && authMemo && Date.now() - authMemo.at < 60_000) return authMemo.v
+    // PR-30: a login shell slower than the launch-time 3 s left us without the user's env (CLAUDE_CONFIG_DIR picks the
+    // Keychain entry), so Claude read "signed out"; a Recheck tries the shell again with more time
+    if (req?.refresh && !loginEnvState().ok) await resolveLoginEnv(RECHECK_ENV_TIMEOUT_MS)
     const claude = (await h.engine.providers.list({ refresh: !!req?.refresh })).find((p) => p.id === 'claude')
     let v: ClaudeAuthStatus
     if (!claude?.available || !claude.binPath) v = parseClaudeAuth({ code: null, stdout: '', missing: true })
@@ -45,4 +51,33 @@ export function registerProfileHandlers(h: Hive): void {
     authMemo = { at: Date.now(), v }
     return v
   })
+  // PR-30: "Sign in to Claude" for people who signed in to Claude Desktop only and never open Terminal
+  const signIn = new ClaudeSignIn({
+    bin: async () => (await h.engine.providers.list({ refresh: false })).find((p) => p.id === 'claude' && p.available)?.binPath ?? null,
+    spawn: (file, args): SignInProc => {
+      const p = spawn(file, args, { cwd: os.homedir(), env: baseChildEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
+      p.stdin.on('error', () => undefined)
+      return {
+        onOutput: (cb) => {
+          p.stdout.on('data', (b: Buffer) => cb(b.toString('utf8')))
+          p.stderr.on('data', (b: Buffer) => cb(b.toString('utf8')))
+        },
+        onExit: (cb) => {
+          p.on('exit', (code) => cb(code))
+          p.on('error', () => cb(null)) // ENOENT and friends: no 'exit' follows
+        },
+        write: (text) => void p.stdin.write(text),
+        kill: () => void p.kill()
+      }
+    }
+  })
+  handle('providers:claudeSignIn', () => signIn.start())
+  handle('providers:claudeSignInWait', async () => {
+    const s = await signIn.wait()
+    // the next claudeAuth reads Claude again instead of the minute-old "signed out"
+    authMemo = null
+    return s
+  })
+  handle('providers:claudeSignInCode', ({ code }) => ({ ok: signIn.submitCode(code) }))
+  handle('providers:claudeSignInCancel', () => signIn.cancel())
 }

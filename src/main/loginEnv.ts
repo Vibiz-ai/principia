@@ -49,11 +49,31 @@ export interface LoginEnvState {
 }
 
 let state: LoginEnvState = {
-  env: snapshotProcessEnv(),
+  env: withUserIdentity(snapshotProcessEnv()),
   loginPath: null,
   shell: process.env.SHELL || '/bin/zsh',
   resolvedAt: new Date(0).toISOString(),
   ok: false
+}
+
+/**
+ * Pure: fills HOME / USER / LOGNAME from the OS account when the launching process left them out. Claude Code finds
+ * its Keychain sign-in by $USER: without it `claude auth status` reads "loggedIn: false" for a signed-in Mac and every
+ * chat fails (PR-30).
+ */
+export function withUserIdentity(env: Record<string, string>, who: () => { username: string; homedir: string } = os.userInfo): Record<string, string> {
+  if (env.HOME && env.USER && env.LOGNAME) return env
+  let u: { username: string; homedir: string } | null = null
+  try {
+    u = who()
+  } catch {
+    return env
+  }
+  const out = { ...env }
+  if (!out.HOME && u.homedir) out.HOME = u.homedir
+  if (!out.USER && (out.LOGNAME || u.username)) out.USER = out.LOGNAME || u.username
+  if (!out.LOGNAME && out.USER) out.LOGNAME = out.USER
+  return out
 }
 
 function snapshotProcessEnv(): Record<string, string> {
@@ -78,12 +98,15 @@ function runShell(shell: string, timeoutMs: number): Promise<string> {
   })
 }
 
+/** A Recheck gives a slow login shell (oh-my-zsh, nvm, conda) this long; the launch-time 3 s can lose CLAUDE_CONFIG_DIR. */
+export const RECHECK_ENV_TIMEOUT_MS = 10_000
+
 /** Resolves the login env, updates process.env.PATH (so main's own spawns find CLIs) and returns the state. */
 export async function resolveLoginEnv(timeoutMs = 3000): Promise<LoginEnvState> {
   const shell = process.env.SHELL || '/bin/zsh'
   const login = parseEnvDump(await runShell(shell, timeoutMs))
   const base = snapshotProcessEnv()
-  const env: Record<string, string> = { ...base, ...(login ?? {}) }
+  const env: Record<string, string> = withUserIdentity({ ...base, ...(login ?? {}) })
   delete env.HIVE_RESOLVING_ENV
   env.PATH = mergePath(login?.PATH, base.PATH, FALLBACK_PATH_DIRS().join(':'))
   process.env.PATH = env.PATH

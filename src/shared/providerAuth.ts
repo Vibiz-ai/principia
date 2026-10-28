@@ -52,3 +52,14 @@ export function parseClaudeAuth(r: { code: number | null; stdout: string; missin
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() && v !== 'none' ? v.trim().slice(0, 40) : null)
   return { state: o.loggedIn ? 'ok' : 'signedOut', method: o.loggedIn ? str(o.authMethod) : null, plan: o.loggedIn ? str(o.subscriptionType) : null, checkedAt: at }
 }
+
+/** PR-30, "Sign in to Claude" (`claude auth login`): started = the CLI waits on the browser (url: the page to open by
+ * hand if it didn't open); done / failed / canceled are final. */
+export interface ClaudeSignInStatus {
+  phase: 'started' | 'done' | 'failed' | 'canceled'
+  url: string | null
+  message: string | null
+}
+
+/** A code from the claude.com sign-in page: letters, digits and a few URL-safe marks (it usually holds a '#'). */
+export const SIGN_IN_CODE_RE = /^[A-Za-z0-9#_\-.~]{8,600}$/

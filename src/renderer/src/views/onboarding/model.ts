@@ -687,7 +687,7 @@ export function claudeCheckLine(auth: Pick<ClaudeAuthStatus, 'state' | 'method' 
     if (onPlan(auth) === false) return { ok: true, text: 'Claude is signed in on this Mac with an API key: Anthropic bills each use. Principia adds nothing.' }
     return { ok: true, text: `Runs on your Claude ${plan ?? 'plan'}. No extra charge from Principia. Claude is signed in on this Mac.` }
   }
-  if (auth.state === 'signedOut') return { ok: false, text: `Sign in to Claude, or get a plan: Claude isn’t signed in on this Mac, so your team can’t start yet. Run claude in Terminal to sign in. ${CLAUDE_PLAN_PRICES}` }
+  if (auth.state === 'signedOut') return { ok: false, text: `Sign in to Claude, or get a plan: Claude Code isn’t signed in on this Mac, so your team can’t start yet. A Claude app sign-in doesn’t carry over: click Sign in to Claude and approve in your browser. ${CLAUDE_PLAN_PRICES}` }
   if (auth.state === 'missing') return { ok: false, text: `Claude Code isn’t installed on this Mac, so your team can’t start yet. Install it and sign in with a Claude plan. ${CLAUDE_PLAN_PRICES}` }
   return { ok: null, text: 'Runs on your Claude plan. No extra charge from Principia. This Claude Code can’t tell us whether you’re signed in.' }
 }

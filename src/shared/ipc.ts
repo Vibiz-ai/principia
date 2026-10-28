@@ -318,6 +318,11 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'providers:list': [{ refresh?: boolean } | V, ProviderInfo[]]
   /** Five doors E12: is Claude Code signed in, and on which plan (`claude auth status`). Never a guess. */
   'providers:claudeAuth': [{ refresh?: boolean } | V, import('./providerAuth').ClaudeAuthStatus]
+  /** PR-30: "Sign in to Claude" runs `claude auth login` and resolves once the browser is open; Wait resolves at the end */
+  'providers:claudeSignIn': [V, import('./providerAuth').ClaudeSignInStatus]
+  'providers:claudeSignInWait': [V, import('./providerAuth').ClaudeSignInStatus]
+  'providers:claudeSignInCode': [{ code: string }, { ok: boolean }]
+  'providers:claudeSignInCancel': [V, V]
   // repos
   'repos:list': [CompanyFilter | V, Repo[]] // with companyId: that company's repos in its repo_order:<companyId>
   /** Native folder picker (multi), returns newly added. companyId: new repos are assigned to that company (§3). */
@@ -853,7 +858,7 @@ export const INVOKE_CHANNELS = [
   'app:info', 'app:status', 'app:home', 'app:canvas', 'app:quit', 'app:openExternal', 'app:showItemInFolder',
   'app:hideWindow',
   'settings:get', 'settings:update',
-  'providers:list', 'providers:claudeAuth',
+  'providers:list', 'providers:claudeAuth', 'providers:claudeSignIn', 'providers:claudeSignInWait', 'providers:claudeSignInCode', 'providers:claudeSignInCancel',
   'repos:list', 'repos:pick', 'repos:add', 'repos:update', 'repos:move', 'repos:remove', 'repos:siblings',
   'profiles:list', 'profiles:create', 'profiles:update', 'profiles:remove',
   'sessions:list', 'sessions:create', 'sessions:attach', 'sessions:kill', 'sessions:remove', 'sessions:rename',

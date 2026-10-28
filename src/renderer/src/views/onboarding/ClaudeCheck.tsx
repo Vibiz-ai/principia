@@ -7,6 +7,7 @@ import { claudeCheckLine } from './model'
 import { Button } from '../../components/ui'
 import { hive } from '../../lib/hive'
 import { useClaudeAuth } from '../../state/claudeAuth'
+import { ClaudeSignInButton } from '../../components/ClaudeSignIn'
 
 export function ClaudeCheck(): React.JSX.Element {
   const { auth, recheck, checking } = useClaudeAuth({ fresh: true })
@@ -19,6 +20,7 @@ export function ClaudeCheck(): React.JSX.Element {
       <span className="ob-claude__text">{line.text}</span>
       {line.ok === false && (
         <span className="ob-claude__acts">
+          {auth?.state === 'signedOut' && <ClaudeSignInButton onDone={recheck} />}
           <Button size="sm" onClick={() => void recheck()} disabled={checking}>
             {checking ? 'Checking…' : 'Check again'}
           </Button>
