@@ -40,7 +40,7 @@
     "cloud:control:start": "node out-cloud/control.mjs",
     "cloud:control:smoke": "node cloud/control.smoke.mjs",
     "cloud:isolation:smoke": "node cloud/isolation.smoke.mjs",
-    "release:test": "node --test scripts/prepare-public-release.test.mjs scripts/release-target.test.mjs scripts/release-assets.test.mjs scripts/update-info.test.mjs scripts/mac-sign.test.mjs",
+    "release:test": "node --test scripts/readme.test.mjs scripts/prepare-public-release.test.mjs scripts/release-target.test.mjs scripts/release-assets.test.mjs scripts/update-info.test.mjs scripts/mac-sign.test.mjs",
     "cloud:verify": "npm run cloud:build && ELECTRON_RUN_AS_NODE=1 electron cloud/workflows.smoke.mjs && ELECTRON_RUN_AS_NODE=1 electron cloud/workflows-api.smoke.mjs && ELECTRON_RUN_AS_NODE=1 electron cloud/gateway-workflow.smoke.mjs"
   },
   "devDependencies": {
