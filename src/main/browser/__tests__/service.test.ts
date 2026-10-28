@@ -112,8 +112,10 @@ describe('BrowserService', () => {
   function make() {
     const browsers: Record<string, FakeBrowser> = { co_a: new FakeBrowser('a'), co_b: new FakeBrowser('b') }
     const activity: [string, BrowserActivity][] = []
-    svc = new BrowserService({ backend: { forCompany: (id) => browsers[id]!, setActivity: (id, a) => void activity.push([id, a]) }, bridgeScript: '/x/mcp-browser.js', execPath: '/x/Principia' })
-    return { svc, browsers, activity }
+    const scopes: [string, string][] = []
+    const forCompany = (id: string, scope: string): FakeBrowser => (scopes.push([id, scope]), browsers[id.includes('|') ? id : `${id}|${scope}`] ?? browsers[id]!)
+    svc = new BrowserService({ backend: { forCompany, setActivity: (id, a) => void activity.push([id, a]) }, bridgeScript: '/x/mcp-browser.js', execPath: '/x/Principia' })
+    return { svc, browsers, activity, scopes }
   }
   const post = (port: number, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> =>
     new Promise((resolve, reject) => {
@@ -168,7 +170,42 @@ describe('BrowserService', () => {
     expect(svc.toolNames()).toEqual(BROWSER_TOOLS)
   })
 
-  it("runs one company's calls one at a time", async () => {
+  it("reaches only the tabs of the token's own chat or task, whatever the arguments say", async () => {
+    const { svc, browsers, scopes } = make()
+    browsers['co_a|pane:1'] = new FakeBrowser('chat1')
+    browsers['co_a|task:t9'] = new FakeBrowser('task9')
+    const chat = svc.grant({ companyId: 'co_a', agent: 'Claude', sessionKey: 'pane:1' })
+    const task = svc.grant({ companyId: 'co_a', agent: 'Claude', sessionKey: 'task:t9' })
+    const r1 = await svc.call(chat, 'browser_snapshot', { scope: 'task:t9', sessionKey: 'task:t9' })!
+    const r2 = await svc.call(task, 'browser_snapshot', {})!
+    expect((r1.content[0] as { text: string }).text).toContain('chat1 button 0')
+    expect((r2.content[0] as { text: string }).text).toContain('task9 button 0')
+    expect(scopes).toEqual([
+      ['co_a', 'pane:1'],
+      ['co_a', 'task:t9']
+    ])
+  })
+
+  it('lets two chats browse side by side', async () => {
+    const { svc, browsers } = make()
+    browsers['co_a|pane:1'] = new FakeBrowser('chat1')
+    browsers['co_a|pane:2'] = new FakeBrowser('chat2')
+    const order: string[] = []
+    for (const k of ['pane:1', 'pane:2']) {
+      browsers[`co_a|${k}`]!.cdp.on('Runtime.evaluate', async () => {
+        order.push(`start ${k}`)
+        await new Promise((r) => setTimeout(r, 15))
+        order.push(`end ${k}`)
+        return { result: { value: true } }
+      })
+    }
+    const t1 = svc.grant({ companyId: 'co_a', agent: 'Claude', sessionKey: 'pane:1' })
+    const t2 = svc.grant({ companyId: 'co_a', agent: 'Claude', sessionKey: 'pane:2' })
+    await Promise.all([svc.call(t1, 'browser_wait', { for: 'text', text: 'x' }), svc.call(t2, 'browser_wait', { for: 'text', text: 'y' })])
+    expect(order.slice(0, 2)).toEqual(['start pane:1', 'start pane:2'])
+  })
+
+  it("runs one chat's calls one at a time", async () => {
     const { svc, browsers } = make()
     const t = svc.grant({ companyId: 'co_a', agent: 'Claude', sessionKey: 's' })
     const order: string[] = []

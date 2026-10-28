@@ -15,6 +15,7 @@ import type { NotifyResult } from '../../shared/authoring'
 import type { Ask, AskAnswer } from '../../shared/live'
 import type { MemoryMode } from '../../shared/memory'
 import { newId } from '../../shared/ids'
+import { runScope, taskScope } from '../../shared/browser'
 import type {
   AdapterId,
   AgentNode,
@@ -884,11 +885,11 @@ export class Execution {
           this.ctx.log.warn('engine: forum MCP attach failed; the step keeps the CLI and the fenced block', { stepId, error: String(e) })
         }
       }
-      // BROWSER.md §3: the company browser (its own token, this run's company only)
+      // BROWSER.md §3: the company browser (its own token, this run's company only; the task's own tabs, kept across its wakes)
       let browserTools: string[] = []
       if (runnable && this.run.companyId && this.ctx.browser && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
         try {
-          const spec = this.ctx.browser.attachment({ companyId: this.run.companyId, agent: s.participantLabel ?? s.profile?.name ?? (s.adapterId === 'codex' ? 'Codex' : 'Claude'), sessionKey: `run:${this.run.id}` })
+          const spec = this.ctx.browser.attachment({ companyId: this.run.companyId, agent: s.participantLabel ?? s.profile?.name ?? (s.adapterId === 'codex' ? 'Codex' : 'Claude'), sessionKey: this.task ? taskScope(this.task.taskId) : runScope(this.run.id) })
           if (spec) {
             const dir = live?.channel?.dir ?? mem?.grant.spawnDir ?? join(this.ctx.paths.runLogsDir, this.run.id)
             const att = attachForum(s.adapterId, spec, this.ctx.browser.toolNames(), slackMcp ?? mem?.attachment ?? null, join(dir, `${stepId}.browser.mcp.json`))

@@ -2,24 +2,26 @@
  * BROWSER.md §6: one company's browser, self-contained. The page itself is a native view main places over the
  * `.bp-live` box (its rectangle is reported on every resize); everything around it is plain DOM.
  *
- * Mount API: <BrowserPanel companyId={id} onClose={fn} />. It owns its data (browser:state + browser:changed) and
- * can sit in any right-hand panel; it never takes keyboard focus by itself.
+ * Mount API: <BrowserPanel companyId={id} scope={scope} onClose={fn} />. It shows one chat's or task's tabs (`scope`),
+ * owns its data (browser:state + browser:changed) and can sit in any right-hand panel; it never takes keyboard focus
+ * by itself.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { BrowserState } from '@shared/browser'
+import { FOUNDER_SCOPE, type BrowserScope, type BrowserState } from '@shared/browser'
 import { Button, IconButton } from '../ui'
 import { Icon } from '../Icon'
 import { hive } from '../../lib/hive'
 import { activityLine, overlaps } from '../../lib/browserDock'
-import { setBrowserState, takePendingUrl, useDock } from '../../state/browser'
+import { setBrowserState, stateOf, takePendingUrl, useDock } from '../../state/browser'
 import { toastError } from '../../state/store'
 
-const EMPTY = (companyId: string): BrowserState => ({ companyId, tabs: [], activeTabId: null, takeover: false, activity: null, shots: [], downloads: [] })
+const EMPTY = (companyId: string, scope: BrowserScope): BrowserState => ({ companyId, scope, tabs: [], activeTabId: null, takeover: false, activity: null, shots: [], downloads: [] })
 /** Overlays that may sit on top of the live view: while one does, the native view steps aside. */
 const OVERLAYS = '.sheet-layer, .palette-layer, .sheet, .popover, .cl-menu, .chat-menu, [role="dialog"], [role="menu"]'
 
-export function BrowserPanel({ companyId, companyName, onClose }: { companyId: string; companyName?: string; onClose?: () => void }): React.JSX.Element {
-  const state = useDock((s) => s.states[companyId]) ?? EMPTY(companyId)
+export function BrowserPanel({ companyId, scope = FOUNDER_SCOPE, companyName, onClose }: { companyId: string; scope?: BrowserScope; companyName?: string; onClose?: () => void }): React.JSX.Element {
+  const state = useDock((s) => stateOf(s, companyId, scope)) ?? EMPTY(companyId, scope)
+  const mine = scope === FOUNDER_SCOPE
   const live = useRef<HTMLDivElement>(null)
   const [address, setAddress] = useState('')
   const [editing, setEditing] = useState(false)
@@ -28,13 +30,13 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
 
   useEffect(() => {
     let alive = true
-    void hive.browser.state({ companyId }).then((s) => alive && setBrowserState(s), () => undefined)
+    void hive.browser.state({ companyId, scope }).then((s) => alive && setBrowserState(s), () => undefined)
     const url = takePendingUrl()
-    if (url) void act(() => hive.browser.navigate({ companyId, url }))
+    if (url) void act(() => hive.browser.navigate({ companyId, scope, url }))
     return () => {
       alive = false
     }
-  }, [companyId])
+  }, [companyId, scope])
 
   useEffect(() => {
     if (!editing) setAddress(tab?.url ?? '')
@@ -56,7 +58,7 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
         const key = JSON.stringify(bounds)
         if (key === last) return
         last = key
-        void hive.browser.bounds({ companyId, bounds }).catch(() => undefined)
+        void hive.browser.bounds({ companyId, scope, bounds }).catch(() => undefined)
       })
     }
     const ro = new ResizeObserver(report)
@@ -71,9 +73,9 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
       ro.disconnect()
       mo.disconnect()
       window.removeEventListener('resize', report)
-      void hive.browser.bounds({ companyId, bounds: null }).catch(() => undefined)
+      void hive.browser.bounds({ companyId, scope, bounds: null }).catch(() => undefined)
     }
-  }, [companyId])
+  }, [companyId, scope])
 
   async function act(f: () => Promise<BrowserState | void>): Promise<void> {
     try {
@@ -90,16 +92,16 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
     if (!url) return
     setEditing(false)
     ;(document.activeElement as HTMLElement | null)?.blur()
-    void act(() => hive.browser.navigate({ companyId, url }))
+    void act(() => hive.browser.navigate({ companyId, scope, url }))
   }
 
   const busy = !!state.activity && !state.takeover
   return (
     <section className={`bp ${state.takeover ? 'is-takeover' : ''} ${busy ? 'is-agent' : ''}`} aria-label="Company browser">
       <header className="bp-bar">
-        <IconButton icon="chevronLeft" label="Back" disabled={!tab?.canGoBack} onClick={() => void act(() => hive.browser.nav({ companyId, action: 'back' }))} />
-        <IconButton icon="chevronRight" label="Forward" disabled={!tab?.canGoForward} onClick={() => void act(() => hive.browser.nav({ companyId, action: 'forward' }))} />
-        <IconButton icon={tab?.loading ? 'close' : 'refresh'} label={tab?.loading ? 'Stop' : 'Reload'} disabled={!tab} onClick={() => void act(() => hive.browser.nav({ companyId, action: tab?.loading ? 'stop' : 'reload' }))} />
+        <IconButton icon="chevronLeft" label="Back" disabled={!tab?.canGoBack} onClick={() => void act(() => hive.browser.nav({ companyId, scope, action: 'back' }))} />
+        <IconButton icon="chevronRight" label="Forward" disabled={!tab?.canGoForward} onClick={() => void act(() => hive.browser.nav({ companyId, scope, action: 'forward' }))} />
+        <IconButton icon={tab?.loading ? 'close' : 'refresh'} label={tab?.loading ? 'Stop' : 'Reload'} disabled={!tab} onClick={() => void act(() => hive.browser.nav({ companyId, scope, action: tab?.loading ? 'stop' : 'reload' }))} />
         <form className="bp-address" onSubmit={go}>
           <Icon name={tab?.url?.startsWith('https:') ? 'lock' : 'globe'} size={12} />
           <input
@@ -133,16 +135,16 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
         )}
         {state.tabs.map((t) => (
           <div key={t.id} className={`bp-tab ${t.id === state.activeTabId ? 'is-active' : ''}`}>
-            <button type="button" className="bp-tab-main" title={t.url || t.title} onClick={() => void act(() => hive.browser.tab({ companyId, op: 'select', tabId: t.id }))}>
+            <button type="button" className="bp-tab-main" title={t.url || t.title} onClick={() => void act(() => hive.browser.tab({ companyId, scope, op: 'select', tabId: t.id }))}>
               {t.loading && <span className="bp-spin" aria-hidden />}
               <span className="bp-tab-title">{t.title || hostOf(t.url) || 'New tab'}</span>
             </button>
-            <button type="button" className="bp-tab-x" aria-label="Close tab" onClick={() => void act(() => hive.browser.tab({ companyId, op: 'close', tabId: t.id }))}>
+            <button type="button" className="bp-tab-x" aria-label="Close tab" onClick={() => void act(() => hive.browser.tab({ companyId, scope, op: 'close', tabId: t.id }))}>
               <Icon name="close" size={10} />
             </button>
           </div>
         ))}
-        <IconButton icon="plus" label="New tab" onClick={() => void act(() => hive.browser.tab({ companyId, op: 'new' }))} />
+        <IconButton icon="plus" label="New tab" onClick={() => void act(() => hive.browser.tab({ companyId, scope, op: 'new' }))} />
       </nav>
 
       <div className="bp-status" role="status" aria-live="polite">
@@ -154,9 +156,9 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
             {activityLine(state)}
           </span>
         ) : (
-          <span className="bp-who bp-who--quiet">{state.tabs.length ? 'Agents in this company can use this browser. You can watch and take over.' : ''}</span>
+          <span className="bp-who bp-who--quiet">{state.tabs.length ? (mine ? 'Your own tabs. Agents in chats and tasks get tabs of their own.' : "This chat's own tabs: its agents browse here. You can watch and take over.") : ''}</span>
         )}
-        <Button size="sm" variant={state.takeover ? 'primary' : 'secondary'} icon={state.takeover ? 'play' : 'pause'} onClick={() => void act(() => hive.browser.takeover({ companyId, on: !state.takeover }))}>
+        <Button size="sm" variant={state.takeover ? 'primary' : 'secondary'} icon={state.takeover ? 'play' : 'pause'} onClick={() => void act(() => hive.browser.takeover({ companyId, scope, on: !state.takeover }))}>
           {state.takeover ? 'Hand back' : 'Take over'}
         </Button>
       </div>
@@ -166,7 +168,7 @@ export function BrowserPanel({ companyId, companyName, onClose }: { companyId: s
           <div className="bp-empty">
             <Icon name="globe" size={28} />
             <p>Nothing open yet.</p>
-            <p className="bp-muted">Type an address above, or ask an agent to look something up: it opens here and you can watch.</p>
+            <p className="bp-muted">{mine ? 'Type an address above. Agents browse in the tabs of their own chat or task.' : 'Type an address above, or ask the agent in this chat to look something up: it opens here and you can watch.'}</p>
           </div>
         )}
         {state.tabs.length > 0 && covered && <div className="bp-empty bp-muted">The page is hidden while a window is open on top of it.</div>}

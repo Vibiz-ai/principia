@@ -1,15 +1,17 @@
 /**
  * BROWSER.md §2: one embedded browser per company. Each company's tabs are WebContentsViews on its own session
  * (persist:company-<id>): sandboxed, context-isolated, no preload, no Node. The debugger (CDP over
- * webContents.debugger, never a remote-debugging port) is attached to these views only.
+ * webContents.debugger, never a remote-debugging port) is attached to these views only. Every tab belongs to one
+ * chat or task (its scope, scopes.ts): agents and the panel only ever reach the tabs of their own scope.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { session as electronSession, WebContentsView, type BrowserWindow, type Session, type WebContents } from 'electron'
-import type { BrowserActivity, BrowserBounds, BrowserDownload, BrowserNavAction, BrowserShot, BrowserState, BrowserTabView } from '../../shared/browser'
+import { FOUNDER_SCOPE, type BrowserActivity, type BrowserBounds, type BrowserDownload, type BrowserNavAction, type BrowserScope, type BrowserShot, type BrowserState, type BrowserTabView } from '../../shared/browser'
 import { BrowserError, CdpDriver, type CdpTransport } from './driver'
 import { handleDownload } from './downloads'
 import { checkUrl, partitionFor, permissionAllowed, type UrlVerdict } from './policy'
+import { ScopedTabs, type ScopedTab } from './scopes'
 import type { CompanyBrowser, ShotResult } from './tools'
 
 export interface HostLog {
@@ -28,8 +30,7 @@ export interface HostOptions {
   log: HostLog
 }
 
-interface Tab {
-  id: string
+interface Tab extends ScopedTab {
   view: WebContentsView
   driver: CdpDriver
   listeners: Set<(m: string, p: Record<string, unknown>) => void>
@@ -40,24 +41,24 @@ interface Tab {
 interface Company {
   id: string
   session: Session
-  tabs: Tab[]
-  active: string | null
-  takeover: boolean
-  activity: BrowserActivity | null
-  activityTimer: NodeJS.Timeout | null
-  shots: BrowserShot[]
-  downloads: BrowserDownload[]
-  notes: string[]
-  /** where the panel shows the view (null = hidden) */
+  tabs: ScopedTabs<Tab>
+  /** the scopes the founder has taken over (agents of other chats keep going) */
+  takeover: Set<BrowserScope>
+  activity: Map<BrowserScope, BrowserActivity>
+  activityTimers: Map<BrowserScope, NodeJS.Timeout>
+  shots: (BrowserShot & { scope: BrowserScope })[]
+  downloads: (BrowserDownload & { scope: BrowserScope })[]
+  notes: Map<BrowserScope, string[]>
+  /** the chat or task the panel shows, and where (null bounds = hidden) */
+  view: BrowserScope | null
   bounds: BrowserBounds | null
   /** the page size agents work with while the panel is closed */
   size: { width: number; height: number }
   seq: number
-  emitTimer: NodeJS.Timeout | null
+  emitTimers: Map<BrowserScope, NodeJS.Timeout>
 }
 
 const DEFAULT_SIZE = { width: 1180, height: 820 }
-const MAX_TABS = 12
 const MAX_SHOTS = 24
 const ACTIVITY_MS = 6_000
 
@@ -84,18 +85,18 @@ export class BrowserHost {
     c = {
       id: companyId,
       session: ses,
-      tabs: [],
-      active: null,
-      takeover: false,
-      activity: null,
-      activityTimer: null,
+      tabs: new ScopedTabs<Tab>(),
+      takeover: new Set(),
+      activity: new Map(),
+      activityTimers: new Map(),
       shots: [],
       downloads: [],
-      notes: [],
+      notes: new Map(),
+      view: null,
       bounds: null,
       size: { ...DEFAULT_SIZE },
       seq: 0,
-      emitTimer: null
+      emitTimers: new Map()
     }
     this.companies.set(companyId, c)
     this.configure(c)
@@ -121,27 +122,34 @@ export class BrowserHost {
     } catch {
       /* keep the default */
     }
-    ses.on('will-download', (_e, item) => {
+    ses.on('will-download', (_e, item, wc) => {
       const dir = path.join(this.o.workspaceDir(c.id), 'Downloads')
+      // the download belongs to the chat whose tab started it
+      const scope = c.tabs.everything().find((t) => !t.view.webContents.isDestroyed() && t.view.webContents === wc)?.scope ?? c.view ?? FOUNDER_SCOPE
       handleDownload(item, {
         dir,
         confirm: (name) => this.o.confirm(`Download ${name}?`, 'This file can run programs on your Mac. An agent or a page in the company browser started it. Only say yes if you expected it.'),
         update: (d) => {
           const i = c.downloads.findIndex((x) => x.id === d.id)
-          if (i >= 0) c.downloads[i] = d
-          else c.downloads.unshift(d)
-          c.downloads = c.downloads.slice(0, 10)
-          this.changed(c)
+          if (i >= 0) c.downloads[i] = { ...d, scope }
+          else c.downloads.unshift({ ...d, scope })
+          c.downloads = c.downloads.slice(0, 30)
+          this.changed(c, scope)
         },
-        note: (t) => c.notes.push(t)
+        note: (t) => c.notes.set(scope, [...(c.notes.get(scope) ?? []), t])
       })
     })
   }
 
   // ---------- tabs ----------
 
-  private newTab(c: Company, url?: string): Tab {
-    if (c.tabs.length >= MAX_TABS) throw new BrowserError(`At most ${MAX_TABS} tabs; close one first (browser_tabs {action: "close"}).`)
+  private newTab(c: Company, scope: BrowserScope, url?: string): Tab {
+    // the chat on screen and the one asking keep their tabs; the oldest tab of another chat makes room
+    const protect = new Set<BrowserScope>([scope, ...(c.view ? [c.view] : [])])
+    for (const old of c.tabs.makeRoom(scope, protect, (max) => new BrowserError(`At most ${max} tabs; close one first (browser_tabs {action: "close"}).`))) {
+      this.o.log.info('browser: closing an old tab to make room', { companyId: c.id, tab: old.id, scope: old.scope })
+      this.dropTab(c, old)
+    }
     const view = new WebContentsView({
       webPreferences: {
         session: c.session,
@@ -166,7 +174,7 @@ export class BrowserHost {
         return () => void listeners.delete(fn)
       }
     }
-    const tab: Tab = { id: `t${++c.seq}`, view, driver: new CdpDriver(transport), listeners, ready: Promise.resolve(), dead: false }
+    const tab: Tab = { id: `t${++c.seq}`, scope, used: Date.now(), view, driver: new CdpDriver(transport), listeners, ready: Promise.resolve(), dead: false }
     this.wire(c, tab, wc)
     // a command sent before the first navigation can hang: load about:blank, attach once it has loaded
     tab.ready = new Promise<void>((resolve) => {
@@ -179,21 +187,20 @@ export class BrowserHost {
     })
       .then(() => this.kick(c, tab))
       .then(() => this.attach(tab))
-    c.tabs.push(tab)
-    c.active = tab.id
+    c.tabs.add(tab)
     this.layout(c)
     if (url) void tab.ready.then(() => tab.driver.navigate(url)).catch((e) => this.o.log.warn('browser: open failed', { error: String(e) }))
-    this.changed(c)
+    this.changed(c, scope)
     return tab
   }
 
   private wire(c: Company, tab: Tab, wc: WebContents): void {
-    // a new window (target=_blank, window.open) becomes a tab in the panel
+    // a new window (target=_blank, window.open) becomes a tab of the same chat
     wc.setWindowOpenHandler(({ url }) => {
       const v = this.check(url)
       if (v.ok && url !== 'about:blank') {
         try {
-          this.newTab(c, v.url)
+          this.newTab(c, tab.scope, v.url)
         } catch (e) {
           this.o.log.warn('browser: new tab refused', { error: String(e) })
         }
@@ -209,11 +216,11 @@ export class BrowserHost {
     wc.on('will-attach-webview', (e) => e.preventDefault())
     // DevTools on a panel view would detach our debugger
     wc.on('devtools-opened', () => wc.closeDevTools())
-    for (const ev of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) wc.on(ev as 'did-start-loading', () => this.changed(c))
+    for (const ev of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) wc.on(ev as 'did-start-loading', () => this.changed(c, tab.scope))
     wc.on('render-process-gone', (_e, d) => {
       this.o.log.warn('browser: page crashed', { companyId: c.id, reason: d.reason })
       tab.driver.reset()
-      this.changed(c)
+      this.changed(c, tab.scope)
     })
     wc.debugger.on('message', (_e, method, params, sessionId) => {
       if (sessionId) return
@@ -238,14 +245,16 @@ export class BrowserHost {
     await tab.driver.init()
   }
 
-  private activeTab(c: Company): Tab | null {
-    return c.tabs.find((t) => t.id === c.active) ?? c.tabs[c.tabs.length - 1] ?? null
+  private activeTab(c: Company, scope: BrowserScope): Tab | null {
+    const t = c.tabs.activeOf(scope)
+    if (t) t.used = Date.now()
+    return t
   }
 
-  async ensureTab(companyId: string): Promise<Tab> {
+  async ensureTab(companyId: string, scope: BrowserScope): Promise<Tab> {
     const c = this.company(companyId)
-    let tab = this.activeTab(c)
-    if (!tab) tab = this.newTab(c)
+    let tab = this.activeTab(c, scope)
+    if (!tab) tab = this.newTab(c, scope)
     await tab.ready
     if (tab.view.webContents.isCrashed()) tab.view.webContents.reload()
     await this.attach(tab)
@@ -287,27 +296,33 @@ export class BrowserHost {
     await this.kick(c, tab)
   }
 
-  openTab(companyId: string, url?: string): Tab {
-    return this.newTab(this.company(companyId), url)
+  openTab(companyId: string, scope: BrowserScope, url?: string): Tab {
+    return this.newTab(this.company(companyId), scope, url)
   }
 
-  selectTab(companyId: string, tabId: string): void {
+  /** Only a tab of this scope: another chat's tab is "no tab" here. */
+  selectTab(companyId: string, scope: BrowserScope, tabId: string): void {
     const c = this.company(companyId)
-    if (!c.tabs.some((t) => t.id === tabId)) throw new BrowserError(`No tab ${tabId}.`)
-    c.active = tabId
-    this.layout(c)
-    this.changed(c)
-  }
-
-  closeTab(companyId: string, tabId: string): void {
-    const c = this.company(companyId)
-    const tab = c.tabs.find((t) => t.id === tabId)
+    const tab = c.tabs.get(scope, tabId)
     if (!tab) throw new BrowserError(`No tab ${tabId}.`)
-    this.destroyTab(tab)
-    c.tabs = c.tabs.filter((t) => t !== tab)
-    if (c.active === tabId) c.active = c.tabs[c.tabs.length - 1]?.id ?? null
+    tab.used = Date.now()
+    c.tabs.select(tab)
     this.layout(c)
-    this.changed(c)
+    this.changed(c, scope)
+  }
+
+  closeTab(companyId: string, scope: BrowserScope, tabId: string): void {
+    const c = this.company(companyId)
+    const tab = c.tabs.get(scope, tabId)
+    if (!tab) throw new BrowserError(`No tab ${tabId}.`)
+    this.dropTab(c, tab)
+    this.layout(c)
+  }
+
+  private dropTab(c: Company, tab: Tab): void {
+    this.destroyTab(tab)
+    c.tabs.remove(tab)
+    this.changed(c, tab.scope)
   }
 
   private destroyTab(tab: Tab): void {
@@ -332,9 +347,9 @@ export class BrowserHost {
     }
   }
 
-  async nav(companyId: string, action: BrowserNavAction): Promise<void> {
+  async nav(companyId: string, scope: BrowserScope, action: BrowserNavAction): Promise<void> {
     const c = this.company(companyId)
-    const tab = this.activeTab(c)
+    const tab = this.activeTab(c, scope)
     if (!tab) throw new BrowserError('No page is open.')
     const h = tab.view.webContents.navigationHistory
     if (action === 'back') {
@@ -347,12 +362,12 @@ export class BrowserHost {
     else tab.view.webContents.stop()
   }
 
-  /** The founder typed an address in the panel. */
-  async navigate(companyId: string, url: string): Promise<void> {
+  /** The founder typed an address in the panel (it opens in the tabs of the chat on screen). */
+  async navigate(companyId: string, scope: BrowserScope, url: string): Promise<void> {
     const v = this.check(url)
     if (!v.ok) throw new BrowserError(v.reason)
     const c = this.company(companyId)
-    const tab = this.activeTab(c) ?? this.newTab(c)
+    const tab = this.activeTab(c, scope) ?? this.newTab(c, scope)
     await tab.ready
     await tab.view.webContents.loadURL(v.url).catch((e) => {
       if (!/ERR_ABORTED/.test(String(e))) throw new BrowserError(`Could not open ${v.url}: ${String(e).split('\n')[0]}`)
@@ -361,10 +376,16 @@ export class BrowserHost {
 
   // ---------- layout ----------
 
-  /** The panel's live-view rectangle (CSS pixels of the window), or null when the panel is closed. */
-  setBounds(companyId: string, bounds: BrowserBounds | null): void {
+  /**
+   * The panel's live-view rectangle (CSS pixels of the window) for the chat or task it shows, or null when the panel
+   * is closed. A null from a scope the panel no longer shows (it moved to another chat) changes nothing.
+   */
+  setBounds(companyId: string, scope: BrowserScope, bounds: BrowserBounds | null): void {
     const c = this.company(companyId)
-    c.bounds = bounds && bounds.width >= 40 && bounds.height >= 40 ? bounds : null
+    const next = bounds && bounds.width >= 40 && bounds.height >= 40 ? bounds : null
+    if (!next && c.view !== scope) return
+    c.view = scope
+    c.bounds = next
     if (c.bounds) c.size = { width: Math.round(c.bounds.width), height: Math.round(c.bounds.height) }
     // one company's view on screen at a time
     if (c.bounds) for (const other of this.companies.values()) if (other !== c && other.bounds) {
@@ -377,7 +398,7 @@ export class BrowserHost {
   private layout(c: Company): void {
     const win = this.o.window()
     if (!win || win.isDestroyed()) return
-    for (const tab of c.tabs) {
+    for (const tab of c.tabs.everything()) {
       if (tab.dead) continue
       if (this.addedTo.get(tab.view) !== win) {
         win.contentView.addChildView(tab.view)
@@ -395,32 +416,40 @@ export class BrowserHost {
    */
   private boundsFor(c: Company, tab: Tab): { x: number; y: number; width: number; height: number } {
     const b = c.bounds
-    if (b && tab.id === c.active) return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) }
+    if (b && tab.scope === c.view && c.tabs.isActive(tab)) return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) }
     return { x: -c.size.width - 200, y: 0, width: c.size.width, height: c.size.height }
   }
 
   // ---------- agent-facing helpers ----------
 
-  setTakeover(companyId: string, on: boolean): void {
+  /** The founder takes over one chat's tabs: only that chat's agents wait. */
+  setTakeover(companyId: string, scope: BrowserScope, on: boolean): void {
     const c = this.company(companyId)
-    c.takeover = on
-    this.changed(c)
+    if (on) c.takeover.add(scope)
+    else c.takeover.delete(scope)
+    this.changed(c, scope)
   }
 
-  takeover(companyId: string): boolean {
-    return this.companies.get(companyId)?.takeover === true
+  takeover(companyId: string, scope: BrowserScope): boolean {
+    return this.companies.get(companyId)?.takeover.has(scope) === true
   }
 
+  /** What an agent is doing, in its own chat's state (a.sessionKey is its scope). */
   setActivity(companyId: string, a: BrowserActivity): void {
     const c = this.company(companyId)
-    c.activity = a
-    if (c.activityTimer) clearTimeout(c.activityTimer)
-    c.activityTimer = setTimeout(() => {
-      c.activity = null
-      c.activityTimer = null
-      this.changed(c)
-    }, ACTIVITY_MS)
-    this.changed(c)
+    const scope = a.sessionKey
+    c.activity.set(scope, a)
+    const old = c.activityTimers.get(scope)
+    if (old) clearTimeout(old)
+    c.activityTimers.set(
+      scope,
+      setTimeout(() => {
+        c.activity.delete(scope)
+        c.activityTimers.delete(scope)
+        this.changed(c, scope)
+      }, ACTIVITY_MS)
+    )
+    this.changed(c, scope)
   }
 
   private browserDir(companyId: string, sub: string): string {
@@ -429,9 +458,9 @@ export class BrowserHost {
     return dir
   }
 
-  async screenshot(companyId: string, o: { box?: { x: number; y: number; width: number; height: number } | null; fullPage?: boolean; agent: string | null }): Promise<ShotResult> {
+  async screenshot(companyId: string, scope: BrowserScope, o: { box?: { x: number; y: number; width: number; height: number } | null; fullPage?: boolean; agent: string | null }): Promise<ShotResult> {
     const c = this.company(companyId)
-    const tab = await this.ensureTab(companyId)
+    const tab = await this.ensureTab(companyId, scope)
     const wc = tab.view.webContents
     let png: Buffer
     let cssWidth: number
@@ -485,8 +514,8 @@ export class BrowserHost {
     const forAgent = img.getSize().width > w ? img.resize({ width: w, quality: 'good' }) : img
     const thumb = img.resize({ width: 240, quality: 'good' })
     const shot: BrowserShot = { id: `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, path: file, at: new Date().toISOString(), agent: o.agent, thumb: `data:image/jpeg;base64,${thumb.toJPEG(70).toString('base64')}`, url: wc.getURL() }
-    c.shots = [shot, ...c.shots].slice(0, MAX_SHOTS)
-    this.changed(c)
+    c.shots = [{ ...shot, scope }, ...c.shots].slice(0, MAX_SHOTS * 4)
+    this.changed(c, scope)
     return { path: file, jpegBase64: forAgent.toJPEG(80).toString('base64') }
   }
 
@@ -508,74 +537,91 @@ export class BrowserHost {
     return this.companies.get(companyId)?.shots.find((s) => s.id === id)?.path ?? null
   }
 
-  takeNotes(companyId: string): string[] {
+  takeNotes(companyId: string, scope: BrowserScope): string[] {
     const c = this.companies.get(companyId)
-    return c ? c.notes.splice(0) : []
+    const notes = c?.notes.get(scope) ?? []
+    c?.notes.delete(scope)
+    return notes
   }
 
-  /** The tools' view of one company's browser. */
-  forCompany(companyId: string): CompanyBrowser {
+  /** The tools' view of one company's browser, as one chat or task sees it: its own tabs only. */
+  forCompany(companyId: string, scope: BrowserScope): CompanyBrowser {
     return {
-      takeover: () => this.takeover(companyId),
+      takeover: () => this.takeover(companyId, scope),
       driver: async () => {
-        const tab = await this.ensureTab(companyId)
+        const tab = await this.ensureTab(companyId, scope)
         return { tabId: tab.id, driver: tab.driver }
       },
       openTab: async (url) => {
-        const tab = this.openTab(companyId, undefined)
+        const tab = this.openTab(companyId, scope, undefined)
         await tab.ready
         await this.attach(tab)
         if (url) await tab.driver.navigate(url)
         return tab.id
       },
-      selectTab: (id) => this.selectTab(companyId, id),
-      closeTab: (id) => this.closeTab(companyId, id),
-      tabs: () => this.state(companyId).tabs,
-      activeTabId: () => this.state(companyId).activeTabId,
-      nav: (a) => this.nav(companyId, a),
+      selectTab: (id) => this.selectTab(companyId, scope, id),
+      closeTab: (id) => this.closeTab(companyId, scope, id),
+      tabs: () => this.state(companyId, scope).tabs,
+      activeTabId: () => this.state(companyId, scope).activeTabId,
+      nav: (a) => this.nav(companyId, scope, a),
       checkUrl: (u) => this.check(u),
-      screenshot: (o) => this.screenshot(companyId, o),
+      screenshot: (o) => this.screenshot(companyId, scope, o),
       writeSnapshot: (t) => this.writeSnapshot(companyId, t),
-      takeDownloadNotes: () => this.takeNotes(companyId)
+      takeDownloadNotes: () => this.takeNotes(companyId, scope)
     }
   }
 
   // ---------- state ----------
 
-  state(companyId: string): BrowserState {
+  /** One chat's or task's view: its tabs, its active tab, its takeover, its agent's activity, its screenshots. */
+  state(companyId: string, scope: BrowserScope): BrowserState {
     const c = this.companies.get(companyId)
-    if (!c) return { companyId, tabs: [], activeTabId: null, takeover: false, activity: null, shots: [], downloads: [] }
+    if (!c) return { companyId, scope, tabs: [], activeTabId: null, takeover: false, activity: null, shots: [], downloads: [] }
     const tabs: BrowserTabView[] = c.tabs
-      .filter((t) => !t.dead && !t.view.webContents.isDestroyed())
+      .list(scope)
+      .filter((t) => !t.view.webContents.isDestroyed())
       .map((t) => {
         const wc = t.view.webContents
         const url = wc.getURL()
         return { id: t.id, url: url === 'about:blank' ? '' : url, title: wc.getTitle() === 'about:blank' ? 'New tab' : wc.getTitle(), loading: wc.isLoading(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward() }
       })
-    return { companyId, tabs, activeTabId: c.active, takeover: c.takeover, activity: c.activity, shots: c.shots, downloads: c.downloads }
+    const strip = <T extends { scope: BrowserScope }>({ scope: _s, ...rest }: T): Omit<T, 'scope'> => rest
+    return {
+      companyId,
+      scope,
+      tabs,
+      activeTabId: c.tabs.activeId(scope),
+      takeover: c.takeover.has(scope),
+      activity: c.activity.get(scope) ?? null,
+      shots: c.shots.filter((s) => s.scope === scope).slice(0, MAX_SHOTS).map(strip),
+      downloads: c.downloads.filter((d) => d.scope === scope).slice(0, 10).map(strip)
+    }
   }
 
-  private changed(c: Company): void {
-    if (c.emitTimer) return
-    c.emitTimer = setTimeout(() => {
-      c.emitTimer = null
-      try {
-        this.o.emit(this.state(c.id))
-      } catch (e) {
-        this.o.log.warn('browser: emit failed', { error: String(e) })
-      }
-    }, 80)
+  private changed(c: Company, scope: BrowserScope): void {
+    if (c.emitTimers.has(scope)) return
+    c.emitTimers.set(
+      scope,
+      setTimeout(() => {
+        c.emitTimers.delete(scope)
+        try {
+          this.o.emit(this.state(c.id, scope))
+        } catch (e) {
+          this.o.log.warn('browser: emit failed', { error: String(e) })
+        }
+      }, 80)
+    )
   }
 
-  /** Forget the company's cookies, storage and cache; close its tabs. */
+  /** Forget the company's cookies, storage and cache; close the tabs of every chat and task. */
   async clear(companyId: string): Promise<void> {
     const c = this.company(companyId)
-    for (const t of c.tabs) this.destroyTab(t)
-    c.tabs = []
-    c.active = null
+    const scopes = new Set([...c.tabs.scopes(), ...(c.view ? [c.view] : [])])
+    for (const t of c.tabs.everything()) this.destroyTab(t)
+    c.tabs.clear()
     await c.session.clearStorageData()
     await c.session.clearCache()
-    this.changed(c)
+    for (const s of scopes) this.changed(c, s)
   }
 
   /** The window was recreated: re-add the views to it. */
@@ -585,10 +631,10 @@ export class BrowserHost {
 
   dispose(): void {
     for (const c of this.companies.values()) {
-      for (const t of c.tabs) this.destroyTab(t)
-      c.tabs = []
-      if (c.activityTimer) clearTimeout(c.activityTimer)
-      if (c.emitTimer) clearTimeout(c.emitTimer)
+      for (const t of c.tabs.everything()) this.destroyTab(t)
+      c.tabs.clear()
+      for (const t of c.activityTimers.values()) clearTimeout(t)
+      for (const t of c.emitTimers.values()) clearTimeout(t)
     }
   }
 }

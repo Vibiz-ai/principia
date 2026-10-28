@@ -6,6 +6,7 @@ import type { CreateEngine, Engine, EngineContext, StartRunOptions } from '../..
 import { HiveError } from '../../shared/errors'
 import { inputValueErrors } from '../../shared/inputs'
 import { newId } from '../../shared/ids'
+import { paneScope } from '../../shared/browser'
 import type { AdapterId, ProviderInfo, Run, RunTarget, WorkflowDraft } from '../../shared/types'
 import { ADAPTER_IDS } from '../../shared/types'
 import { DEFAULT_ADAPTERS, type Adapter } from './adapters'
@@ -480,11 +481,11 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
           const gateway = opts.companyId ? ctx.gateway?.attachment(gwCwd, opts.companyId, null, profile.secretNames) : ctx.gateway?.attachment(gwCwd, null, null, profile.secretNames)
           if (gateway) { mcp = attachGateway(profile.adapter, gateway, mcp, gateway.env.PRINCIPIA_GATEWAY_DIR); if (mcp) { writeMcpFiles(mcp.files); gatewayOn = true } }
         }
-        // BROWSER.md §3: the company browser for company panes (claude, codex), its own token
+        // BROWSER.md §3: the company browser for company panes (claude, codex), its own token and this chat's own tabs
         let browserTools: string[] = []
         if (opts.companyId && ctx.browser && (profile.adapter === 'claude' || profile.adapter === 'codex')) {
           try {
-            const spec = ctx.browser.attachment({ companyId: opts.companyId, agent: profile.adapter === 'codex' ? 'Codex' : 'Claude', sessionKey: `pane:${opts.spawnTag?.HIVE_SPAWN_ID ?? opts.freshAgentSessionId ?? opts.resumeAgentSessionId ?? Date.now().toString(36)}` })
+            const spec = ctx.browser.attachment({ companyId: opts.companyId, agent: profile.adapter === 'codex' ? 'Codex' : 'Claude', sessionKey: paneScope(opts.spawnTag?.HIVE_SPAWN_ID ?? opts.freshAgentSessionId ?? opts.resumeAgentSessionId ?? Date.now().toString(36)) })
             const dir = opts.live?.dir ?? authorDir ?? (grant ? grant.spawnDir : null) ?? join(ctx.paths.scratchDir, 'mcp-browser')
             if (spec) {
               const att = attachForum(profile.adapter, spec, ctx.browser.toolNames(), mcp, join(dir, 'browser.mcp.json'))

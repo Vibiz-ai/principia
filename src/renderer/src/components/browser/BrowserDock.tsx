@@ -5,30 +5,33 @@
 import { useEffect, useRef, useState } from 'react'
 import { dockLayout, type DockLayout } from '../../lib/browserDock'
 import { BrowserPanel } from './BrowserPanel'
-import { closeBrowser, followCompany, setDockWidth, useDock, wireBrowser } from '../../state/browser'
+import { closeBrowser, followPage, setDockWidth, useDock, wireBrowser } from '../../state/browser'
 import { scopeCompanyId, useStore } from '../../state/store'
 import '../../styles/browser.css'
 
 export function BrowserDock(): React.JSX.Element | null {
   const open = useDock((s) => s.open)
   const companyId = useDock((s) => s.companyId)
+  const scope = useDock((s) => s.scope)
   const width = useDock((s) => s.width)
   const company = useStore((s) => (companyId ? s.companies.find((c) => c.id === companyId) : undefined))
   const pageCompany = useDock((s) => s.pageCompany)
+  const pageScope = useDock((s) => s.pageScope)
   const railCompany = useStore((s) => scopeCompanyId(s) ?? null)
   const ref = useRef<HTMLElement>(null)
 
   useEffect(() => wireBrowser(), [])
 
-  // switching company (or going to a page of another company) switches the open browser with it. Only on a change:
-  // a link that opened one company's browser on purpose is not overridden.
+  // switching company or chat (or going to a page of another company) switches the open browser with it, to the tabs
+  // of the chat on screen. Only on a change: a link that opened one company's browser on purpose is not overridden.
   const target = pageCompany ?? railCompany
-  const lastTarget = useRef(target)
+  const targetKey = `${target ?? ''}|${pageScope ?? ''}`
+  const lastTarget = useRef(targetKey)
   useEffect(() => {
-    if (lastTarget.current === target) return
-    lastTarget.current = target
-    if (open) followCompany(target)
-  }, [open, target])
+    if (lastTarget.current === targetKey) return
+    lastTarget.current = targetKey
+    if (open) followPage(target, pageScope)
+  }, [open, target, pageScope, targetKey])
 
   useEffect(() => {
     if (!open) return
@@ -99,7 +102,7 @@ export function BrowserDock(): React.JSX.Element | null {
   return (
     <aside className={`browser-dock is-${layout.mode}`} ref={ref} style={{ width: layout.width }} aria-label={`Browser${company ? ` · ${company.name}` : ''}`}>
       <div className="browser-dock-grip" role="separator" aria-orientation="vertical" aria-label="Resize the browser" onPointerDown={startResize} />
-      <BrowserPanel key={companyId} companyId={companyId} companyName={company?.name} onClose={closeBrowser} />
+      <BrowserPanel key={`${companyId}|${scope}`} companyId={companyId} scope={scope} companyName={company?.name} onClose={closeBrowser} />
     </aside>
   )
 }

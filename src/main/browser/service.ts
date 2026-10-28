@@ -1,7 +1,8 @@
 /**
  * BROWSER.md §3: the principia-browser transport. Each agent spawn gets its own token, bound to ONE company; the
  * stdio MCP bridge (out/main/mcp-browser.js) forwards tool calls to main's 127.0.0.1 endpoint with that token. The
- * token, never an argument, decides which company's browser a call reaches. No Electron import.
+ * token, never an argument, decides which company's browser a call reaches, and which chat's tabs (its sessionKey,
+ * a BrowserScope). No Electron import.
  */
 import crypto from 'node:crypto'
 import http from 'node:http'
@@ -12,7 +13,8 @@ import type { McpServerSpec } from '../../shared/engine'
 import { runBrowserTool, type CompanyBrowser } from './tools'
 
 export interface BrowserBackend {
-  forCompany(companyId: string): CompanyBrowser
+  /** one company's browser as one chat or task sees it: only that scope's tabs */
+  forCompany(companyId: string, scope: string): CompanyBrowser
   setActivity(companyId: string, a: BrowserActivity): void
 }
 
@@ -20,7 +22,7 @@ export interface BrowserGrantRequest {
   companyId: string
   /** shown in the panel: "Claude", "Codex", "Ana (Sales)" */
   agent: string
-  /** one chat or task run: the panel opens by itself once per key */
+  /** the chat or task (BrowserScope: pane:<session>, task:<task>, run:<run>): its own tabs, never another's */
   sessionKey: string
 }
 
@@ -46,7 +48,7 @@ export class BrowserService {
   private grants = new Map<string, Grant>()
   private server: http.Server | null = null
   port = 0
-  /** calls of one company run one at a time (two agents never interleave clicks) */
+  /** calls of one chat or task run one at a time (two agents in it never interleave clicks); chats run side by side */
   private queues = new Map<string, Promise<unknown>>()
 
   constructor(private readonly o: BrowserServiceOptions) {}
@@ -103,17 +105,18 @@ export class BrowserService {
     const g = this.lookup(token)
     if (!g) return null
     if (!isBrowserTool(tool)) return Promise.resolve({ content: [{ type: 'text', text: `Unknown tool ${tool}` }], isError: true })
-    const b = this.o.backend.forCompany(g.companyId)
+    const b = this.o.backend.forCompany(g.companyId, g.sessionKey)
     const caller = {
       agent: g.agent,
       sessionKey: g.sessionKey,
       activity: (doing: string) => this.o.backend.setActivity(g.companyId, { agent: g.agent, doing, at: new Date(this.now()).toISOString(), sessionKey: g.sessionKey })
     }
-    const prev = this.queues.get(g.companyId) ?? Promise.resolve()
+    const key = `${g.companyId}|${g.sessionKey}`
+    const prev = this.queues.get(key) ?? Promise.resolve()
     const next = prev.catch(() => undefined).then(() => runBrowserTool(b, caller, tool, args))
-    this.queues.set(g.companyId, next)
+    this.queues.set(key, next)
     void next.finally(() => {
-      if (this.queues.get(g.companyId) === next) this.queues.delete(g.companyId)
+      if (this.queues.get(key) === next) this.queues.delete(key)
     })
     return next
   }

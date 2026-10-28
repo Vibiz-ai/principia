@@ -1,13 +1,16 @@
 /**
- * BROWSER.md §6: when the browser panel opens by itself. Pure (tested): the panel opens once per chat or task run when
- * an agent starts browsing, in the company on screen, and never while the founder is typing.
+ * BROWSER.md §6: when the browser panel opens by itself. Pure (tested): the panel opens once per chat or task when
+ * an agent starts browsing, only while that very chat or task is on screen, and never while the founder is typing.
+ * An agent browsing in another chat stays in that chat: its tabs show there when the founder opens it.
  */
-import type { BrowserState } from '@shared/browser'
+import type { BrowserScope, BrowserState } from '@shared/browser'
 
 export interface AutoOpenInput {
   state: BrowserState
   /** the company on screen; null = All companies */
   activeCompany: string | null
+  /** the chat or task on screen (its BrowserScope); null = a page that is no chat or task */
+  pageScope: BrowserScope | null
   open: boolean
   /** session keys the panel already opened for */
   opened: ReadonlySet<string>
@@ -23,6 +26,8 @@ export function autoOpen(i: AutoOpenInput): AutoOpen {
   if (!a || i.open) return 'no'
   if (i.opened.has(a.sessionKey)) return 'no'
   if (i.activeCompany && i.activeCompany !== i.state.companyId) return 'no'
+  // only beside the chat or task that is browsing, never on top of another one
+  if (!i.pageScope || a.sessionKey !== i.pageScope || i.state.scope !== i.pageScope) return 'no'
   if (i.sinceTyping < TYPING_QUIET_MS) return 'later'
   return 'open'
 }
