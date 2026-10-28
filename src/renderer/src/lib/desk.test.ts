@@ -101,6 +101,13 @@ describe('statusSentence', () => {
     expect(statusSentence({ seat: seat({}), agentPaused: true, code: false })).toMatchObject({ kind: 'paused', glyph: '‖', text: 'Paused by you' })
     expect(statusSentence({ seat: seat({ current: t('HD-1', 'SEO audit') }), agentPaused: true, companyPaused: 'Harbor Dental Group', code: false }).text).toBe('Paused with Harbor Dental Group: SEO audit is saved')
   })
+  it('an agent on several tasks at once says how many', () => {
+    const a = t('VO-12', 'Audit the repo'), b = t('VO-15', 'Check the build'), x = t('VO-16', 'Tidy the docs')
+    expect(statusSentence({ seat: seat({ current: a, working: [a, b], kind: 'working' }), agentPaused: false, code: true, activity: 'Reading files' }).text).toBe('Working on 2 tasks: VO-12 Audit the repo and VO-15 Check the build')
+    expect(statusSentence({ seat: seat({ current: a, working: [a, b, x], kind: 'working' }), agentPaused: false, code: false }).text).toBe('Working on 3 tasks: Audit the repo, Check the build and 1 more')
+    expect(statusSentence({ seat: seat({ current: b, working: [a, b], kind: 'needs' }), agentPaused: false, code: false }).text).toBe('Asking you about Check the build (working on 1 more)')
+    expect(statusSentence({ seat: seat({ current: a, working: [a, b] }), agentPaused: true, code: false }).text).toBe('Paused by you: 2 tasks are saved')
+  })
 })
 
 describe('Home words', () => {

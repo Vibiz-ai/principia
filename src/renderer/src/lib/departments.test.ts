@@ -116,6 +116,11 @@ describe('seatState', () => {
     expect(seatState(a, [t], new Set()).label).toBe('PRN-12 · working')
     expect(seatState(a, [t], new Set(['run_1']))).toMatchObject({ kind: 'needs', label: 'PRN-12 · needs you' })
   })
+  it('several tasks in flight: all of them, the asking one leads', () => {
+    const t1 = task({ agentId: 'agt_1', status: 'in_progress', runId: 'run_1', identifier: 'PRN-12' }), t2 = task({ agentId: 'agt_1', status: 'in_progress', runId: 'run_2', identifier: 'PRN-15' })
+    expect(seatState(a, [t1, t2], new Set())).toMatchObject({ kind: 'working', label: '2 tasks · working', working: [t1, t2], current: t1 })
+    expect(seatState(a, [t1, t2], new Set(['run_2']))).toMatchObject({ kind: 'needs', label: 'PRN-15 · needs you', current: t2 })
+  })
   it('parked count when idle with parked tasks; idle otherwise; queue sorted by priority', () => {
     const parked = [task({ agentId: 'agt_1', status: 'blocked', blockReason: 'run_failed' }), task({ agentId: 'agt_1', status: 'blocked', blockReason: 'no_report' })]
     expect(seatState(a, parked, new Set())).toMatchObject({ kind: 'parked', label: '2 parked' })

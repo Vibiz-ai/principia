@@ -30,7 +30,7 @@ export function AgentConversation({ agent, crumb = false, nonce }: { agent: Comp
   const companyPaused = useStore((s) => s.companies.find((c) => c.id === agent.companyId)?.pausedAt ?? null)
   const short = useCompanyShortName(agent.companyId)
   const cur = status.seat.current
-  const doing = status.kind === 'working' && cur ? `${taskName(cur, code)} · ${status.text}` : status.text
+  const doing = status.kind === 'working' && cur && status.seat.working.length < 2 ? `${taskName(cur, code)} · ${status.text}` : status.text
   return (
     <div className="view convo-view">
       <Toolbar

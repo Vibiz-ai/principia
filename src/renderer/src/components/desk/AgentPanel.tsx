@@ -148,7 +148,7 @@ export function AgentPanel({ agent, session, overlay, onClose }: { agent: Compan
   const ext = useExtTabs('agent')
   const [rawTab, setTab] = useTab<AgentTab>('agent', 'details')
   const st = status.seat
-  const queueN = (st.current ? 1 : 0) + st.review.length + st.parked.length + st.queue.length
+  const queueN = st.working.length + st.review.length + st.parked.length + st.queue.length
   const tabs: { key: AgentTab; label: string; n?: number }[] = [
     { key: 'details', label: 'Details' },
     { key: 'queue', label: 'Queue', n: queueN },
@@ -354,7 +354,7 @@ function AgentQueue({ agent, status, code }: { agent: CompanyAgent; status: Retu
   const ctx = useLaneContext()
   const tasks = useStore((s) => s.tasks)
   const st = status.seat
-  const rows = [...(st.current ? [st.current] : []), ...st.review, ...st.parked, ...st.queue]
+  const rows = [...st.working, ...st.review, ...st.parked, ...st.queue]
   const waiting = new Set(st.queue.filter((t) => t.waiting).map((t) => t.id))
   const done = useMemo(() => tasks.filter((t) => t.agentId === agent.id && t.companyId === agent.companyId && t.status === 'done').sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 5), [tasks, agent.id, agent.companyId])
   const paused = status.kind === 'paused'
@@ -376,7 +376,7 @@ function AgentQueue({ agent, status, code }: { agent: CompanyAgent; status: Retu
                 {waiting.has(t.id) ? 'Waiting on another task' : LANE_WORDS[lane]}
               </div>
             </div>
-            {lane === 'queued' && t.status === 'todo' && !waiting.has(t.id) && !paused && !st.current && (
+            {lane === 'queued' && t.status === 'todo' && !waiting.has(t.id) && !paused && (
               <Button size="sm" onClick={(e) => (e.stopPropagation(), void startTask(t))}>
                 Start
               </Button>
@@ -459,7 +459,7 @@ function AgentComputer({ agent, session, code }: { agent: CompanyAgent; session:
   const who = useDeskWho(agent)
   const status = useAgentStatus(agent)
   const st = status.seat
-  const open = [...(st.current ? [st.current] : []), ...st.queue.slice(0, 4)]
+  const open = [...st.working, ...st.queue.slice(0, 4)]
   return (
     <>
       {session ? <ChatComputer session={session} name={who.name} /> : <p className="convo-empty">No chat with {who.name} yet. Your first message starts it.</p>}
@@ -474,7 +474,7 @@ function AgentComputer({ agent, session, code }: { agent: CompanyAgent; session:
               </span>
               <span className="convo-lib__text">
                 <span className="convo-lib__title">{taskName(t, code)}</span>
-                <span className="convo-lib__detail">{t.status === 'in_progress' ? (status.kind === 'working' ? status.text : 'Working') : 'To do'}</span>
+                <span className="convo-lib__detail">{t.status === 'in_progress' ? (status.kind === 'working' && st.working.length < 2 ? status.text : 'Working') : 'To do'}</span>
               </span>
             </button>
           ))

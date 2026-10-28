@@ -338,18 +338,12 @@ describe('PLANS.md §2 the pilot', () => {
     expect(started.map(s => s.opts.taskId)).toEqual([taskOf(plan, 'T1').id])
     expect(pilot.detail(plan.id).waits).toEqual({ [plan.milestones[1].id]: expect.stringMatching(new RegExp(`^waits: M1 agent \\(\\w+\\) edits the same files \\(${taskOf(plan, 'T1').identifier}\\)$`)) })
   })
-  it('an independent milestone whose agent is busy elsewhere says so on the plan, not silently (QA)', async () => {
+  it('an independent milestone whose agent is on another milestone starts beside it, each in its own worktree', async () => {
     const { plan } = await approved('autopilot', twoMilestones({ parallel: true, touches: ['a.ts', 'b.ts'] }))
     const t1 = taskOf(plan, 'T1'), t3 = taskOf(plan, 'T3')
-    expect(started.map(s => s.opts.taskId)).toEqual([t1.id])
-    const det = pilot.detail(plan.id)
-    const line = det.waits?.[plan.milestones[1].id] ?? ''
-    expect(line).toMatch(new RegExp(`^waits: \\w+ is busy on ${t1.identifier}$`))
-    // the same agent goes on with T2 first; once M1 is done with it, M2 starts and the wait line goes
-    finish(t1.id); await settle()
-    expect(pilot.detail(plan.id).waits?.[plan.milestones[1].id]).toMatch(new RegExp(`busy on ${taskOf(plan, 'T2').identifier}$`))
-    finish(taskOf(plan, 'T2').id); await settle()
-    expect(runsOf(t3.id)).toHaveLength(1)
+    expect(started.map(s => s.opts.taskId)).toEqual([t1.id, t3.id])
+    expect(c.task(t1.id).agentId).toBe(c.task(t3.id).agentId)
+    expect(new Set(ensured.map(e => e.key))).toEqual(new Set([plan.milestones[0].key, plan.milestones[1].key]))
     expect(pilot.detail(plan.id).waits?.[plan.milestones[1].id]).toBeUndefined()
   })
   it('two plans whose touches overlap run one after the other', async () => {

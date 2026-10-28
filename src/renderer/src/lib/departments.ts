@@ -104,8 +104,10 @@ export function mergeBoardBadge<B extends { needsYou: number; working: number }>
 export type SeatKind = 'working' | 'needs' | 'parked' | 'idle' | 'paused' | 'archived'
 export interface SeatState {
   kind: SeatKind
-  /** the task in flight, if any (one per agent, §0.7) */
+  /** the task in flight the seat leads with (one asking the human first), if any */
   current: CompanyTask | null
+  /** every task in flight: an agent works on several at once */
+  working: CompanyTask[]
   /** blocked for any reason other than deps: waits for the human */
   parked: CompanyTask[]
   /** todo, backlog and dependency-blocked tasks assigned to the seat, highest priority first */
@@ -122,19 +124,22 @@ const prio = (p: number): number => (p === 0 ? 9 : p)
 
 export function seatState(agent: CompanyAgent, tasks: CompanyTask[], openRuns: Set<Id>): SeatState {
   const mine = tasks.filter((t) => t.agentId === agent.id && t.companyId === agent.companyId)
-  const current = mine.find((t) => t.status === 'in_progress') ?? null
+  const working = mine.filter((t) => t.status === 'in_progress')
+  const askingOf = (t: CompanyTask): boolean => !!t.runId && openRuns.has(t.runId)
+  const current = working.find(askingOf) ?? working[0] ?? null
   const parked = mine.filter((t) => t.status === 'blocked' && t.blockReason !== 'deps')
   const queue = mine
     .filter((t) => QUEUED.has(t.status) || (t.status === 'blocked' && t.blockReason === 'deps'))
     .sort((a, b) => prio(a.priority) - prio(b.priority) || (a.createdAt < b.createdAt ? -1 : 1))
   const review = mine.filter((t) => t.status === 'in_review')
-  const base = { current, parked, queue, review }
+  const base = { current, working, parked, queue, review }
+  const what = (t: CompanyTask): string => (working.length > 1 ? `${working.length} tasks` : t.identifier)
   if (agent.archivedAt) return { ...base, kind: 'archived', label: 'archived' }
-  // a paused seat may still finish the turn it was on; say both
-  if (agent.pausedAt) return { ...base, kind: 'paused', label: current ? `${current.identifier} · paused` : 'paused' }
+  // a paused seat may still finish the turns it was on; say both
+  if (agent.pausedAt) return { ...base, kind: 'paused', label: current ? `${what(current)} · paused` : 'paused' }
   if (current) {
-    const asking = !!current.runId && openRuns.has(current.runId)
-    return { ...base, kind: asking ? 'needs' : 'working', label: `${current.identifier} · ${asking ? 'needs you' : 'working'}` }
+    const asking = askingOf(current)
+    return { ...base, kind: asking ? 'needs' : 'working', label: `${asking ? current.identifier : what(current)} · ${asking ? 'needs you' : 'working'}` }
   }
   if (parked.length) {
     // a question is not "parked" to the human: the board calls it a Question (needsYouReason 'needs_input')

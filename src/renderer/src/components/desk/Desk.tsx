@@ -109,7 +109,8 @@ export function AgentAction({ agent, status, size = 'sm', wide }: { agent: Compa
       : btn({ variant: 'primary', icon: 'play', onClick: () => void setAgentPaused(agent, false), children: 'Resume' })
   }
   const cur = status.seat.current
-  if (cur && status.kind === 'working') return btn({ icon: 'pause', onClick: () => void pauseTask(cur), children: 'Pause this task' })
+  // several in flight: no single task to pause here (each pauses from its card); the next one can still start beside them
+  if (cur && status.kind === 'working' && status.seat.working.length < 2) return btn({ icon: 'pause', onClick: () => void pauseTask(cur), children: 'Pause this task' })
   if (status.kind === 'needs' || status.kind === 'failed') return btn({ variant: 'primary', onClick: () => void navigate({ name: 'home' }), children: 'See what’s needed' })
   const next = status.seat.queue.find((t) => !t.waiting)
   if (next) return btn({ variant: 'primary', icon: 'play', onClick: () => void startTask(next), children: 'Start' })
@@ -169,13 +170,12 @@ export function DraftCard({ task, code, onHome = false }: { task: CompanyTask; c
     setBusy(true)
     const ok = await attempt(() => hive.tasks.sendBack({ id: task.id, note: note.trim() }), 'Send back')
     if (!ok) return setBusy(false)
-    // the agent picks it up now when it is free and the company runs; otherwise it says where it waits
+    // the agent picks it up now when the company runs (beside any other work it has); otherwise it says where it waits
     const st = getState()
     const co = st.companies.find((c) => c.id === task.companyId)
     const agent = task.agentId ? st.companyAgents.find((a) => a.id === task.agentId) : undefined
-    const busyAgent = !!agent && st.tasks.some((t) => t.agentId === agent.id && t.status === 'in_progress' && t.id !== task.id)
     let started = false
-    if (agent && !co?.pausedAt && !agent.pausedAt && !busyAgent) started = !!(await hive.tasks.start({ id: task.id }).then(() => true, () => false))
+    if (agent && !co?.pausedAt && !agent.pausedAt) started = !!(await hive.tasks.start({ id: task.id }).then(() => true, () => false))
     setBusy(false)
     await refreshTasks()
     setNote('')

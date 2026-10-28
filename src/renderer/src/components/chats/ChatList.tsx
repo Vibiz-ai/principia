@@ -108,9 +108,10 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
         if (a.archivedAt || a.kind !== 'profile' || (scope && a.companyId !== scope)) continue
         const mine = tasks.filter((t) => t.agentId === a.id && t.companyId === a.companyId)
         const chats = (chatOf.get(a.id) ?? []).slice().sort((x, y) => Number(y.status === 'running') - Number(x.status === 'running') || (x.startedAt < y.startedAt ? 1 : -1))
-        const cur = mine.find((t) => t.status === 'in_progress')
-        const live = (!!cur?.runId && (liveRuns.has(cur.runId) || liveSessions.has(cur.runId))) || chats.some((s) => liveSessions.has(s.id))
-        if (cur?.runId) covered.add(cur.runId)
+        // an agent may work on several tasks at once: any of their runs keeps the row live, and each belongs to it
+        const runs = mine.filter((t) => t.status === 'in_progress' && t.runId).map((t) => t.runId!)
+        const live = runs.some((r) => liveRuns.has(r) || liveSessions.has(r)) || chats.some((s) => liveSessions.has(s.id))
+        for (const r of runs) covered.add(r)
         for (const c of chats) covered.add(c.id)
         const at = [...mine.map((t) => t.updatedAt), ...chats.map((s) => s.endedAt ?? s.startedAt), a.createdAt].reduce((m, x) => (x > m ? x : m), '')
         if (!chats.length && !live) continue

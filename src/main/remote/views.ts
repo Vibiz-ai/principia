@@ -430,7 +430,10 @@ export function agentStatus(d: PhoneData, a: CompanyAgent): string {
   const co = d.companies.find((c) => c.id === a.companyId)
   if (co?.pausedAt) return `${co.name} is paused`
   if (a.pausedAt) return 'Paused'
-  const cur = d.tasks.find((t) => t.agentId === a.id && t.companyId === a.companyId && t.status === 'in_progress')
+  const working = d.tasks.filter((t) => t.agentId === a.id && t.companyId === a.companyId && t.status === 'in_progress')
+  const cur = working[0]
+  // an agent works on several tasks at once
+  if (working.length > 1) return `Working on ${working.length} tasks: ${working.slice(0, 2).map((t) => t.title).join(', ')}${working.length > 2 ? ` and ${working.length - 2} more` : ''}`
   if (cur) {
     const live = cur.runId ? d.agents.find((x) => isLive(x) && x.parentId === null && (x.runId === cur.runId || x.sessionId === cur.runId)) : undefined
     const act = live ? plainActivity(live.activity, { code: reposOf(d.repos, a.companyId).length > 0 }) : null

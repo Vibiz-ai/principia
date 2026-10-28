@@ -72,9 +72,9 @@ describe('routines apply', () => {
     expect(d.calls).toEqual(['fire:sch_1', 'task:Morning brief:agt_o', 'start:tsk_1'])
   })
   it('Run once now says when the fire waits (busy, paused), from the schedule event', async () => {
-    const d = { ...fakeDeps(), lastScheduleMessage: async () => 'Commented on PC-4; Seneca is busy on PC-2; it starts right after' }
+    const d = { ...fakeDeps(), lastScheduleMessage: async () => 'Commented on PC-4; Seneca is running 3 tasks; PC-4 starts when one finishes' }
     const plan = planRoutine(routineDef('morning-brief'), ctx())
-    expect(await runRoutineOnce(d, plan, ctx(), [], sched())).toEqual({ kind: 'schedule', id: 'sch_1', waiting: 'Seneca is busy on PC-2; it starts right after' })
+    expect(await runRoutineOnce(d, plan, ctx(), [], sched())).toEqual({ kind: 'schedule', id: 'sch_1', waiting: 'Seneca is running 3 tasks; PC-4 starts when one finishes' })
     expect(scheduleWaitingOf('Created PC-4')).toBeNull()
     expect(scheduleWaitingOf(null)).toBeNull()
   })

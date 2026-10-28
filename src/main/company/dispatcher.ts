@@ -4,14 +4,16 @@
  * serialized per company. A pump heals dependency blocks, then gives every eligible agent its next task:
  *
  * - eligible = not paused or archived, `autonomy:'auto'`, headless, in a company with autopilot on and fewer than
- *   maxInFlight tasks in flight, and with no task in flight of its own;
+ *   maxInFlight tasks in flight, and with fewer than AGENT_MAX_PARALLEL tasks in flight of its own (an agent works
+ *   on several tasks at once; a code task whose checkout is taken gets its own worktree, CompanyStore.startTask);
  * - the exception (startsWithoutAutopilot): a schedule's standing card with a queued fire (the founder turned the
  *   schedule on) and a task whose question the founder just answered start on any active headless seat with autopilot
- *   off too (still never on a paused company, past
- *   maxInFlight, on a busy seat or past the wake guard);
+ *   off too (still never on a paused company, past maxInFlight or AGENT_MAX_PARALLEL, or past the wake guard);
  * - its next task = its highest-priority `todo` task, oldest first (priority 1 urgent … 4 low, 0 none last);
  * - the claim is a compare-and-set on the status mirror inside one transaction with CompanyStore.startTask, so two
- *   pumps, or a pump and a human Run, can never both start the agent: the loser skips or gets "<Agent> is busy on <ID>".
+ *   pumps, or a pump and a human Run, can never both start the same task (the loser skips or gets "An agent already
+ *   owns this task"), nor take the agent past AGENT_MAX_PARALLEL ("<Agent> is running 3 tasks; <ID> starts when one
+ *   finishes").
  *
  * Wakes for a task already in flight coalesce into `pendingWake` (+ a `coalesced` activity); at run end one follow-up
  * turn starts if the outcome is not needs_input and the wake guard allows it. Guard (§0.7): at most
@@ -22,7 +24,7 @@
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, agentActive, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, AGENT_MAX_PARALLEL, agentActive, agentFullLine, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -165,7 +167,7 @@ export class Dispatcher {
     if (this.roomFor(companyId, false) > 0) {
       for (const agent of this.c.departments.listAgents({ companyId })) {
         if (this.roomFor(companyId, false) <= 0) break
-        if (!agentActive(agent) || agent.data.mode === 'session' || this.busyOn(agent.id) || this.takingOver(agent.id)) continue
+        if (!agentActive(agent) || agent.data.mode === 'session' || this.full(agent.id) || this.takingOver(agent.id)) continue
         // autopilot picks any todo task of an auto seat; without it, work the founder already said go to still starts:
         // a schedule's queued fire (they turned the schedule on) and the answer they just gave to a question
         const auto = this.seatEligible(agent) && this.autopilotRoom(companyId) > 0
@@ -204,8 +206,9 @@ export class Dispatcher {
     for (const a of this.takeovers.values()) if (a === agentId) return true
     return false
   }
-  private busyOn(agentId: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM company_tasks WHERE agent_id=? AND status='in_progress' LIMIT 1").get(agentId)
+  /** The seat already runs AGENT_MAX_PARALLEL tasks: nothing more starts on it by itself (a human Run now still does). */
+  private full(agentId: string): boolean {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress'").get(agentId) as { n: number }).n >= AGENT_MAX_PARALLEL
   }
   /** §3.2 seat gates (autopilot and room are the company's). Session-mode seats start only from a human click. */
   private seatEligible(a: CompanyAgent): boolean {
@@ -259,13 +262,13 @@ export class Dispatcher {
     return t.dependencyIds.every(id => { try { return this.c.task(id).status === 'done' } catch { return false } })
   }
   /**
-   * UPDATE … WHERE id=? AND status='todo' AND NOT EXISTS (in-flight task of the agent). Only the mirror; startTask writes
-   * the row. The JSON status is checked too: an older build sharing the db writes only the JSON (§11).
+   * UPDATE … WHERE id=? AND status='todo' AND (the agent's other in-flight tasks) < AGENT_MAX_PARALLEL. Only the mirror;
+   * startTask writes the row. The JSON status is checked too: an older build sharing the db writes only the JSON (§11).
    */
   private cas(taskId: string, agentId: string): boolean {
     return this.db.prepare(`UPDATE company_tasks SET status='in_progress' WHERE id=? AND status='todo'
       AND json_valid(data) AND json_extract(data,'$.status')='todo'
-      AND NOT EXISTS (SELECT 1 FROM company_tasks o WHERE o.agent_id=? AND o.status='in_progress' AND o.id<>?)`).run(taskId, agentId, taskId).changes === 1
+      AND (SELECT COUNT(*) FROM company_tasks o WHERE o.agent_id=? AND o.status='in_progress' AND o.id<>?) < ?`).run(taskId, agentId, taskId, AGENT_MAX_PARALLEL).changes === 1
   }
   /**
    * §3.6: the next autoWakes, or null when this automatic start would exceed limits.autoWakesPerHour within the last
@@ -312,7 +315,7 @@ export class Dispatcher {
 
   // ---------- human starts ----------
 
-  /** "Run now": a human start (no autopilot gate); one in flight per agent ("Copywriter is busy on NC-12"). */
+  /** "Run now": a human start (no autopilot gate), never held by a busy agent: it works on this task beside the others. */
   runNow(taskId: string, profileId?: string): BoardTask {
     const t = this.c.task(taskId)
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
@@ -401,14 +404,14 @@ export class Dispatcher {
     if (this.disposed || !t.pendingWake?.count || (t.ask && !t.ask.answer) || t.plan) return
     const from = t.status === 'in_review' ? 'in_review' : t.status === 'blocked' && t.blockReason === 'agent' ? 'blocked' : null
     const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
-    if (!from || !agent || !this.d.enabled() || !this.seatEligible(agent) || this.autopilotRoom(t.companyId) <= 0 || this.busyOn(agent.id)) return
+    if (!from || !agent || !this.d.enabled() || !this.seatEligible(agent) || this.autopilotRoom(t.companyId) <= 0 || this.full(agent.id)) return
     try {
       this.db.transaction(() => {
         const guard = this.guard(t, agent)
         if (!guard) return void this.parkGuard(t, agent)
         const n = t.pendingWake!.count
         if (!this.moveRaw(t.id, [from], { status: 'todo', blockReason: null }, 'woke', `Follow-up turn for ${agent.name}: ${n} wake${n === 1 ? '' : 's'} arrived during the run`)) return
-        if (!this.cas(t.id, agent.id)) fail(`${agent.name} is busy`)
+        if (!this.cas(t.id, agent.id)) fail(agentFullLine(agent.name, AGENT_MAX_PARALLEL, t.identifier))
         this.c.startTask(t.id, undefined, this.starter(agent), { actor: 'system' })
         this.c.patchInFlight(t.id, { autoWakes: guard })
       })()
@@ -453,7 +456,7 @@ export class Dispatcher {
           title: clip(`${t.identifier} · ${t.title}`, 80), initialPrompt: p.prompt, resumeAgentSessionId: link.resumeSessionId,
           task: true, taskId: t.id, ...(t.departmentId ? { taskDepartmentId: t.departmentId } : {}) })
         return leaseRun(session.id, 'queued', target, companyId)
-      }, { actor: 'human' })
+      }, { actor: 'human', lease: true })
     } catch (err) {
       if (session) void sessions.kill((session as Session).id).catch(() => undefined)
       throw err

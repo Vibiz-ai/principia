@@ -146,14 +146,27 @@ describe('DEPARTMENTS.md §8: task-mode schedules keep one standing card', () =>
     expect(c.task(other.id).status).toBe('todo')
   })
 
-  it('a fire while the agent is busy or paused says so in plain words, and the busy one starts right after', async () => {
+  it('a fire while the agent is busy starts beside its other work', async () => {
     const b = board({ autopilot: false })
     const busy = c.createTask({ title: 'Other', description: '', companyId: b.co.id, repoId: null, status: 'todo', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: b.dep.id, agentId: b.agent.id })
     d.runNow(busy.id)
     const { mem, s } = scheduler()
     mem.schedules.set('sch_digest', taskSchedule(b))
     s.tick(); await flush()
-    expect(mem.events.at(-1)!.message).toMatch(/Digest writer is busy on [A-Z]+-\d+; it starts right after/)
+    const card = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
+    expect(c.task(card.id).status).toBe('in_progress')
+    expect(c.task(busy.id).status).toBe('in_progress')
+    expect(started.at(-1)!.opts.taskId).toBe(card.id)
+  })
+
+  it('a fire while the agent runs AGENT_MAX_PARALLEL tasks says so in plain words, and starts when one finishes', async () => {
+    const b = board({ autopilot: false })
+    const busy = [1, 2, 3].map(n => c.createTask({ title: `Other ${n}`, description: '', companyId: b.co.id, repoId: null, status: 'todo', priority: 0, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], departmentId: b.dep.id, agentId: b.agent.id }))
+    for (const t of busy) d.runNow(t.id)
+    const { mem, s } = scheduler()
+    mem.schedules.set('sch_digest', taskSchedule(b))
+    s.tick(); await flush()
+    expect(mem.events.at(-1)!.message).toMatch(/Digest writer is running 3 tasks; [A-Z]+-\d+ starts when one finishes/)
     const card = findBySource(c, b.co.id, 'schedule', 'sch_digest')!
     expect(c.task(card.id).status).toBe('todo')
     end(started[0].run.id, 'passed'); await flush()
