@@ -202,7 +202,8 @@ describe('screens', () => {
     expect(node).toHaveLength(1)
     expect(textOf(node[0]!)).toContain('VO-9')
     expect(textOf(node[0]!)).toContain('Working · 2m')
-    expect(findAll(working, (n) => n.attrs?.class === 'tes tes--run')).toHaveLength(1)
+    // its tile on the card pinned above the reply box, and on its one-line reference in the stream (§8.5)
+    expect(findAll(working, (n) => n.attrs?.class === 'tes tes--run')).toHaveLength(2)
     // the working line: what its run is doing now, only while it works
     const doing = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(card('working', 'Working', { activity: 'Reading funnel.md' }))] } }, noop, now)
     expect(findAll(doing, (n) => n.attrs?.class === 'tcard__a').map(textOf)).toEqual(['Reading funnel.md'])
@@ -214,6 +215,26 @@ describe('screens', () => {
     expect(findAll(done, (n) => n.tag === 'a' && n.attrs?.href === 'https://github.com/a/b/pull/7')).toHaveLength(1)
     // the plain line is not repeated next to the card
     expect(textOf(done)).not.toContain('Julia started VO-9')
+  })
+  it('open tasks are pinned above the reply box; the stream keeps a one-line reference (CHAT-UI.md §8.5)', () => {
+    const card = (id: string, state: string, label: string, startedAt = T): PhoneTaskCard => ({ identifier: id, title: `Task ${id}`, state, label, result: state === 'done' ? 'Rewrote the hero' : null, prUrl: null, startedAt, finishedAt: null })
+    const msg = (task: PhoneTaskCard, i: number) => ({ id: `c${i}`, seq: i, channelId: 'ch', threadId: null, authorId: 'm1', kind: 'system' as const, text: `Julia started ${task.identifier}`, at: T, task })
+    const room = { companyId: 'co_a', enabled: true, message: null, me: 'm1', channelId: 'ch', channels: [{ id: 'ch', label: '#chat-ugc' }], members: [], answering: [] }
+    const cards = [card('VO-14', 'done', 'Done'), card('VO-15', 'working', 'Working'), card('VO-16', 'needs_you', 'Needs you')]
+    const v = renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: cards.map(msg) } }, noop)
+    const dock = findAll(v, (n) => n.attrs?.class === 'tdock')
+    expect(dock).toHaveLength(1)
+    expect(findAll(dock[0]!, (n) => typeof n.attrs?.class === 'string' && n.attrs.class.startsWith('tcard ')).map((n) => n.attrs?.['data-task'])).toEqual(['VO-15', 'VO-16'])
+    const msgs = findAll(v, (n) => n.attrs?.class === 'msgs')[0]!
+    expect(findAll(msgs, (n) => n.attrs?.class === 'tcard is-done')).toHaveLength(1)
+    expect(findAll(msgs, (n) => typeof n.attrs?.class === 'string' && n.attrs.class.startsWith('tref')).map(textOf)).toEqual(['VO-15 · working · see below', 'VO-16 · needs you · see below'])
+    // nothing open: no dock
+    expect(findAll(renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: [msg(cards[0]!, 1)] } }, noop), (n) => n.attrs?.class === 'tdock')).toHaveLength(0)
+    // more than three: the newest three, "+N more"
+    const five = [1, 2, 3, 4, 5].map((i) => card(`VO-${i}`, 'queued', 'Queued', new Date(Date.parse(T) + i * 1000).toISOString()))
+    const many = findAll(renderRoom({ ...baseView(), tab: 'room', room: { ...room, messages: five.map(msg) } }, noop), (n) => n.attrs?.class === 'tdock')[0]!
+    expect(textOf(many)).toContain('+2 more')
+    expect(findAll(many, (n) => n.attrs?.class === 'tcard is-queued').map((n) => n.attrs?.['data-task'])).toEqual(['VO-3', 'VO-4', 'VO-5'])
   })
   it('a queued message offers Send now', () => {
     const r = new ChatReplica({ ...snap(), turn: 'working', queue: [{ id: 'q1', text: 'Change of plan', images: 0 }] } as ChatSnapshot)

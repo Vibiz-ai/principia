@@ -275,3 +275,9 @@ body[data-phase='pair'] .toast, body[data-phase='out'] .toast { bottom: calc(24p
 .boardlink .go { margin-left: auto; font-size: 20px; opacity: .6; }
 .tlink { width: 100%; text-align: left; background: none; color: inherit; font: inherit; border-left: 0; border-right: 0; border-bottom: 0; }
 .fact { display: grid; grid-template-columns: 104px 1fr; gap: 12px; padding: 4px 0; overflow-wrap: anywhere; }
+
+/* CHAT-UI.md §8.5: the room's open tasks pinned above the reply box; the stream keeps a one-line reference */
+.tdock { position: sticky; bottom: calc(var(--tabs-h) + 88px + env(safe-area-inset-bottom)); z-index: 3; display: flex; flex-direction: column; gap: 6px; padding: 8px 0 4px; background: var(--page); border-top: 1px solid var(--line); }
+.tdock .tcard { margin: 0; }
+.tdock__more { font-size: 12px; color: var(--faint); }
+.tref { display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 22px; font-size: 12px; color: var(--faint); }

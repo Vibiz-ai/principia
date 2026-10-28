@@ -13,10 +13,13 @@
  * - RecentConversations: the last few conversations with who is in each, a shimmer while someone answers in it.
  * - CHAT-UI.md §8: a task that stops for you asks here, as its filer's message (with Connect buttons for the services
  *   it names and its options); you answer in the reply box ("Replying to VO-15's question" after the card's Answer).
+ * - CHAT-UI.md §8.5: while a task filed here is queued, working or needs you, its live card is docked right above the
+ *   reply box (TaskDock) and its card in the history is a one-line reference; the message list scrolls above the dock.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
+import type { TaskCardState } from '@shared/taskCard'
 import { Button } from '../ui'
 import { Icon } from '../Icon'
 import { MemberAvatar, useMemberDisplay } from '../forum/Avatar'
@@ -29,9 +32,9 @@ import { useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, whoLine } from '../../state/conversations'
 import { navigate, startSession, useStore } from '../../state/store'
-import { TASK_ASK_REPLY_EVENT, TaskCard, WorkingStrip, type TaskAskReply } from './TaskCard'
+import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
-import { connectToolsIn, isOpenTaskQuestion } from '../../lib/taskCardView'
+import { cardsOfMessages, connectToolsIn, dockedTasks, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
 import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
 
@@ -427,6 +430,9 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   // CHAT-UI.md §8: the reply answers a task's question (the card's Answer, the question's Reply)
   const [replyTo, setReplyTo] = useState<{ messageId: string; identifier: string } | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const body = useRef<HTMLDivElement>(null)
+  // the list follows new messages while you are at its end (also when the dock above the composer grows or shrinks)
+  const atEnd = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
   const me = state?.me ?? null
   const agentMembers = (channel?.memberIds ?? []).filter((id) => display(id)?.kind === 'agent')
@@ -441,7 +447,21 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   }, [companyId, channelId, channel?.unread])
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' })
+    atEnd.current = true
   }, [msgs.length])
+  useEffect(() => {
+    const el = body.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (atEnd.current) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  // CHAT-UI.md §8.5: the tasks filed here that are still open sit in the dock above the composer
+  const cards = useMemo(() => cardsOfMessages(msgs), [msgs])
+  const cardItems = useStripItems(cards)
+  const docked = useMemo(() => new Map(dockedTasks(cardItems).map((t) => [t.taskId, t.state])), [cardItems])
   useEffect(() => {
     input.current?.focus()
     setReplyTo(null)
@@ -521,8 +541,15 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           ))}
         </span>
       </header>
-      <WorkingStrip msgs={msgs} />
-      <div className="cx-thread__body scroll">
+      <WorkingStrip cards={cards} dock />
+      <div
+        className="cx-thread__body scroll"
+        ref={body}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+      >
         {channel?.purpose && (
           <div className="cx-handoff" data-chatux="handoff">
             <span className="cx-handoff__mark" aria-hidden>
@@ -539,7 +566,8 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
               key={m.id}
               m={m}
               mine={m.authorId === me}
-              head={i === 0 || msgs[i - 1]!.authorId !== m.authorId || msgs[i - 1]!.kind === 'system'}
+              head={startsGroup(msgs, i)}
+              docked={m.task ? (docked.get(m.task.taskId) ?? null) : null}
               display={display}
               onReply={(id, identifier) => {
                 setReplyTo({ messageId: id, identifier })
@@ -566,6 +594,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
         ))}
         <div ref={bottom} />
       </div>
+      <TaskDock items={cardItems} cards={cards} companyId={companyId} channelId={channelId} />
       <form
         className="cx-thread__reply"
         onSubmit={(e) => {
@@ -642,9 +671,20 @@ function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<stri
   return expect.filter((id) => !answered.has(id) && (busy.has(id) || fresh)).map((id) => ({ id, state: busy.has(id) ? 'working' : 'reading' }))
 }
 
-function MessageBubble({ m, mine, head, display, onReply }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay>; onReply?: (messageId: string, identifier: string) => void }): React.JSX.Element {
-  // CHAT-UI.md §8: a task started here is a live card, not a grey line
-  if (m.kind === 'system' && m.task) return <TaskCard m={m} />
+/**
+ * A message opens a new group (its author's name and time over it) after someone else's message or a system line,
+ * and always for a task's question: "Got it, back on VO-15." and the next question from the same agent read as two
+ * messages, not one paragraph.
+ */
+export function startsGroup(msgs: readonly Pick<ForumMessage, 'authorId' | 'kind' | 'ask'>[], i: number): boolean {
+  const m = msgs[i]!
+  const prev = msgs[i - 1]
+  return !prev || prev.authorId !== m.authorId || prev.kind === 'system' || (m.kind === 'ask' && !!m.ask?.taskId)
+}
+
+export function MessageBubble({ m, mine, head, display, onReply, docked = null }: { m: ForumMessage; mine: boolean; head: boolean; display: ReturnType<typeof useMemberDisplay>; onReply?: (messageId: string, identifier: string) => void; docked?: TaskCardState | null }): React.JSX.Element {
+  // CHAT-UI.md §8: a task started here is a live card, not a grey line; while it is docked, a one-line reference (§8.5)
+  if (m.kind === 'system' && m.task) return docked ? <TaskCardRef card={m.task} state={docked} /> : <TaskCard m={m} />
   if (m.kind === 'system')
     return (
       <div className="cx-handoff cx-handoff--small" data-chatux="thread-msg" data-kind="system" data-msg-id={m.id}>
@@ -668,7 +708,7 @@ function MessageBubble({ m, mine, head, display, onReply }: { m: ForumMessage; m
           </div>
         )}
         <div className="cx-msg__bubble selectable">
-          <MarkdownLite text={m.text} />
+          <MarkdownLite text={question ? questionText(m.text, m.ask?.options) : m.text} />
         </div>
         {question && <TaskQuestionActions m={m} onReply={onReply} />}
       </div>
@@ -685,8 +725,23 @@ function TaskQuestionActions({ m, onReply }: { m: ForumMessage; onReply?: (messa
   const known = useStore((s) => s.tasks.find((t) => t.id === m.ask?.taskId)?.identifier ?? null)
   const identifier = known ?? /^([A-Z][A-Z0-9]{0,9}-\d+)\b/.exec(m.text)?.[1] ?? 'the task'
   const [busy, setBusy] = useState(false)
-  if (!isOpenTaskQuestion(m)) return null
   const options = m.ask?.options ?? []
+  if (!isOpenTaskQuestion(m)) {
+    // answered: the options stay as a record of what was picked (the bubble no longer lists them in its text)
+    if (!options.length || m.ask?.status !== 'answered') return null
+    const picked = (m.ask?.answer ?? '').trim().toLowerCase()
+    return (
+      <div className="cx-question" data-chatux="task-question" data-answered="">
+        <div className="cx-question__actions">
+          {options.map((o) => (
+            <span key={o} className={`cx-question__opt ${picked && o.trim().toLowerCase() === picked ? 'is-picked' : ''}`} data-chatux="task-question-option-done">
+              {o}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="cx-question" data-chatux="task-question">
       {tools.map((tool) => (

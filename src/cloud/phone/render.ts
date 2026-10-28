@@ -446,6 +446,9 @@ export function renderRoom(v: View, a: Actions, now = Date.now()): VNode {
   const by = new Map(r.members.map((m) => [m.id, m]))
   const agents = r.members.filter((m) => m.kind === 'agent')
   const whoOpen = v.drafts['room:who:open'] === '1'
+  // CHAT-UI.md §8.5: the tasks filed here that are still open are pinned above the reply box; the stream keeps a one-line reference
+  const docked = roomDocked(r.messages.map((m) => m.task).filter((t): t is PhoneTaskCard => !!t))
+  const dockedIds = new Set(docked.map((t) => t.identifier))
   return h(
     'section',
     { class: 'page chat' },
@@ -463,10 +466,25 @@ export function renderRoom(v: View, a: Actions, now = Date.now()): VNode {
     h(
       'div',
       { class: 'msgs', 'data-scroll': 'chat' },
-      ...(r.messages.length ? r.messages.map((m) => (m.task ? roomTaskCard(m.task, now) : roomMsg(m.authorId, m.text, m.at, m.kind, by, r.me, now, !!m.threadId))) : [h('p', { class: 'sub center' }, 'Say hello. @mention an agent and it answers here.')]),
+      ...(r.messages.length ? r.messages.map((m) => (m.task ? (dockedIds.has(m.task.identifier) ? roomTaskRef(m.task) : roomTaskCard(m.task, now)) : roomMsg(m.authorId, m.text, m.at, m.kind, by, r.me, now, !!m.threadId))) : [h('p', { class: 'sub center' }, 'Say hello. @mention an agent and it answers here.')]),
       ...(r.answering ?? []).map((n) => h('div', { class: 'typing' }, h('i', { class: 'dot', 'aria-hidden': 'true' }), `${n} is replying…`))
-    )
+    ),
+    docked.length
+      ? h('div', { class: 'tdock', 'data-dock': 'tasks' }, ...(docked.length > ROOM_DOCK_MAX ? [h('div', { class: 'tdock__more' }, `+${docked.length - ROOM_DOCK_MAX} more`)] : []), ...docked.slice(-ROOM_DOCK_MAX).map((t) => roomTaskCard(t, now)))
+      : null
   )
+}
+const ROOM_DOCK_MAX = 3
+/** The room's open tasks (queued, working, needs you), newest card per task, oldest first: pinned above the reply box. */
+export function roomDocked(cards: readonly PhoneTaskCard[]): PhoneTaskCard[] {
+  const byId = new Map<string, PhoneTaskCard>()
+  for (const c of cards) byId.set(c.identifier, c)
+  return [...byId.values()].filter((c) => c.state === 'queued' || c.state === 'working' || c.state === 'needs_you').sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))
+}
+/** A docked task's place in the stream: "VO-15 · working · see below". */
+export function roomTaskRef(t: PhoneTaskCard): VNode {
+  const st = t.state === 'needs_you' ? 'needs you' : t.state
+  return h('div', { class: `tref is-${t.state}`, 'data-task': t.identifier }, h('span', { class: `tes tes--${CARD_TILE[t.state] ?? 'q'}`, 'aria-hidden': 'true' }), `${t.identifier} · ${st} · see below`)
 }
 const CARD_TILE: Record<string, 'ok' | 'needs' | 'fail' | 'run' | 'q'> = { queued: 'q', working: 'run', needs_you: 'needs', in_review: 'ok', done: 'ok', failed: 'fail' }
 /** CHAT-UI.md §8: a task started from this conversation, as a compact card with its state (the Mac keeps it current). */

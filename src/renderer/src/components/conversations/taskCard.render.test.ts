@@ -8,7 +8,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { CompanyAgent, CompanyPassport, CompanyTask } from '@shared/company'
 import type { AgentNode } from '@shared/live'
-import type { ForumTaskCard } from '@shared/taskCard'
+import type { ForumTaskCard, StripTask } from '@shared/taskCard'
+import type { ForumMessage } from '@shared/forum'
 
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react')
@@ -99,5 +100,92 @@ describe('the task card in a chat', () => {
     expect(html).not.toMatch(/data-chatux="working-strip-line"[^>]*disabled/)
     const plain = renderToStaticMarkup(createElement(WorkingStrip, { cards: [card('vo-15')] }))
     expect(plain).toMatch(/disabled=""[^>]*data-chatux="working-strip-line"/)
+  })
+})
+
+describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
+  const st = (id: string, state: StripTask['state']): StripTask => ({ taskId: id, identifier: id.toUpperCase(), who: 'Julia', state, startedAt: T })
+  const cards = [card('vo-14'), card('vo-15'), card('vo-16', { state: 'done' }), card('vo-17', { state: 'needs_you', askMessageId: 'msg_q' })]
+  it('docks the queued, working and needs-you tasks, not the one that came back', async () => {
+    const { TaskDock } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-14', 'queued'), st('vo-15', 'working'), st('vo-16', 'done'), st('vo-17', 'needs_you')], cards, companyId: 'co_a', channelId: 'ch_1' }))
+    expect(html).toContain('data-chatux="task-dock"')
+    expect(html).toContain('data-dock-task="VO-14"')
+    expect(html).toContain('data-dock-task="VO-15"')
+    expect(html).toContain('data-dock-task="VO-17"')
+    expect(html).not.toContain('data-dock-task="VO-16"')
+    expect(html).not.toContain('task-dock-more')
+    // nothing open: no dock at all
+    expect(renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-16', 'done')], cards, companyId: 'co_a', channelId: 'ch_1' }))).toBe('')
+  })
+  it('more than three: the newest three and "+N more"', async () => {
+    const { TaskDock } = await import('./TaskCard')
+    const many = ['vo-14', 'vo-15', 'vo-17', 'vo-18', 'vo-19'].map((id) => card(id))
+    const html = renderToStaticMarkup(createElement(TaskDock, { items: many.map((c) => st(c.taskId, 'queued')), cards: many, companyId: 'co_a', channelId: 'ch_1' }))
+    expect(html.match(/data-chatux="task-dock-card"/g)).toHaveLength(3)
+    expect(html).toContain('+2 more')
+  })
+  it('the docked working card is compact: state and clock on one line, two tail lines, Show logs, Watch, Open task', async () => {
+    const { TaskCardView } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(TaskCardView, { card: card('vo-15'), dock: true }))
+    expect(html).toContain('data-chatux="task-dock-card"')
+    expect(html).toContain('data-state="working"')
+    expect(html).toMatch(/data-chatux="task-clock">1m 1\d+s</)
+    expect(html).toContain('data-chatux="task-tail"')
+    expect(html).toContain('Show logs')
+    expect(html).toMatch(/data-chatux="task-watch"[^>]*>Watch</)
+    expect(html).toContain('Open task')
+    expect(html).not.toContain('data-chatux="task-log"')
+  })
+  it('the docked needs-you card keeps Answer pointing at the question', async () => {
+    const { TaskCardView } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(TaskCardView, { card: card('vo-17', { state: 'needs_you', askMessageId: 'msg_q' }), channelId: 'ch_1', dock: true }))
+    expect(html).toContain('data-chatux="task-answer"')
+    expect(html).toContain('title="Answer in the conversation"')
+  })
+  it('the history card becomes a one-line reference while docked, the full card once it came back', async () => {
+    const { MessageBubble } = await import('./ConversationKit')
+    const sys = (c: ForumTaskCard): ForumMessage => ({ id: `m_${c.taskId}`, companyId: 'co_a', channelId: 'ch_1', authorId: 'mem_p', kind: 'system', text: `Julia started ${c.identifier}`, mentions: [], createdAt: T, origin: 'local', task: c }) as unknown as ForumMessage
+    const display = (() => ({ name: 'Julia', role: 'Analyst', kind: 'agent' })) as never
+    const ref = renderToStaticMarkup(createElement(MessageBubble, { m: sys(card('vo-15')), mine: false, head: true, display, docked: 'working' }))
+    expect(ref).toContain('data-chatux="task-card-ref"')
+    expect(ref).toContain('VO-15 · working · see below')
+    expect(ref).not.toContain('data-chatux="task-card"')
+    const full = renderToStaticMarkup(createElement(MessageBubble, { m: sys(card('vo-16', { state: 'done' })), mine: false, head: true, display, docked: null }))
+    expect(full).toContain('data-chatux="task-card"')
+    expect(full).toContain('Rewrote the hero')
+  })
+  it('a task question with options: quick-answer buttons under it, no "Options:" line in the bubble', async () => {
+    const { MessageBubble } = await import('./ConversationKit')
+    const opts = ['Cancel both', 'Cancel only Oct 28', "Leave them, I'll ask her first"]
+    const q = (status: 'open' | 'answered', answer?: string): ForumMessage =>
+      ({ id: 'msg_q', companyId: 'co_a', channelId: 'ch_1', authorId: 'mem_julia', kind: 'ask', text: "VO-17 is stuck and needs you.\nShould I cancel them?\nOptions: Cancel both, Cancel only Oct 28 or Leave them, I'll ask her first.\nReply here and I'll pass it on to VO-17.", mentions: [], createdAt: T, origin: 'principia:ask:run_n', ask: { status, to: ['mem_p'], taskId: 'vo-17', runId: 'run_n', options: opts, ...(answer ? { answer } : {}) } }) as unknown as ForumMessage
+    const display = (() => ({ name: 'Julia', role: 'Analyst', kind: 'agent' })) as never
+    const open = renderToStaticMarkup(createElement(MessageBubble, { m: q('open'), mine: false, head: true, display, onReply: () => {} }))
+    expect(open.match(/data-chatux="task-question-option"/g)).toHaveLength(3)
+    expect(open).toMatch(/Cancel only Oct 28<\/span><\/button>/)
+    expect(open).not.toContain('Options:')
+    expect(open).toContain('Should I cancel them?')
+    expect(open).toContain('data-chatux="task-question-reply"')
+    // answered: the options stay as a record, the picked one marked, no buttons
+    const done = renderToStaticMarkup(createElement(MessageBubble, { m: q('answered', 'Cancel both'), mine: false, head: true, display }))
+    expect(done).not.toContain('data-chatux="task-question-option"')
+    expect(done).toMatch(/cx-question__opt is-picked"[^>]*>Cancel both</)
+  })
+  it('a question from the agent who just said "Got it" starts its own message', async () => {
+    const { startsGroup } = await import('./ConversationKit')
+    const msgs = [
+      { authorId: 'mem_p', kind: 'message' },
+      { authorId: 'mem_julia', kind: 'message' },
+      { authorId: 'mem_julia', kind: 'message' },
+      { authorId: 'mem_julia', kind: 'ask', ask: { status: 'open', to: [], taskId: 'vo-17' } }
+    ] as unknown as ForumMessage[]
+    expect([0, 1, 2, 3].map((i) => startsGroup(msgs, i))).toEqual([true, true, false, true])
+  })
+  it('the strip of a conversation with a dock points at the docked card', async () => {
+    const { WorkingStrip } = await import('./TaskCard')
+    const html = renderToStaticMarkup(createElement(WorkingStrip, { cards: [card('vo-15')], dock: true }))
+    expect(html).toMatch(/class="cx-strip__line shimmer-text is-link"[^>]*title="Show it above the reply box"/)
+    expect(html).not.toMatch(/disabled=""[^>]*data-chatux="working-strip-line"/)
   })
 })
