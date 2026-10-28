@@ -1,10 +1,10 @@
 /** CONTRACT §13: spawn tagging + reaper. Pure tree math on a ps fixture, a fake process table, and real fake processes. */
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { Reaper, attachEnv, collectTree, findLeftovers, parseEtime, parsePs, spawnIdOf, systemProcessTable, type ProcRow, type ProcessTable } from '../reaper'
+import { Reaper, attachEnv, collectTree, findLeftovers, ownedByUserData, parseEtime, parsePs, spawnIdOf, systemProcessTable, type ProcRow, type ProcessTable } from '../reaper'
 
 const UD = '/Users/u/Library/Application Support/Hive'
 const tag = (id: string, ud = UD): string => `PATH=/usr/bin HIVE_SPAWN_ID=${id} HIVE_USER_DATA=${ud} TERM=xterm-256color`
@@ -208,15 +208,26 @@ describe('Reaper (fake process table)', () => {
 
 // ---------- real fake processes (macOS ps -E; skipped where env is not visible, e.g. a sandbox) ----------
 
+// PR-28: every fake below exits on its own after LIFE_S, so a runner that is killed mid-test (no afterAll) can't leave
+// them running forever; afterAll also sweeps every process tagged with a test's userData, not just the pids it saw.
+const LIFE_S = 60
 const spawned: number[] = []
+const userDatas: string[] = []
+const testUserData = (prefix: string): string => {
+  const ud = mkdtempSync(join(tmpdir(), prefix))
+  userDatas.push(ud)
+  return ud
+}
 afterAll(() => {
-  for (const p of spawned) {
+  const tagged = systemProcessTable.snapshotSync(true).filter((r) => userDatas.some((ud) => ownedByUserData(` ${r.env ?? ''} `, ud)))
+  for (const p of new Set([...spawned, ...tagged.map((r) => r.pid)])) {
     try {
       process.kill(p, 'SIGKILL')
     } catch {
       /* gone */
     }
   }
+  for (const ud of userDatas) rmSync(ud, { recursive: true, force: true })
 })
 
 function envVisible(): boolean {
@@ -256,16 +267,16 @@ const waitFor = async (f: () => boolean, ms = 5000): Promise<boolean> => {
 const LEADER = `
 const { spawn } = require('child_process')
 const fs = require('fs')
-const a = spawn('/bin/sleep', ['600'], { stdio: 'ignore' })                         // same group
-const b = spawn(process.execPath, ['-e', "require('child_process').spawn('/bin/sleep',['601'],{stdio:'ignore'}); setInterval(()=>{},1000)"], { stdio: 'ignore', detached: true }) // escapes the group
+const a = spawn('/bin/sleep', ['${LIFE_S}'], { stdio: 'ignore' })                   // same group
+const b = spawn(process.execPath, ['-e', "require('child_process').spawn('/bin/sleep',['${LIFE_S + 1}'],{stdio:'ignore'}); setTimeout(()=>{},${LIFE_S * 1000})"], { stdio: 'ignore', detached: true }) // escapes the group
 b.unref()
 setTimeout(() => fs.writeFileSync(process.argv[1], JSON.stringify({ a: a.pid, b: b.pid })), 300)
-setInterval(() => {}, 1000)
+setTimeout(() => {}, ${LIFE_S * 1000})
 `
 
 describe.runIf(process.platform === 'darwin' && envVisible())('Reaper (real processes)', () => {
   it('kills a leader, its group, and a tagged escapee (+ its group) after the leader is gone', async () => {
-    const ud = mkdtempSync(join(tmpdir(), 'hive reaper '))
+    const ud = testUserData('hive reaper ')
     const out = join(ud, 'pids.json')
     const spawnId = `st_test${process.pid}`
     const r = new Reaper({ userData: ud, selfPid: process.pid, graceMs: 800, sampleMs: 0 })
@@ -292,10 +303,10 @@ describe.runIf(process.platform === 'darwin' && envVisible())('Reaper (real proc
   }, 20_000)
 
   it('lists a tagged orphan as a leftover (never killed on its own) and Stop kills it', async () => {
-    const ud = mkdtempSync(join(tmpdir(), 'hive leftover '))
+    const ud = testUserData('hive leftover ')
     const r = new Reaper({ userData: ud, selfPid: process.pid, graceMs: 800, sampleMs: 0 })
     // an "earlier Hive run" left this behind: detached, re-parented to launchd once its parent shell exits
-    const sh = spawn('/bin/sh', ['-c', `"${process.execPath}" -e "setInterval(()=>{},1000)" >/dev/null 2>&1 &`], { env: { ...process.env, ...r.tag('s_gone') }, stdio: 'ignore' })
+    const sh = spawn('/bin/sh', ['-c', `"${process.execPath}" -e "setTimeout(()=>{},${LIFE_S * 1000})" >/dev/null 2>&1 &`], { env: { ...process.env, ...r.tag('s_gone') }, stdio: 'ignore' })
     await new Promise((res) => sh.on('exit', res))
     let orphan = 0
     await waitFor(() => {
