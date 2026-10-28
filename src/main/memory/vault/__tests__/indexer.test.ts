@@ -9,6 +9,8 @@ import { readSnapshot } from '../snapshots'
 import { ExpectedWrites, VaultWatcher } from '../watcher'
 import { openIndexDb, getLayout, saveLayout } from '../indexDb'
 import { CO, makeKit, nativeOk, note, type Kit } from './vaultTestKit'
+import { budget } from '../../../../test/timing'
+import { expectFast } from '../../../../test/perf'
 
 const d = nativeOk ? describe : describe.skip
 
@@ -388,11 +390,8 @@ d('incremental index equals a full rebuild', () => {
     kit.index.rebuild(CO)
     const rebuilt = dumpDerived(kit.db, CO)
     for (const k of Object.keys(rebuilt)) expect({ [k]: incremental[k] }).toEqual({ [k]: rebuilt[k] })
-  }, 30_000) // ~1.5 s alone, past the 5 s default under the full parallel suite
+  }, budget(10_000)) // ~1.5 s alone, past the 5 s default under the full parallel suite
 })
-
-// 5 s on a laptop; shared CI runners are slower and noisier, so they get headroom (a real regression still fails)
-const BUDGET_MS = process.env.CI ? 15_000 : 5000
 
 d('rebuild performance', () => {
   it('rebuilds 5k notes in under 5 s', () => {
@@ -406,17 +405,16 @@ d('rebuild performance', () => {
     }
     const t0 = Date.now()
     const stats = kit.index.rebuild(CO)
-    const ms = Date.now() - t0
+    expectFast(Date.now() - t0, 5000, 'rebuilding 5k notes')
     expect(stats.notes).toBe(5000)
-    expect(ms).toBeLessThan(BUDGET_MS)
     expect(kit.db.prepare('SELECT count(*) AS n FROM mem_link WHERE company_id = ? AND to_note IS NOT NULL').get(CO)).toEqual({ n: 15000 })
     // a second rebuild skips rewriting unchanged snapshots
     const t1 = Date.now()
     kit.index.rebuild(CO)
-    expect(Date.now() - t1).toBeLessThan(BUDGET_MS)
+    expectFast(Date.now() - t1, 5000, 'a second rebuild')
     // startup scan with nothing changed is cheap and touches nothing
     expect(kit.index.scan(CO)).toEqual([])
-  }, 30_000)
+  }, budget(15_000))
 })
 
 d('watcher', () => {
@@ -430,17 +428,17 @@ d('watcher', () => {
       await new Promise((r) => setTimeout(r, 100))
       const t0 = Date.now()
       kit.write('People/Ana.md', note(ANA, 'Ana', 'v2 mentions [[Acme]]\n'))
-      while (Date.now() - t0 < 2000 && noteRow(ANA)!.summary !== 'v2 mentions [[Acme]]') await new Promise((r) => setTimeout(r, 20))
+      while (Date.now() - t0 < budget(2000) && noteRow(ANA)!.summary !== 'v2 mentions [[Acme]]') await new Promise((r) => setTimeout(r, 20))
       expect(noteRow(ANA)!.summary).toBe('v2 mentions [[Acme]]')
-      expect(Date.now() - t0).toBeLessThan(1000)
+      expectFast(Date.now() - t0, 1000, 'indexing an outside edit')
       expect(kit.changed.some((e) => e.paths.includes('People/Ana.md'))).toBe(true)
 
       // a new note in a new folder
       const t1 = Date.now()
       kit.write('Customers/Globex.md', '# Globex\n')
-      while (Date.now() - t1 < 2000 && !kit.index.noteByPath(CO, 'Customers/Globex.md')) await new Promise((r) => setTimeout(r, 20))
+      while (Date.now() - t1 < budget(2000) && !kit.index.noteByPath(CO, 'Customers/Globex.md')) await new Promise((r) => setTimeout(r, 20))
       expect(kit.index.noteByPath(CO, 'Customers/Globex.md')).toBeTruthy()
-      expect(Date.now() - t1).toBeLessThan(1000)
+      expectFast(Date.now() - t1, 1000, 'indexing a new note')
     } finally {
       w.stop()
     }

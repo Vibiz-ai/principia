@@ -6,6 +6,7 @@ import { makeKit, nativeOk, type Kit } from '../vault/__tests__/vaultTestKit'
 import { buildPassportBrief, companyCardLines, knownNotesLine, PASSPORT_BRIEF, renderCompanyCard } from '../brief'
 import { expand, loadLinkGraph, neighbours, personalizedPageRank, seedsFor, SEED_WEIGHT } from '../expand'
 import { backlinks, EDGE_WEIGHT, globalGraph, localGraph, notesTree, outgoingLinks, unlinkedMentions, vaultGhosts, vaultNoteDetail, vaultSearch, vaultTags } from '../search'
+import { expectFast } from '../../../test/perf'
 
 const d = nativeOk ? describe : describe.skip
 const A = 'co_acme'
@@ -210,7 +211,7 @@ d('graph expansion (§8.2)', () => {
     const g = loadLinkGraph(k.db, A)
     const t = performance.now()
     personalizedPageRank(g, new Map([['n-1', 1], ['n-2', 0.5]]))
-    expect(performance.now() - t).toBeLessThan(50)
+    expectFast(performance.now() - t, 50, 'PageRank over 3k notes / 9k links')
   })
 })
 

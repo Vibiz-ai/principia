@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hash32, layoutMemoryGraph, layoutMemoryGroups, lcg, seedPositions, type LayoutEdge, type LayoutFrame, type LayoutNode } from './memoryLayout'
+import { expectFast } from '../../../test/perf'
 
 function synth(n: number, edgeEvery = 1): { nodes: LayoutNode[]; edges: LayoutEdge[] } {
   const rand = lcg(42)
@@ -91,7 +92,7 @@ describe('layoutMemoryGraph', () => {
     layoutMemoryGraph(nodes, edges) // warm the JIT
     const t = performance.now()
     layoutMemoryGraph(nodes, edges)
-    expect(performance.now() - t).toBeLessThan(100)
+    expectFast(performance.now() - t, 100, 'laying out 150 nodes')
   })
 })
 
@@ -206,7 +207,7 @@ describe('seedPositions with a hub note', () => {
     const saved = new Map([['n-0', { x: 0, y: 0 }]])
     const t0 = performance.now()
     const a = seedPositions(ids, edges, saved)
-    expect(performance.now() - t0).toBeLessThan(500)
+    expectFast(performance.now() - t0, 500, 'seeding a 3k-link hub')
     expect(a.size).toBe(3000)
     expect(a.get('n-0')).toEqual({ x: 0, y: 0 })
     expect(JSON.stringify([...seedPositions(ids, edges, saved)])).toBe(JSON.stringify([...a]))
