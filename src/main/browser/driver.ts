@@ -54,6 +54,14 @@ const KEYS: Record<string, { code: string; key: string; vk: number; text?: strin
 }
 const MODS: Record<string, number> = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 }
 
+/**
+ * A JavaScript string literal for `value`, to splice into code for Runtime.evaluate: JSON.stringify quotes and escapes
+ * it, and `<`, `>`, U+2028 and U+2029 become \u escapes as well, so it stays one inert literal wherever the code lands.
+ */
+export function jsString(value: string): string {
+  return JSON.stringify(value).replace(/[<>\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
 export function parseKey(chord: string): { key: string; code: string; vk: number; text?: string; modifiers: number } {
   const parts = chord.split('+').map((p) => p.trim()).filter(Boolean)
   if (!parts.length) throw new BrowserError('No key given.')
@@ -490,8 +498,8 @@ export class CdpDriver {
     if (!want) throw new BrowserError(o.for === 'selector' ? 'Give a selector.' : 'Give the text to wait for.')
     const expr =
       o.for === 'selector'
-        ? `(() => { try { return !!document.querySelector(${JSON.stringify(want)}) } catch (e) { return 'bad' } })()`
-        : `(document.body ? document.body.innerText : '').includes(${JSON.stringify(want)})`
+        ? `(() => { try { return !!document.querySelector(${jsString(want)}) } catch (e) { return 'bad' } })()`
+        : `(document.body ? document.body.innerText : '').includes(${jsString(want)})`
     const until = this.now() + Math.max(100, Math.min(timeoutMs, 60_000))
     for (;;) {
       const r = await this.evaluate<boolean | string>(expr).catch(() => false)

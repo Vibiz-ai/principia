@@ -339,6 +339,14 @@ export function archive(text: string, mergedInto?: string | null): PatchResult {
 export type LinkRewrite = (link: WikiLink, ctx: { line: number; frontmatter: boolean }) => { target: string; display?: string | null } | null
 
 /**
+ * Writes every pipe of a rendered link as `\|`, for markdown table rows: the target/display separator and any pipe in
+ * the display text (one already written `\|` is kept as is). A bare `|` anywhere in the link would split the cell.
+ */
+export function escapeTablePipes(rendered: string): string {
+  return rendered.replace(/(?<!\\)\|/g, '\\|')
+}
+
+/**
  * Rewrites wikilinks (body outside code, and quoted frontmatter values). The callback returns the new
  * target (and display) or null to keep the link. Heading, block and embed parts are preserved.
  */
@@ -361,7 +369,7 @@ export function rewriteLinks(text: string, fn: LinkRewrite): PatchResult & { cou
       const written = line.slice(link.start, link.end)
       let rendered = formatWikiLink({ target: next.target, heading: link.heading, block: link.block, display, embed: link.embed })
       // inside markdown table rows the display pipe must be written `\|` or it splits the cell
-      if (written.includes('\\|') || (!inFm && /^\s*\|/.test(line))) rendered = rendered.replace('|', '\\|')
+      if (written.includes('\\|') || (!inFm && /^\s*\|/.test(line))) rendered = escapeTablePipes(rendered)
       if (rendered === written) continue
       out = out.slice(0, link.start) + rendered + out.slice(link.end)
       count++
@@ -408,7 +416,7 @@ export function linkMention(text: string, line: number, span: { start: number; e
   // a stale line/span (the note changed since the suggestion) must never link other words
   if (expected !== undefined && mention.toLowerCase() !== expected.toLowerCase()) throw new PatchError('bad_span', `the text at that position is no longer "${expected}"`)
   let rendered = formatWikiLink({ target, display: mention === target ? null : mention })
-  if (/^\s*\|/.test(raw)) rendered = rendered.replace('|', '\\|')
+  if (/^\s*\|/.test(raw)) rendered = escapeTablePipes(rendered)
   l.lines[line] = raw.slice(0, span.start) + rendered + raw.slice(span.end)
   return result(text, l, { line })
 }

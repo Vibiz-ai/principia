@@ -22,6 +22,7 @@ import {
 import { cleanText, isPolarity, normText } from './grammar'
 import { credentialHit, imperativeHit } from './screen'
 import { readZipText } from './zip'
+import { stripTags } from '../../shared/stripAll'
 
 const MAX_EXPORT_ENTRY = 512 * 1024 * 1024
 const MAX_EXPORT_TOTAL = 1024 * 1024 * 1024
@@ -81,7 +82,7 @@ export async function fetchSite(url: string, opts: { fetch?: typeof fetch; extra
   if (home === null) throw new Error(`could not read ${start.toString()}`)
   pages.push({ url: start.toString(), html: home })
   // an About link on the homepage, else the usual paths
-  const linked = [...home.matchAll(/<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)].find((m) => /about|our story|company/i.test(m[2].replace(/<[^>]+>/g, '')))?.[1]
+  const linked = [...home.matchAll(/<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)].find((m) => /about|our story|company/i.test(stripTags(m[2])))?.[1]
   const candidates = [...(linked ? [linked] : []), ...(opts.extraPaths ?? ['/about', '/about-us'])]
   for (const c of candidates) {
     if (pages.length >= 3) break

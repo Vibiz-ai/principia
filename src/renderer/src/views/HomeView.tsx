@@ -24,7 +24,7 @@ import { withAutopilot } from '@shared/autopilotState'
 import { useAutopilotState } from '../components/autopilot/AutopilotChip'
 import { AgentRow } from '../components/agents/AgentTree'
 import { AskCard } from '../components/agents/AskCard'
-import { ReplyBox } from '../components/agents/ReplyBox'
+import { AnsweredCard } from '../components/agents/ReplyBox'
 import { LeftoverList, useLeftovers } from '../components/agents/LimitBits'
 import { ApprovalCard } from '../components/author/ApprovalCard'
 import { AgentFace, useAgentDisplay } from '../components/board/NeedsYouTasks'
@@ -274,7 +274,7 @@ function NeedsList({ scope, code, drafts, empty, paused }: { scope: Id; code: bo
                       ))}
                     </div>
                   )}
-                  {ra.length === 0 && isUnseenIdle(root, seen) && <ReplyBox agent={root} onOpen={() => void focusAgent(root.id)} />}
+                  {ra.length === 0 && isUnseenIdle(root, seen) && <AnsweredCard agent={root} onOpen={() => void focusAgent(root.id)} />}
                 </AgentRow>
               ))}
               {items.map((item) => (

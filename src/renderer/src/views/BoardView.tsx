@@ -109,6 +109,7 @@ function Board({ fixedDepartmentId, embedded }: { fixedDepartmentId?: Id; embedd
     try {
       if (a.kind === 'assign') { const seat = agentById.get(a.agentId); await hive.tasks.assign({ id: t.id, agentId: a.agentId, ...(a.departmentId ? { departmentId: a.departmentId } : {}) }); toast(`${t.identifier} assigned to ${seat ? agentNameNow(seat).name : 'the agent'}`) }
       else if (a.kind === 'unpark') { await hive.tasks.unpark({ id: t.id }); toast(`${t.title} is back in the queue`) }
+      else if (a.kind === 'done') { await hive.tasks.approve({ id: t.id }); toast(`${t.identifier} is done`) }
       else await hive.tasks.update({ id: t.id, patch: { status: a.status } })
       reload()
     } catch (e) { toast(errorMessage(e), 'error') } // the card stays where it was: it renders from the store

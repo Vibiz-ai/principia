@@ -46,6 +46,17 @@
 .side-row__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .side-row__kind { color: var(--text-tertiary); font-size: var(--text-xs); margin-left: 2px; }
 .sidebar--doors .side-row--nav:has(.kbd):hover .side-row__count, .sidebar--doors .side-row--nav:has(.kbd):hover .side-row__working { visibility: hidden; }
+/* Team's nested list (TeamNav): departments at the sidebar's nested indent, their dashboards one level deeper */
+.side-row__twisty--inline { display: inline-grid; vertical-align: middle; margin: -2px 0 0 4px; border-radius: var(--radius-sm); }
+.side-row__twisty--inline:hover, .team-nav .side-row__twisty:hover { color: var(--text-primary); }
+.team-nav__wrap, .team-nav, .team-nav__dep { display: flex; flex-direction: column; gap: 1px; }
+.team-nav .side-row__twisty { margin-left: -4px; }
+.team-nav__row > .icon { color: var(--text-secondary); flex: none; }
+.team-nav__row.is-dim > .icon, .team-nav__row.is-dim .side-row__label { color: var(--text-tertiary); }
+.team-nav__row.is-selected > .icon { color: var(--text-primary); }
+.team-nav__row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.team-nav__dash { padding-left: 46px; }
+.team-nav__count { flex: none; font-variant-numeric: tabular-nums; }
 
 .sidebar--doors .sidebar__body { padding-bottom: 8px; }
 .side-sec { display: flex; flex-direction: column; }

@@ -66,7 +66,7 @@ describe('DEPARTMENTS.md §1.4 state machine, row by row', () => {
   })
   it('illegal moves throw', () => {
     no(S('todo'), S('in_review'), 'human', {}, 'cannot move from To do to In review')
-    no(S('backlog'), S('done'), 'human', { doneNote: 'x' }); no(S('triage'), S('in_review'), 'system')
+    ok(S('backlog'), S('done'), 'human', { doneNote: 'x' }); no(S('backlog'), S('done'), 'human'); no(S('in_progress'), S('done'), 'human', { doneNote: 'x' }); no(S('triage'), S('in_review'), 'system')
     no(S('done'), S('in_progress'), 'human', { start: true }); no(S('canceled'), S('in_review'), 'human')
     no(S('blocked', 'deps'), S('blocked', 'manual'), 'human'); no(S('todo'), S('blocked', 'needs_input'), 'human')
     no(S('in_review'), S('blocked', 'agent'), 'system')

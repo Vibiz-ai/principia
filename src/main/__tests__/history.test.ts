@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type DB } from '../db'
 import { ClaudeHistory, historyRoots } from '../history'
 import { readTranscript } from '../history/transcript'
+import { expectFast } from '../../test/perf'
 
 let root: string
 let db: DB
@@ -127,7 +128,7 @@ describe('Claude history index', () => {
     h.list({ limit: 500 })
     const t0 = performance.now()
     const r = h.list({ limit: 500 })
-    expect(performance.now() - t0).toBeLessThan(300)
+    expectFast(performance.now() - t0, 300, 'a warm list of 500 sessions')
     expect(r.total).toBe(500)
   })
 })

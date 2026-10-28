@@ -12,7 +12,7 @@
  * - Empty: the company's own empty state ("No chats in Harbor Dental Group yet…").
  * - `task:<id>` (CHAT-UI.md §8.4): a task as a chat (TaskLiveView): its brief, what the agent says, its steps folded, a note box.
  */
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { Session } from '@shared/types'
 import { AgentGlyph } from '../components/agents/AgentBits'
 import { AgentTimeline } from '../components/agents/AgentTimeline'
@@ -33,7 +33,8 @@ import { focusAgent, useOpenAsks } from '../state/live'
 import { pausedChatsLine } from '../state/desk'
 import { focusSession, openNewChat, providerLabel, useStore, type ChatsFilter } from '../state/store'
 import { MarkdownLite } from '../components/diagrams/MarkdownLite'
-import { ConversationThread, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
+import { ConversationThread, DropHint, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
+import { useFileDrop } from '../lib/dropFiles'
 import type { Id } from '@shared/types'
 import { TaskLiveView } from '../components/chats/TaskLiveView'
 import { taskOfChatKey } from '../lib/liveRow'
@@ -114,14 +115,18 @@ function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): Reac
 
 /** CHAT-UI.md §7: New conversation (the sidebar button, ⌥⌘N, Team › Message): the composer and your recent ones. */
 function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; chat: string | undefined; companyName: string }): React.JSX.Element {
+  // an image or file dropped anywhere on the page goes into the box, as in a chat
+  const dropTo = useRef<((files: FileList | File[]) => void) | null>(null)
+  const drop = useFileDrop((files) => dropTo.current?.(files))
   return (
-    <div className="view">
+    <div className={`view cx-newpane-view ${drop.dragging ? 'is-dropping' : ''}`} data-chatux="new-pane-view" {...drop.handlers}>
+      {drop.dragging && <DropHint />}
       <Toolbar title="Chats" sub={<span className="company-toolbar-meta">{companyName}</span>} />
       <div className="scroll view__body">
         <div className="cx-newpane" data-chatux="new-pane">
           <h2 className="cx-newpane__title">New conversation</h2>
           <p className="cx-newpane__sub">Say what you need. Principia brings in the right people, or pick someone in To.</p>
-          <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} />
+          <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} dropRef={dropTo} />
           <div className="cx-newpane__sec">Recent conversations</div>
           <RecentConversations companyId={companyId} limit={8} onOpen={openConversation} empty="Your conversations show here, each with who is in it." />
         </div>

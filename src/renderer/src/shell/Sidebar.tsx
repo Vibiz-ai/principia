@@ -1,7 +1,7 @@
 /**
  * Five doors (design.md §2-3, pm-review step 1). One fixed order, the same in every mode:
  * CompanyHeader → New conversation (⌥⌘N, CHAT-UI.md §7) → Search or ask (⌘K) → Home · Team · Board · Chats ·
- * Knowledge (⌘1-⌘5) → More (popover with pins) → RECENT (your last five conversations, who is in each) → LIVE
+ * Knowledge (⌘1-⌘5), Team expanding into departments and their dashboards (TeamNav) → More (popover with pins) → RECENT (your last five conversations, who is in each) → LIVE
  * (working agents, two lines, up to 4, each opens that exact chat; an agent answering in a conversation opens the
  * conversation) → REPOSITORIES + (only where there is no team: Personal, a code workspace; with a team a repository is
  * "Claude in <repository>" in New conversation's To:) → PINNED (the user's own, per company in settings.sidebarNav)
@@ -21,7 +21,7 @@ import { AgentGlyph } from '../components/agents/AgentBits'
 import { agentVisual, isStalled } from '../lib/live'
 import { age, startedHint } from '../lib/time'
 import { collapseExited, sessionEndLabel, tildify } from '../lib/format'
-import { agentCompanyResolver, companyOf, reposOf, useLiveItems, type LiveItem } from '../lib/company'
+import { agentCompanyResolver, companyOf, isPersonal, reposOf, useLiveItems, type LiveItem } from '../lib/company'
 import {
   MORE,
   moreByKey,
@@ -30,6 +30,7 @@ import {
   navKeyOf,
   pinnedRefs,
   prefsFor,
+  prefsKey,
   PRIMARY,
   togglePin,
   isPinned,
@@ -80,6 +81,8 @@ import { useConversations, useTaskChannels } from '../state/conversations'
 import { groupLive, workersLine, type LiveEntry } from '../lib/convWork'
 import { conversationOfRunTitle } from '../lib/conversations'
 import { liveRowView } from '../lib/liveRow'
+import { setTeamOpen } from '../lib/teamNav'
+import { TeamNav, disclosureKeys, useTeamNavState } from './TeamNav'
 
 /** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
 export const REPO_DRAG_TYPE = 'application/x-principia-repository'
@@ -252,6 +255,12 @@ export function Sidebar(): React.JSX.Element {
   // the More row carries a dot when something in it wants you and is not already shown in PINNED
   const moreWants = [...activeMore].some((k) => !pins.includes(k))
   const openMore = (): void => setMore(more ? null : (moreRef.current?.getBoundingClientRect() ?? null))
+  // Team expands into the focused company's departments and their dashboards; with departments off, into the one row
+  // that turns them on. All companies and Personal have no departments of their own, so Team stays a plain door there.
+  const teamCompany = mode === 'focused' && focusedCompany && !isPersonal(focusedCompany) ? focusedCompany.id : null
+  const teamNests = !departments || !!teamCompany
+  const [teamNav, setTeamNav] = useTeamNavState(prefsKey(active, multi))
+  const teamOpen = teamNests && teamNav.open
   const pinMenu = async (ref: string): Promise<void> => {
     const id = await nativeMenu([{ id: 'unpin', label: 'Unpin from Sidebar' }])
     if (id === 'unpin') updateSidebarPrefs((p) => togglePin(p, ref))
@@ -283,8 +292,11 @@ export function Sidebar(): React.JSX.Element {
     window.addEventListener('mouseup', up)
   }
 
-  /** One nav row (a door, More, a pin, Settings): keyboard-activatable, aria-current when it is the page. */
-  const navRow = (o: { key: string; label: React.ReactNode; icon: React.ReactNode; selected: boolean; onOpen: () => void; title?: string; kbd?: string; badge?: React.ReactNode; className?: string; onContextMenu?: () => void; refEl?: React.Ref<HTMLDivElement>; popup?: { expanded: boolean } }): React.JSX.Element => (
+  /**
+   * One nav row (a door, More, a pin, Settings): keyboard-activatable, aria-current when it is the page. A row with a
+   * `disclosure` (Team) carries a chevron after its label; → and ← expand and collapse it.
+   */
+  const navRow = (o: { key: string; label: React.ReactNode; icon: React.ReactNode; selected: boolean; onOpen: () => void; title?: string; kbd?: string; badge?: React.ReactNode; className?: string; onContextMenu?: () => void; refEl?: React.Ref<HTMLDivElement>; popup?: { expanded: boolean }; disclosure?: { expanded: boolean; onToggle: (open: boolean) => void; label: string } }): React.JSX.Element => (
     <div
       key={o.key}
       ref={o.refEl}
@@ -292,22 +304,33 @@ export function Sidebar(): React.JSX.Element {
       // More opens a popover, so it is a button with popup semantics, not a link
       role={o.popup ? 'button' : 'link'}
       aria-haspopup={o.popup ? 'dialog' : undefined}
-      aria-expanded={o.popup ? o.popup.expanded : undefined}
+      aria-expanded={o.popup ? o.popup.expanded : o.disclosure ? o.disclosure.expanded : undefined}
       tabIndex={0}
       aria-current={o.selected && !o.popup ? 'page' : undefined}
       aria-keyshortcuts={o.kbd ? o.kbd.replace('⇧', 'Shift+').replace('⌘', 'Meta+') : undefined}
       title={o.title}
       onClick={o.onOpen}
       onContextMenu={o.onContextMenu ? (e) => (e.preventDefault(), o.onContextMenu!()) : undefined}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          o.onOpen()
-        }
-      }}
+      onKeyDown={(e) => disclosureKeys(e, { open: o.onOpen, expanded: o.disclosure?.expanded, setExpanded: o.disclosure?.onToggle })}
     >
       {o.icon}
-      <span className="side-row__label">{o.label}</span>
+      <span className="side-row__label">
+        {o.label}
+        {o.disclosure && (
+          <button
+            type="button"
+            className="side-row__twisty side-row__twisty--inline"
+            tabIndex={-1}
+            aria-label={o.disclosure.expanded ? `Hide ${o.disclosure.label}` : `Show ${o.disclosure.label}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              o.disclosure!.onToggle(!o.disclosure!.expanded)
+            }}
+          >
+            <Icon name={o.disclosure.expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+          </button>
+        )}
+      </span>
       {o.badge}
       {o.kbd && <Kbd>{o.kbd}</Kbd>}
     </div>
@@ -618,18 +641,31 @@ export function Sidebar(): React.JSX.Element {
         <Kbd>⌘K</Kbd>
       </button>
       <nav className="sidebar__nav sidebar__doors" aria-label="Main" ref={navEl}>
-        {PRIMARY.map((d) =>
-          navRow({
+        {PRIMARY.map((d) => {
+          const nests = d.key === 'team' && teamNests
+          const row = navRow({
             key: d.key,
             label: d.label,
             icon: <Icon name={d.icon} />,
             selected: current === d.key,
-            onOpen: () => void navigate(viewFor(d.key)),
+            onOpen: () => {
+              // Team still opens the Team page, and unfolds its departments underneath
+              if (nests && !teamOpen) setTeamNav((s) => setTeamOpen(s, true))
+              void navigate(viewFor(d.key))
+            },
             title: `${d.label}: ${d.desc} (${d.kbd})`,
             kbd: d.kbd,
-            badge: doorBadge(d.key)
+            badge: doorBadge(d.key),
+            disclosure: nests ? { expanded: teamOpen, onToggle: (v) => setTeamNav((s) => setTeamOpen(s, v)), label: departments ? 'departments' : 'Turn on departments' } : undefined
           })
-        )}
+          if (!nests || !teamOpen) return row
+          return (
+            <div key={d.key} className="team-nav__wrap">
+              {row}
+              <TeamNav companyId={departments ? teamCompany : null} state={teamNav} onChange={setTeamNav} />
+            </div>
+          )
+        })}
         {navRow({
           key: 'more',
           label: 'More',

@@ -129,7 +129,10 @@ one address in 10 minutes are refused for 10 minutes. The limit counts the socke
 clients share one, so a bad actor there can block pairing for 10 minutes (it fails closed; run `principia-cloud pair`
 again later). A paired Mac holds a device token that you can revoke from **Cloud → Workspace → Devices**.
 
-Pinned CLI versions (build args in `cloud/Dockerfile`, checked with `npm view` on 21 October 2026):
+Pinned CLI versions (`cloud/agent-clis/package.json`, installed with `npm ci` from its lockfile so every package is
+pinned by hash; checked with `npm view` on 21 October 2026). To bump one, change its exact version there, run
+`npm install --package-lock-only` in `cloud/agent-clis` and update this table. The `node:24-bookworm-slim` base image
+is pinned by digest in `cloud/Dockerfile`; Dependabot proposes digest and CLI bumps as pull requests.
 
 | CLI | Version |
 |---|---|

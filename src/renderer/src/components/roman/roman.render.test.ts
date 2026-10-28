@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { createElement, Fragment, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { BustLook } from '@shared/personas'
+import { stripTags } from '@shared/stripAll'
 
 // the tone fallback reads the store; server markup needs a server snapshot and a window without a bridge
 vi.mock('react', async () => {
@@ -72,7 +73,7 @@ function readableText(html: string): string {
     const re = new RegExp(`<${tag}\\b[^>]*aria-hidden="true"[^>]*>[\\s\\S]*?</${tag}>`, 'g')
     out = out.replace(re, '')
   }
-  return out.replace(/<[^>]+>/g, '').trim()
+  return stripTags(out).trim()
 }
 
 interface Node {

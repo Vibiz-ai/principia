@@ -459,7 +459,7 @@ export class RunApplier {
         const conv = safe(() => forum.conversationOfTask(task.id), null)
         const ev = r.evidence.slice(0, 3)
         // agents often name the task in their summary themselves: then it is not put in front again
-        const named = new RegExp(`(^|[^A-Za-z0-9])${task.identifier.replace(/[-]/g, '\\-')}([^A-Za-z0-9]|$)`, 'i').test(r.summary)
+        const named = new RegExp(`(^|[^A-Za-z0-9])${task.identifier.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}([^A-Za-z0-9]|$)`, 'i').test(r.summary)
         // in the conversation it reads as the agent talking to the person who asked; in a room, as a team update
         const head = conv && r.outcome === 'review' ? `${named ? 'Ready for your review' : `${task.identifier} is ready for your review`}. ${r.summary}` : named ? r.summary : `${task.identifier}: ${r.summary}`
         const text = `${head}${ev.length ? `\n${conv ? 'What I checked' : 'Evidence'}: ${ev.join('; ')}` : ''}`

@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
-import { CLONE_URL, MAX_ONBOARDING_PATHS, type DraftRepo, type FolderCandidate, type GithubRepo, type RepoScanSummary } from '@shared/onboarding'
+import { CLONE_URL, MAX_ONBOARDING_PATHS, githubRefFromQuery, type DraftRepo, type FolderCandidate, type GithubRepo, type RepoScanSummary } from '@shared/onboarding'
 import { Button, Segmented } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { tildify } from '../../lib/format'
@@ -285,7 +285,10 @@ function GitHubPane({ scanning }: { scanning: boolean }): React.JSX.Element | nu
     }, 'Choose folder')
   }
   const recheck = (): void => void refreshOnboardingStatus()
-  const shown = (list ?? []).filter((r) => !query.trim() || `${r.fullName} ${r.description ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const ref = githubRefFromQuery(query)?.toLowerCase()
+  const shown = (list ?? []).filter(
+    (r) => !query.trim() || r.fullName.toLowerCase() === ref || `${r.fullName} ${r.description ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())
+  )
   const pasteOk = !paste.trim() || CLONE_URL.test(paste.trim())
   return (
     <div className="ob-gh">
@@ -294,8 +297,8 @@ function GitHubPane({ scanning }: { scanning: boolean }): React.JSX.Element | nu
           <input
             className="input"
             type="search"
-            placeholder="Search your repos"
-            aria-label="Search your repos"
+            placeholder="Search your and your organisations' repos"
+            aria-label="Search your and your organisations' repos"
             value={query}
             data-autofocus=""
             data-enter-local=""
@@ -310,7 +313,7 @@ function GitHubPane({ scanning }: { scanning: boolean }): React.JSX.Element | nu
               }
             }}
           />
-          <div className="ob-rows ob-rows--scroll" role="listbox" aria-label="Your GitHub repos">
+          <div className="ob-rows ob-rows--scroll" role="listbox" aria-label="GitHub repos">
             {list === null && !err && <div className="ob-row ob-hint">Loading your repos…</div>}
             {err && <div className="ob-row ob-hint ob-hint--warn">{err}</div>}
             {list !== null && shown.length === 0 && <div className="ob-row ob-hint">No repos match.</div>}

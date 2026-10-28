@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:perf": "TEST_PERF=1 TEST_TIME_SCALE=1 vitest run --no-file-parallelism src/main/__tests__/history.test.ts src/main/memory/__tests__/brief.test.ts src/main/memory/vault/__tests__/indexer.test.ts src/renderer/src/lib/memoryLayout.test.ts",
     "verify:native": "electron scripts/verify-native.cjs",
     "verify:memory": "electron-vite build && ELECTRON_RUN_AS_NODE=1 electron scripts/verify-memory-mcp.cjs",
     "verify:hive": "electron-vite build && ELECTRON_RUN_AS_NODE=1 electron scripts/verify-hive-mcp.cjs",
@@ -39,7 +40,7 @@
     "cloud:control:start": "node out-cloud/control.mjs",
     "cloud:control:smoke": "node cloud/control.smoke.mjs",
     "cloud:isolation:smoke": "node cloud/isolation.smoke.mjs",
-    "release:test": "node --test scripts/prepare-public-release.test.mjs scripts/release-target.test.mjs scripts/release-assets.test.mjs scripts/update-info.test.mjs scripts/mac-sign.test.mjs",
+    "release:test": "node --test scripts/readme.test.mjs scripts/prepare-public-release.test.mjs scripts/release-target.test.mjs scripts/release-assets.test.mjs scripts/update-info.test.mjs scripts/mac-sign.test.mjs",
     "cloud:verify": "npm run cloud:build && ELECTRON_RUN_AS_NODE=1 electron cloud/workflows.smoke.mjs && ELECTRON_RUN_AS_NODE=1 electron cloud/workflows-api.smoke.mjs && ELECTRON_RUN_AS_NODE=1 electron cloud/gateway-workflow.smoke.mjs"
   },
   "devDependencies": {

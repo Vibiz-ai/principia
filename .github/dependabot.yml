@@ -44,3 +44,27 @@ updates:
     groups:
       website-minor-patch:
         update-types: [minor, patch]
+  # cloud/Dockerfile: the node:24-bookworm-slim base image is pinned by digest; this proposes digest bumps
+  - package-ecosystem: docker
+    directory: /cloud
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 5
+    ignore:
+      # the image follows the Node major the app and CI run on (24)
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+  # the agent CLIs baked into the cloud image (cloud/agent-clis/package-lock.json). deploy.test.ts fails a bump until
+  # the version table in cloud/README.md matches, so add that edit to the pull request
+  - package-ecosystem: npm
+    directory: /cloud/agent-clis
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      agent-clis:
+        update-types: [minor, patch]

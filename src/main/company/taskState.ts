@@ -87,6 +87,9 @@ export const TRANSITIONS: readonly Rule[] = [
     // an answer attempt is held to the answer row, whatever the reason
     check: ctx => ctx.answer !== undefined && blank(ctx.answer) ? 'Write an answer first' : null },
   { row: 'in_review → done (approve)', from: 'in_review', to: 'done', actors: HUMAN, check: ctx => blank(ctx.doneNote) ? 'A done note is required to approve a task' : null },
+  // the founder drops a card on Done (or marks it done): it is done, whatever lane it waited in; the store writes the note
+  { row: 'not in flight → done (marked done by hand)', from: s => !['in_progress', 'in_review', 'done', 'canceled'].includes(s.status), to: 'done', actors: HUMAN,
+    check: ctx => blank(ctx.doneNote) ? 'A done note is required' : null },
   { row: 'in_review → todo (Send back)', from: 'in_review', to: 'todo', actors: HUMAN, check: ctx => ctx.note === undefined || !blank(ctx.note) ? null : 'Say what to change' },
   { row: 'not in flight → canceled', from: s => s.status !== 'in_progress' && s.status !== 'canceled', to: 'canceled', actors: HUMAN },
   // carried over: planning moves a human makes on the board, reopening, and parking by hand

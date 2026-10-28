@@ -56,7 +56,7 @@ export default defineConfig(
     languageOptions: {
       parserOptions: {
         // Files outside both tsconfig projects get a default program instead of a parse error.
-        projectService: { allowDefaultProject: ['vite.console.config.ts', 'scripts/fake-linear.ts', 'src/test/isolateHome.ts'] },
+        projectService: { allowDefaultProject: ['vite.console.config.ts', 'scripts/fake-linear.ts'] },
         tsconfigRootDir: import.meta.dirname
       }
     },

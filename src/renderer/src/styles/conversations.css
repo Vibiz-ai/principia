@@ -245,3 +245,7 @@
 .task-chat__step-dur { flex: none; color: var(--text-tertiary); font-size: var(--text-xs); }
 .task-chat__log { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 6px; }
 .task-chat__log .cx-task__log { max-height: 360px; }
+/* New conversation takes dropped images and files (as @path mentions): the box, or the whole page around it */
+.cx-newpane-view { position: relative; }
+.cx-drop { position: absolute; inset: 6px; z-index: 6; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; text-align: center; border: 1.5px dashed var(--border-focus); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface-1) 88%, transparent); color: var(--text-primary); font-size: var(--text-sm); pointer-events: none; }
+.cx-newpane-view > .cx-drop { inset: 10px; }
