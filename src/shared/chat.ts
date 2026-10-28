@@ -218,8 +218,13 @@ export const CODEX_MODES: ChatModeOption[] = [
   { value: 'acceptEdits', label: 'Ask when needed', hint: 'Codex works inside this folder and asks before anything outside it' }
 ]
 
+/** A message's images: at most CHAT_IMAGE_MAX, each at most CHAT_IMAGE_BYTES (Claude's own cap), in these types. */
+export const CHAT_IMAGE_MAX = 6
+export const CHAT_IMAGE_BYTES = 5 * 1024 * 1024
+export const CHAT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
+
 export interface ChatImage {
-  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
+  mediaType: (typeof CHAT_IMAGE_TYPES)[number]
   /** base64, no data: prefix */
   data: string
   /** a small JPEG data URL for the sent bubble (the renderer makes it) */
@@ -258,7 +263,7 @@ export interface ChatInvokeMap {
    */
   'chat:openAgent': [{ agentId: Id }, Session]
   /** AGENT CHAT: a message straight into an agent's chat (Home's Ask box, ⌘K, New chat). Returns the session. */
-  'chat:sendAgent': [{ agentId: Id; text: string }, Session]
+  'chat:sendAgent': [{ agentId: Id; text: string; images?: ChatImage[] }, Session]
 }
 export const CHAT_CHANNELS = [
   'chat:snapshot', 'chat:send', 'chat:queueEdit', 'chat:interrupt', 'chat:answer', 'chat:setPermissionMode', 'chat:setModel',

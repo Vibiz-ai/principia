@@ -40,6 +40,8 @@ export interface Actions {
   /** hosted: forget the Mac this phone remembers (its address and token) */
   forget(): void
   draft(key: string, value: string): void
+  /** New chat (drafts `new`, `new:to`): starts it on the Mac and opens it */
+  newChat(): void
 }
 
 export interface View {
@@ -274,8 +276,24 @@ export function renderTask(v: View, a: Actions, now = Date.now()): VNode {
 export function renderChats(v: View, a: Actions, now = Date.now()): VNode {
   const c = v.chats
   if (!c) return loading()
-  if (!c.rows.length) return h('section', { class: 'page' }, empty('No chats yet', 'Conversations with your agents and Claude show here.', 'scribe'))
-  return h('section', { class: 'page' }, h('h1', { class: 'title' }, 'Chats'), h('div', { class: 'list rows' }, ...c.rows.map((r) => chatRow(r, a, now))))
+  if (!c.rows.length) return h('section', { class: 'page' }, newChat(c, v, a), empty('No chats yet', 'Conversations with your agents and Claude show here.', 'scribe'))
+  return h('section', { class: 'page' }, h('h1', { class: 'title' }, 'Chats'), newChat(c, v, a), h('div', { class: 'list rows' }, ...c.rows.map((r) => chatRow(r, a, now))))
+}
+/** New chat: the first message, to Claude directly or to one of the company's agents (the Mac's New conversation). */
+function newChat(c: PhoneChats, v: View, a: Actions): VNode {
+  if (v.drafts['new:open'] !== '1') return h('div', { class: 'opts' }, btn('New chat', () => a.draft('new:open', '1'), { kind: 'ghost', small: true }))
+  const busy = v.busy.has('newChat')
+  const team = c.team ?? []
+  const to = v.drafts['new:to'] ?? ''
+  return h(
+    'div',
+    { class: 'free col' },
+    team.length
+      ? h('select', { class: 'chan', 'aria-label': 'To', on: { change: (e: Event) => a.draft('new:to', (e.target as HTMLSelectElement).value) } }, h('option', { value: '', selected: !to }, 'To: Claude'), ...team.map((m) => h('option', { value: m.id, selected: m.id === to }, `To: ${m.who.role ? `${m.who.name} · ${m.who.role}` : m.who.name}`)))
+      : null,
+    h('textarea', { class: 'inp', rows: '3', 'data-k': 'new', placeholder: 'What do you need?', on: { input: (e: Event) => a.draft('new', (e.target as HTMLTextAreaElement).value) } }),
+    h('div', { class: 'opts' }, btn('Send', () => a.newChat(), { kind: 'primary', disabled: busy || !(v.drafts.new ?? '').trim(), small: true }), btn('Cancel', () => a.draft('new:open', ''), { kind: 'ghost', small: true }))
+  )
 }
 function chatRow(r: PhoneChatRow, a: Actions, now: number): VNode {
   return h(

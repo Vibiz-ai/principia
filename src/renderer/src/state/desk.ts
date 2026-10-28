@@ -5,6 +5,7 @@
  * agent answers there itself and files board tasks when the work needs one; Principia never writes a reply in its name.
  */
 import { useEffect, useMemo, useState } from 'react'
+import type { ChatImage } from '@shared/chat'
 import type { CompanyAgent } from '@shared/company'
 import type { Id, Session } from '@shared/types'
 import { errorMessage, hive } from '../lib/hive'
@@ -55,9 +56,10 @@ let sending = false
  * Sends a message into one agent's chat (started, or resumed with its conversation, when it was not running). Returns
  * null when nothing was sent (empty, gone, or an error, which is the toast). `open`: go to the agent's page afterwards.
  */
-export async function sendToAgent(agentId: Id, text: string, opts: { open?: boolean } = {}): Promise<SendResult | null> {
+export async function sendToAgent(agentId: Id, text: string, opts: { open?: boolean; images?: ChatImage[] } = {}): Promise<SendResult | null> {
   const request = text.trim()
-  if (!request || sending) return null
+  const images = opts.images ?? []
+  if ((!request && !images.length) || sending) return null
   const agent = getState().companyAgents.find((a) => a.id === agentId && !a.archivedAt)
   if (!agent) {
     toast('That agent is no longer on the team', 'error')
@@ -65,7 +67,7 @@ export async function sendToAgent(agentId: Id, text: string, opts: { open?: bool
   }
   sending = true
   try {
-    const s = await hive.chat.sendAgent({ agentId, text: request })
+    const s = await hive.chat.sendAgent({ agentId, text: request, ...(images.length ? { images } : {}) })
     upsertSession(s)
     if (opts.open) openAgentSeat(agent)
     return { sessionId: s.id }

@@ -5,13 +5,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatImage, ChatMeta, ChatModeOption, ChatTurn } from '@shared/chat'
-import { TERMINAL_ONLY_COMMANDS } from '@shared/chat'
+import { CHAT_IMAGE_BYTES, CHAT_IMAGE_MAX, TERMINAL_ONLY_COMMANDS } from '@shared/chat'
 import { Icon } from '../Icon'
 import { hive, nativeMenu } from '../../lib/hive'
 import { toast } from '../../state/store'
 
 const drafts = new Map<string, string>()
-const MAX_IMAGE = 5 * 1024 * 1024
+const MAX_IMAGE = CHAT_IMAGE_BYTES
 const MODES: { value: string; label: string; hint: string }[] = [
   { value: 'default', label: 'Ask before edits', hint: 'Claude asks before it edits files or runs commands' },
   { value: 'acceptEdits', label: 'Accept edits', hint: 'File edits go through; commands still ask' },
@@ -216,8 +216,8 @@ export function Composer({
     if (out.length) {
       setImages((cur) => {
         const all = [...cur, ...out]
-        if (all.length > 6) toast(`Up to 6 images per message: kept the first 6.`)
-        return all.slice(0, 6)
+        if (all.length > CHAT_IMAGE_MAX) toast(`Up to ${CHAT_IMAGE_MAX} images per message: kept the first ${CHAT_IMAGE_MAX}.`)
+        return all.slice(0, CHAT_IMAGE_MAX)
       })
     }
     if (paths.length) {

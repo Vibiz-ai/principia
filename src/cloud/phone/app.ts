@@ -496,6 +496,18 @@ const actions: Actions = {
       await reloadBoard()
     })
   },
+  newChat() {
+    const text = (st.drafts.new ?? '').trim()
+    const agentId = st.drafts['new:to'] || undefined
+    if (!text) return
+    void busy('newChat', async () => {
+      const out = await api.call<{ sessionId: string }>('newChat', { params: cid(), body: { text, ...(agentId ? { agentId } : {}) } })
+      delete st.drafts.new
+      delete st.drafts['new:to']
+      delete st.drafts['new:open']
+      go({ tab: 'chats', open: { kind: 'session', id: out.sessionId } })
+    })
+  },
   sendBack(taskId) {
     const key = `back:${taskId}`
     const text = (st.drafts[key] ?? '').trim()

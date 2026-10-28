@@ -148,7 +148,11 @@ final class DemoMac: @unchecked Sendable {
         PhoneTaskRow(id: id, identifier: ident, title: title, status: status, column: col, who: who, agentId: nil, line: line, priority: prio, at: iso(minutesAgo))
     }
     private func nextId(_ p: String) -> String { itemSeq += 1; return "\(p)-\(itemSeq)" }
-    private func user(_ t: String) -> JSONValue { ["id": .string(nextId("u")), "kind": "user", "text": .string(t)] }
+    private func user(_ t: String, images: Int = 0) -> JSONValue {
+        var u: [String: JSONValue] = ["id": .string(nextId("u")), "kind": "user", "text": .string(t)]
+        if images > 0 { u["images"] = .number(Double(images)) }
+        return .object(u)
+    }
     private func text(_ md: String, streaming: Bool = false) -> JSONValue { ["id": .string(nextId("t")), "kind": "text", "md": .string(md), "streaming": .bool(streaming)] }
     private func tool(_ name: String, _ input: JSONValue, status: String = "ok") -> JSONValue {
         let id = nextId("tool")
@@ -194,12 +198,13 @@ final class DemoMac: @unchecked Sendable {
     }
 
     private func chatList(_ co: String) -> PhoneChats {
-        guard co == Self.companyId else { return PhoneChats(companyId: co, rows: []) }
+        guard co == Self.companyId else { return PhoneChats(companyId: co, rows: [], team: []) }
         let rows = chatOrder.compactMap { id -> PhoneChatRow? in
             guard let c = chats[id] else { return nil }
             return PhoneChatRow(key: id, ref: PhoneChatRef(kind: .session, id: id), title: c.title, who: c.who, live: c.live, at: Self.isoString(c.at), line: c.line)
         }
-        return PhoneChats(companyId: co, rows: rows.sorted { $0.at > $1.at })
+        let team = Self.agentChat.sorted { $0.key < $1.key }.compactMap { aid, sid in chats[sid].map { PhoneTeamMember(id: aid, who: $0.who) } }
+        return PhoneChats(companyId: co, rows: rows.sorted { $0.at > $1.at }, team: team)
     }
 
     private func session(_ id: String) -> PhoneSession? {
@@ -278,6 +283,22 @@ final class DemoMac: @unchecked Sendable {
             allow(rest[1], ok: (body["optionId"] as? String) != "deny")
             return Self.okJSON(["ok": true])
         case (false, "chats", 1): return Self.ok(chatList(co))
+        case (true, "chats", 2) where rest[1] == "new":
+            let words = ((body["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !words.isEmpty else { return Self.error(400, "Write something first") }
+            guard co == Self.companyId else { return Self.error(404, "Company not found") }
+            if let aid = body["agentId"] as? String {
+                guard let sid = Self.agentChat[aid], chats[sid] != nil else { return Self.error(404, "This agent is not in this company any more.") }
+                reply(sid, to: words)
+                return Self.okJSON(["sessionId": sid])
+            }
+            // Claude directly, as on the Mac: a new chat named after the first message
+            let sid = nextId("demo-new")
+            chats[sid] = DemoChat(title: String(words.prefix(80)), who: PhoneWho(name: "Claude", role: "", bust: nil),
+                                  replica: ChatReplica(snapshot(sid, turn: "idle", activity: nil, items: [])), line: "", at: clock(), live: false)
+            chatOrder.append(sid)
+            reply(sid, to: words)
+            return Self.okJSON(["sessionId": sid])
         case (false, "sessions", 2):
             guard let s = session(rest[1]) else { return Self.error(404, "This chat is not on your Mac any more.") }
             return Self.ok(s)
@@ -286,7 +307,7 @@ final class DemoMac: @unchecked Sendable {
             guard chats[sid] != nil else { return Self.error(404, "This chat is not on your Mac any more.") }
             switch rest[2] {
             case "send", "reply":
-                reply(sid, to: (body["text"] as? String) ?? "")
+                reply(sid, to: (body["text"] as? String) ?? "", images: (body["images"] as? [Any])?.count ?? 0)
                 return Self.okJSON(["sessionId": NSNull()])
             case "stop":
                 emit(sid, [["op": "state", "turn": "idle", "activity": .null]])
@@ -304,7 +325,7 @@ final class DemoMac: @unchecked Sendable {
             return Self.ok(PhoneAgent(ref: PhoneChatRef(kind: .agent, id: aid), who: c.who, status: c.live ? "Working" : "Idle", items: [], chatSessionId: sid))
         case (true, "agents", 3) where rest[2] == "send":
             guard let sid = Self.agentChat[rest[1]], chats[sid] != nil else { return Self.error(404, "This agent is not in this company any more.") }
-            reply(sid, to: (body["text"] as? String) ?? "")
+            reply(sid, to: (body["text"] as? String) ?? "", images: (body["images"] as? [Any])?.count ?? 0)
             return Self.okJSON(["sessionId": sid])
         case (false, "room", 1):
             return Self.ok(roomView(co, channel: query.first { $0.name == "channelId" }?.value))
@@ -369,8 +390,8 @@ final class DemoMac: @unchecked Sendable {
     }
 
     /// Anything typed in a demo chat: an honest canned answer, streamed like a real one.
-    private func reply(_ sid: String, to text: String) {
-        let me = user(text)
+    private func reply(_ sid: String, to text: String, images: Int = 0) {
+        let me = user(text, images: images)
         let words = "This is the demo company, so no agent reads this and nothing leaves your phone. Pair your Mac (Settings › Leave the demo) and your own agents answer here, live, from your Mac."
         let first: [JSONValue] = [["op": "add", "item": me], ["op": "state", "turn": "working", "activity": "Thinking"]]
         script(sid, line: "Answering", [first] + streamOps(words, ms: 3_000), done: "This is the demo company: pair your Mac for your own agents")

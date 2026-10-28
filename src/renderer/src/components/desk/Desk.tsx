@@ -307,7 +307,7 @@ export function AgentChat({ agent, chat, autoFocus = true }: { agent: CompanyAge
           name: who.name,
           face: <AgentBust agent={agent} size={56} />,
           intro,
-          sendEnded: async (text) => !!(await sendToAgent(agent.id, text))
+          sendEnded: async (text, images) => !!(await sendToAgent(agent.id, text, { images }))
         }}
       />
     </div>

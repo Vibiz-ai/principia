@@ -12,18 +12,20 @@ import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
 import { TASK_CARD_LABEL } from '../../shared/taskCard'
-import type { ChatSnapshot } from '../../shared/chat'
+import type { ChatImage, ChatItem, ChatSnapshot } from '../../shared/chat'
+import { CHAT_IMAGE_TYPES } from '../../shared/chat'
 import type { AgentNode } from '../../shared/live'
-import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
+import type { PhoneAgent, PhoneClientMsg, PhoneImage, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
 import { firstLine } from '../../renderer/src/lib/format'
+import { taskTitleFor } from '../../renderer/src/lib/desk'
 import { isIdleWaiting } from '../../renderer/src/lib/live'
 import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { reposOf } from '../../renderer/src/lib/companyModel'
 import { HttpError, type RemoteApi } from './server'
 import type { StoredDevice } from './auth'
 import { TerminalFeeds, terminalSnapshot, terminalTurn, transcriptItems, type PhoneTerminalHost } from './terminalFeed'
-import { agentStatus, askCompany, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, phoneTaskDetail, phoneTasks, providerName, whoResolver, type PhoneData } from './views'
+import { agentStatus, askCompany, deskHistory, phoneAgent, phoneAgentTasks, phoneAnswerable, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, phoneTaskDetail, phoneTasks, providerName, whoResolver, type PhoneData } from './views'
 
 /**
  * RA3: every desktop channel the Phone may reach. Nothing else is callable from here: no settings writes, keys,
@@ -53,6 +55,11 @@ export interface PhoneHost {
   onEvent(fn: <E extends EventName>(event: E, payload: EventMap[E]) => void): () => void
   /** a terminal session as a chat: its transcript or screen, and messages typed into it (absent: the old card) */
   terminal?: PhoneTerminalHost
+  /**
+   * New chat with Claude directly: the desktop's sessions:create with a fixed request (this company, no folder, Claude,
+   * the first message), so the phone never picks a folder, profile or pty of its own. Absent: Claude needs the Mac.
+   */
+  newChat?(req: { companyId: Id; text: string; title: string }): Promise<Session>
   /** masks the vault's secrets in text the phone reads (task titles, descriptions, reports); absent: the terminal's */
   redact?(text: string): string
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
@@ -61,12 +68,22 @@ export interface PhoneHost {
 const DAY = 86_400_000
 const notFound = (what: string): HttpError => new HttpError(404, `${what} not found`)
 const text = (max: number = REMOTE_LIMITS.text) => z.string().trim().min(1, 'Write something first').max(max)
+const image = z
+  .object({
+    mime: z.string().max(100),
+    data: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'An image did not come through. Try again.'),
+    thumb: z.string().max(60_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/, 'An image did not come through. Try again.').optional()
+  })
+  .strict()
 const BODIES = {
   pause: z.object({ paused: z.boolean() }).strict(),
   answerAsk: z.object({ optionId: z.string().min(1).max(64).optional(), text: z.string().max(REMOTE_LIMITS.answer).optional() }).strict(),
   sendBack: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   answerTask: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   text: z.object({ text: text() }).strict(),
+  newChat: z.object({ text: text(), agentId: z.string().min(1).max(64).optional() }).strict(),
+  /** a chat message: words, images, or both (phoneImages checks the images as the Mac's composer does) */
+  send: z.object({ text: z.string().trim().max(REMOTE_LIMITS.text).default(''), images: z.array(image).max(100).default([]) }).strict(),
   stop: z.object({ sendNow: z.boolean().optional() }).strict(),
   sessionAnswer: z
     .object({
@@ -88,6 +105,25 @@ function body<K extends keyof typeof BODIES>(k: K, raw: unknown): z.infer<(typeo
   const r = BODIES[k].safeParse(raw)
   if (!r.success) throw new HttpError(400, r.error.issues[0]?.message ?? 'Bad request')
   return r.data as z.infer<(typeof BODIES)[K]>
+}
+
+/** A chat message from the phone: its words and its images, checked like the Mac's composer (count, type, size). */
+export function phoneMessage(raw: unknown): { words: string; images: ChatImage[] } {
+  const b = body('send', raw)
+  const images = phoneImages(b.images)
+  if (!b.text && !images.length) throw new HttpError(400, 'Write something first')
+  return { words: b.text, images }
+}
+export function phoneImages(list: PhoneImage[]): ChatImage[] {
+  const max = REMOTE_LIMITS.images
+  if (list.length > max) throw new HttpError(400, `Up to ${max} images per message`)
+  return list.map((im) => {
+    const mediaType = CHAT_IMAGE_TYPES.find((t) => t === im.mime)
+    if (!mediaType) throw new HttpError(400, 'Use a PNG, JPEG, GIF or WebP image')
+    const bytes = Math.floor((im.data.length * 3) / 4) - (im.data.endsWith('==') ? 2 : im.data.endsWith('=') ? 1 : 0)
+    if (bytes > REMOTE_LIMITS.imageBytes) throw new HttpError(413, `An image is too large: each must be under ${REMOTE_LIMITS.imageBytes / 1024 / 1024} MB`)
+    return { mediaType, data: im.data, ...(im.thumb ? { thumb: im.thumb } : {}) }
+  })
 }
 
 interface Sub {
@@ -114,6 +150,8 @@ export class PhoneApi implements RemoteApi {
   readonly feeds: TerminalFeeds | null
   /** each chat's last op number seen here (the subscription's ack says it, so a phone can tell it missed some) */
   private chatSeq = new Map<Id, number>()
+  /** AGENT CHAT: the desk thread shown above each agent chat a phone read (withDesk) */
+  private desk = new Map<Id, ChatItem[]>()
   /** when each session's current turn began (Now's "working for"), from its chat state ops or its root going to work */
   private turnSince = new Map<Id, string>()
 
@@ -244,24 +282,31 @@ export class PhoneApi implements RemoteApi {
       }
       case 'chats':
         return phoneChats(d, companyId)
+      case 'newChat': {
+        const b = body('newChat', raw)
+        if (b.agentId) return { sessionId: (await this.sendToAgent(d, this.agent(d, companyId, b.agentId), b.text)).sessionId }
+        return { sessionId: await this.startChat(companyId, b.text) }
+      }
       case 'session':
         return this.sessionView(d, companyId, params.sessionId)
       case 'sessionSend': {
         const s = this.session(d, companyId, params.sessionId)
-        const words = body('text', raw).text
+        const { words, images } = phoneMessage(raw)
         // AGENT CHAT: a message to an agent's chat goes through the agent (chat:sendAgent), which reopens its chat when
         // it ended (an app restart) and resumes the same conversation; the phone follows the session it lands in
         const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId && !a.archivedAt) : undefined
         if (agent) {
-          const r = await this.sendToAgent(d, agent, words)
+          const r = await this.sendToAgent(d, agent, words, images)
           return { ok: true, sessionId: r.sessionId }
         }
         const snap = await this.chatOf(s)
         if (!snap?.available) {
+          // a terminal takes typed words only
+          if (images.length) throw new HttpError(409, 'Images go into a chat. This one is a terminal: send words, or open it on your Mac.')
           await this.typeInto(d, s, words)
           return { ok: true }
         }
-        await this.h.invoke('chat:send', { id: s.id, text: words })
+        await this.h.invoke('chat:send', { id: s.id, text: words, ...(images.length ? { images } : {}) })
         return { ok: true }
       }
       case 'sessionContinue': {
@@ -302,7 +347,8 @@ export class PhoneApi implements RemoteApi {
         return this.agentView(d, this.agent(d, companyId, params.agentId))
       case 'agentSend': {
         const a = this.agent(d, companyId, params.agentId)
-        const r = await this.sendToAgent(d, a, body('text', raw).text)
+        const { words, images } = phoneMessage(raw)
+        const r = await this.sendToAgent(d, a, words, images)
         return { ...r, agent: await this.agentView(await this.load(), a) }
       }
       case 'room':
@@ -367,7 +413,7 @@ export class PhoneApi implements RemoteApi {
     // an agent's chat speaks in the agent's name and face, not the AI tool's
     const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId) : undefined
     const view = { ref: { kind: 'session' as const, id: s.id }, title: s.title, who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null } }
-    if (chat) return { ...view, chat, terminal: null }
+    if (chat) return { ...view, chat: await this.withDesk(d, s, agent, chat), terminal: null }
     const activity = root ? plainActivity(root.activity, { code }) : null
     const ended = s.status === 'exited'
     const terminal: PhoneTerminal = { activity, canReply: !ended && s.adapter !== 'shell' && !!root && isIdleWaiting(root), ended }
@@ -393,6 +439,23 @@ export class PhoneApi implements RemoteApi {
       /* the composer stays; sending re-checks */
     }
     return { ...view, chat: feed.chat, terminal: { ...terminal, canType: pastes(s) && !held, held, source: feed.source, screen: feed.screen, asks, canContinue: false } }
+  }
+
+  /**
+   * AGENT CHAT: an agent's chat reads under the desk thread its screen showed before the chat began (deskHistory), so
+   * the first message from that screen keeps the conversation. Kept per chat: a reset op (the chat rebuilt from its
+   * transcript) gets it in front again.
+   */
+  private async withDesk(d: PhoneData, s: Session, agent: CompanyAgent | undefined, chat: ChatSnapshot): Promise<ChatSnapshot> {
+    if (!agent) return chat
+    const start = d.sessions.filter((x) => x.companyAgentId === agent.id).reduce((m, x) => (x.startedAt < m ? x.startedAt : m), s.startedAt)
+    const before = deskHistory(phoneAgent(d, agent, await this.details(d, agent)).items, start)
+    if (!before.length) {
+      this.desk.delete(s.id)
+      return chat
+    }
+    this.desk.set(s.id, before)
+    return { ...chat, items: [...before, ...chat.items] }
   }
 
   private safeItems<T>(f: () => T[]): T[] {
@@ -443,15 +506,27 @@ export class PhoneApi implements RemoteApi {
    * agent answers there and files board tasks itself when the work needs one. Returns the chat's session, which the
    * phone opens like any chat.
    */
-  async sendToAgent(_d: PhoneData, agent: CompanyAgent, text: string): Promise<{ sessionId: Id; merged: false; started: true }> {
+  async sendToAgent(_d: PhoneData, agent: CompanyAgent, text: string, images: ChatImage[] = []): Promise<{ sessionId: Id; merged: false; started: true }> {
     void _d
     const request = text.trim()
-    if (!request) throw new HttpError(400, 'Write something first')
+    if (!request && !images.length) throw new HttpError(400, 'Write something first')
     if (this.sending) throw new HttpError(409, 'Still sending the last one')
     this.sending = true
     try {
-      const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request })
+      const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request, ...(images.length ? { images } : {}) })
       return { sessionId: s.id, merged: false, started: true }
+    } finally {
+      this.sending = false
+    }
+  }
+
+  /** New chat with Claude directly, as the Mac's New conversation does it (To: Claude directly). */
+  private async startChat(companyId: Id, text: string): Promise<Id> {
+    if (!this.h.newChat) throw new HttpError(409, 'Start this one on your Mac')
+    if (this.sending) throw new HttpError(409, 'Still sending the last one')
+    this.sending = true
+    try {
+      return (await this.h.newChat({ companyId, text, title: taskTitleFor(text).slice(0, 80) })).id
     } finally {
       this.sending = false
     }
@@ -628,7 +703,9 @@ export class PhoneApi implements RemoteApi {
         }
         this.chatSeq.set(p.sessionId, p.seq)
         for (const o of p.ops) if (o.op === 'state' && o.turnStartedAt !== undefined) this.turnStarted(p.sessionId, o.turnStartedAt)
-        this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops: p.ops })
+        const desk = this.desk.get(p.sessionId)
+        const ops = desk ? p.ops.map((o) => (o.op === 'reset' ? { ...o, items: [...desk, ...o.items] } : o)) : p.ops
+        this.push((s) => s.sessionId === p.sessionId, { t: 'chat', sessionId: p.sessionId, seq: p.seq, ops })
         return
       }
       case 'forum:event': {

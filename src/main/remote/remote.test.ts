@@ -22,7 +22,7 @@ import type { OrchSuggestion } from '../../shared/orchestrator'
 import { PHONE_CHANNELS, PhoneApi, terminalReply, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared, parseTunnelUrl } from './tunnel'
-import { askHeading, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
+import { askHeading, deskHistory, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
 
 const T = '2026-10-25T10:00:00.000Z'
 
@@ -90,6 +90,10 @@ function world() {
         default: return { ok: true }
       }
     }) as PhoneHost['invoke'],
+    newChat: async (req) => {
+      d.calls.push({ channel: 'newChat', req })
+      return sess('se_new', req.companyId)
+    },
     onEvent: (fn) => {
       const f = fn as (e: string, p: unknown) => void
       listeners.add(f)
@@ -249,6 +253,16 @@ describe('RemoteServer (RA1, RA2)', () => {
     expect((await fetch(url, { method: 'POST', headers: { cookie, 'content-type': 'application/json', [REMOTE_CSRF_HEADER]: 'wrong' }, body: '{"paused":true}' })).status).toBe(403)
     expect((await fetch(url, { method: 'POST', headers: { cookie, 'content-type': 'text/plain', [REMOTE_CSRF_HEADER]: csrf }, body: '{"paused":true}' })).status).toBe(415)
     expect((await fetch(url, { method: 'POST', headers: { cookie, 'content-type': 'application/json', [REMOTE_CSRF_HEADER]: csrf }, body: '{"paused":true}' })).status).toBe(200)
+  })
+  it('only the message routes take a body big enough for images', async () => {
+    const { cookie, csrf } = await pair()
+    const headers = { cookie, 'content-type': 'application/json', [REMOTE_CSRF_HEADER]: csrf }
+    const pad = 'A'.repeat(200 * 1024)
+    expect((await fetch(`${base}/api/c/co_a/pause`, { method: 'POST', headers, body: JSON.stringify({ paused: true, pad }) })).status).toBe(413)
+    // past the small limit, a message's images reach the route (and its checks)
+    const send = await fetch(`${base}/api/c/co_a/sessions/se_a/send`, { method: 'POST', headers, body: JSON.stringify({ images: [{ mime: 'image/heic', data: pad }] }) })
+    expect(send.status).toBe(400)
+    expect(((await send.json()) as { message: string }).message).toBe('Use a PNG, JPEG, GIF or WebP image')
   })
   it('a revoked device is refused at once', async () => {
     const { cookie } = await pair()
@@ -468,6 +482,27 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'just do it bro' })
     expect(d.calls.some((c) => c.channel === 'tasks:create' || c.channel === 'tasks:comment' || c.channel === 'tasks:start')).toBe(false)
   })
+  it('New chat: Claude directly in this company (the Mac\'s New conversation), or the agent\'s own chat', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    const out = (await api.handle('newChat', { companyId: 'co_a' }, { text: '  Can you draft the spring menu?  ' }, dev)) as { sessionId: string }
+    expect(out).toEqual({ sessionId: 'se_new' })
+    expect(d.calls.find((c) => c.channel === 'newChat')?.req).toEqual({ companyId: 'co_a', text: 'Can you draft the spring menu?', title: 'Draft the spring menu' })
+    const withAgent = (await api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', agentId: 'ag_a' }, dev)) as { sessionId: string }
+    expect(withAgent).toEqual({ sessionId: 'se_agent' })
+    // To: offers this company's agents only
+    expect(((await api.handle('chats', { companyId: 'co_a' }, {}, dev)) as { team: { id: string }[] }).team.map((m) => m.id)).toEqual(['ag_a'])
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'hi' })
+  })
+  it('New chat: another company\'s agent or an unknown company is 404, an empty message 400, nothing starts', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', agentId: 'ag_b' }, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('newChat', { companyId: 'co_zzz' }, { text: 'hi' }, dev)).rejects.toMatchObject({ status: 404 })
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: '   ' }, dev)).rejects.toMatchObject({ status: 400 })
+    await expect(api.handle('newChat', { companyId: 'co_a' }, { text: 'hi', cwd: '/' }, dev)).rejects.toMatchObject({ status: 400 })
+    expect(d.calls.filter((c) => c.channel === 'newChat' || c.channel === 'chat:sendAgent')).toEqual([])
+  })
   it('an agent on the phone opens its own chat: the agent view names it, so the phone reads it with the chat model', async () => {
     const { host, d } = world()
     const api = new PhoneApi(host)
@@ -490,6 +525,31 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'still there?' })
     expect(d.calls.some((c) => c.channel === 'chat:send')).toBe(false)
   })
+  it('the first message to an agent keeps what its screen showed: the desk thread from before its chat stays above the chat', async () => {
+    const { host, d, fire } = world()
+    const api = new PhoneApi(host)
+    // no chat yet: the agent's screen is its desk thread (its tasks and reports)
+    const desk = (await api.handle('agent', { companyId: 'co_a', agentId: 'ag_a' }, {}, dev)) as { items: { text?: string }[]; chatSessionId: string | null }
+    expect(desk.chatSessionId).toBeNull()
+    expect(desk.items.map((i) => i.text)).toContain('Seven posts are ready.')
+    // "Ok can you post them?": the agent's chat starts and the phone follows it there
+    const out = (await api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { text: 'Ok can you post them?' }, dev)) as { sessionId: string }
+    d.sessions.push(sess(out.sessionId, 'co_a', { companyAgentId: 'ag_a', startedAt: '2026-10-26T09:00:00.000Z' }))
+    const words = (items: ChatSnapshot['items']): string[] => items.map((i) => (i.kind === 'text' ? i.md : i.kind === 'user' || i.kind === 'notice' ? i.text : i.kind))
+    const view = (await api.handle('session', { companyId: 'co_a', sessionId: out.sessionId }, {}, dev)) as { chat: ChatSnapshot }
+    expect(words(view.chat.items)).toContain('Seven posts are ready.')
+    // a reset (the chat rebuilt from its transcript) keeps it in front too
+    const sent: PhoneServerMsg[] = []
+    api.socket({ OPEN: 1, readyState: 1, send: (t: string) => sent.push(JSON.parse(t)), on: () => undefined } as unknown as WebSocket, dev)
+    await api.subscribe(api.subscriptions()[0]!, { t: 'sub', companyId: 'co_a', sessionId: out.sessionId })
+    fire('chat:ops', { sessionId: out.sessionId, seq: 2, ops: [{ op: 'reset', items: [{ id: 'u1', parent: null, kind: 'user', text: 'Ok can you post them?', images: 0, state: 'sent' }] }] })
+    const reset = sent.find((m) => m.t === 'chat') as { ops: { op: string; items: ChatSnapshot['items'] }[] }
+    expect(words(reset.ops[0]!.items)).toEqual([...words(view.chat.items), 'Ok can you post them?'])
+    // an agent's history from after its chat began is the chat's own; a chat of yours gets nothing added
+    const plain = (await api.handle('session', { companyId: 'co_a', sessionId: 'se_a' }, {}, dev)) as { chat: ChatSnapshot }
+    expect(plain.chat.items).toEqual([])
+    api.dispose()
+  })
   it('a Codex agent chat reads and replies on the phone like a Claude one', async () => {
     const { host, d } = world()
     const api = new PhoneApi(host)
@@ -510,6 +570,60 @@ describe('PhoneApi scoping (RA3: each view is one company, no cross-company leak
     expect(room.members.map((m) => m.handle)).toContain('livia')
     await api.handle('roomPost', { companyId: 'co_a' }, { channelId: 'ch_a', text: '@livia hi' }, dev)
     expect(d.calls.find((c) => c.channel === 'forum:post')?.req).toEqual({ companyId: 'co_a', channelId: 'ch_a', text: '@livia hi' })
+  })
+})
+
+// ---------- images from the phone (the Mac composer's own path: chat:send / chat:sendAgent with images) ----------
+describe('images in a phone message', () => {
+  // a 1x1 PNG; big: just over 5 MB once decoded
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+  const big = 'A'.repeat(Math.ceil((5 * 1024 * 1024 + 3) / 3) * 4)
+  const at = { companyId: 'co_a', sessionId: 'se_a' }
+
+  it('pass through to chat:send as the Mac composer sends them (thumb kept)', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    const thumb = `data:image/jpeg;base64,${PNG}`
+    await api.handle('sessionSend', at, { text: 'look', images: [{ mime: 'image/png', data: PNG, thumb }, { mime: 'image/jpeg', data: PNG }] }, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:send')?.req).toEqual({ id: 'se_a', text: 'look', images: [{ mediaType: 'image/png', data: PNG, thumb }, { mediaType: 'image/jpeg', data: PNG }] })
+  })
+  it('images alone are a message; nothing at all is not', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    await api.handle('sessionSend', at, { text: '  ', images: [{ mime: 'image/webp', data: PNG }] }, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:send')?.req).toEqual({ id: 'se_a', text: '', images: [{ mediaType: 'image/webp', data: PNG }] })
+    await expect(api.handle('sessionSend', at, { text: '', images: [] }, dev)).rejects.toMatchObject({ status: 400, message: 'Write something first' })
+    await expect(api.handle('sessionSend', at, {}, dev)).rejects.toMatchObject({ status: 400, message: 'Write something first' })
+  })
+  it('go to an agent through chat:sendAgent, from its page or its chat', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    await api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { images: [{ mime: 'image/gif', data: PNG }] }, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: '', images: [{ mediaType: 'image/gif', data: PNG }] })
+    d.sessions.push({ ...sess('se_ag', 'co_a'), companyAgentId: 'ag_a' } as never)
+    d.calls.length = 0
+    await api.handle('sessionSend', { companyId: 'co_a', sessionId: 'se_ag' }, { text: 'this one', images: [{ mime: 'image/png', data: PNG }] }, dev)
+    expect(d.calls.find((c) => c.channel === 'chat:sendAgent')?.req).toEqual({ agentId: 'ag_a', text: 'this one', images: [{ mediaType: 'image/png', data: PNG }] })
+  })
+  it('refuses too many, too big, a bad type or broken data, before anything is sent', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    const seven = Array.from({ length: 7 }, () => ({ mime: 'image/png', data: PNG }))
+    await expect(api.handle('sessionSend', at, { text: 'x', images: seven }, dev)).rejects.toMatchObject({ status: 400, message: 'Up to 6 images per message' })
+    await expect(api.handle('sessionSend', at, { text: 'x', images: [{ mime: 'image/png', data: big }] }, dev)).rejects.toMatchObject({ status: 413, message: expect.stringMatching(/under 5 MB/) })
+    await expect(api.handle('sessionSend', at, { text: 'x', images: [{ mime: 'image/heic', data: PNG }] }, dev)).rejects.toMatchObject({ status: 400, message: 'Use a PNG, JPEG, GIF or WebP image' })
+    await expect(api.handle('sessionSend', at, { text: 'x', images: [{ mime: 'image/png', data: 'not base64!' }] }, dev)).rejects.toMatchObject({ status: 400 })
+    await expect(api.handle('sessionSend', at, { text: 'x', images: [{ mime: 'image/png', data: PNG, thumb: 'javascript:x' }] }, dev)).rejects.toMatchObject({ status: 400 })
+    await expect(api.handle('agentSend', { companyId: 'co_a', agentId: 'ag_a' }, { images: seven }, dev)).rejects.toMatchObject({ status: 400 })
+    expect(d.calls.some((c) => c.channel === 'chat:send' || c.channel === 'chat:sendAgent')).toBe(false)
+  })
+  it('a terminal session takes words only', async () => {
+    const { host, d } = world()
+    const inner = host.invoke
+    host.invoke = (async (c: string, req: { id: string }) => (c === 'chat:snapshot' ? { ...snap(req.id), mode: 'terminal', available: false } : (inner as (c: string, r: unknown) => Promise<unknown>)(c, req))) as PhoneHost['invoke']
+    const api = new PhoneApi(host)
+    await expect(api.handle('sessionSend', at, { text: 'see', images: [{ mime: 'image/png', data: PNG }] }, dev)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/^Images go into a chat/) })
+    expect(d.calls.some((c) => c.channel === 'chat:send')).toBe(false)
   })
 })
 
@@ -627,6 +741,20 @@ describe('PhoneApi live (RA3)', () => {
 
 // ---------- views ----------
 describe('Phone views (the desktop’s one live source)', () => {
+  it('deskHistory: the desk thread before the chat began, as chat items (yours, the agent’s, quiet lines)', () => {
+    const items = deskHistory(
+      [
+        { kind: 'task', id: 'a1', at: '2026-10-25T09:00:00.000Z', taskId: 't', text: 'PR-17 · Combine the PRs (from you)' },
+        { kind: 'me', id: 'a2', at: '2026-10-25T09:01:00.000Z', taskId: 't', text: 'one PR please' },
+        { kind: 'agent', id: 'a3', at: '2026-10-25T09:30:00.000Z', taskId: 't', text: 'PR #85 is ready.', card: 'review' },
+        { kind: 'note', id: 'a4', at: '2026-10-26T10:00:00.000Z', taskId: 't', text: 'You approved PR-17' }
+      ],
+      '2026-10-26T00:00:00.000Z'
+    )
+    expect(items.map((i) => [i.id, i.kind])).toEqual([['desk_a1', 'notice'], ['desk_a2', 'user'], ['desk_a3', 'text']])
+    expect(items[1]).toMatchObject({ text: 'one PR please', state: 'sent', at: Date.parse('2026-10-25T09:01:00.000Z') })
+    expect(items[2]).toMatchObject({ md: 'PR #85 is ready.', streaming: false })
+  })
   const data = (): PhoneData => {
     const { d } = world()
     // the working step has no open ask here (an agent with an ask needs you instead of working)

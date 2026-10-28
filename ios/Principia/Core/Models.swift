@@ -164,6 +164,13 @@ struct PhoneChatRow: Codable, Hashable, Identifiable, Sendable {
 struct PhoneChats: Codable, Sendable {
     var companyId: String
     var rows: [PhoneChatRow]
+    /// who a New chat can be with (the company's agents); absent from an older Mac: Claude only
+    var team: [PhoneTeamMember]?
+}
+
+struct PhoneTeamMember: Codable, Hashable, Identifiable, Sendable {
+    var id: String
+    var who: PhoneWho
 }
 
 struct ChatQueued: Codable, Hashable, Identifiable, Sendable {

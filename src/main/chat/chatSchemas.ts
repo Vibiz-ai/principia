@@ -1,10 +1,11 @@
 /** CHAT-UI.md §3.2: request schemas of the chat:* channels (merged into ipcSchemas REQUEST_SCHEMAS). */
 import { z } from 'zod'
+import { CHAT_IMAGE_MAX, CHAT_IMAGE_TYPES } from '../../shared/chat'
 
 const id = z.string().min(1).max(64).regex(/^[a-z]+_[0-9a-z]+$/, 'invalid id')
 const requestId = z.string().min(1).max(200)
 /** ~5 MB of base64 per image, at most 6 per message */
-const image = z.object({ mediaType: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']), data: z.string().min(1).max(7_000_000).regex(/^[A-Za-z0-9+/=]+$/, 'base64'), thumb: z.string().max(60_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/, 'thumb').optional() }).strict()
+const image = z.object({ mediaType: z.enum(CHAT_IMAGE_TYPES), data: z.string().min(1).max(7_000_000).regex(/^[A-Za-z0-9+/=]+$/, 'base64'), thumb: z.string().max(60_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/, 'thumb').optional() }).strict()
 const decision = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('allow') }).strict(),
   z.object({ kind: z.literal('allowAlways'), suggestion: z.number().int().min(0).max(20) }).strict(),
@@ -17,7 +18,7 @@ const decision = z.discriminatedUnion('kind', [
 
 export const CHAT_REQUEST_SCHEMAS = {
   'chat:snapshot': z.object({ id }).strict(),
-  'chat:send': z.object({ id, text: z.string().max(200_000), images: z.array(image).max(6).optional() }).strict(),
+  'chat:send': z.object({ id, text: z.string().max(200_000), images: z.array(image).max(CHAT_IMAGE_MAX).optional() }).strict(),
   'chat:queueEdit': z.object({ id, queueId: z.string().min(1).max(64), text: z.string().max(200_000).nullable() }).strict(),
   'chat:interrupt': z.object({ id, sendNow: z.boolean().optional() }).strict(),
   'chat:answer': z.object({ id, requestId, decision }).strict(),
@@ -27,5 +28,6 @@ export const CHAT_REQUEST_SCHEMAS = {
   'chat:toTerminal': z.object({ id, force: z.boolean().optional() }).strict(),
   'chat:toChat': z.object({ id, force: z.boolean().optional() }).strict(),
   'chat:openAgent': z.object({ agentId: id }).strict(),
-  'chat:sendAgent': z.object({ agentId: id, text: z.string().min(1).max(200_000) }).strict()
+  // images alone are a message too (the handler refuses neither words nor images)
+  'chat:sendAgent': z.object({ agentId: id, text: z.string().max(200_000), images: z.array(image).max(CHAT_IMAGE_MAX).optional() }).strict()
 }
