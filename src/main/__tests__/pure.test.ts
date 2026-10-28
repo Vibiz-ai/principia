@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { baseChildEnv, isInheritedMarker, mergePath, parseEnvDump } from '../loginEnv'
+import { baseChildEnv, isInheritedMarker, mergePath, parseEnvDump, withUserIdentity } from '../loginEnv'
 import { slotLabel } from '../engine/scheduler'
 import { buildChildEnv } from '../childEnv'
 import { maskSecret, parseEnvText } from '../envParse'
@@ -69,6 +69,22 @@ describe('loginEnv (SPEC A14)', () => {
     expect(isInheritedMarker('NO_COLOR')).toBe(true)
     expect(isInheritedMarker('CODEX_THREAD_ID')).toBe(true)
     expect(isInheritedMarker('CODEX_HOME')).toBe(false)
+  })
+})
+
+describe('login env user identity (PR-30)', () => {
+  const who = () => ({ username: 'yous', homedir: '/Users/yous' })
+  it('fills USER, LOGNAME and HOME when the launching process left them out', () => {
+    // without USER, `claude auth status` can't find its Keychain sign-in and says loggedIn: false
+    expect(withUserIdentity({ PATH: '/x' }, who)).toEqual({ PATH: '/x', HOME: '/Users/yous', USER: 'yous', LOGNAME: 'yous' })
+  })
+  it('keeps what is set and borrows LOGNAME for a missing USER', () => {
+    expect(withUserIdentity({ HOME: '/h', USER: 'a', LOGNAME: 'b' }, who)).toEqual({ HOME: '/h', USER: 'a', LOGNAME: 'b' })
+    expect(withUserIdentity({ HOME: '/h', LOGNAME: 'b' }, who)).toEqual({ HOME: '/h', USER: 'b', LOGNAME: 'b' })
+    expect(withUserIdentity({ HOME: '/h', USER: 'a' }, who)).toEqual({ HOME: '/h', USER: 'a', LOGNAME: 'a' })
+  })
+  it('leaves the env alone when the OS account cannot be read', () => {
+    expect(withUserIdentity({ PATH: '/x' }, () => { throw new Error('no passwd entry') })).toEqual({ PATH: '/x' })
   })
 })
 

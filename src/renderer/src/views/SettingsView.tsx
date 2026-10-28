@@ -1078,7 +1078,7 @@ function ClaudeAccount(): React.JSX.Element {
             <>
               <div>Sign in to Claude, or get a plan</div>
               <div className="srow__desc">
-                Claude Code is installed but nobody is signed in, so agents can’t start. Run <span className="mono">claude</span> in Terminal and sign in, then Recheck. {CLAUDE_PLAN_PRICES}
+                Claude Code is installed but nobody is signed in to it, so agents can’t start. Signing in to the Claude app or claude.ai doesn’t count: Claude Code has its own sign-in. Run <span className="mono">claude auth login</span> in Terminal, then Recheck. {CLAUDE_PLAN_PRICES}
               </div>
             </>
           ) : auth.state === 'missing' ? (

@@ -1,6 +1,6 @@
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
-import { baseChildEnv, resolveLoginEnv } from '../loginEnv'
+import { RECHECK_ENV_TIMEOUT_MS, baseChildEnv, loginEnvState, resolveLoginEnv } from '../loginEnv'
 import { defaultGhExec } from '../onboarding/github'
 import { parseClaudeAuth, type ClaudeAuthStatus } from '../../shared/providerAuth'
 
@@ -25,7 +25,7 @@ export function registerProfileHandlers(h: Hive): void {
   handle('providers:list', async (req) => {
     if (req?.refresh) {
       // Settings "Recheck": re-resolve the login env first so newly installed CLIs are found (SPEC A14)
-      await resolveLoginEnv()
+      await resolveLoginEnv(RECHECK_ENV_TIMEOUT_MS)
     }
     const list = await h.engine.providers.list({ refresh: !!req?.refresh })
     h.ensureSeeds()
@@ -35,6 +35,9 @@ export function registerProfileHandlers(h: Hive): void {
   let authMemo: { at: number; v: ClaudeAuthStatus } | null = null
   handle('providers:claudeAuth', async (req) => {
     if (!req?.refresh && authMemo && Date.now() - authMemo.at < 60_000) return authMemo.v
+    // PR-30: a login shell slower than the launch-time 3 s left us without the user's env (CLAUDE_CONFIG_DIR picks the
+    // Keychain entry), so Claude read "signed out"; a Recheck tries the shell again with more time
+    if (req?.refresh && !loginEnvState().ok) await resolveLoginEnv(RECHECK_ENV_TIMEOUT_MS)
     const claude = (await h.engine.providers.list({ refresh: !!req?.refresh })).find((p) => p.id === 'claude')
     let v: ClaudeAuthStatus
     if (!claude?.available || !claude.binPath) v = parseClaudeAuth({ code: null, stdout: '', missing: true })
