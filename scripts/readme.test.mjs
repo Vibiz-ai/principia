@@ -6,7 +6,16 @@ import { fileURLToPath } from 'node:url'
 
 // The README is the first page most people see: its local links must resolve and its download must be the current one.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const readme = readFileSync(path.join(root, 'README.md'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
+const stripHtmlComments = input => {
+  let previous
+  let current = input
+  do {
+    previous = current
+    current = current.replace(/<!--[\s\S]*?-->/g, '')
+  } while (current !== previous)
+  return current
+}
+const readme = stripHtmlComments(readFileSync(path.join(root, 'README.md'), 'utf8'))
 const slug = heading => heading.trim().toLowerCase().replace(/[^\w\- ]/g, '').replace(/ /g, '-')
 const anchors = new Set([...readme.matchAll(/^#{1,6} (.+)$/gm)].map(m => slug(m[1])))
 const targets = [
