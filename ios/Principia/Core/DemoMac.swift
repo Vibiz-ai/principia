@@ -148,7 +148,11 @@ final class DemoMac: @unchecked Sendable {
         PhoneTaskRow(id: id, identifier: ident, title: title, status: status, column: col, who: who, agentId: nil, line: line, priority: prio, at: iso(minutesAgo))
     }
     private func nextId(_ p: String) -> String { itemSeq += 1; return "\(p)-\(itemSeq)" }
-    private func user(_ t: String) -> JSONValue { ["id": .string(nextId("u")), "kind": "user", "text": .string(t)] }
+    private func user(_ t: String, images: Int = 0) -> JSONValue {
+        var u: [String: JSONValue] = ["id": .string(nextId("u")), "kind": "user", "text": .string(t)]
+        if images > 0 { u["images"] = .number(Double(images)) }
+        return .object(u)
+    }
     private func text(_ md: String, streaming: Bool = false) -> JSONValue { ["id": .string(nextId("t")), "kind": "text", "md": .string(md), "streaming": .bool(streaming)] }
     private func tool(_ name: String, _ input: JSONValue, status: String = "ok") -> JSONValue {
         let id = nextId("tool")
@@ -303,7 +307,7 @@ final class DemoMac: @unchecked Sendable {
             guard chats[sid] != nil else { return Self.error(404, "This chat is not on your Mac any more.") }
             switch rest[2] {
             case "send", "reply":
-                reply(sid, to: (body["text"] as? String) ?? "")
+                reply(sid, to: (body["text"] as? String) ?? "", images: (body["images"] as? [Any])?.count ?? 0)
                 return Self.okJSON(["sessionId": NSNull()])
             case "stop":
                 emit(sid, [["op": "state", "turn": "idle", "activity": .null]])
@@ -321,7 +325,7 @@ final class DemoMac: @unchecked Sendable {
             return Self.ok(PhoneAgent(ref: PhoneChatRef(kind: .agent, id: aid), who: c.who, status: c.live ? "Working" : "Idle", items: [], chatSessionId: sid))
         case (true, "agents", 3) where rest[2] == "send":
             guard let sid = Self.agentChat[rest[1]], chats[sid] != nil else { return Self.error(404, "This agent is not in this company any more.") }
-            reply(sid, to: (body["text"] as? String) ?? "")
+            reply(sid, to: (body["text"] as? String) ?? "", images: (body["images"] as? [Any])?.count ?? 0)
             return Self.okJSON(["sessionId": sid])
         case (false, "room", 1):
             return Self.ok(roomView(co, channel: query.first { $0.name == "channelId" }?.value))
@@ -386,8 +390,8 @@ final class DemoMac: @unchecked Sendable {
     }
 
     /// Anything typed in a demo chat: an honest canned answer, streamed like a real one.
-    private func reply(_ sid: String, to text: String) {
-        let me = user(text)
+    private func reply(_ sid: String, to text: String, images: Int = 0) {
+        let me = user(text, images: images)
         let words = "This is the demo company, so no agent reads this and nothing leaves your phone. Pair your Mac (Settings › Leave the demo) and your own agents answer here, live, from your Mac."
         let first: [JSONValue] = [["op": "add", "item": me], ["op": "state", "turn": "working", "activity": "Thinking"]]
         script(sid, line: "Answering", [first] + streamOps(words, ms: 3_000), done: "This is the demo company: pair your Mac for your own agents")
