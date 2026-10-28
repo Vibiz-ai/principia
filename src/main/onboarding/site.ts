@@ -19,6 +19,7 @@ import net from 'node:net'
 import zlib from 'node:zlib'
 import { HiveError } from '../../shared/errors'
 import { MAX_URL_LENGTH, type SiteSummary } from '../../shared/onboarding'
+import { stripAll } from '../../shared/stripAll'
 import { redactCredentials } from '../memory/screen'
 
 export const SITE_TIMEOUT_MS = 5000
@@ -277,7 +278,7 @@ export interface SiteFacts {
 
 /** Regex extraction from (capped) HTML. Pure. */
 export function extractSiteFacts(html: string): SiteFacts {
-  const clean = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+  const clean = stripAll(html, /<!--[\s\S]*?-->/g).replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
   const out: SiteFacts = {}
   const title = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(clean)
   out.title = text(title?.[1])

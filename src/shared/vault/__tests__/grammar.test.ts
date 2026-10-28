@@ -52,6 +52,7 @@ import {
   appendRelation,
   archive,
   ensureNoteId,
+  escapeTablePipes,
   invalidate,
   linkMention,
   materializeId,
@@ -919,6 +920,16 @@ describe('review hardening', () => {
     expect(parseNote(r.text).links.map((l) => `${l.target}|${l.display}`)).toEqual(['New|x', 'New|Old'])
     const m = linkMention('| ana | y |\n', 0, { start: 2, end: 5 }, 'Ana Ruiz')
     expect(m.text).toBe('| [[Ana Ruiz\\|ana]] | y |\n')
+  })
+
+  it('escapes every pipe of a link written into a table row, not only the first', () => {
+    expect(escapeTablePipes('[[T|a|b]]')).toBe('[[T\\|a\\|b]]')
+    // a pipe already written `\|` is kept as is
+    expect(escapeTablePipes('[[T|a\\|b]]')).toBe('[[T\\|a\\|b]]')
+    expect(escapeTablePipes('[[T]]')).toBe('[[T]]')
+    // a display carrying a second pipe used to keep it bare and split the cell
+    const r = retargetLinks('| who | note |\n|---|---|\n| [[Old\\|a|b]] | y |\n', (t) => t === 'Old', 'New')
+    expect(r.text).toBe('| who | note |\n|---|---|\n| [[New\\|a\\|b]] | y |\n')
   })
 
   it('refuses empty observations and relations instead of writing unparseable lines', () => {

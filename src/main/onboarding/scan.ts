@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PERSONAL_COMPANY_ID } from '../../shared/company'
+import { stripAll, stripTags } from '../../shared/stripAll'
 import {
   GITHUB_FULL_NAME,
   MAX_ONBOARDING_PATHS,
@@ -255,7 +256,7 @@ export interface ReadmeFacts {
 /** First heading, first meaningful prose line, first 2 KB and first non-badge https link. Pure. */
 export function readmeFacts(text: string): ReadmeFacts {
   const out: ReadmeFacts = {}
-  const body = text.replace(/<!--[\s\S]*?-->/g, '')
+  const body = stripAll(text, /<!--[\s\S]*?-->/g)
   out.excerpt = text.slice(0, README_EXCERPT_MAX)
   let inFence = false
   for (const raw of body.split('\n')) {
@@ -296,8 +297,7 @@ export function readmeFacts(text: string): ReadmeFacts {
 }
 
 function stripMd(s: string): string {
-  return s
-    .replace(/<[^>]+>/g, '')
+  return stripTags(s)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/[*_`~]+/g, '')

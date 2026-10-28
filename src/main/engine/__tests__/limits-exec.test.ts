@@ -182,7 +182,7 @@ describe.runIf(process.platform === 'darwin')('reaper through the executor', () 
       name: 'bg',
       description: '',
       inputs: [],
-      nodes: [{ id: 'bg', type: 'shell', label: 'bg', after: [], cwd: null, timeoutMin: 5, command: `sleep ${marker} & "${process.execPath}" -e "${ESCAPE.replace(/"/g, '\\"')}"; echo started; sleep ${marker}` }]
+      nodes: [{ id: 'bg', type: 'shell', label: 'bg', after: [], cwd: null, timeoutMin: 5, command: `sleep ${marker} & "${process.execPath}" -e "${ESCAPE.replace(/[\\"$`]/g, '\\$&')}"; echo started; sleep ${marker}` }]
     })
     const run = engine.runs.start({ kind: 'workflow', workflowId: wf.id, inputs: {} }, { trigger: 'manual' })
     // wait until both sleeps and the escapee exist
