@@ -322,7 +322,9 @@ export function phoneChats(d: PhoneData, companyId: Id): PhoneChats {
     covered.add(s.id)
   }
   rows.sort((a, b) => Number(b.live) - Number(a.live) || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
-  return { companyId, rows }
+  // New chat's To: the agents of this company (none with Departments off)
+  const team = d.departmentsOn ? d.companyAgents.filter((a) => !a.archivedAt && a.companyId === companyId).map((a) => ({ id: a.id, who: who(a) ?? { name: a.name, role: '', bust: null } })) : []
+  return { companyId, rows, team }
 }
 
 // ---------- the board (RA3, read only) ----------

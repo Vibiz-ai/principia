@@ -26,6 +26,8 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
       return invokeLocal(channel, req)
     },
     onEvent: (fn) => onEmit(fn),
+    // the Mac's New conversation › Claude directly (TeamComposer): no folder, Claude, the first message
+    newChat: ({ companyId, text, title }) => invokeLocal('sessions:create', { companyId, adapter: 'claude', repoId: null, cols: 120, rows: 32, initialPrompt: text, title }),
     ...(o.terminal ? { terminal: o.terminal, redact: (t: string) => o.terminal!.redact(t) } : {}),
     log
   }

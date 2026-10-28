@@ -531,6 +531,21 @@ final class AppModel {
         if chatPath.last != ref { chatPath = [ref] }
     }
 
+    /// New chat (Chats' compose button): with the agent when one is picked, else Claude directly; then it opens.
+    func newChat(_ text: String, agentId: String?) async -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let co = companyId else { return false }
+        var ok = false
+        await run("newChat") {
+            let sid = try await self.api.newChat(co, text: t, agentId: agentId)
+            ok = true
+            guard self.companyId == co else { return }
+            self.openChat(PhoneChatRef(kind: .session, id: sid))
+            await self.refresh([.chats])
+        }
+        return ok
+    }
+
     func load(_ ref: PhoneChatRef) async {
         guard let co = companyId else { return }
         if loadFailed == ref { loadFailed = nil; loadFailure = nil }

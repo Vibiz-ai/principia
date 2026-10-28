@@ -194,12 +194,13 @@ final class DemoMac: @unchecked Sendable {
     }
 
     private func chatList(_ co: String) -> PhoneChats {
-        guard co == Self.companyId else { return PhoneChats(companyId: co, rows: []) }
+        guard co == Self.companyId else { return PhoneChats(companyId: co, rows: [], team: []) }
         let rows = chatOrder.compactMap { id -> PhoneChatRow? in
             guard let c = chats[id] else { return nil }
             return PhoneChatRow(key: id, ref: PhoneChatRef(kind: .session, id: id), title: c.title, who: c.who, live: c.live, at: Self.isoString(c.at), line: c.line)
         }
-        return PhoneChats(companyId: co, rows: rows.sorted { $0.at > $1.at })
+        let team = Self.agentChat.sorted { $0.key < $1.key }.compactMap { aid, sid in chats[sid].map { PhoneTeamMember(id: aid, who: $0.who) } }
+        return PhoneChats(companyId: co, rows: rows.sorted { $0.at > $1.at }, team: team)
     }
 
     private func session(_ id: String) -> PhoneSession? {
@@ -278,6 +279,22 @@ final class DemoMac: @unchecked Sendable {
             allow(rest[1], ok: (body["optionId"] as? String) != "deny")
             return Self.okJSON(["ok": true])
         case (false, "chats", 1): return Self.ok(chatList(co))
+        case (true, "chats", 2) where rest[1] == "new":
+            let words = ((body["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !words.isEmpty else { return Self.error(400, "Write something first") }
+            guard co == Self.companyId else { return Self.error(404, "Company not found") }
+            if let aid = body["agentId"] as? String {
+                guard let sid = Self.agentChat[aid], chats[sid] != nil else { return Self.error(404, "This agent is not in this company any more.") }
+                reply(sid, to: words)
+                return Self.okJSON(["sessionId": sid])
+            }
+            // Claude directly, as on the Mac: a new chat named after the first message
+            let sid = nextId("demo-new")
+            chats[sid] = DemoChat(title: String(words.prefix(80)), who: PhoneWho(name: "Claude", role: "", bust: nil),
+                                  replica: ChatReplica(snapshot(sid, turn: "idle", activity: nil, items: [])), line: "", at: clock(), live: false)
+            chatOrder.append(sid)
+            reply(sid, to: words)
+            return Self.okJSON(["sessionId": sid])
         case (false, "sessions", 2):
             guard let s = session(rest[1]) else { return Self.error(404, "This chat is not on your Mac any more.") }
             return Self.ok(s)

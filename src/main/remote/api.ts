@@ -17,6 +17,7 @@ import type { AgentNode } from '../../shared/live'
 import type { PhoneAgent, PhoneClientMsg, PhoneLiveView, PhoneMe, PhoneRoom, PhoneRoomMessage, PhoneServerMsg, PhoneSession, PhoneTerminal, RemoteRouteName } from '../../shared/remote'
 import { REMOTE_LIMITS } from '../../shared/remote'
 import { firstLine } from '../../renderer/src/lib/format'
+import { taskTitleFor } from '../../renderer/src/lib/desk'
 import { isIdleWaiting } from '../../renderer/src/lib/live'
 import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { reposOf } from '../../renderer/src/lib/companyModel'
@@ -53,6 +54,11 @@ export interface PhoneHost {
   onEvent(fn: <E extends EventName>(event: E, payload: EventMap[E]) => void): () => void
   /** a terminal session as a chat: its transcript or screen, and messages typed into it (absent: the old card) */
   terminal?: PhoneTerminalHost
+  /**
+   * New chat with Claude directly: the desktop's sessions:create with a fixed request (this company, no folder, Claude,
+   * the first message), so the phone never picks a folder, profile or pty of its own. Absent: Claude needs the Mac.
+   */
+  newChat?(req: { companyId: Id; text: string; title: string }): Promise<Session>
   /** masks the vault's secrets in text the phone reads (task titles, descriptions, reports); absent: the terminal's */
   redact?(text: string): string
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
@@ -67,6 +73,7 @@ const BODIES = {
   sendBack: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   answerTask: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   text: z.object({ text: text() }).strict(),
+  newChat: z.object({ text: text(), agentId: z.string().min(1).max(64).optional() }).strict(),
   stop: z.object({ sendNow: z.boolean().optional() }).strict(),
   sessionAnswer: z
     .object({
@@ -246,6 +253,11 @@ export class PhoneApi implements RemoteApi {
       }
       case 'chats':
         return phoneChats(d, companyId)
+      case 'newChat': {
+        const b = body('newChat', raw)
+        if (b.agentId) return { sessionId: (await this.sendToAgent(d, this.agent(d, companyId, b.agentId), b.text)).sessionId }
+        return { sessionId: await this.startChat(companyId, b.text) }
+      }
       case 'session':
         return this.sessionView(d, companyId, params.sessionId)
       case 'sessionSend': {
@@ -471,6 +483,18 @@ export class PhoneApi implements RemoteApi {
     try {
       const s = await this.h.invoke('chat:sendAgent', { agentId: agent.id, text: request })
       return { sessionId: s.id, merged: false, started: true }
+    } finally {
+      this.sending = false
+    }
+  }
+
+  /** New chat with Claude directly, as the Mac's New conversation does it (To: Claude directly). */
+  private async startChat(companyId: Id, text: string): Promise<Id> {
+    if (!this.h.newChat) throw new HttpError(409, 'Start this one on your Mac')
+    if (this.sending) throw new HttpError(409, 'Still sending the last one')
+    this.sending = true
+    try {
+      return (await this.h.newChat({ companyId, text, title: taskTitleFor(text).slice(0, 80) })).id
     } finally {
       this.sending = false
     }

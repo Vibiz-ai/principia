@@ -149,6 +149,31 @@ final class DemoModeTests: XCTestCase {
         await mac.settled()
     }
 
+    func testNewChatStartsAndOpensIt() async throws {
+        let (app, _, _, _) = model()
+        await app.boot()
+        await app.startDemo(pace: 0)
+        XCTAssertEqual(app.chats?.team?.count, 4, "the agents a New chat can be with")
+        let ok = await app.newChat("  Draft a thank-you note  ", agentId: nil)
+        XCTAssertTrue(ok)
+        let ref = try XCTUnwrap(app.chatPath.last)
+        XCTAssertEqual(ref.kind, .session)
+        XCTAssertEqual(app.chats?.rows.count, 5)
+        XCTAssertTrue(app.chats?.rows.contains { $0.ref == ref && $0.title == "Draft a thank-you note" } ?? false)
+        await app.load(ref)
+        await app.demo?.settled()
+        await eventually("the reply finished streaming") { app.replica?.turn == "idle" }
+        // with an agent: its own chat
+        let withAgent = await app.newChat("hi", agentId: "agent-cicero")
+        XCTAssertTrue(withAgent)
+        XCTAssertEqual(app.chatPath.last, PhoneChatRef(kind: .session, id: "demo-launch"))
+        // empty or another company's: nothing starts
+        let api = APIClient(transport: DemoTransport(mac: DemoMac(pace: 0)), target: APITarget(mac: DemoMac.address, site: DemoMac.site, token: DemoMac.token))
+        do { _ = try await api.newChat(DemoMac.companyId, text: "  "); XCTFail() } catch APIError.server(400, _) {}
+        do { _ = try await api.newChat(DemoMac.companyId, text: "hi", agentId: "nope"); XCTFail() } catch APIError.server(404, _) {}
+        await app.demo?.settled()
+    }
+
     func testChunksKeepEveryWord() {
         let s = "one two three four five six seven"
         XCTAssertEqual(DemoMac.chunks(s, count: 3).joined(), s)
