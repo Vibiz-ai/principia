@@ -622,14 +622,20 @@ export class CompanyStore {
     })()
   }
   /** tasks:approve: in_review → done, human only, with a non-empty done note (§0.7). Heals the tasks waiting on it. */
-  approve(id: string, doneNote: string, by: ActivityBy = 'human'): BoardTask {
+  /**
+   * tasks:approve. In review: the founder's approval. Any other lane not in flight: the founder marked it done by hand
+   * (a drop on Done), dependencies or not. A blank note becomes the agent's last report, else "Marked done by you".
+   */
+  approve(id: string, doneNote = '', by: ActivityBy = 'human'): BoardTask {
     const out=this.store.db.transaction(()=> {
-      const t=this.task(id);const note=(doneNote ?? '').trim()
+      const t=this.task(id);const reviewed=t.status==='in_review'
+      const note=(doneNote ?? '').trim() || (by==='human' ? (t.report?.summary.trim() || (reviewed ? 'Approved by you' : 'Marked done by you')).slice(0,10_000) : '')
+      if(t.status==='in_progress') fail('This task is running. Stop it before marking it done.')
+      if(t.status==='done'||t.status==='canceled') fail(`This task is already ${t.status==='done' ? 'done' : 'canceled'}`)
       assertTransition(t,{status:'done'},by,{doneNote:note})
-      if(t.status!=='in_review') fail('Only a task in review can be approved')
-      if(!this.depsDone(t)) fail('Complete dependencies before completing this task')
+      if(reviewed&&!this.depsDone(t)) fail('Complete dependencies before completing this task')
       const next:BoardTask={...t,status:'done',blockReason:null,doneNote:note,pendingWake:null,updatedAt:new Date().toISOString()}
-      this.writeTask(next);this.activity(id,'approved',`Approved: ${note}`,'human')
+      this.writeTask(next);this.activity(id,'approved',`${reviewed ? 'Approved' : 'Marked done'}: ${note}`,'human')
       return next
     })()
     this.heal(out.companyId)
