@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
 import { HiveError } from '../../shared/errors'
-import { CLONE_URL, GITHUB_FULL_NAME, type GhStatus, type GithubRepo } from '../../shared/onboarding'
+import { CLONE_URL, GITHUB_FULL_NAME, githubRefFromQuery, type GhStatus, type GithubRepo } from '../../shared/onboarding'
 import { startProcess } from '../engine/process'
 import { baseChildEnv } from '../loginEnv'
 import { redactCredentials } from '../memory/screen'
@@ -169,9 +169,12 @@ export function parseRepoList(stdout: string, redact: (t: string) => string = (t
   } catch {
     return []
   }
-  if (!Array.isArray(raw)) return []
+  return Array.isArray(raw) ? parseRepoRows(raw, redact) : []
+}
+
+function parseRepoRows(rows: unknown[], redact: (t: string) => string): GithubRepo[] {
   const out: GithubRepo[] = []
-  for (const row of raw) {
+  for (const row of rows) {
     const p = ghRepoSchema.safeParse(row)
     if (!p.success) continue
     const r = p.data
@@ -193,6 +196,34 @@ export function parseRepoList(stdout: string, redact: (t: string) => string = (t
   return out
 }
 
+/** Parses `gh repo view --json …` output (one object). Null when malformed; never throws. */
+export function parseRepoView(stdout: string, redact: (t: string) => string = (t) => t): GithubRepo | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (parseRepoRows([raw], redact)[0] ?? null) : null
+}
+
+/** Parses `gh api user/orgs` output into org logins. Drops malformed rows; never throws. */
+export function parseOrgList(stdout: string): string[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(stdout)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const row of raw) {
+    const login = row && typeof row === 'object' ? (row as { login?: unknown }).login : undefined
+    if (typeof login === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login) && !out.includes(login)) out.push(login)
+  }
+  return out
+}
+
 /** Case-insensitive filter on name, owner/name and description. */
 export function filterRepos(repos: GithubRepo[], query?: string): GithubRepo[] {
   const q = (query ?? '').trim().toLowerCase()
@@ -200,14 +231,91 @@ export function filterRepos(repos: GithubRepo[], query?: string): GithubRepo[] {
   return repos.filter((r) => r.fullName.toLowerCase().includes(q) || (r.description ?? '').toLowerCase().includes(q))
 }
 
-/** The founder's 100 most recent repos (`gh repo list`), filtered by `query`. */
-export async function listRepos(query: string | undefined, deps: GhDeps & { redact?: (t: string) => string } = {}): Promise<GithubRepo[]> {
+/** Repos listed per owner (`gh repo list <owner> --limit …`). */
+export const GH_LIST_PER_OWNER = 100
+/** Orgs listed at most, and how many org lists run at once. */
+export const GH_MAX_ORGS = 50
+export const GH_ORG_CONCURRENCY = 4
+/** Cap on the merged list. */
+export const GH_LIST_TOTAL_CAP = 500
+/** The merged list is reused this long, so typing in the search box doesn't re-list every org per keystroke. */
+export const GH_LIST_CACHE_MS = 60_000
+
+/** Per exec (the default one in the app; a fresh fake per test). */
+const listCache = new WeakMap<GhExec, { at: number; repos: GithubRepo[] }>()
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
+/** Newest push first; repos never pushed go last. */
+const byPushedDesc = (a: GithubRepo, b: GithubRepo): number => (b.pushedAt ?? '').localeCompare(a.pushedAt ?? '')
+
+/**
+ * The founder's repos plus the repos of every org they belong to (`gh api user/orgs`, then `gh repo list <org>` per org,
+ * a few at a time), deduped by owner/name, newest push first, capped, then filtered by `query`. An org that fails (SSO not
+ * authorised, timeout) is skipped; only the founder's own list failing is an error. A query naming one repo (`owner/name`
+ * or a github.com link) that isn't listed is looked up with `gh repo view`, so any repo the founder can read can be picked.
+ */
+export async function listRepos(
+  query: string | undefined,
+  deps: GhDeps & { redact?: (t: string) => string; now?: () => number } = {}
+): Promise<GithubRepo[]> {
   const exec = deps.exec ?? defaultGhExec
-  const r = await exec('gh', ['repo', 'list', '--limit', '100', '--json', GH_LIST_FIELDS], { env: ghEnv(deps.env), timeoutMs: GH_LIST_TIMEOUT_MS }).promise
-  if (isMissing(r)) throw new HiveError('adapter_unavailable', 'The GitHub CLI (gh) is not installed. Paste a repo link instead.')
-  if (r.timedOut) throw new HiveError('bad_request', 'GitHub took too long to answer. Try again, or paste a repo link.')
-  if (r.code !== 0) throw new HiveError('bad_request', 'Could not list your GitHub repos. Run `gh auth login` in Terminal, then Recheck.')
-  return filterRepos(parseRepoList(r.stdout, deps.redact), query)
+  const env = ghEnv(deps.env)
+  const now = deps.now ?? Date.now
+  const run = (args: string[], outputCap?: number): Promise<GhRunResult> =>
+    exec('gh', args, { env, timeoutMs: GH_LIST_TIMEOUT_MS, ...(outputCap ? { outputCap } : {}) }).promise
+  const listArgs = (owner?: string): string[] => ['repo', 'list', ...(owner ? [owner] : []), '--limit', String(GH_LIST_PER_OWNER), '--json', GH_LIST_FIELDS]
+  const ok = (r: GhRunResult): boolean => r.code === 0 && !r.timedOut
+
+  let all: GithubRepo[]
+  const cached = listCache.get(exec)
+  if (cached && now() - cached.at < GH_LIST_CACHE_MS) all = cached.repos
+  else {
+    const r = await run(listArgs())
+    if (isMissing(r)) throw new HiveError('adapter_unavailable', 'The GitHub CLI (gh) is not installed. Paste a repo link instead.')
+    if (r.timedOut) throw new HiveError('bad_request', 'GitHub took too long to answer. Try again, or paste a repo link.')
+    if (r.code !== 0) throw new HiveError('bad_request', 'Could not list your GitHub repos. Run `gh auth login` in Terminal, then Recheck.')
+    const own = parseRepoList(r.stdout, deps.redact)
+    const o = await run(['api', '--hostname', 'github.com', '--method', 'GET', 'user/orgs?per_page=100'], 256 * 1024)
+    const orgs = ok(o) ? parseOrgList(o.stdout).slice(0, GH_MAX_ORGS) : []
+    const orgLists = await mapLimit(orgs, GH_ORG_CONCURRENCY, async (org) => {
+      const x = await run(listArgs(org))
+      return ok(x) ? parseRepoList(x.stdout, deps.redact) : []
+    })
+    const seen = new Set<string>()
+    all = [own, ...orgLists]
+      .flat()
+      .filter((repo) => {
+        const k = repo.fullName.toLowerCase()
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+      .sort(byPushedDesc)
+      .slice(0, GH_LIST_TOTAL_CAP)
+    listCache.set(exec, { at: now(), repos: all })
+  }
+
+  const matches = filterRepos(all, query)
+  const ref = githubRefFromQuery(query)
+  if (!ref) return matches
+  const same = (repo: GithubRepo): boolean => repo.fullName.toLowerCase() === ref.toLowerCase()
+  const listed = all.find(same)
+  if (listed) return [listed, ...matches.filter((repo) => !same(repo))]
+  const v = await run(['repo', 'view', ref, '--json', GH_LIST_FIELDS], 256 * 1024)
+  const found = ok(v) ? parseRepoView(v.stdout, deps.redact) : null
+  return found ? [found, ...matches.filter((repo) => repo.fullName.toLowerCase() !== found.fullName.toLowerCase())] : matches
 }
 
 // ---------- api ----------

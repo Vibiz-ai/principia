@@ -425,6 +425,22 @@ export type DraftRepo = z.infer<typeof DraftRepoSchema>
  * is never `.` or `..` (the clone destination is `<cloneDir>/<repo>`, so it must stay inside the chosen folder).
  */
 export const GITHUB_FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/
+/**
+ * The `owner/repo` a repo-search query names, when it names exactly one: `owner/repo`, a github.com link
+ * (`https://github.com/owner/repo/tree/main`, `github.com/owner/repo.git`) or `git@github.com:owner/repo.git`. Else null.
+ */
+export function githubRefFromQuery(query: string | undefined): string | null {
+  let s = (query ?? '').trim()
+  if (!s || /\s/.test(s)) return null
+  const scp = /^git@github\.com:(.+)$/i.exec(s)
+  if (scp) s = scp[1]
+  else {
+    const m = /^(?:https?:\/\/)?(?:www\.)?github\.com\/(.+)$/i.exec(s)
+    if (m) s = m[1].replace(/[?#].*$/, '').split('/').slice(0, 2).join('/')
+  }
+  s = s.replace(/\/+$/, '').replace(/\.git$/i, '')
+  return GITHUB_FULL_NAME.test(s) ? s : null
+}
 /** §5.2: the only clone URL forms accepted (no `file://`, `ext::`, or `-`-prefixed option injection). */
 export const CLONE_URL = /^(https:\/\/|ssh:\/\/|git@)[^\s]+$/i
 export const DraftGithubSchema = z
