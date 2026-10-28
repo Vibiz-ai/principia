@@ -67,6 +67,29 @@ describe('compose: one file, pulled images, nothing else on disk', () => {
     expect(docker).toMatch(/useradd --system --uid 1001 .* agent/)
     expect(docker).not.toMatch(/^USER /m)
   })
+
+  it('cloud/Dockerfile pins every base image by digest and installs the agent CLIs from a lockfile (OpenSSF PinnedDependencies)', () => {
+    const docker = readFileSync(join(root, 'cloud/Dockerfile'), 'utf8')
+    const froms = [...docker.matchAll(/^FROM\s+(\S+)/gm)].map(m => m[1])
+    expect(froms).toHaveLength(2)
+    for (const image of froms) expect(image).toMatch(/^node:24-bookworm-slim@sha256:[0-9a-f]{64}$/)
+    // one digest for both stages, so a bump cannot leave the build and runtime stages on different Node images
+    expect(new Set(froms).size).toBe(1)
+    // npm ci only: an `npm install` / `npm i` resolves versions at build time and is not pinned by hash
+    expect(docker).not.toMatch(/\bnpm\s+(install|i)\b/)
+    expect(docker).toContain('COPY cloud/agent-clis/package.json cloud/agent-clis/package-lock.json ./')
+
+    const pkg = JSON.parse(readFileSync(join(root, 'cloud/agent-clis/package.json'), 'utf8')) as { dependencies: Record<string, string> }
+    const lock = JSON.parse(readFileSync(join(root, 'cloud/agent-clis/package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string; link?: boolean }> }
+    const readme = readFileSync(join(root, 'cloud/README.md'), 'utf8')
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@anthropic-ai/claude-code', '@google/gemini-cli', '@openai/codex'])
+    for (const [name, version] of Object.entries(pkg.dependencies)) {
+      expect(version).toMatch(/^\d+\.\d+\.\d+$/) // exact, never a range
+      expect(lock.packages[`node_modules/${name}`]?.version).toBe(version)
+      expect(readme).toContain(`| \`${name}\` | ${version} |`)
+    }
+    for (const [path, entry] of Object.entries(lock.packages)) if (path && !entry.link) expect(entry.integrity, path).toMatch(/^sha512-/)
+  })
 })
 
 describe('Render Blueprint: one button, https, no tunnel (CLOUD.md §12.1)', () => {
