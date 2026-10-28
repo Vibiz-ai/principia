@@ -162,3 +162,5 @@
 .cust__order { display: inline-flex; }
 .cust__up svg { transform: rotate(180deg); }
 .more-pop__foot { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .more-pop__customize { font-size: var(--text-xs); }
+/* CHAT-UI.md §8.4: the task a live row runs, after its agent's name, muted */
+.live-row__task { font-weight: 400; color: var(--text-secondary); }

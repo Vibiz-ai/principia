@@ -26,7 +26,7 @@ import { agentRoutines, computerView, libraryOf, routineLine, type ComputerView,
 import { AgentBust, useLaneContext } from '../../shell/DepartmentGroup'
 import { useChat } from '../../state/chat'
 import { agentAutonomy, useDeskWho } from '../../state/desk'
-import { attempt, closeSession, departmentById, focusSession, loadJson, navigate, openBoard, providerLabel, refreshDepartments, saveJson, sessionTitle, setAgentPaused, toast, useStore } from '../../state/store'
+import { attempt, closeSession, departmentById, focusSession, loadJson, navigate, openBoard, openTaskLive, providerLabel, refreshDepartments, saveJson, sessionTitle, setAgentPaused, toast, useStore } from '../../state/store'
 import { AgentAction, StatusLine, startTask, useAgentStatus, useIsCode } from './Desk'
 import { Instructions, LANE_WORDS, RunHistory, RunsOnPicker } from './AgentSettings'
 
@@ -175,7 +175,24 @@ export function AgentPanel({ agent, session, overlay, onClose }: { agent: Compan
           {agent.archivedAt ? ' · archived' : ''}
         </div>
         <div className={`convo-panel__status ${status.kind === 'needs' ? 'is-needs' : ''}`}>
-          <StatusLine status={status} />
+          {/* CHAT-UI.md §8.4: the working box opens the task's live view in the main pane; several in flight, one Watch each */}
+          {status.kind === 'working' && st.working.length > 1 ? (
+            <div className="convo-panel__status--many">
+              <StatusLine status={status} />
+              {st.working.map((t) => (
+                <button key={t.id} type="button" className="link-btn convo-panel__watch" data-chatux="panel-watch" data-task={t.identifier} onClick={() => openTaskLive(t.id, t.companyId)} title={`Watch ${taskName(t, code)}`}>
+                  Watch {code ? t.identifier : `“${t.title}”`}
+                </button>
+              ))}
+            </div>
+          ) : status.kind === 'working' && st.current ? (
+            <button type="button" className="convo-panel__status--live" data-chatux="panel-watch" onClick={() => openTaskLive(st.current!.id, st.current!.companyId)} title="Watch it work">
+              <StatusLine status={status} />
+              <span className="link-btn convo-panel__watch">Watch it work</span>
+            </button>
+          ) : (
+            <StatusLine status={status} />
+          )}
         </div>
         <AgentAction agent={agent} status={status} size="sm" wide />
       </div>

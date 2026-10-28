@@ -12,9 +12,14 @@ import { useAgentEvents } from '../../state/live'
 import { Button, EmptyState, Loading } from '../ui'
 import { hasDiagram } from '@shared/diagram'
 import { TextWithDiagrams } from '../diagrams/TextWithDiagrams'
+import { plainActivity } from '../../lib/plainActivity'
 
-/** `emptyText` null: nothing at all when there are no events (the pane above already shows the message). */
-export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }: { agentId: Id; emptyText?: string | null; note?: string | null }): React.JSX.Element {
+/**
+ * `emptyText` null: nothing at all when there are no events (the pane above already shows the message).
+ * `plain` (a task's live view, CHAT-UI.md §8.4): a tool row reads what it does ("Running a SQL query in PostHog");
+ * the raw call (`posthog.exec call execute-sql {…}`) and its input open on click.
+ */
+export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note, plain }: { agentId: Id; emptyText?: string | null; note?: string | null; plain?: { code: boolean } }): React.JSX.Element {
   const { events, loading, error, loadOlder, hasOlder } = useAgentEvents(agentId)
   const durs = useMemo(() => eventDurations(events), [events])
   const box = useRef<HTMLDivElement>(null)
@@ -46,15 +51,18 @@ export function AgentTimeline({ agentId, emptyText = 'No activity yet.', note }:
       {events.length === 0 ? (
         loading ? <Loading /> : error ? <EmptyState compact text={<span className="text-failed">{error}</span>} /> : emptyText === null ? null : <EmptyState compact text={emptyText} />
       ) : (
-        events.map((e) => <EventRow key={e.seq} e={e} dur={durs.get(e.seq)} />)
+        events.map((e) => <EventRow key={e.seq} e={e} dur={durs.get(e.seq)} plain={plain} />)
       )}
     </div>
   )
 }
 
-function EventRow({ e, dur }: { e: AgentEvent; dur: number | undefined }): React.JSX.Element {
+function EventRow({ e, dur, plain }: { e: AgentEvent; dur: number | undefined; plain?: { code: boolean } }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const expandable = !!e.detail && e.detail !== e.summary
+  const words = plain && e.kind === 'tool' ? plainActivity(e.summary, { code: plain.code }) : null
+  const raw = words ? [[e.name, e.summary].filter(Boolean).join(' · '), e.detail && e.detail !== e.summary ? e.detail : null].filter(Boolean).join('\n\n') : null
+  const detail = raw ?? e.detail
+  const expandable = !!detail && detail !== (words ?? e.summary)
   const state = e.state ?? (e.kind === 'error' ? 'error' : null)
   if (e.kind === 'text' && hasDiagram(e.detail)) {
     // DIAGRAMS.md: an answer with a diagram shows whole, the block drawn in place
@@ -87,12 +95,20 @@ function EventRow({ e, dur }: { e: AgentEvent; dur: number | undefined }): React
       </span>
       <div className="tl__body">
         <div className={`tl__head ${expandable ? 'is-expandable' : ''}`} onClick={() => expandable && setOpen(!open)}>
-          {e.name && <span className="tl__name">{e.name}</span>}
-          <span className="tl__summary">{e.summary}</span>
+          {words ? (
+            <span className="tl__summary tl__summary--plain" title={e.summary}>
+              {words}
+            </span>
+          ) : (
+            <>
+              {e.name && <span className="tl__name">{e.name}</span>}
+              <span className="tl__summary">{e.summary}</span>
+            </>
+          )}
           {state === 'denied' && <span className="tl__state">denied</span>}
           {dur !== undefined && <span className="tl__dur">{durationMs(dur)}</span>}
         </div>
-        {open && e.detail && <pre className="tl__detail">{e.detail}</pre>}
+        {open && detail && <pre className="tl__detail">{detail}</pre>}
       </div>
     </div>
   )

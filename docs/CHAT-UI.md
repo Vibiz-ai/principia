@@ -545,3 +545,26 @@ phone card). CDP selectors: `data-chatux` = `task-card` (with `data-state`, `dat
 `conversations/taskCard.render.test.ts`, `taskCardView.test.ts` (tail, run clock), `shared/taskCard.test.ts`
 (`clockLabel`, `queuedReason`, strip), `remote/remote.test.ts` (the phone's working line).
 
+
+### 8.4 Live opens the work itself (2026-10-28)
+
+"If it says live and I click it, I should see it working within the chat, not on the right."
+
+- **The live view** (Chats, `task:<id>`, `components/chats/TaskLiveView.tsx`): the header names who and what
+  ("Julia · VO-15 Check why…", the title alone in a company with no code), "Working · 4m 12s" ticking from the run's
+  start, Pause, Chat with Julia, Open task. Under it, what it is doing now in words; an open ask shows as its AskCard;
+  then the run's log fills the pane: the task card's TaskLog (AgentTimeline Activity / StepLog Output), following the
+  tail. Tool rows read in words ("Running a SQL query in PostHog"); the raw call and its input open on click. A task
+  that came back keeps its log with the result line; Pause goes.
+- **Every live entry opens it**: LIVE rows, the status bar's "1 working" (more than one opens Chats › Live), Home's
+  Open, the rail popover and palette rows (`openLiveItem` with a `taskId`), a working agent's row in Chats (its line
+  says what it is working on, not its old chat; on several tasks at once it opens their chat, whose banner has one
+  Watch per task), the right panel's working box ("Watch it work"; on several tasks, one "Watch VO-15" per task in
+  flight, from the seat's `working` list), and the task card's
+  and strip's Watch while the task is in progress (a finished run still opens the run view).
+- **Labelled by what runs**: one LIVE row per running task (an agent on two tasks is two rows): "Julia · VO-15 Check
+  why…" over the activity (`lib/liveRow.ts`). Connector calls are words (`lib/plainActivity.ts`: `posthog.exec call
+  execute-sql {…}` → "Running a SQL query in PostHog", "Looking up data in PostHog" without code; `mcp__google_drive__
+  search` → "Searching Google Drive"; memory lines → "Checking memory").
+- **The resting chat says so**: an agent's own chat, while it works on a task, carries a slim line on top: "Julia is
+  working on VO-15 now · Watch" (several: "working on 2 tasks now", one Watch each).

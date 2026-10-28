@@ -1594,12 +1594,27 @@ export function enterCompanySlot(n: number): void {
  * Open a live row of any company in one click. `enter` (rail popover): focus its company first, no Undo since the
  * user picked the company. Otherwise (Needs you, palette) focus follows a cross-company open with Undo.
  */
-export async function openLiveItem(item: { agentId: Id; askId: Id | null; companyId: Id }, opts: { enter?: boolean } = {}): Promise<void> {
+export async function openLiveItem(item: { agentId: Id; askId: Id | null; companyId: Id; taskId?: Id | null }, opts: { enter?: boolean } = {}): Promise<void> {
   if (opts.enter && multiCompany() && companyById(item.companyId)) setScope(item.companyId)
+  // CHAT-UI.md §8.4: a task at work opens its live view, never the agent's resting chat
+  if (item.taskId && !item.askId) return openTaskLive(item.taskId, item.companyId)
   const before = state.activeCompanyId
   await focusAgent(item.agentId, item.askId)
   // focusAgent already followed a session's company: a second switch would make Undo return to the wrong one
   if (state.activeCompanyId === before) followCompany(item.companyId)
+}
+
+/**
+ * CHAT-UI.md §8.4: watch a task at work in Chats (`task:<id>`): its run streaming in the main pane. Every live entry
+ * (LIVE rows, the status bar, Home, a working agent's row and panel, the banner on its resting chat) opens this. In
+ * another focused company it enters that company first.
+ */
+export function openTaskLive(taskId: Id, companyId?: Id | null): void {
+  const view: ViewState = { name: 'chats', filter: 'live', chat: `task:${taskId}` }
+  const co = companyId ?? state.tasks.find((t) => t.id === taskId)?.companyId ?? null
+  const active = activeCompany()
+  if (!co || !multiCompany() || active === 'all' || active === co) void navigate(view)
+  else void enterCompany(co, { view })
 }
 
 /** Open a company's Passport (enters the company: the vault is always the active company's). */

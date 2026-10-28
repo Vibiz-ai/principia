@@ -176,3 +176,8 @@
 .cx-strip__list { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: flex; flex-direction: column; gap: 4px; }
 .cx-strip__item { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
 .cx-strip__id { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-xs); color: var(--text-primary); }
+
+/* CHAT-UI.md §8.4: the run's log as the main pane of a task's live view */
+.cx-task__log--fill { flex: 1; min-height: 0; margin-left: 0; }
+.cx-task__log--fill > .cx-task__logbox { flex: 1; height: auto; max-height: none; }
+.tl__summary--plain { color: var(--text-primary); }

@@ -10,6 +10,7 @@
  * - With nothing picked (or "New conversation") a company opens New conversation: To: Principia picks ▾, the line
  *   that says who will answer, and your recent conversations. All companies opens the last chat you had open.
  * - Empty: the company's own empty state ("No chats in Harbor Dental Group yet…").
+ * - `task:<id>` (CHAT-UI.md §8.4): a task at work, its run streaming here (TaskLiveView). Every LIVE entry opens it.
  */
 import { useEffect } from 'react'
 import type { Session } from '@shared/types'
@@ -34,6 +35,8 @@ import { focusSession, openNewChat, providerLabel, useStore, type ChatsFilter } 
 import { MarkdownLite } from '../components/diagrams/MarkdownLite'
 import { ConversationThread, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
 import type { Id } from '@shared/types'
+import { TaskLiveView } from '../components/chats/TaskLiveView'
+import { taskOfChatKey } from '../lib/liveRow'
 import '../styles/diagrams.css'
 import '../styles/desk.css'
 
@@ -44,12 +47,14 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: in a company, Chats with nothing picked is New conversation, not the newest row
   const pane = !!scope && (!chat || chat.startsWith('new'))
-  const cur = pane ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && rows.find((r) => r.key === remembered)) || rows[0] || null
+  const liveTask = taskOfChatKey(chat)
+  const cur = pane || liveTask ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && rows.find((r) => r.key === remembered)) || rows[0] || null
   const code = useIsCode(scope)
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   useEffect(() => {
     if (cur) rememberChat(scope, cur.key)
   }, [scope, cur?.key])
+  if (liveTask) return <TaskLiveView key={liveTask} taskId={liveTask} />
   if (pane && scope) return <NewConversationPane companyId={scope} chat={chat} companyName={company?.name ?? ''} />
   if (!cur)
     return (

@@ -25,7 +25,7 @@ import { reposOf } from '../../lib/companyModel'
 import { eventGlyph } from '../../lib/live'
 import { errorMessage, hive } from '../../lib/hive'
 import { mergeAgents, useAgentEvents } from '../../state/live'
-import { attempt, navigate, openBoard, useStore, type State } from '../../state/store'
+import { attempt, getState, navigate, openBoard, openTaskLive, useStore, type State } from '../../state/store'
 import '../../styles/conversations.css'
 
 /** A clock for elapsed labels: ticks while something is open, stops otherwise. */
@@ -40,12 +40,15 @@ function useNow(active: boolean, ms = 10_000): number {
   return now
 }
 
-function watch(runId: string | null): void {
+/** Watch: a task at work opens its live view in Chats (CHAT-UI.md §8.4); a run that ended opens the run view. */
+function watch(runId: string | null, taskId?: string | null): void {
+  const t = taskId ? getState().tasks.find((x) => x.id === taskId) : undefined
+  if (t && t.status === 'in_progress' && t.runId) return openTaskLive(t.id, t.companyId)
   if (runId) void navigate({ name: 'run', runId })
 }
 
 /** "1m 12s", ticking every second; its own component so only the clock re-renders. */
-function WorkClock({ since }: { since: string }): React.JSX.Element {
+export function WorkClock({ since }: { since: string }): React.JSX.Element {
   const now = useNow(true, 1000)
   return (
     <span className="cx-task__age" title="Since its run started" data-chatux="task-clock">
@@ -83,11 +86,14 @@ function TaskTail({ agentId, code, fallback }: { agentId: Id; code: boolean; fal
   )
 }
 
-/** The run's full log in the card: the run view's Activity timeline or its Output, following the tail. */
-export function TaskLog({ agentId, runId, stepId, live }: { agentId: Id; runId: Id; stepId: Id | null; live: boolean }): React.JSX.Element {
+/**
+ * The run's full log in the card: the run view's Activity timeline or its Output, following the tail. `fill` (the
+ * task's live view in Chats, CHAT-UI.md §8.4): it takes the pane, and tool calls read in words (raw on click).
+ */
+export function TaskLog({ agentId, runId, stepId, live, fill, code = true }: { agentId: Id; runId: Id; stepId: Id | null; live: boolean; fill?: boolean; code?: boolean }): React.JSX.Element {
   const [tab, setTab] = useState<'activity' | 'output'>('activity')
   return (
-    <div className="cx-task__log" data-chatux="task-log">
+    <div className={`cx-task__log ${fill ? 'cx-task__log--fill' : ''}`} data-chatux="task-log">
       {stepId && (
         <Segmented
           size="sm"
@@ -101,7 +107,7 @@ export function TaskLog({ agentId, runId, stepId, live }: { agentId: Id; runId: 
         />
       )}
       <div className="cx-task__logbox">
-        {tab === 'output' && stepId ? <StepLog runId={runId} stepId={stepId} live={live} /> : <AgentTimeline agentId={agentId} emptyText={live ? 'Waiting for the first tool call…' : 'No activity recorded.'} />}
+        {tab === 'output' && stepId ? <StepLog runId={runId} stepId={stepId} live={live} /> : <AgentTimeline agentId={agentId} emptyText={live ? 'Waiting for the first tool call…' : 'No activity recorded.'} plain={fill ? { code } : undefined} />}
       </div>
     </div>
   )
@@ -291,7 +297,7 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
           </Button>
         )}
         {v.needs?.live && (
-          <Button size="sm" variant="primary" data-chatux="task-approve" onClick={() => watch(v.runId)}>
+          <Button size="sm" variant="primary" data-chatux="task-approve" onClick={() => watch(v.runId, card.taskId)}>
             Answer it
           </Button>
         )}
@@ -307,7 +313,7 @@ export function TaskCardView({ card: stored, companyId }: { card: ForumTaskCard;
         )}
         <span className="flex1" />
         {v.runId && (
-          <button type="button" className="link-btn cx-task__link" data-chatux="task-watch" onClick={() => watch(v.runId)}>
+          <button type="button" className="link-btn cx-task__link" data-chatux="task-watch" onClick={() => watch(v.runId, card.taskId)}>
             {v.state === 'working' || (v.needs?.live ?? false) ? 'Watch' : 'See the run'}
           </button>
         )}
@@ -367,7 +373,7 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
         </button>
         <span className="flex1" />
         {!many && focusRun && (
-          <button type="button" className="link-btn" data-chatux="working-strip-watch" onClick={() => watch(focusRun)}>
+          <button type="button" className="link-btn" data-chatux="working-strip-watch" onClick={() => watch(focusRun, strip.focus.taskId)}>
             Watch
           </button>
         )}
@@ -382,7 +388,7 @@ export function WorkingStrip({ msgs, cards }: { msgs?: readonly ForumMessage[]; 
               <span className="cx-strip__who">· {t.state === 'working' ? 'working' : t.state === 'needs_you' ? 'needs you' : 'queued'}</span>
               <span className="flex1" />
               {runOf(t) && (
-                <button type="button" className="link-btn" onClick={() => watch(runOf(t))}>
+                <button type="button" className="link-btn" onClick={() => watch(runOf(t), t.taskId)}>
                   Watch
                 </button>
               )}
