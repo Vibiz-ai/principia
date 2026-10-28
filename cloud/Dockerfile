@@ -6,9 +6,11 @@
 #   (or: docker compose -f cloud/compose.yml -f cloud/compose.build.yml up --build -d)
 # The published image (.github/workflows/cloud-images.yml) builds from one pinned Open Passport commit
 # (OPEN_PASSPORT_COMMIT there), not from main.
-# CLI versions are pinned (CLOUD.md §7.2, §11 supply chain). Bump them deliberately and record them in cloud/README.md.
+# Supply chain (CLOUD.md §7.2, §11): the base image is pinned by its multi-arch index digest (the tag stays for readers;
+# Dependabot proposes digest bumps), and the agent CLIs install with `npm ci` from cloud/agent-clis/package-lock.json,
+# so every package is pinned by hash. Bump them deliberately and record them in cloud/README.md.
 
-FROM node:24-bookworm-slim AS build
+FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/principia
 COPY package.json package-lock.json ./
@@ -20,13 +22,14 @@ RUN npx vite build --config vite.cloud.config.ts \
  && npx vite build --config vite.console.config.ts \
  && npm prune --omit=dev --ignore-scripts
 
-FROM node:24-bookworm-slim
-ARG CLAUDE_CODE_VERSION=2.1.306
-ARG CODEX_VERSION=0.163.0
-ARG GEMINI_CLI_VERSION=0.65.0
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client && rm -rf /var/lib/apt/lists/* \
- && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
- && npm cache clean --force
+FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client && rm -rf /var/lib/apt/lists/*
+# the Claude Code, Codex and Gemini CLIs, at the versions and hashes in the lockfile, linked onto the sandbox PATH
+WORKDIR /opt/agent-clis
+COPY cloud/agent-clis/package.json cloud/agent-clis/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force \
+ && ln -s /opt/agent-clis/node_modules/.bin/claude /opt/agent-clis/node_modules/.bin/codex /opt/agent-clis/node_modules/.bin/gemini /usr/local/bin/ \
+ && chmod -R a+rX /opt/agent-clis
 WORKDIR /opt/principia
 COPY --from=build /opt/principia/package.json ./package.json
 COPY --from=build /opt/principia/node_modules ./node_modules

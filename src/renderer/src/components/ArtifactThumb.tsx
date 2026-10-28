@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { Artifact } from '@shared/types'
+import { stripTags } from '@shared/stripAll'
 import { hive } from '../lib/hive'
 
 const cache = new Map<string, string>()
@@ -46,7 +47,7 @@ const fetchText = (id: string): Promise<string | null> => once(textInflight, tex
 /** Readable preview lines: html → visible text (title/headings first), markdown/code → leading lines. */
 export function previewLines(kind: string, text: string, max = 8): { heading: string | null; lines: string[] } {
   if (kind === 'html') {
-    const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim() || /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(text)?.[1]?.replace(/<[^>]+>/g, '').trim() || null
+    const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim() || stripTags(/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(text)?.[1] ?? '').trim() || null
     const body = text
       .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, ' ')
       .replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr|section|header)>/gi, '\n')

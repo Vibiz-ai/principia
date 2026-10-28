@@ -14,6 +14,8 @@ import type { PhoneHost } from './api'
 
 const SITE = 'https://phone.example.com'
 const TUNNEL = 'quiet-tree-42.trycloudflare.com'
+/** `s` as a literal inside a RegExp: every metacharacter escaped, not just the dots. */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** an API that answers every route with its name and the device, and greets sockets */
 function fakeApi(): RemoteApi & { seen: { name: string; device: string }[] } {
@@ -304,10 +306,10 @@ describe('RemoteService, hosted mode (RA6)', () => {
     const on = await svc.setEnabled(true)
     const link = svc.pairLink()
     expect(link.site).toBe(SITE)
-    expect(link.link).toMatch(new RegExp(`^${SITE}/#mac=${encodeURIComponent(on.localUrl!).replace(/[.]/g, '\\.')}&code=[0-9a-f]{32}$`))
+    expect(link.link).toMatch(new RegExp(`^${escapeRe(SITE)}/#mac=${escapeRe(encodeURIComponent(on.localUrl!))}&code=[0-9a-f]{32}$`))
     site = null
     const local = svc.pairLink()
-    expect(local.link).toMatch(new RegExp(`^${on.localUrl!.replace(/[.]/g, '\\.')}/#pair=[0-9a-f]{32}$`))
+    expect(local.link).toMatch(new RegExp(`^${escapeRe(on.localUrl!)}/#pair=[0-9a-f]{32}$`))
     expect(local.site).toBeNull()
     await svc.setEnabled(false)
   })

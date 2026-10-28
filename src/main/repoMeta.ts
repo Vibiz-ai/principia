@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isInside } from './pathGuard'
+import { stripTags } from '../shared/stripAll'
 
 export interface RepoMeta {
   remote: string | null
@@ -100,7 +101,7 @@ export function fsRepoMeta(repoPath: string): RepoMeta {
     if (text === null) continue
     const line = text
       .split('\n')
-      .map((l) => l.replace(/^#+\s*/, '').replace(/<[^>]+>/g, '').trim())
+      .map((l) => stripTags(l.replace(/^#+\s*/, '')).trim())
       .find((l) => l && /[\p{L}\p{N}]/u.test(l))
     if (line) {
       readme = cap(line, README_LINE_MAX)

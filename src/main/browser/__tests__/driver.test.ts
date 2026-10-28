@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserError, CdpDriver, parseKey } from '../driver'
+import { BrowserError, CdpDriver, jsString, parseKey } from '../driver'
 import { FakeCdp } from './fakeCdp'
 
 const AX = {
@@ -129,6 +129,17 @@ describe('CdpDriver', () => {
     expect(d.consoleText()).toContain('[info] hello')
     expect(d.networkText({ failed: true })).toBe('GET 404 Script https://a.test/x.js')
     expect(d.networkText({ filter: '/api' })).toBe('POST 200 Fetch https://a.test/api')
+  })
+})
+
+describe('jsString', () => {
+  it('is one inert JavaScript string literal that evaluates back to the input', () => {
+    for (const v of ['plain', 'say "hi"', 'back\\slash', '</script><script>alert(1)</script>', 'line\u2028sep\u2029para', "it's `x` ${y}"]) {
+      const lit = jsString(v)
+      expect(lit).not.toMatch(/[<>\u2028\u2029]/)
+      // \u escapes are valid JSON too, so it parses back to exactly the input
+      expect(JSON.parse(lit)).toBe(v)
+    }
   })
 })
 

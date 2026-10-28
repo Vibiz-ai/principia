@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripTags } from '@shared/stripAll'
 
 // the tone fallback reads the store; server markup needs a server snapshot and a window without a bridge
 vi.mock('react', async () => {
@@ -92,7 +93,7 @@ describe('PassportTablet: line-art passport (VOICE.md §5.3)', () => {
     expect(count(ins, '<wbr/>')).toBe(3)
     expect(count(ins, '<span class="rm-pp__dot">·</span><wbr/>')).toBe(3)
     // words carry no break opportunity of their own (no spaces, no soft hyphens)
-    expect(ins.replace(/<[^>]+>/g, '')).not.toMatch(/[\s\u00ad\u200b-]/)
+    expect(stripTags(ins)).not.toMatch(/[\s\u00ad\u200b-]/)
     // a single word: no interpunct, no break
     expect(insOf(pp({ name: 'Northwind' }))).toBe('NORTHWIND')
   })
