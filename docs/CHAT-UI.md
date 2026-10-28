@@ -570,6 +570,12 @@ task. It should come back and reply to the parent so the parent tells what it ne
   the agent: in a conversation a task in review reads "VO-15 is ready for your review. <summary>" with "What I checked:
   …" instead of "Evidence: …".
 - **The card** stays a compact status card: NEEDS YOU · the reason on one line · Show logs · Answer · Open task.
+- **Its options are buttons.** The question's options (`ForumAsk.options`) are quick answers under the message; the
+  bubble drops the "Options: A, B or C." line of the stored text while the buttons say it (`taskCardView.ts
+  questionText`; the line stays for search, notifications and older clients). Once answered, the options stay as quiet
+  chips with the one picked marked. A question always opens its own message group (name and time over it,
+  `ConversationKit.startsGroup`), so after "Got it, back on VO-15." from the same agent it does not read as part of the
+  confirmation; consecutive messages from one person keep a small gap between them.
 - **The strip** "VO-15 needs you · Julia is waiting" is a link to Julia's question (it scrolls there and marks it);
   with several tasks, each needs-you row has "See the question".
 - **The phone** gets the question as an ordinary room message, and a reply from the phone's room box goes through the
@@ -629,3 +635,35 @@ Answer, the strip's link), `chat/chatTasks.test.ts` (a chat's question notice on
   search` → "Searching Google Drive"; memory lines → "Checking memory").
 - **The resting chat says so**: an agent's own chat, while it works on a task, carries a slim line on top: "Julia is
   working on VO-15 now · Watch" (several: "working on 2 tasks now", one Watch each).
+
+### 8.5 Working tasks stay at the bottom: the dock (2026-10-28)
+
+The founder: the task card sits where it was first posted; as the chat goes on (Julia's question, his answer, "Got it,
+back on VO-15") the live card scrolls away to the top and the work is "hidden". Now, in a team conversation:
+
+- **The dock** (`TaskCard.tsx TaskDock`), right above the composer, outside the message list: the compact live card
+  (`TaskCardView dock`) of every task filed from this conversation that is **queued, working or needs you**
+  (`taskCardView.ts dockedTasks`, from the strip's live states, oldest first so the newest sits next to the reply box).
+  One head line: face, identifier, title, who, the state and its clock ("WORKING · 1m 12s"); under it the 2 latest
+  activity lines (the live tail), or why it waits, or what it needs; then Run now / Answer, Show logs, Watch, Open task.
+  **Show logs** opens the run's log above the card (the dock grows upward), 240 px capped at 35vh, scrollable. More than
+  three: the newest three and "+N more" (`dockRows`, `DOCK_VISIBLE`), which expands them all. The dock is capped at 55vh
+  and scrolls.
+- **It never covers messages**: the list is a flex sibling above it, so it shrinks as the dock grows. The list follows
+  new messages while you are at its end, also when the dock grows or shrinks (a `ResizeObserver` on the list).
+- **The history keeps a reference**: while its task is docked, the original card is one line, "VO-15 · working · see
+  below" (`TaskCardRef`, `dockRefLine`; a click marks the docked card). When the task comes back (in review, done,
+  failed) it leaves the dock with a short fade, the reference turns back into the full outcome card, and the result
+  message comes into the stream as before.
+- **The header strip** stays; with one task its line marks the docked card (`jumpToDockedTask`) instead of being inert,
+  except needs you, which still goes to the question. With several, each identifier in the list marks its docked card.
+  A chat session's strip (ChatPane) has no dock and is unchanged.
+- **The phone** (`cloud/phone/render.ts roomDocked`, `roomTaskRef`): the room's queued, working and needs-you cards
+  are pinned (sticky) above the reply box, the newest three and "+N more"; the stream shows "VO-15 · working · see
+  below" in their place. The iPhone app (`RoomView.swift`) is not changed yet.
+- CDP selectors: `task-dock`, `task-dock-card` (with `data-dock-task`), `task-dock-more`, `task-card-ref`,
+  `working-strip-dock`, `task-question-option-done`.
+- Tests: `taskCardView.test.ts` (dock membership by status, order, "+N more", the reference line, `questionText`),
+  `conversations/taskCard.render.test.ts` (the dock's cards, the compact working and needs-you cards, the history's
+  reference and the full card once done, the options as buttons without the "Options:" line, `startsGroup`, the strip's
+  link to the dock), `cloud/phone/phone.test.ts` (pinned cards, references, "+N more").
