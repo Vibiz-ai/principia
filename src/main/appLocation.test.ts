@@ -35,6 +35,7 @@ describe('offerMoveToApplications', () => {
     return {
       platform: 'darwin' as NodeJS.Platform,
       packaged: true,
+      env: {} as NodeJS.ProcessEnv,
       execPath: '/Volumes/Principia/Principia.app/Contents/MacOS/Principia',
       userData,
       inApplications: () => false,
@@ -56,8 +57,8 @@ describe('offerMoveToApplications', () => {
     expect(await offerMoveToApplications(d)).toBe(false)
     expect(d.move).not.toHaveBeenCalled()
   })
-  it('does nothing in dev, off macOS or already in Applications', async () => {
-    for (const o of [{ packaged: false }, { platform: 'win32' as const }, { inApplications: () => true }]) {
+  it('does nothing in dev, off macOS, already in Applications, in a separate instance or the smoke test', async () => {
+    for (const o of [{ packaged: false }, { platform: 'win32' as const }, { inApplications: () => true }, { env: { HIVE_USER_DATA: '/tmp/x' } }, { env: { HIVE_SMOKE: '1' } }]) {
       const d = deps(o)
       expect(await offerMoveToApplications(d)).toBe(false)
       expect(d.ask).not.toHaveBeenCalled()

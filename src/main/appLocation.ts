@@ -26,6 +26,8 @@ const DECLINED_FILE = 'move-to-applications-declined'
 export interface MoveToApplicationsDeps {
   platform: NodeJS.Platform
   packaged: boolean
+  /** a separate instance (HIVE_USER_DATA) or the smoke test (HIVE_SMOKE=1) is never asked, like deepLinks.ts */
+  env: NodeJS.ProcessEnv
   execPath: string
   userData: string
   inApplications: () => boolean
@@ -41,7 +43,7 @@ export interface MoveToApplicationsDeps {
  * from the DMG or translocated: that path breaks other apps' configs, so it is always worth asking.
  */
 export async function offerMoveToApplications(d: MoveToApplicationsDeps): Promise<boolean> {
-  if (d.platform !== 'darwin' || !d.packaged) return false
+  if (d.platform !== 'darwin' || !d.packaged || d.env.HIVE_USER_DATA || d.env.HIVE_SMOKE === '1') return false
   try {
     if (d.inApplications()) return false
   } catch {
@@ -85,6 +87,7 @@ export function offerMoveToApplicationsNow(userData: string): Promise<boolean> {
   return offerMoveToApplications({
     platform: process.platform,
     packaged: app.isPackaged,
+    env: process.env,
     execPath: process.execPath,
     userData,
     inApplications: () => app.isInApplicationsFolder(),
