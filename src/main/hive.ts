@@ -59,6 +59,9 @@ export function clockLabel(iso: string, now = new Date()): string {
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 const OUTPUT_COALESCE_MS = 50
 
+/** requestQuit: the longest the shutdown steps may take before the app quits anyway */
+export const QUIT_SHUTDOWN_CAP_MS = 15_000
+
 export class Hive {
   private companyStore: HookedCompanyStore | null = null
   /** DEPARTMENTS.md §3: the store tells the dispatcher about every task write (routing on create, wakes on comments). */
@@ -172,6 +175,8 @@ export class Hive {
   private blockerId: number | null = null
   private outBuf = new Map<string, { runId: Id; stepId: Id; chunk: string; timer: NodeJS.Timeout }>()
   private shuttingDown = false
+  /** a requestQuit is between its start and its end (confirm dialog open, or shutting down) */
+  private quitPending = false
   /** the app is quitting (nothing new starts) */
   get quitting(): boolean {
     return this.shuttingDown
@@ -928,65 +933,113 @@ export class Hive {
   /**
    * before-quit: confirm if anything is running, then stop sessions + engine, then really quit. `finish` replaces the
    * final app.quit() (Restart to update: the updater's quitAndInstall, once windows may close).
+   *
+   * Never leaves the app unquittable: once the user said Quit (or nothing needed confirming), the final quit is
+   * scheduled in `finally`, whatever a shutdown step throws. Parts that do not exist yet (a quit during boot, tests)
+   * are skipped. Only Cancel in the confirm dialog ends without quitting, and the next quit asks again.
    */
   async requestQuit(finish?: () => void): Promise<void> {
-    if (this.shuttingDown || this.shutdownDone) return
-    const nS = this.sessions.runningCount()
-    const nR = this.store.listRuns({ status: ['queued', 'running'], limit: 1000 }).length
-    if (nS + nR > 0 && !this.forceQuit && process.env.HIVE_SMOKE !== '1') {
-      const parts = [
-        nS ? `${nS} session${nS === 1 ? '' : 's'}` : '',
-        nR ? `${nR} run${nR === 1 ? '' : 's'}` : ''
-      ].filter(Boolean)
-      const win = this.windows.get()
-      const opts = {
-        type: 'warning' as const,
-        message: `${parts.join(' and ')} will be stopped. Quit?`,
-        detail: 'Exited Claude sessions can be resumed later with Restart.',
-        buttons: ['Quit', 'Cancel'],
-        defaultId: 0,
-        cancelId: 1
-      }
-      const { response } = win && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-      if (response !== 0) return
+    if (this.quitPending || this.shuttingDown || this.shutdownDone) return
+    this.quitPending = true
+    let quit: boolean
+    try {
+      quit = await this.confirmQuit()
+    } catch (e) {
+      // the user asked to quit; a dialog that cannot open must not keep the app running
+      log.error('quit: confirm failed; quitting anyway', { e: String(e) })
+      quit = true
+    }
+    if (!quit) {
+      this.quitPending = false
+      return
     }
     this.shuttingDown = true
-    this.windows.quitting = true
+    try {
+      // bounded: a stop() that never settles must not keep the app from quitting (sessions have their own 6 s cap)
+      await Promise.race([this.shutdownForQuit(), new Promise<void>((r) => setTimeout(r, QUIT_SHUTDOWN_CAP_MS))])
+    } catch (e) {
+      log.error('quit: shutdown failed; quitting anyway', { e: String(e) })
+    } finally {
+      this.quitPending = false
+      this.finishQuit(finish)
+    }
+  }
+
+  /** The "N sessions will be stopped. Quit?" dialog when something runs; true = go on. A failure here does not block the quit. */
+  private async confirmQuit(): Promise<boolean> {
+    if (this.forceQuit || process.env.HIVE_SMOKE === '1') return true
+    const nS = this.safe(() => this.sessions?.runningCount() ?? 0, 0)
+    const nR = this.safe(() => this.store.listRuns({ status: ['queued', 'running'], limit: 1000 }).length, 0)
+    if (nS + nR === 0) return true
+    const parts = [nS ? `${nS} session${nS === 1 ? '' : 's'}` : '', nR ? `${nR} run${nR === 1 ? '' : 's'}` : ''].filter(Boolean)
+    const win = this.safe(() => this.windows?.get() ?? null, null)
+    const opts = {
+      type: 'warning' as const,
+      message: `${parts.join(' and ')} will be stopped. Quit?`,
+      detail: 'Exited Claude sessions can be resumed later with Restart.',
+      buttons: ['Quit', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1
+    }
+    const { response } = win && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    return response === 0
+  }
+
+  /** Stops everything this Hive runs. Each step is isolated: one that throws does not skip the ones after it. */
+  private async shutdownForQuit(): Promise<void> {
+    const step = (name: string, fn: () => unknown): Promise<void> =>
+      Promise.resolve()
+        .then(fn)
+        .then(
+          () => undefined,
+          (e: unknown) => log.warn('quit: shutdown step failed', { step: name, e: String(e) })
+        )
+    if (this.windows) this.windows.quitting = true
     // DEPARTMENTS.md §3: before the engine cancels its runs, so their run ends start nothing new during the quit
-    this.dispatcher?.dispose()
-    this.taskWork?.dispose()
+    await step('dispatcher', () => this.dispatcher?.dispose())
+    await step('taskWork', () => this.taskWork?.dispose())
+    // ptys first: every one must have exited before the process does (index.ts guardedExit)
     const timeout = new Promise<void>((r) => setTimeout(r, 6000))
-    await Promise.race([
-      Promise.all([
-        this.sessions.shutdown().catch(() => undefined),
-        this.safe(() => this.engine.shutdown(), Promise.resolve()).catch(() => undefined)
-      ]),
-      timeout
-    ])
-    this.safe(() => this.engine.scheduler.stop(), undefined)
-    this.safe(() => this.engine.slackTriggers?.stop(), undefined)
-    this.dispatcher?.dispose()
+    await Promise.race([Promise.all([step('sessions', () => this.sessions?.shutdown()), step('engine', () => this.engine?.shutdown())]), timeout])
+    await step('scheduler', () => this.engine?.scheduler.stop())
+    await step('slackTriggers', () => this.engine?.slackTriggers?.stop())
+    await step('dispatcher', () => this.dispatcher?.dispose())
     // SLACK.md §2.3: close the socket with 1000, no retries
-    await this.slack?.stop().catch(() => undefined)
+    await step('slack', () => this.slack?.stop())
     // REMOTE.md RA1: quitting is Turn off (tunnel, server, every phone signed out)
-    await this.remote?.stop().catch(() => undefined)
-    this.browser?.host.dispose()
-    await this.browser?.service.stop().catch(() => undefined)
+    await step('remote', () => this.remote?.stop())
+    await step('browser host', () => this.browser?.host.dispose())
+    await step('browser', () => this.browser?.service.stop())
     for (const t of this.sessionRetries.values()) clearTimeout(t)
     this.sessionRetries.clear()
     // CONTRACT §13: nothing tagged by this Hive outlives it (dev servers, watchers, leftovers nobody stopped)
     const reaped = this.safe(() => this.reaper?.reapAllSync() ?? 0, 0)
     if (reaped) log.info('reaped tagged processes on quit', { count: reaped })
-    await this.indexer.stop().catch(() => undefined)
-    this.tray?.destroy()
-    if (this.blockerId !== null) powerSaveBlocker.stop(this.blockerId)
-    this.memory?.stop()
-    this.safe(() => (this.cloudWiring?.logins.cancel(), this.cloudWiring?.link.stop()), undefined)
+    await step('indexer', () => this.indexer?.stop())
+    await step('tray', () => this.tray?.destroy())
+    await step('power', () => (this.blockerId !== null ? powerSaveBlocker.stop(this.blockerId) : undefined))
+    await step('memory', () => this.memory?.stop())
+    await step('cloud', () => (this.cloudWiring?.logins.cancel(), this.cloudWiring?.link.stop()))
+  }
+
+  /** The real quit, after shutdown (or a failed one). The db closes in will-quit (index.ts). */
+  private finishQuit(finish?: () => void): void {
+    this.shuttingDown = true
+    this.safe(() => {
+      if (this.windows) this.windows.quitting = true
+    }, undefined)
     this.shutdownDone = true
     // Deferred: when requestQuit ran synchronously inside the first before-quit (nothing running, e.g. SIGTERM or
     // tray Quit), a nested app.quit() is overwritten by the outer, prevented quit and the app just hides instead of
     // exiting. A fresh task makes this a clean second quit. Hard exit if something still blocks it.
-    setImmediate(() => (finish ?? (() => app.quit()))())
+    setImmediate(() => {
+      try {
+        ;(finish ?? (() => app.quit()))()
+      } catch (e) {
+        log.error('quit: final quit failed; exiting', { e: String(e) })
+        app.exit(0)
+      }
+    })
     setTimeout(() => {
       log.warn('quit did not complete; forcing exit')
       app.exit(0)

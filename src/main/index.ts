@@ -24,6 +24,7 @@ import { WindowManager } from './windowManager'
 import { HiveTray } from './tray'
 import { buildAppMenu } from './menu'
 import { Hive } from './hive'
+import { createGuardedExit } from './exitGuard'
 import { emit, setEventTargets, setTrustedSender } from './ipc'
 import { registerAllHandlers } from './handlers'
 import { importWorkflowFromDialog } from './handlers/workflows'
@@ -55,6 +56,9 @@ import { DeepLinkInbox, PROTOCOL, deepLinkFromArgv, shouldRegisterProtocol } fro
 import { UpdateService, appCannotSelfUpdate, type Updater } from './updates'
 import { updatesOffReason } from '../shared/updates'
 
+/** a quit during startup waits this long for it to finish, then exits */
+const BOOT_QUIT_CAP_MS = 20_000
+
 applyUserDataOverride()
 // BROWSER.md §2: agents drive the company browser while Principia sits behind other windows. An occluded window must
 // keep rendering: clicks are hit-tested against rendered frames and screenshots need one.
@@ -74,7 +78,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     const url = deepLinkFromArgv(argv)
     if (url) links.receive(url)
-    if (hive) hive.windows.show()
+    if (hive?.windows) hive.windows.show()
     else pendingShow = true
   })
   // macOS: also on a cold launch from a link, before ready
@@ -82,12 +86,31 @@ if (!app.requestSingleInstanceLock()) {
     e.preventDefault()
     if (links.receive(url) && !hive) pendingShow = true
   })
-  app.on('activate', () => hive?.windows.show())
+  app.on('activate', () => hive?.windows?.show())
 
+  // A quit that arrives while the app is still starting (Cmd+Q, Dock Quit, logout while engine.init or provider
+  // detection is awaited) waits for startup to finish and then takes the normal path: quitting half-way would let the
+  // rest of startup create windows and start the scheduler after the shutdown. If startup never finishes, exit anyway.
+  let booted = false
+  let quitAfterBoot = false
+  const quitHive = (): void => {
+    if (!hive) return
+    if (!booted) {
+      if (quitAfterBoot) return
+      quitAfterBoot = true
+      log.info('quit requested during startup; quitting once it finishes')
+      setTimeout(() => {
+        log.warn('startup did not finish; exiting')
+        guardedExit(0)
+      }, BOOT_QUIT_CAP_MS)
+      return
+    }
+    hive.requestQuit().catch((e: unknown) => log.error('quit failed', { e: String(e) }))
+  }
   app.on('before-quit', (e) => {
     if (!hive || hive.shutdownDone) return
     e.preventDefault()
-    void hive.requestQuit()
+    quitHive()
   })
   app.on('window-all-closed', () => {
     // Hive keeps running in the menu bar; quit only via Cmd+Q / tray / app:quit.
@@ -103,40 +126,16 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   // Every exit (including app.exit() from tooling such as Playwright) waits for live ptys to be killed and their
-  // exit callbacks delivered first. Exiting with a live node-pty aborts the process ("libc++abi: terminating due to
-  // uncaught exception of type Napi::Error"), which macOS reports as "Hive quit unexpectedly".
+  // exit callbacks delivered first, reaps what this Hive tagged, and hard-kills the process if Electron's exit does
+  // not end it (exitGuard.ts).
   const realExit = app.exit.bind(app)
-  let exiting = false
-  const guardedExit = (code = 0): void => {
-    const sessions = hive?.sessions
-    const reapTagged = (): void => {
-      // CONTRACT §13: every exit path reaps what this Hive tagged (dev servers, watchers)
-      try {
-        hive?.reaper?.reapAllSync()
-      } catch {
-        /* best effort */
-      }
-    }
-    if (exiting || !sessions || sessions.runningCount() === 0) {
-      exiting = true
-      reapTagged()
-      return realExit(code)
-    }
-    exiting = true
-    const fallback = setTimeout(() => {
-      sessions.killAllNow()
-      reapTagged()
-      setTimeout(() => realExit(code), 300)
-    }, 2500)
-    void sessions
-      .shutdown()
-      .catch(() => undefined)
-      .finally(() => {
-        clearTimeout(fallback)
-        reapTagged()
-        realExit(code)
-      })
-  }
+  const guardedExit = createGuardedExit({
+    sessions: () => hive?.sessions,
+    // CONTRACT §13: every exit path reaps what this Hive tagged (dev servers, watchers)
+    reap: () => void hive?.reaper?.reapAllSync(),
+    realExit: (code) => realExit(code),
+    log
+  })
   try {
     ;(app as { exit: (code?: number) => void }).exit = guardedExit
   } catch {
@@ -159,7 +158,7 @@ if (!app.requestSingleInstanceLock()) {
       guardedExit(0)
     }, 3500)
     if (hive.shutdownDone) app.quit()
-    else void hive.requestQuit()
+    else quitHive()
   }
   const installSignalHandlers = (): void => {
     for (const sig of ['SIGTERM', 'SIGINT'] as const) {
@@ -679,6 +678,9 @@ if (!app.requestSingleInstanceLock()) {
     // CONTRACT §13: list (never kill) processes an earlier Hive run left behind
     setTimeout(() => void h.scanLeftovers(), 1500)
     h.updates.start()
+  }).finally(() => {
+    booted = true
+    if (quitAfterBoot) quitHive()
   })
 }
 
