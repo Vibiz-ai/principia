@@ -131,6 +131,7 @@ export const Composer = forwardRef<ComposerHandle, {
       <textarea
         ref={ta}
         className="fm-composer__input"
+        data-field-drop-target
         rows={1}
         value={text}
         disabled={archived}
