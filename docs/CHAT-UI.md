@@ -684,8 +684,13 @@ back on VO-15") the live card scrolls away to the top and the work is "hidden". 
   One head line: face, identifier, title, who, the state and its clock ("WORKING · 1m 12s"); under it the 2 latest
   activity lines (the live tail), or why it waits, or what it needs; then Run now / Answer, Show logs, Watch, Open task.
   **Show logs** opens the run's log above the card (the dock grows upward), 240 px capped at 35vh, scrollable. More than
-  three: the newest three and "+N more" (`dockRows`, `DOCK_VISIBLE`), which expands them all. The dock is capped at 55vh
+  two: the newest two and "+N more" (`dockRows`, `DOCK_VISIBLE`), which expands them all. The dock is capped at 55vh
   and scrolls.
+- **Fold and close** (2026-10-29, PR-53): with more than one card, a summary line sits on top ("3 need you ▾",
+  `dockSummary`); a click folds the dock to that one line and back. Each card has **×**: it leaves the dock (its history
+  card is the full card again) until its task moves on: a new question or back to work (`dockMark`, `openDocked`).
+  "Show N closed" brings them back. Both are per viewer and per conversation in localStorage (`DOCK_PREFS_KEY`,
+  `parseDockPrefs`, `useDockPrefs`). The strip's line and a history reference open a folded dock or a closed card.
 - **It never covers messages**: the list is a flex sibling above it, so it shrinks as the dock grows. The list follows
   new messages while you are at its end, also when the dock grows or shrinks (a `ResizeObserver` on the list).
 - **The history keeps a reference**: while its task is docked, the original card is one line, "VO-15 · working · see
@@ -698,7 +703,8 @@ back on VO-15") the live card scrolls away to the top and the work is "hidden". 
 - **The phone** (`cloud/phone/render.ts roomDocked`, `roomTaskRef`): the room's queued, working and needs-you cards
   are pinned (sticky) above the reply box, the newest three and "+N more"; the stream shows "VO-15 · working · see
   below" in their place. The iPhone app (`RoomView.swift`) is not changed yet.
-- CDP selectors: `task-dock`, `task-dock-card` (with `data-dock-task`), `task-dock-more`, `task-card-ref`,
+- CDP selectors: `task-dock`, `task-dock-card` (with `data-dock-task`), `task-dock-more`, `task-dock-bar`,
+  `task-dock-toggle`, `task-dock-close`, `task-dock-reopen`, `task-card-ref`,
   `working-strip-dock`, `task-question-option-done`.
 - Tests: `taskCardView.test.ts` (dock membership by status, order, "+N more", the reference line, `questionText`),
   `conversations/taskCard.render.test.ts` (the dock's cards, the compact working and needs-you cards, the history's

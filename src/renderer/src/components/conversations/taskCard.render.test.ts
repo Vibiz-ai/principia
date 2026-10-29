@@ -10,6 +10,7 @@ import type { CompanyAgent, CompanyPassport, CompanyTask } from '@shared/company
 import type { AgentNode } from '@shared/live'
 import type { ForumTaskCard, StripTask } from '@shared/taskCard'
 import type { ForumMessage } from '@shared/forum'
+import type { DockControls } from './TaskCard'
 
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react')
@@ -106,24 +107,54 @@ describe('the task card in a chat', () => {
 describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
   const st = (id: string, state: StripTask['state']): StripTask => ({ taskId: id, identifier: id.toUpperCase(), who: 'Julia', state, startedAt: T })
   const cards = [card('vo-14'), card('vo-15'), card('vo-16', { state: 'done' }), card('vo-17', { state: 'needs_you', askMessageId: 'msg_q' })]
+  const prefs = (x: Partial<DockControls> = {}): DockControls => ({ collapsed: false, closed: {}, setCollapsed: () => {}, close: () => {}, reopen: () => {}, ...x })
   it('docks the queued, working and needs-you tasks, not the one that came back', async () => {
     const { TaskDock } = await import('./TaskCard')
-    const html = renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-14', 'queued'), st('vo-15', 'working'), st('vo-16', 'done'), st('vo-17', 'needs_you')], cards, companyId: 'co_a', channelId: 'ch_1' }))
+    const html = renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-15', 'working'), st('vo-16', 'done'), st('vo-17', 'needs_you')], cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs() }))
     expect(html).toContain('data-chatux="task-dock"')
-    expect(html).toContain('data-dock-task="VO-14"')
     expect(html).toContain('data-dock-task="VO-15"')
     expect(html).toContain('data-dock-task="VO-17"')
     expect(html).not.toContain('data-dock-task="VO-16"')
     expect(html).not.toContain('task-dock-more')
     // nothing open: no dock at all
-    expect(renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-16', 'done')], cards, companyId: 'co_a', channelId: 'ch_1' }))).toBe('')
+    expect(renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-16', 'done')], cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs() }))).toBe('')
   })
-  it('more than three: the newest three and "+N more"', async () => {
+  it('more than one card: a summary line on top that folds the dock; each card has ×', async () => {
+    const { TaskDock } = await import('./TaskCard')
+    const items = [st('vo-14', 'needs_you'), st('vo-15', 'needs_you'), st('vo-17', 'needs_you')]
+    const html = renderToStaticMarkup(createElement(TaskDock, { items, cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs() }))
+    expect(html).toMatch(/data-chatux="task-dock-toggle"[^>]*aria-expanded="true"/)
+    expect(html).toContain('3 need you')
+    expect(html.match(/data-chatux="task-dock-close"/g)).toHaveLength(2)
+    // folded: the one line, no cards
+    const folded = renderToStaticMarkup(createElement(TaskDock, { items, cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs({ collapsed: true }) }))
+    expect(folded).toMatch(/data-chatux="task-dock-toggle"[^>]*aria-expanded="false"/)
+    expect(folded).toContain('3 need you')
+    expect(folded).not.toContain('data-chatux="task-dock-card"')
+    // a single card needs no summary line
+    const one = renderToStaticMarkup(createElement(TaskDock, { items: [st('vo-15', 'working')], cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs() }))
+    expect(one).not.toContain('task-dock-bar')
+    expect(one).toContain('data-chatux="task-dock-close"')
+  })
+  it('a card closed with × leaves the dock until its task moves on; "Show 1 closed" brings it back', async () => {
+    const { TaskDock } = await import('./TaskCard')
+    const items = [st('vo-15', 'working'), st('vo-17', 'needs_you')]
+    const closed = renderToStaticMarkup(createElement(TaskDock, { items, cards, companyId: 'co_a', channelId: 'ch_1', prefs: prefs({ closed: { 'vo-17': 'needs_you:msg_q' } }) }))
+    expect(closed).not.toContain('data-dock-task="VO-17"')
+    expect(closed).toContain('data-dock-task="VO-15"')
+    expect(closed).toContain('Show 1 closed')
+    // VO-17 asks something new: the old close no longer holds
+    const asked = renderToStaticMarkup(createElement(TaskDock, { items, cards: cards.map((c) => (c.taskId === 'vo-17' ? { ...c, askMessageId: 'msg_q2' } : c)), companyId: 'co_a', channelId: 'ch_1', prefs: prefs({ closed: { 'vo-17': 'needs_you:msg_q' } }) }))
+    expect(asked).toContain('data-dock-task="VO-17"')
+    expect(asked).not.toContain('task-dock-reopen')
+  })
+  it('more than two: the newest two and "+N more"', async () => {
     const { TaskDock } = await import('./TaskCard')
     const many = ['vo-14', 'vo-15', 'vo-17', 'vo-18', 'vo-19'].map((id) => card(id))
-    const html = renderToStaticMarkup(createElement(TaskDock, { items: many.map((c) => st(c.taskId, 'queued')), cards: many, companyId: 'co_a', channelId: 'ch_1' }))
-    expect(html.match(/data-chatux="task-dock-card"/g)).toHaveLength(3)
-    expect(html).toContain('+2 more')
+    const html = renderToStaticMarkup(createElement(TaskDock, { items: many.map((c) => st(c.taskId, 'queued')), cards: many, companyId: 'co_a', channelId: 'ch_1', prefs: prefs() }))
+    expect(html.match(/data-chatux="task-dock-card"/g)).toHaveLength(2)
+    expect(html).toContain('+3 more')
+    expect(html).toContain('5 queued')
   })
   it('the docked working card is compact: state and clock on one line, two tail lines, Show logs, Watch, Open task', async () => {
     const { TaskCardView } = await import('./TaskCard')

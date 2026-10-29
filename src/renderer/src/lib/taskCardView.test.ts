@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
 import type { ForumTaskCard, StripTask } from '@shared/taskCard'
-import { cardsOfMessages, connectToolsIn, dockedTasks, dockRefLine, dockRows, questionText, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
+import { cardsOfMessages, connectToolsIn, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, questionText, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -119,6 +119,7 @@ describe("a task's question in the conversation", () => {
 })
 
 describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
+  const T = '2026-10-28T10:00:00Z'
   const st = (id: string, state: StripTask['state'], at: string): StripTask => ({ taskId: id, identifier: id.toUpperCase(), who: 'Julia', state, startedAt: at })
   it('docks queued, working and needs-you tasks; in review, done and failed leave it', () => {
     const items = [st('vo-1', 'done', '2026-10-28T10:00:00Z'), st('vo-2', 'working', '2026-10-28T10:05:00Z'), st('vo-3', 'needs_you', '2026-10-28T10:01:00Z'), st('vo-4', 'in_review', '2026-10-28T10:02:00Z'), st('vo-5', 'queued', '2026-10-28T10:09:00Z'), st('vo-6', 'failed', '2026-10-28T10:03:00Z')]
@@ -126,11 +127,35 @@ describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
     expect(dockedTasks(items).map((t) => t.identifier)).toEqual(['VO-3', 'VO-2', 'VO-5'])
     expect(dockedTasks([st('vo-1', 'done', '2026-10-28T10:00:00Z')])).toEqual([])
   })
-  it('shows at most three, the newest, then "+N more"; all once expanded', () => {
+  it('shows at most two, the newest, then "+N more"; all once expanded', () => {
     const five = [1, 2, 3, 4, 5]
-    expect(dockRows(five, false)).toEqual({ shown: [3, 4, 5], more: 2 })
+    expect(dockRows(five, false)).toEqual({ shown: [4, 5], more: 3 })
     expect(dockRows(five, true)).toEqual({ shown: five, more: 0 })
     expect(dockRows([1, 2], false)).toEqual({ shown: [1, 2], more: 0 })
+  })
+  it('sums the dock up in one line, needs you first', () => {
+    expect(dockSummary([st('a', 'needs_you', T), st('b', 'needs_you', T), st('c', 'needs_you', T)])).toBe('3 need you')
+    expect(dockSummary([st('a', 'queued', T), st('b', 'working', T), st('c', 'needs_you', T)])).toBe('1 needs you · 1 working · 1 queued')
+    expect(dockSummary([])).toBe('')
+  })
+  it('a card closed with × stays hidden until the task moves on (a new question, back to work)', () => {
+    const a = st('a', 'needs_you', T)
+    const b = st('b', 'working', T)
+    const asks: Record<string, string> = { a: 'm1' }
+    const mark = (t: StripTask): string => dockMark(t, asks[t.taskId])
+    const closed = { a: mark(a) }
+    expect(openDocked([a, b], closed, mark)).toEqual({ shown: [b], hidden: [a] })
+    // the same task asks something new: it comes back
+    asks.a = 'm2'
+    expect(openDocked([a, b], closed, mark).shown).toEqual([a, b])
+    // it was answered and works again: it comes back
+    expect(openDocked([{ ...a, state: 'working' as const }], { a: 'needs_you:m1' }, mark).hidden).toEqual([])
+    expect(openDocked([a], undefined, mark).shown).toEqual([a])
+  })
+  it('reads the dock prefs from localStorage, dropping what it cannot use', () => {
+    expect(parseDockPrefs({ ch1: { collapsed: true, closed: { t1: 'needs_you:m1', t2: 4 } }, ch2: 'x', ch3: { collapsed: 'yes' } })).toEqual({ ch1: { collapsed: true, closed: { t1: 'needs_you:m1' } }, ch3: {} })
+    expect(parseDockPrefs(null)).toEqual({})
+    expect(parseDockPrefs([1])).toEqual({})
   })
   it('the history keeps a one-line reference while docked', () => {
     expect(dockRefLine('VO-15', 'working')).toBe('VO-15 · working · see below')
