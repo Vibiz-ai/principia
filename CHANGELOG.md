@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.4.0](https://github.com/Vibiz-ai/principia/compare/v0.3.0...v0.4.0) (2026-10-29)
+
+
+### Features
+
+* **board:** agents work on several tasks at once; a busy checkout gets its own worktree ([acff207](https://github.com/Vibiz-ai/principia/commit/acff207410c07968079a48d7083939b31fcbbff9))
+* **chat:** a task that stops for you asks in its conversation, as the agent who filed it ([fd36b27](https://github.com/Vibiz-ai/principia/commit/fd36b27d2489a95a1bd101315cf4203d42eb952e))
+* **chat:** dock working tasks above the composer ([d99ebb1](https://github.com/Vibiz-ai/principia/commit/d99ebb166d8ac8a79978fb24656fdd946da38543))
+* **chat:** dock working tasks above the composer ([8f14ea8](https://github.com/Vibiz-ai/principia/commit/8f14ea86807096c51b0e7da35dbb7b767abe5618))
+* **chats:** real conversation titles and specialists created on demand ([3e49b15](https://github.com/Vibiz-ai/principia/commit/3e49b15043367926ddb9266aad87ad89cf1dba6a))
+* **chat:** task cards show the run working, its live log in place, and why a queued task waits ([bf27f08](https://github.com/Vibiz-ai/principia/commit/bf27f08e7e01cf0709bdbba23f5786b948624a86))
+* **chat:** tasks are the conversation's subagents, and a task is a chat ([1ad79e9](https://github.com/Vibiz-ai/principia/commit/1ad79e943286593df81a7d1ba4a436fdb5b3709b))
+* **chat:** tasks are the conversation's subagents, and a task is a chat (stacks on [#72](https://github.com/Vibiz-ai/principia/issues/72)) ([233d7d3](https://github.com/Vibiz-ai/principia/commit/233d7d3221ec6deb8d163eb4117299e5248c10d5))
+* **claude:** sign in to Claude Code from Principia, no Terminal ([893c1bc](https://github.com/Vibiz-ai/principia/commit/893c1bc2371a46836de0bba347ec7bc194373ab9))
+* drop images into any text box; switching company reopens its last screen ([c150645](https://github.com/Vibiz-ai/principia/commit/c150645eb257535ec34b9ffe4ffcfaee6ab97684))
+* **live:** clicking a live item opens the task's run streaming in Chats, labelled by what runs ([ef20249](https://github.com/Vibiz-ai/principia/commit/ef202491513f697ce933b970370b4ff29366c761))
+* **phone:** add photos to a chat from the iPhone ([f855c28](https://github.com/Vibiz-ai/principia/commit/f855c282c4491280c056e1f6d96b55fd7219756e))
+* **phone:** start a new chat from the phone ([aa7cb61](https://github.com/Vibiz-ai/principia/commit/aa7cb61482080f92d6b44a818b45cb9c381dba01))
+* **sidebar:** Team unfolds into departments and their dashboards ([021063a](https://github.com/Vibiz-ai/principia/commit/021063a8cd2c52cba6ee9ac7ac9d566692bb385a))
+
+
+### Bug Fixes
+
+* ask to move Principia to Applications; Connect warns from the DMG ([bf8a891](https://github.com/Vibiz-ai/principia/commit/bf8a891e9d15b716529de6d8e3724b2de18492ec))
+* **board:** a card dropped on Done is done ([9586cc6](https://github.com/Vibiz-ai/principia/commit/9586cc6288ed0b7337e40a851d50e81acfc09a3d))
+* **browser:** closing the panel beside a browsing chat sticks ([8bd3cc2](https://github.com/Vibiz-ai/principia/commit/8bd3cc29715701bd1015f85b849edbef28c2f9f3))
+* **browser:** each chat and task gets its own tabs; the panel opens only beside the chat that browses ([4f08687](https://github.com/Vibiz-ai/principia/commit/4f08687d1eb5525060199e1e231768830beb9e30))
+* **browser:** let the browser panel be dragged much wider ([a221f38](https://github.com/Vibiz-ai/principia/commit/a221f386a0353dfb5e73a01d2916c2ec2214a779))
+* **chat:** escape the task identifier fully in notStarted's patterns (CodeQL) ([b1b2c78](https://github.com/Vibiz-ai/principia/commit/b1b2c78ffa0c6879606068362ba560629ebe5876))
+* **chats:** drop images into New conversation; Home's answered row opens the chat ([c98103d](https://github.com/Vibiz-ai/principia/commit/c98103d7a2ac496fe2b6fa8b95ee5e9d449714b3))
+* **chats:** Send waits for images still being saved (Codex on [#79](https://github.com/Vibiz-ai/principia/issues/79)) ([a04da16](https://github.com/Vibiz-ai/principia/commit/a04da16009c104ae66a281d6728c0418282295bf))
+* **chat:** the founder's answer or "go ahead" starts the task; only answers are routed to its question ([a727fe2](https://github.com/Vibiz-ai/principia/commit/a727fe210e7bd12ab084a712960f2c2d05f369b7))
+* **chat:** the founder's answer or "go ahead" starts the task; only answers are routed to its question ([d3f3538](https://github.com/Vibiz-ai/principia/commit/d3f353833baeb93db1f20cf6f7850caeddcbbe13))
+* **claude:** don't read a signed-in Mac as "nobody signed in" ([1172117](https://github.com/Vibiz-ai/principia/commit/11721173dfa0d432ef6bd250253832e50a705ad6))
+* never ask to move in a separate instance or the smoke test ([cfbbc81](https://github.com/Vibiz-ai/principia/commit/cfbbc817edfdd35d5d9e9adc73ad017f3f899a8b))
+* **onboarding:** GitHub picker lists organisation repos too ([158db5c](https://github.com/Vibiz-ai/principia/commit/158db5cd1bc0cf19b46a90edf9f8b7850560c7d8))
+* **phone:** an agent's first chat message keeps the desk history above it ([4379d4c](https://github.com/Vibiz-ai/principia/commit/4379d4ca35a596ffed1763c7f832a91c25fed1b8))
+* **quit:** a failed or early quit can no longer leave the app unquittable ([4b3dc3c](https://github.com/Vibiz-ai/principia/commit/4b3dc3c9273fddcdb0266233666082f73fc5513b))
+* **quit:** a failed or early quit can no longer leave the app unquittable ([62c0321](https://github.com/Vibiz-ai/principia/commit/62c03211532ab4b99ce57d93370fc966a29adc5b))
+* **quit:** clear the startup watchdog once boot settles, so Cancel on the deferred quit stands ([3855e2e](https://github.com/Vibiz-ai/principia/commit/3855e2e7d0853d0265f77b220ae0709c1eaa34be))
+* **reaper:** never list Principia's own launcher or helpers as leftovers ([7745975](https://github.com/Vibiz-ai/principia/commit/77459759996415cfd28b7487f155ed883aa83a1c))
+
 ## [0.3.0](https://github.com/Vibiz-ai/principia/compare/v0.2.0...v0.3.0) (2026-10-27)
 
 
