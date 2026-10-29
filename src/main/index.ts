@@ -28,6 +28,7 @@ import { emit, setEventTargets, setTrustedSender } from './ipc'
 import { registerAllHandlers } from './handlers'
 import { importWorkflowFromDialog } from './handlers/workflows'
 import { closeLog, initLog, log, setLogRedactor } from './log'
+import { offerMoveToApplicationsNow } from './appLocation'
 import { claudeConversationExists, claudeDataDir, trustFolderForClaude } from './claudeTrust'
 import { historyRoots } from './history'
 import { MemoryService, resolveServerScript } from './memory/service'
@@ -178,6 +179,8 @@ if (!app.requestSingleInstanceLock()) {
     initLog(paths.mainLog)
     installVisualizeSkill(paths.userData) // DIAGRAMS.md §6: /visualize in the Claude chats Principia starts
     log.info('Hive starting', { version: app.getVersion(), userData: paths.userData, packaged: app.isPackaged })
+    // Connect configs hold this app's path: outside /Applications ask to move it (it relaunches from there)
+    if (await offerMoveToApplicationsNow(paths.userData)) return
     const envState = await resolveLoginEnv()
     if (!envState.ok) log.warn('login shell env resolution failed; using fallback PATH', { shell: envState.shell })
 

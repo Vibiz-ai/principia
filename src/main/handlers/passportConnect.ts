@@ -16,6 +16,7 @@ import type { Id } from '../../shared/types'
 import type { PassportConnectInfo, PassportConnectRequest, PassportConnectResult, PassportImportRequest, PassportImportResult } from '../../shared/passport'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
+import { appLocationProblem } from '../appLocation'
 import { hubNote } from '../memory/brief'
 import {
   claudeDesktopConfigPath,
@@ -73,6 +74,10 @@ export function passportConnectActions(h: Hive, opts: { userData: string; execPa
     const base = c.url.replace(/\/+$/, '')
     return { base, passportId: c.passportId, token: c.token, mcpUrl: `${base}/v1/passports/${encodeURIComponent(c.passportId)}/mcp` }
   }
+  const location = appLocationProblem(execPath)
+  const stablePath = () => {
+    if (location) throw new Error('Move Principia to your Applications folder first: the path it runs from now goes away when the disk image is ejected or the Mac restarts')
+  }
   const pendingChanged = (companyId: Id) => emit('memory:changed', { seq: 0, runIds: [], entityIds: [], pendingDelta: true, companyId })
 
   const info = (companyId: Id): PassportConnectInfo => {
@@ -85,6 +90,7 @@ export function passportConnectActions(h: Hive, opts: { userData: string; execPa
       local: localSnippets(name, execPath, script, vault),
       hosted: hs ? { mcpUrl: hs.mcpUrl, snippets: hostedSnippets(name, hs.mcpUrl) } : null,
       claudeDesktop: { configPath: claudeConfig, installed: claudeDesktopHas(claudeConfig, name) },
+      location,
       queued: queuedCount(vault)
     }
   }
@@ -98,6 +104,7 @@ export function passportConnectActions(h: Hive, opts: { userData: string; execPa
           case 'info':
             return { info: info(q.companyId) }
           case 'install': {
+            stablePath()
             const vault = rt().ensure(q.companyId)
             const installed = installClaudeDesktop(claudeConfig, nameOf(q.companyId), stdioEntry(execPath, script, vault, 'claude-desktop'))
             return { installed, info: info(q.companyId) }
@@ -110,6 +117,7 @@ export function passportConnectActions(h: Hive, opts: { userData: string; execPa
               if (!hs) throw new Error('Turn on Cloud sync first: the hosted URL comes from it')
               entry = q.app === 'vscode' ? { type: 'http', url: hs.mcpUrl } : { url: hs.mcpUrl }
             } else {
+              stablePath()
               const e = stdioEntry(execPath, script, rt().ensure(q.companyId), q.app)
               entry = q.app === 'vscode' ? { type: 'stdio', ...e } : e
             }
