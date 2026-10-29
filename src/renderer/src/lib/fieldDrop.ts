@@ -22,6 +22,18 @@ export function textFieldAt(target: EventTarget | null): TextField | null {
 }
 
 /**
+ * Where a dropped file goes: the text box under the pointer, else the box a drop zone around it names (a Forum
+ * channel or thread marks itself `data-field-drop-zone` and its composer `data-field-drop-target`, so a file dropped
+ * anywhere on the conversation lands in the message box, not only on its one-line field).
+ */
+export function dropFieldAt(target: EventTarget | null): TextField | null {
+  const own = textFieldAt(target)
+  if (own || (target instanceof Element && target.closest('textarea, input'))) return own
+  const zone = target instanceof Element ? target.closest('[data-field-drop-zone]') : null
+  return zone ? textFieldAt(zone.querySelector('[data-field-drop-target]')) : null
+}
+
+/**
  * `mentions` put into `value` over the selection `start..end`: one space before them unless the caret already
  * follows a space (or starts the box), one after so you can keep typing. Returns what to insert and the new caret.
  */
@@ -70,7 +82,7 @@ export function wireFieldDrops(doc: Document, io: DropIO & { skipped(names: stri
   }
   const onOver = (e: DragEvent): void => {
     if (e.defaultPrevented || !draggingFiles(e)) return
-    const el = textFieldAt(e.target)
+    const el = dropFieldAt(e.target)
     if (el !== over) {
       unmark()
       if (el) (over = el).classList.add(OVER)
@@ -80,13 +92,14 @@ export function wireFieldDrops(doc: Document, io: DropIO & { skipped(names: stri
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
   }
   const onLeave = (e: DragEvent): void => {
-    if (over && !(e.relatedTarget instanceof Node && over.contains(e.relatedTarget))) unmark()
+    // still over the box, or still inside the zone that feeds it: keep it lit
+    if (over && !(e.relatedTarget instanceof Node && (over.contains(e.relatedTarget) || over.closest('[data-field-drop-zone]')?.contains(e.relatedTarget)))) unmark()
   }
   const onDrop = (e: DragEvent): void => {
     unmark()
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (e.defaultPrevented || !files.length) return
-    const el = textFieldAt(e.target)
+    const el = dropFieldAt(e.target)
     if (!el) return
     e.preventDefault()
     take(el, files)
