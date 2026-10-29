@@ -28,7 +28,6 @@
 .home5-row__title { font-weight: var(--weight-semibold); color: var(--text-primary); font-size: var(--text-md); }
 .home5-row__role, .home5-row__what { font-weight: 400; color: var(--text-secondary); }
 .home5-row__desc { margin-top: 3px; font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.45; overflow-wrap: anywhere; }
-.home5-row__inline { margin-top: 10px; }
 .home5-row__acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; flex: none; max-width: 46%; }
 .home5-row__age { flex: none; width: 34px; text-align: right; font-size: var(--text-xs); color: var(--text-tertiary); padding-top: 4px; }
 
