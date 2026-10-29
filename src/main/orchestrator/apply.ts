@@ -28,6 +28,7 @@ import type { ForumService } from '../forum/service'
 import { scrubSecrets } from '../forum/teamTools'
 import type { Mailbox } from './mailbox'
 import { boardOutcome, parseRunReport, readRunReportFile } from './runReport'
+import { waitsOnTasks } from '../company/taskState'
 
 const TERMINAL = new Set(['passed', 'failed', 'canceled'])
 const HOUR = 3_600_000
@@ -278,9 +279,17 @@ export class RunApplier {
       // a teammate this run asked with the Forum tools (forum_ask_agent, or an @mention question) and the agent ended
       // its turn: the answer resumes the task (mailbox.onAnswered / onReplied), so that wait is not the founder's either
       if (!r.handoff) for (const h of this.openAgentAsks(run.id, task)) if (!waiting.includes(h)) waiting.push(h)
-      const blockers = waiting.length && !unasked.length ? r.blockers.filter((b) => b.needs !== 'decision') : r.blockers
-      if (blockers.length < r.blockers.length) {
-        held.push(...r.blockers.filter((b) => !blockers.includes(b)))
+      // a blocker that only waits for another open task ("Waiting on PR-40 to merge") is a dependency, not a question
+      // for the founder: the task waits in blocked(deps) and heals by itself once that task is done
+      const deps = !r.handoff && !shadow ? this.waitsOnTasks(task, r.blockers) : new Map<RunReport['blockers'][number], BoardTask[]>()
+      for (const [b, on] of deps) {
+        for (const dep of on) this.addDependency(c.task(task.id), dep.id)
+        actions.push({ kind: 'blocker', status: 'skipped', ref: task.identifier, detail: `Kept out of Needs you: ${task.identifier} waits for ${on.map((d) => d.identifier).join(', ')}, not for you, and picks back up once ${on.length === 1 ? 'it is' : 'they are'} done (${clip(flat(b.text), 160)})` })
+      }
+      const own = r.blockers.filter((b) => !deps.has(b))
+      const blockers = waiting.length && !unasked.length ? own.filter((b) => b.needs !== 'decision') : own
+      if (blockers.length < own.length) {
+        held.push(...own.filter((b) => !blockers.includes(b)))
         const n = held.length
         actions.push({ kind: 'blocker', status: 'skipped', ref: task.identifier, detail: `Kept ${n === 1 ? 'a decision' : `${n} decisions`} out of Needs you: ${task.identifier} waits for ${waiting.join(', ')}, not for you. The answer picks the task back up` })
       }
@@ -625,6 +634,23 @@ export class RunApplier {
   }
 
   /** The in-flight task gains a dependency (as task_create's blocksCurrent does; no CompanyStore method writes in flight). */
+  /**
+   * The blockers that only wait for other open tasks of the same company, with those tasks: a decision (never access,
+   * money or a connection, which a person gives) whose text says it waits on a task it names by identifier.
+   */
+  private waitsOnTasks(task: BoardTask, blockers: RunReport['blockers']): Map<RunReport['blockers'][number], BoardTask[]> {
+    const out = new Map<RunReport['blockers'][number], BoardTask[]>()
+    const all = safe(() => this.d.company().listTasks(task.companyId), [] as BoardTask[])
+    for (const b of blockers) {
+      if (b.needs !== 'decision') continue
+      // never a cycle: a task that already waits on this one stays the founder's call
+      const on = waitsOnTasks(b.text, all, task.id)
+      if (on.some((d) => d.dependencyIds.includes(task.id))) continue
+      if (on.length) out.set(b, on)
+    }
+    return out
+  }
+
   private addDependency(t: BoardTask, depId: string): void {
     if (t.dependencyIds.includes(depId) || t.dependencyIds.length >= 100) return
     this.d.db

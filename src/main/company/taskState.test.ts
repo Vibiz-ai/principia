@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertEditable, assertReassignable, assertTransition, runEndState, transitionError, type TaskState } from './taskState'
+import { waitsOnTasks, assertEditable, assertReassignable, assertTransition, runEndState, transitionError, type TaskState } from './taskState'
 
 const S = (status: TaskState['status'], blockReason: TaskState['blockReason'] = null): TaskState => ({ status, blockReason })
 const ok = (from: TaskState, to: TaskState, actor: 'human' | 'agent' | 'system', ctx = {}) => expect(transitionError(from, to, actor, ctx)).toBeNull()
@@ -104,6 +104,9 @@ describe('run end outcome (§1.4, §4.5)', () => {
     expect(runEndState({ ask: { prompt: 'x', answer: 'y' } }, passed, true).to.status).toBe('in_review')
     expect(runEndState(report('review'), passed, false)).toMatchObject({ to: { status: 'blocked', blockReason: 'deps' } })
     expect(runEndState({}, failed, false).to.blockReason).toBe('run_failed')
+    // blocked only on other tasks (PR-47): it waits in blocked(deps) and heals, never Needs you
+    expect(runEndState(report('blocked'), passed, false)).toMatchObject({ to: { status: 'blocked', blockReason: 'deps' }, kind: 'parked' })
+    expect(runEndState({ ...report('blocked'), ask: { prompt: 'q' } }, passed, false).to.blockReason).toBe('needs_input')
   })
   it('every outcome is a legal §1.4 move from in_progress', () => {
     for (const end of [runEndState({ ask: { prompt: 'q' } }, passed, true), runEndState(report('blocked'), passed, true), runEndState({}, passed, true), runEndState({}, failed, true),
@@ -130,5 +133,22 @@ describe('WORKTREE.md: the task follows its PR', () => {
   it('Back to Backlog after the worktree went away: human, any open task not in flight', () => {
     for (const from of [S('in_review'), S('blocked', 'interrupted'), S('todo')]) ok(from, S('backlog'), 'human', { worktreeGone: true })
     no(S('in_review'), S('backlog'), 'human'); no(S('in_review'), S('backlog'), 'system', { worktreeGone: true })
+  })
+})
+
+describe('waitsOnTasks (PR-47)', () => {
+  const T = (identifier: string, status = 'in_progress') => ({ id: identifier.toLowerCase(), identifier, status })
+  const all = [T('PR-40'), T('PR-41', 'done'), T('PR-42')]
+  it('finds the open tasks a blocked line waits for', () => {
+    expect(waitsOnTasks('Waiting on PR-40 to merge and ship.', all, 'pr-42').map((t) => t.identifier)).toEqual(['PR-40'])
+    expect(waitsOnTasks('Blocked by pr-40', all, 'pr-42')).toHaveLength(1)
+    expect(waitsOnTasks('Once PR-40 merges, it is a quick edit', all, 'pr-42')).toHaveLength(1)
+  })
+  it('keeps it the founder\'s call when it is not only a wait on open tasks', () => {
+    expect(waitsOnTasks('PR-40 needs your decision on the copy', all, 'pr-42')).toEqual([])
+    expect(waitsOnTasks('Waiting on PR-41', all, 'pr-42')).toEqual([])
+    expect(waitsOnTasks('Waiting on PR-40 and NC-9', all, 'pr-42')).toEqual([])
+    expect(waitsOnTasks('Waiting on PR-42', all, 'pr-42')).toEqual([])
+    expect(waitsOnTasks('Waiting for your answer', all, 'pr-42')).toEqual([])
   })
 })

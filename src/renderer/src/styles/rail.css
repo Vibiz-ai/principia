@@ -53,6 +53,9 @@
 .rail-pop { position: fixed; left: 60px; z-index: var(--z-popover); width: 280px; background: var(--surface-2); border-radius: var(--radius-md); box-shadow: var(--shadow-popover); padding: 6px; animation: fade var(--dur-fast); }
 .rail-pop__head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 6px; font-weight: var(--weight-semibold); font-size: var(--text-sm); }
 .rail-pop__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-pop__close { margin-left: auto; flex: none; display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-tertiary); }
+.rail-pop__state + .rail-pop__close { margin-left: 0; }
+.rail-pop__close:hover { background: var(--row-hover); color: var(--text-primary); }
 .rail-pop__state { margin-left: auto; flex: none; color: var(--text-tertiary); font-size: var(--text-xs); }
 .rail-pop__empty, .rail-pop__more { padding: 4px 6px 6px; color: var(--text-tertiary); font-size: var(--text-xs); }
 .rail-pop__row { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 6px; border: 0; background: none; border-radius: var(--radius-sm); color: var(--text-primary); text-align: left; font-size: var(--text-sm); }

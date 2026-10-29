@@ -629,9 +629,9 @@ export function Sidebar(): React.JSX.Element {
       ) : (
       <div className={`side-menu ${chatsBack ? 'is-back' : ''}`}>
       {company && (
-        <button type="button" className="cx-side-new" data-chatux="new-conversation" onClick={() => openNewChat(company)} title="New conversation (⌥⌘N): Principia brings in the right people, or pick someone">
+        <button type="button" className="cx-side-new" data-chatux="new-conversation" onClick={() => openNewChat(company)} title="New task (⌥⌘N): say what you need, Principia brings in the right people, or pick someone">
           <Icon name="edit" size={14} />
-          <span>New conversation</span>
+          <span>New task</span>
           <Kbd>⌥⌘N</Kbd>
         </button>
       )}

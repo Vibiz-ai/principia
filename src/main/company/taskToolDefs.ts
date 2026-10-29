@@ -80,7 +80,7 @@ export const TASK_TOOL_DEFS: Record<TaskTool | SessionTaskTool, ToolDef> = {
       type: 'object',
       properties: {
         outcome: { type: 'string', enum: ['review', 'blocked'] },
-        summary: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.summary, description: 'What you did, or why you are blocked.' },
+        summary: { type: 'string', minLength: 1, maxLength: TASK_LIMITS.summary, description: 'What you did, or why you are blocked. Start with one sentence in everyday words for the founder (what changed or what you found, and what happens next); no file paths or jargon in it, those go in evidence. Waiting only on another task? Name its id ("Waiting on PR-40 to merge").' },
         evidence: { type: 'array', items: { type: 'string', maxLength: TASK_LIMITS.evidenceItem }, maxItems: TASK_LIMITS.evidence, description: 'Links, file paths, commands, PR URLs.' }
       },
       required: ['outcome', 'summary'],

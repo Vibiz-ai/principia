@@ -58,8 +58,8 @@ describe('Chats switches the sidebar', () => {
     for (const d of ['Home (⌘1)', 'Team (⌘2)', 'Board (⌘3)']) expect(html).toContain(`aria-label="${d}"`)
     expect(html).toContain('placeholder="Search chats"')
     for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
-    expect(html).toContain('>New conversation<')
-    expect(html).toContain('New conversation in Acme (⌥⌘N)')
+    expect(html).toContain('>New task<')
+    expect(html).toContain('New task in Acme (⌥⌘N)')
     // the groups say what each row is: the agent's own session, and Claude
     expect(html).toContain('aria-label="Agent sessions"')
     expect(html).toContain('aria-label="Claude"')
@@ -79,8 +79,8 @@ describe('Chats switches the sidebar', () => {
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toContain('Search or ask…')
     expect(html).not.toContain('Back to the menu')
-    expect(html.indexOf('>New conversation<')).toBeGreaterThan(-1)
-    expect(html.indexOf('>New conversation<')).toBeLessThan(html.indexOf('Search or ask…'))
+    expect(html.indexOf('>New task<')).toBeGreaterThan(-1)
+    expect(html.indexOf('>New task<')).toBeLessThan(html.indexOf('Search or ask…'))
   })
 })
 
@@ -89,7 +89,7 @@ describe('New conversation (CHAT-UI.md §7)', () => {
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, {}))
     expect(html).toContain('data-chatux="new-pane"')
-    expect(html).toContain('>New conversation</h2>')
+    expect(html).toContain('>New task</h2>')
     expect(html).toMatch(/data-chatux="to-pill"[^>]*>.*Principia picks/)
     expect(html).toContain('→ Principia brings in the right people · type @ to pick someone')
     expect(html).toContain('Recent conversations')
@@ -168,5 +168,20 @@ describe('Grok-style reading', () => {
     expect(html).toMatch(/class="chat-stamp" role="separator"><time[^>]*>Today /)
     expect(html).toContain('class="dgm-md__src"')
     expect(html).toMatch(/title="https:\/\/www.example.org\/post\/1">example.org</)
+  })
+})
+
+describe('a calmer list (PR-47)', () => {
+  it('each group shows its first rows (what needs you sorts first), the open one stays, the rest wait behind Show N more', async () => {
+    const { GROUP_LIMIT, visibleRows } = await import('./ChatList')
+    const rows = Array.from({ length: 9 }, (_, i) => ({ key: `task:${i}` }) as never)
+    const n = GROUP_LIMIT.tasks
+    expect(visibleRows('tasks', rows, { expanded: false, selected: null })).toMatchObject({ hidden: 9 - n })
+    expect(visibleRows('tasks', rows, { expanded: false, selected: null }).rows).toHaveLength(n)
+    const picked = visibleRows('tasks', rows, { expanded: false, selected: 'task:8' })
+    expect(picked.rows.map((r) => r.key)).toContain('task:8')
+    expect(picked.hidden).toBe(9 - n - 1)
+    expect(visibleRows('tasks', rows, { expanded: true, selected: null })).toMatchObject({ hidden: 0 })
+    expect(visibleRows('tasks', rows.slice(0, n), { expanded: false, selected: null }).hidden).toBe(0)
   })
 })

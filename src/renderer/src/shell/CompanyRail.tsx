@@ -199,6 +199,11 @@ export function CompanyRail(): React.JSX.Element | null {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
     hoverTimer.current = setTimeout(() => setHover(null), 200)
   }
+  // PR-47: closing it is final until the pointer comes back (a pending open from the same hover or focus is dropped)
+  const closeHover = (): void => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+    setHover(null)
+  }
 
   const tile = (c: CompanyPassport): React.JSX.Element => {
     const b = byCompany[c.id]
@@ -217,23 +222,24 @@ export function CompanyRail(): React.JSX.Element | null {
         aria-current={active === c.id ? 'true' : undefined}
         draggable={draggable}
         onClick={() => {
-          setHover(null)
+          closeHover()
           void enterCompany(c.id)
         }}
         onContextMenu={(e) => {
           e.preventDefault()
-          setHover(null)
+          closeHover()
           void companyContextMenu(c)
         }}
         onMouseEnter={(e) => armHover(c.id, e.currentTarget)}
         onMouseLeave={disarmHover}
-        onFocus={(e) => armHover(c.id, e.currentTarget)}
+        // keyboard focus only: a click focuses the tile too, and that must not bring the popover back over the sidebar
+        onFocus={(e) => e.currentTarget.matches(':focus-visible') && armHover(c.id, e.currentTarget)}
         onBlur={disarmHover}
         onDragStart={(e) => {
           e.dataTransfer.setData(COMPANY_DRAG_TYPE, c.id)
           e.dataTransfer.effectAllowed = 'move'
           setDragged(c.id)
-          setHover(null)
+          closeHover()
         }}
         onDragEnd={() => {
           setDragged(null)
@@ -303,7 +309,7 @@ export function CompanyRail(): React.JSX.Element | null {
           top={hover.top}
           onEnter={() => hoverTimer.current && clearTimeout(hoverTimer.current)}
           onLeave={disarmHover}
-          onClose={() => setHover(null)}
+          onClose={closeHover}
         />
       )}
       {renaming && <RailRename company={companies.find((c) => c.id === renaming.id)} top={renaming.top} onDone={() => setRenaming(null)} />}
@@ -331,6 +337,14 @@ export function RailPopover({ company, top, onEnter, onLeave, onClose }: { compa
   const ctx = useLaneContext()
   const taskRows = useMemo(() => (company ? needsYouTasks(tasks, ctx, company.id, { skipLiveAsks: true }) : []), [tasks, ctx, company])
   const paused = isCompanyPaused(company)
+  // PR-47: Esc closes it, wherever the focus is
+  useEffect(() => {
+    const key = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [onClose])
   if (!company) return null
   const shown = items.slice(0, 8)
   const shownTasks = taskRows.slice(0, Math.max(0, 8 - shown.length))
@@ -347,6 +361,9 @@ export function RailPopover({ company, top, onEnter, onLeave, onClose }: { compa
         {company.client && <span className="rail-pop__tag">client</span>}
         {paused && <span className="rail-pop__state" title="Nothing in this company starts until you resume it">‖ Paused</span>}
         {!paused && <AutopilotMark company={company} label />}
+        <button type="button" className="rail-pop__close" onClick={onClose} aria-label="Close" title="Close (Esc)">
+          <Icon name="close" size={12} />
+        </button>
       </div>
       {shown.length + shownTasks.length === 0 ? (
         <div className="rail-pop__empty">{paused ? 'Paused. Click to enter and resume.' : 'Nothing running. Click to enter.'}</div>

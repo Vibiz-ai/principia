@@ -53,7 +53,7 @@ describe('New conversation takes dropped images', () => {
     const hint = renderToStaticMarkup(createElement(DropHint))
     expect(hint).toContain('Drop to attach')
     const html = renderToStaticMarkup(createElement(TeamComposer, { companyId: 'co_a', onStarted: () => {}, variant: 'pane' }))
-    expect(html).toContain('aria-label="New conversation"')
+    expect(html).toContain('aria-label="New task"')
     // not dragging: no overlay
     expect(html).not.toContain('data-chatux="drop-hint"')
   })
