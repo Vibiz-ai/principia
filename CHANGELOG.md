@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1](https://github.com/Vibiz-ai/principia/compare/v0.4.0...v0.4.1) (2026-10-29)
+
+
+### Features
+
+* calmer sidebar, closable rail popover, honest Needs you ([e22a3ca](https://github.com/Vibiz-ai/principia/commit/e22a3ca72a83d504b20ff6e5ed2d1a3ea176622b))
+* **forum:** drop an image anywhere on a channel or thread ([0ae3d49](https://github.com/Vibiz-ai/principia/commit/0ae3d49594c9edc3c3e81462ec312a5e3da2b75f))
+* **forum:** image drop anywhere + new features bump the patch number until 1.0 ([b679e4e](https://github.com/Vibiz-ai/principia/commit/b679e4e09b7b68ebfce75c1ffd72add760e1ff29))
+
+
+### Bug Fixes
+
+* **home:** Answer opens the task's chat with the question in view ([d9ebf49](https://github.com/Vibiz-ai/principia/commit/d9ebf49e84a4d407aa9e0ce19f134a93628a8aba))
+
 ## [0.4.0](https://github.com/Vibiz-ai/principia/compare/v0.3.0...v0.4.0) (2026-10-29)
 
 
