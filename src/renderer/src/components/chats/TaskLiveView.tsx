@@ -337,6 +337,10 @@ function TaskNoteComposer({ taskId, who, state, answers, onSent }: { taskId: Id;
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const input = useRef<HTMLTextAreaElement>(null)
+  // PR-48: Home's Answer lands here; with an open question the cursor is already in the answer box
+  useEffect(() => {
+    if (answers) input.current?.focus()
+  }, [taskId, answers])
   const send = async (): Promise<void> => {
     const t = text.trim()
     if (!t || busy) return
