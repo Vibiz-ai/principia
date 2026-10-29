@@ -36,9 +36,9 @@ import { useIsCode } from '../desk/Desk'
 import { navigate, startSession, toast, useStore } from '../../state/store'
 import { hive } from '../../lib/hive'
 import { dropMentions, useFileDrop, usePendingAttachments, withMentions } from '../../lib/dropFiles'
-import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
+import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useDockPrefs, useDockView, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
-import { cardsOfMessages, connectToolsIn, dockedTasks, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
+import { cardsOfMessages, connectToolsIn, isOpenTaskQuestion, questionText } from '../../lib/taskCardView'
 import { HireCard } from './HireCard'
 import '../../styles/conversations.css'
 
@@ -536,7 +536,10 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   // CHAT-UI.md §8.5: the tasks filed here that are still open sit in the dock above the composer
   const cards = useMemo(() => cardsOfMessages(msgs), [msgs])
   const cardItems = useStripItems(cards)
-  const docked = useMemo(() => new Map(dockedTasks(cardItems).map((t) => [t.taskId, t.state])), [cardItems])
+  // a card closed with × leaves the dock: its history card is the full card again
+  const dockPrefs = useDockPrefs(channelId)
+  const { shown: dockShown } = useDockView(cardItems, cards, dockPrefs)
+  const docked = useMemo(() => new Map(dockShown.map((t) => [t.taskId, t.state])), [dockShown])
   useEffect(() => {
     input.current?.focus()
     setReplyTo(null)
@@ -675,7 +678,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
         ))}
         <div ref={bottom} />
       </div>
-      <TaskDock items={cardItems} cards={cards} companyId={companyId} channelId={channelId} />
+      <TaskDock items={cardItems} cards={cards} companyId={companyId} channelId={channelId} prefs={dockPrefs} />
       <form
         className="cx-thread__reply"
         onSubmit={(e) => {

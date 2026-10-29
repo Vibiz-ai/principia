@@ -17,18 +17,19 @@
  * Docked (CHAT-UI.md §8.5): while a task filed from a conversation is queued, working or needs you, its compact live
  * card sits in the dock right above the composer (TaskDock), and its card in the history is a one-line reference
  * ("VO-15 · working · see below", TaskCardRef). Once it came back it leaves the dock (a short fade) and the history's
- * card is the full outcome card again.
+ * card is the full outcome card again. The dock folds to one summary line ("3 need you ▸"), and × closes a card here
+ * until its task moves on (useDockPrefs); a closed card is the full card in the history again.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
 import { agentActive, startsWithoutAutopilot, type CompanyTask } from '@shared/company'
 import { clockLabel, queuedReason, workingStrip, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
-import { Button, Segmented } from '../ui'
+import { Button, IconButton, Segmented } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
 import { AgentTimeline } from '../agents/AgentTimeline'
 import { StepLog } from '../StepLog'
-import { cardsOfMessages, DOCK_VISIBLE, dockedTasks, dockRefLine, dockRows, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from '../../lib/taskCardView'
+import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
 import { eventGlyph } from '../../lib/live'
@@ -72,14 +73,82 @@ export function jumpToMessage(messageId: string): boolean {
   return true
 }
 
+/** A folded dock, or one whose card was closed, opens it again for the strip's line and the history's reference. */
+const DOCK_REVEAL_EVENT = 'principia:dock-reveal'
 /** Marks a task's docked card for a moment (the strip's line, the history's reference). */
 export function jumpToDockedTask(identifier: string): boolean {
-  const el = document.querySelector<HTMLElement>(`[data-dock-task="${CSS.escape(identifier)}"]`)
-  if (!el) return false
-  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  el.classList.add('is-flash')
-  setTimeout(() => el.classList.remove('is-flash'), 1600)
-  return true
+  const find = (): HTMLElement | null => document.querySelector<HTMLElement>(`[data-dock-task="${CSS.escape(identifier)}"]`)
+  const flash = (el: HTMLElement): void => {
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    el.classList.add('is-flash')
+    setTimeout(() => el.classList.remove('is-flash'), 1600)
+  }
+  const el = find()
+  if (el) {
+    flash(el)
+    return true
+  }
+  window.dispatchEvent(new CustomEvent<string>(DOCK_REVEAL_EVENT, { detail: identifier }))
+  setTimeout(() => {
+    const shown = find()
+    if (shown) flash(shown)
+  }, 60)
+  return false
+}
+
+/** The dock's prefs for one conversation (folded, cards closed with ×), kept per viewer in localStorage. */
+export interface DockControls {
+  collapsed: boolean
+  closed: Readonly<Record<string, string>>
+  setCollapsed: (collapsed: boolean) => void
+  close: (taskId: string, mark: string) => void
+  /** one card back, or every closed card */
+  reopen: (taskId?: string) => void
+}
+function readDockPrefs(): DockPrefs {
+  try {
+    return parseDockPrefs(JSON.parse(localStorage.getItem(DOCK_PREFS_KEY) ?? 'null'))
+  } catch {
+    return {}
+  }
+}
+export function useDockPrefs(channelId: Id): DockControls {
+  const [prefs, setPrefs] = useState<DockPrefs>(readDockPrefs)
+  const pref = prefs[channelId] ?? {}
+  return useMemo(() => {
+    const save = (fn: (p: DockPref) => DockPref): void =>
+      setPrefs((all) => {
+        const next = { ...all, [channelId]: fn(all[channelId] ?? {}) }
+        try {
+          localStorage.setItem(DOCK_PREFS_KEY, JSON.stringify(next))
+        } catch {
+          // a full or blocked storage only loses the convenience
+        }
+        return next
+      })
+    return {
+      collapsed: !!pref.collapsed,
+      closed: pref.closed ?? {},
+      setCollapsed: (collapsed) => save((p) => ({ ...p, collapsed })),
+      close: (taskId, mark) => save((p) => ({ ...p, closed: { ...p.closed, [taskId]: mark } })),
+      reopen: (taskId) =>
+        save((p) => {
+          if (!taskId) return { ...p, closed: {} }
+          const closed = { ...p.closed }
+          delete closed[taskId]
+          return { ...p, closed }
+        })
+    }
+  }, [channelId, pref.collapsed, pref.closed])
+}
+
+/** The cards of a conversation the dock shows, and those closed with × (their history card is the full card again). */
+export function useDockView(items: readonly StripTask[], cards: readonly ForumTaskCard[], prefs: DockControls): { docked: StripTask[]; shown: StripTask[]; hidden: StripTask[]; markOf: (t: StripTask) => string } {
+  return useMemo(() => {
+    const docked = dockedTasks(items)
+    const markOf = (t: StripTask): string => dockMark(t, cards.find((c) => c.taskId === t.taskId)?.askMessageId)
+    return { docked, markOf, ...openDocked(docked, prefs.closed, markOf) }
+  }, [items, cards, prefs.closed])
 }
 
 /** "1m 12s", ticking every second; its own component so only the clock re-renders. */
@@ -184,7 +253,7 @@ export function TaskCard({ m }: { m: ForumMessage }): React.JSX.Element | null {
  * `dock`: the compact card of the dock above a conversation's composer (CHAT-UI.md §8.5): one head line with the
  * state and clock, the 1–2 latest activity lines, its links; Show logs opens the log above it, capped and scrollable.
  */
-export function TaskCardView({ card: stored, companyId, channelId, dock = false }: { card: ForumTaskCard; companyId?: Id | null; channelId?: Id | null; dock?: boolean }): React.JSX.Element | null {
+export function TaskCardView({ card: stored, companyId, channelId, dock = false, onClose }: { card: ForumTaskCard; companyId?: Id | null; channelId?: Id | null; dock?: boolean; onClose?: () => void }): React.JSX.Element | null {
   const card: ForumTaskCard | undefined = stored
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
@@ -316,6 +385,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false 
                 Open task
               </button>
             )}
+            {onClose && <IconButton icon="close" label="Close it here (it comes back when the task moves on)" className="cx-task__close" data-chatux="task-dock-close" onClick={onClose} />}
           </span>
         </div>
         {runError && (
@@ -550,19 +620,21 @@ export function TaskCardRef({ card, state }: { card: ForumTaskCard; state: TaskC
 
 /**
  * The dock above a conversation's composer (CHAT-UI.md §8.5): the compact live card of each task filed here that is
- * queued, working or needs you; at most three, then "+N more". A task that came back fades out of it.
+ * queued, working or needs you; at most two, then "+N more". A task that came back fades out of it. With more than
+ * one card, a summary line on top ("2 need you · 1 working ▾") folds the dock to that one line; × closes a card here.
  */
-export function TaskDock({ items, cards, companyId, channelId }: { items: readonly StripTask[]; cards: readonly ForumTaskCard[]; companyId: Id; channelId: Id }): React.JSX.Element | null {
-  const docked = useMemo(() => dockedTasks(items), [items])
+export function TaskDock({ items, cards, companyId, channelId, prefs }: { items: readonly StripTask[]; cards: readonly ForumTaskCard[]; companyId: Id; channelId: Id; prefs: DockControls }): React.JSX.Element | null {
+  const { docked: all, shown: docked, hidden, markOf } = useDockView(items, cards, prefs)
   const [expanded, setExpanded] = useState(false)
   const [leaving, setLeaving] = useState<StripTask[]>([])
-  const prev = useRef<StripTask[]>(docked)
+  const prev = useRef<StripTask[]>(all)
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
-  const ids = docked.map((t) => t.taskId).join(',')
+  const ids = all.map((t) => t.taskId).join(',')
   useEffect(() => {
-    const here = new Set(docked.map((t) => t.taskId))
-    const gone = prev.current.filter((t) => !here.has(t.taskId))
-    prev.current = docked
+    // only a task that came back fades out; one closed with × just goes
+    const here = new Set(all.map((t) => t.taskId))
+    const gone = prev.current.filter((t) => !here.has(t.taskId) && !(prefs.closed[t.taskId] === markOf(t)))
+    prev.current = all
     if (!gone.length) return
     const goneIds = new Set(gone.map((t) => t.taskId))
     setLeaving((l) => [...l.filter((x) => !goneIds.has(x.taskId)), ...gone])
@@ -570,33 +642,69 @@ export function TaskDock({ items, cards, companyId, channelId }: { items: readon
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ids])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
+  // the strip's line or a history reference asks for a card that is folded away or closed: open it again
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const t = all.find((x) => x.identifier === (e as CustomEvent<string>).detail)
+      if (!t) return
+      if (prefs.collapsed) prefs.setCollapsed(false)
+      if (hidden.some((h) => h.taskId === t.taskId)) prefs.reopen(t.taskId)
+      setExpanded(true)
+    }
+    window.addEventListener(DOCK_REVEAL_EVENT, on)
+    return () => window.removeEventListener(DOCK_REVEAL_EVENT, on)
+  }, [all, hidden, prefs])
   const { shown, more } = dockRows(docked, expanded)
-  const fading = leaving.filter((t) => !docked.some((d) => d.taskId === t.taskId))
-  if (!shown.length && !fading.length) return null
+  const fading = leaving.filter((t) => !all.some((d) => d.taskId === t.taskId))
+  if (!all.length && !fading.length) return null
   const cardOf = (taskId: string): ForumTaskCard | undefined => cards.find((c) => c.taskId === taskId)
+  const folded = prefs.collapsed && docked.length > 0
+  // one card needs no summary line: its × is enough; the line shows once there is something to fold or bring back
+  const bar = docked.length > 1 || folded || hidden.length > 0
   return (
-    <div className="cx-dock" data-chatux="task-dock" aria-label="Work in progress from this conversation">
-      {(more > 0 || (expanded && docked.length > DOCK_VISIBLE)) && (
-        <button type="button" className="link-btn cx-dock__more" data-chatux="task-dock-more" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
-          {expanded ? 'Show fewer' : `+${more} more`}
-        </button>
+    <div className={`cx-dock ${folded ? 'is-folded' : ''}`} data-chatux="task-dock" aria-label="Work in progress from this conversation">
+      {bar && (
+        <div className="cx-dock__bar" data-chatux="task-dock-bar">
+          {docked.length > 0 && (
+            <button type="button" className="link-btn cx-dock__toggle" data-chatux="task-dock-toggle" aria-expanded={!folded} title={folded ? 'Show the cards' : 'Fold to one line'} onClick={() => prefs.setCollapsed(!folded)}>
+              <span className={`cx-strip__mark is-${docked.some((t) => t.state === 'needs_you') ? 'needs_you' : docked.some((t) => t.state === 'working') ? 'working' : 'queued'}`} aria-hidden />
+              <span>{dockSummary(docked)}</span>
+              <span className="cx-dock__chev" aria-hidden>
+                {folded ? '▸' : '▾'}
+              </span>
+            </button>
+          )}
+          <span className="flex1" />
+          {!folded && (more > 0 || (expanded && docked.length > DOCK_VISIBLE)) && (
+            <button type="button" className="link-btn cx-dock__more" data-chatux="task-dock-more" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+              {expanded ? 'Show fewer' : `+${more} more`}
+            </button>
+          )}
+          {hidden.length > 0 && (
+            <button type="button" className="link-btn cx-dock__more" data-chatux="task-dock-reopen" title={hidden.map((t) => t.identifier).join(', ')} onClick={() => prefs.reopen()}>
+              {`Show ${hidden.length} closed`}
+            </button>
+          )}
+        </div>
       )}
-      {fading.map((t) => {
-        const c = cardOf(t.taskId)
-        return c ? (
-          <div key={t.taskId} className="cx-dock__item is-leaving" aria-hidden>
-            <TaskCardView card={c} companyId={companyId} channelId={channelId} dock />
-          </div>
-        ) : null
-      })}
-      {shown.map((t) => {
-        const c = cardOf(t.taskId)
-        return c ? (
-          <div key={t.taskId} className="cx-dock__item">
-            <TaskCardView card={c} companyId={companyId} channelId={channelId} dock />
-          </div>
-        ) : null
-      })}
+      {!folded &&
+        fading.map((t) => {
+          const c = cardOf(t.taskId)
+          return c ? (
+            <div key={t.taskId} className="cx-dock__item is-leaving" aria-hidden>
+              <TaskCardView card={c} companyId={companyId} channelId={channelId} dock />
+            </div>
+          ) : null
+        })}
+      {!folded &&
+        shown.map((t) => {
+          const c = cardOf(t.taskId)
+          return c ? (
+            <div key={t.taskId} className="cx-dock__item">
+              <TaskCardView card={c} companyId={companyId} channelId={channelId} dock onClose={() => prefs.close(t.taskId, markOf(t))} />
+            </div>
+          ) : null
+        })}
     </div>
   )
 }

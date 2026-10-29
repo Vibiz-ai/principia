@@ -146,8 +146,59 @@ export function stripTasks(cards: readonly ForumTaskCard[], tasks: readonly Live
 export function dockedTasks(items: readonly StripTask[]): StripTask[] {
   return items.filter((t) => isOpenCard(t.state)).sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))
 }
-/** At most this many docked rows show at once; the rest are "+N more". */
-export const DOCK_VISIBLE = 3
+/** At most this many docked rows show at once; the rest are "+N more" (two keep the conversation readable). */
+export const DOCK_VISIBLE = 2
+
+/**
+ * The dock's per-viewer conveniences, per conversation, in localStorage (DOCK_PREFS_KEY): folded to its one summary
+ * line, and the cards closed with ×. A closed card is remembered with the mark it had (its state and its question),
+ * so it comes back on its own when the task moves on: a new question, or it starts working again.
+ */
+export const DOCK_PREFS_KEY = 'principia.dock.v1'
+export interface DockPref {
+  collapsed?: boolean
+  /** taskId → the dockMark it was closed with */
+  closed?: Record<string, string>
+}
+export type DockPrefs = Record<string, DockPref>
+
+export function parseDockPrefs(raw: unknown): DockPrefs {
+  const out: DockPrefs = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue
+    const r = v as Record<string, unknown>
+    const p: DockPref = {}
+    if (typeof r.collapsed === 'boolean') p.collapsed = r.collapsed
+    if (r.closed && typeof r.closed === 'object' && !Array.isArray(r.closed)) {
+      const closed = Object.entries(r.closed as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string')
+      if (closed.length) p.closed = Object.fromEntries(closed)
+    }
+    out[id] = p
+  }
+  return out
+}
+
+/** What a docked card looked like when it was closed: its state and, while it needs you, the question it asked. */
+export function dockMark(t: Pick<StripTask, 'state'>, askMessageId?: string | null): string {
+  return t.state === 'needs_you' ? `needs_you:${askMessageId ?? ''}` : t.state
+}
+
+/** The docked tasks still showing: a closed one stays hidden only while its mark is unchanged. */
+export function openDocked<T extends Pick<StripTask, 'taskId'>>(docked: readonly T[], closed: Readonly<Record<string, string>> | undefined, markOf: (t: T) => string): { shown: T[]; hidden: T[] } {
+  const shown: T[] = []
+  const hidden: T[] = []
+  for (const t of docked) (closed?.[t.taskId] === markOf(t) ? hidden : shown).push(t)
+  return { shown, hidden }
+}
+
+/** The dock's summary line, needs you first: "2 need you · 1 working · 1 queued". */
+export function dockSummary(items: readonly Pick<StripTask, 'state'>[]): string {
+  const n = (s: TaskCardState): number => items.filter((t) => t.state === s).length
+  const needs = n('needs_you')
+  const parts = [needs ? `${needs} ${needs === 1 ? 'needs' : 'need'} you` : '', n('working') ? `${n('working')} working` : '', n('queued') ? `${n('queued')} queued` : ''].filter(Boolean)
+  return parts.join(' · ')
+}
 /** The rows the dock shows and how many more wait behind "+N more" (all of them once expanded). */
 export function dockRows<T>(docked: readonly T[], expanded: boolean, max = DOCK_VISIBLE): { shown: T[]; more: number } {
   if (expanded || docked.length <= max) return { shown: [...docked], more: 0 }
