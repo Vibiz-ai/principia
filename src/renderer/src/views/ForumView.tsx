@@ -320,7 +320,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
             }
           }}
         />
-        <section className="fm-main" aria-label={label}>
+        <section className="fm-main" aria-label={label} data-field-drop-zone>
           {channel ? (
             <>
               <header className="fm-head">
@@ -387,7 +387,7 @@ function CompanyForumView({ companyId, wantedChannel, wantedThread, nonce }: { c
             </div>
           </aside>
         ) : threadId ? (
-          <aside className="fm-side" aria-label="Thread">
+          <aside className="fm-side" aria-label="Thread" data-field-drop-zone>
             <header className="fm-side__head">
               <span className="fm-side__title">Thread</span>
               <span className="fm-side__sub">{thread ? (state.channels.find((c) => c.id === thread.root.channelId)?.name ? `#${state.channels.find((c) => c.id === thread.root.channelId)!.name}` : '') : ''}</span>

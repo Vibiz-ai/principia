@@ -40,6 +40,20 @@ class FakeElement extends FakeNode {
     if (want.some((w) => w === this.tag || (w.startsWith('.') && this.cls.has(w.slice(1))) || (w.startsWith('[') && w.slice(1, -1) in this.attrs))) return this
     return this.parent instanceof FakeElement ? this.parent.closest(sel) : null
   }
+  kids: FakeElement[] = []
+  add<T extends FakeElement>(c: T): T {
+    c.parent = this
+    this.kids.push(c)
+    return c
+  }
+  querySelector(sel: string): FakeElement | null {
+    for (const k of this.kids) {
+      if (k.closest(sel) === k) return k
+      const hit = k.querySelector(sel)
+      if (hit) return hit
+    }
+    return null
+  }
 }
 class FakeField extends FakeElement {
   declare value: string
@@ -162,5 +176,53 @@ describe('wireFieldDrops', () => {
     await flush()
     expect(w.skipped).toHaveBeenCalledWith(['pic.heic'])
     expect(box.value).toBe('')
+  })
+
+  it('a file dropped anywhere on a Forum conversation lands in its message box', async () => {
+    const w = await wire()
+    off = w.off
+    const zone = new FakeElement()
+    zone.attrs['data-field-drop-zone'] = ''
+    const message = zone.add(new FakeElement())
+    const composer = zone.add(new FakeElement())
+    const box = composer.add(new FakeTextArea())
+    box.attrs['data-field-drop-target'] = ''
+    box._value = 'look'
+    const over = ev(message, [file('shot.png', 'image/png', '/Users/m/shot.png')])
+    listeners.get('dragover')!(over)
+    expect(over.preventDefault).toHaveBeenCalled()
+    expect(box.cls.has('field-drop-over')).toBe(true)
+    // moving between rows inside the conversation keeps the box lit
+    listeners.get('dragleave')!({ target: message, relatedTarget: composer })
+    expect(box.cls.has('field-drop-over')).toBe(true)
+    listeners.get('dragleave')!({ target: message, relatedTarget: new FakeElement() })
+    expect(box.cls.has('field-drop-over')).toBe(false)
+    listeners.get('drop')!(ev(message, [file('shot.png', 'image/png', '/Users/m/shot.png')]))
+    await flush()
+    expect(box.value).toBe('look @/Users/m/shot.png ')
+  })
+
+  it('outside a drop zone, or on another field inside one, it does not redirect', async () => {
+    const w = await wire()
+    off = w.off
+    const loose = new FakeElement()
+    const looseDrop = ev(loose, [file('a.png', 'image/png', '/a.png')])
+    listeners.get('drop')!(looseDrop)
+    expect(looseDrop.preventDefault).not.toHaveBeenCalled()
+    const zone = new FakeElement()
+    zone.attrs['data-field-drop-zone'] = ''
+    const box = zone.add(new FakeTextArea())
+    box.attrs['data-field-drop-target'] = ''
+    const pw = zone.add(new FakeInput())
+    pw.attrs.type = 'password'
+    listeners.get('drop')!(ev(pw, [file('a.png', 'image/png', '/a.png')]))
+    const archived = new FakeElement()
+    archived.attrs['data-field-drop-zone'] = ''
+    const off2 = archived.add(new FakeTextArea())
+    off2.attrs['data-field-drop-target'] = ''
+    off2.disabled = true
+    listeners.get('drop')!(ev(archived, [file('a.png', 'image/png', '/a.png')]))
+    await flush()
+    expect([box.value, pw.value, off2.value]).toEqual(['', '', ''])
   })
 })
