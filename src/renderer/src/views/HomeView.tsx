@@ -28,7 +28,6 @@ import { AnsweredCard } from '../components/agents/ReplyBox'
 import { LeftoverList, useLeftovers } from '../components/agents/LimitBits'
 import { ApprovalCard } from '../components/author/ApprovalCard'
 import { AgentFace, useAgentDisplay } from '../components/board/NeedsYouTasks'
-import { AskForm } from '../components/board/AskForm'
 import { CloudNeedsYou } from '../components/cloud/NeedsYou'
 import { PrincipiaSuggestions, usePrincipiaSuggestions } from '../components/orchestrator/PrincipiaTeam'
 import { SetupChecklist } from '../components/home/SetupChecklist'
@@ -304,7 +303,8 @@ function NeedsList({ scope, code, drafts, empty, paused }: { scope: Id; code: bo
 
 /**
  * One board task that waits on you, with its action right here: a review gets Approve (and Review, which opens the
- * draft with its pictures and Send back); a question gets Answer; a stopped task gets Try again; an unassigned one gets
+ * draft with its pictures and Send back); a question gets Answer, which opens the task's chat with the question at
+ * the bottom and the composer ready to answer it; a stopped task gets Try again; an unassigned one gets
  * Assign. Non-code companies never see task codes (C7).
  */
 function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): React.JSX.Element {
@@ -358,13 +358,8 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
           {group === 'review' && <span className="home5-row__what"> · {code ? `${task.identifier} ` : ''}{task.title}</span>}
           {group !== 'review' && code && <span className="home5-row__what"> · {task.identifier}</span>}
         </div>
-        {!(open && answerable) && <div className="home5-row__desc selectable">{desc}</div>}
+        <div className="home5-row__desc selectable">{desc}</div>
         {open && group === 'review' && <DraftCard task={task} code={code} onHome />}
-        {open && answerable && (
-          <div className="home5-row__inline">
-            <AskForm task={task} compact onAnswered={() => setOpen(false)} />
-          </div>
-        )}
       </div>
       <div className="home5-row__acts">
         {group === 'review' && (
@@ -380,9 +375,10 @@ function TaskNeedsRow({ item, code }: { item: NeedsYouItem; code: boolean }): Re
             </Button>
           </>
         )}
+        {/* PR-48: a question is answered in the task's chat, where its brief and the agent's messages are in view */}
         {answerable && (
-          <Button size="sm" variant="primary" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-            {open ? 'Close' : 'Answer'}
+          <Button size="sm" variant="primary" data-home="answer-in-chat" title="Open the task's chat to answer" onClick={() => openTaskLive(task.id, task.companyId)}>
+            Answer
           </Button>
         )}
         {group === 'parked' && !answerable && (

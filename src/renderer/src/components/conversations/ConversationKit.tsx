@@ -227,10 +227,10 @@ export function TeamComposer({
           value={text}
           disabled={busy}
           maxLength={8000}
-          aria-label="New conversation"
+          aria-label="New task"
           aria-autocomplete="list"
           aria-expanded={mentions.open}
-          placeholder={agents.length ? (to.kind === 'agent' && picked ? `Message ${picked.name}…` : to.kind === 'everyone' ? 'Tell everyone…' : 'New conversation… say what you need') : 'Ask Claude anything…'}
+          placeholder={agents.length ? (to.kind === 'agent' && picked ? `Message ${picked.name}…` : to.kind === 'everyone' ? 'Tell everyone…' : 'New task… say what you need') : 'Ask Claude anything…'}
           onChange={(e) => {
             setText(e.target.value)
             mentions.update(e.target.value, e.target.selectionStart)

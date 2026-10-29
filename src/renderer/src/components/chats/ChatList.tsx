@@ -74,6 +74,20 @@ export function chatGroup(r: ChatRowModel): ChatGroup {
 export function groupRows(rows: readonly ChatRowModel[]): { group: ChatGroup; label: string; rows: ChatRowModel[] }[] {
   return (Object.keys(CHAT_GROUP_LABEL) as ChatGroup[]).map((g) => ({ group: g, label: CHAT_GROUP_LABEL[g], rows: rows.filter((r) => chatGroup(r) === g) })).filter((g) => g.rows.length > 0)
 }
+/**
+ * PR-47 (founder: "too much for the user's head, you lose focus"): how many rows a group shows before "Show N more".
+ * Rows come sorted (needs you, live, unread first), so the cut only hides what waits on nobody.
+ */
+export const GROUP_LIMIT: Record<ChatGroup, number> = { team: 6, private: 6, tasks: 4, agent: 4, claude: 4, working: 4 }
+/** The rows a group shows: the first GROUP_LIMIT (all when expanded), plus the open one if the cut hid it. */
+export function visibleRows(group: ChatGroup, rows: readonly ChatRowModel[], o: { expanded: boolean; selected: string | null }): { rows: ChatRowModel[]; hidden: number } {
+  const n = GROUP_LIMIT[group]
+  if (o.expanded || rows.length <= n) return { rows: [...rows], hidden: 0 }
+  const head = rows.slice(0, n)
+  const picked = o.selected ? rows.slice(n).find((r) => r.key === o.selected) : undefined
+  const out = picked ? [...head, picked] : head
+  return { rows: out, hidden: rows.length - out.length }
+}
 function rowText(r: ChatRowModel): string {
   if (r.kind === 'agent') {
     const p = r.agent.data.persona

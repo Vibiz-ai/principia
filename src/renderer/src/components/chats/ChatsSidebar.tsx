@@ -16,7 +16,7 @@ import { rowKeyOfLive } from '../../lib/liveRow'
 import { useTaskChannels } from '../../state/conversations'
 import { pausedChatsLine } from '../../state/desk'
 import { PRIMARY, viewFor } from '../../lib/nav'
-import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, useChatRows } from './ChatList'
+import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, useChatRows, visibleRows, type ChatGroup } from './ChatList'
 
 export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Element {
   useTick()
@@ -26,6 +26,8 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const rows = useChatRows(scope)
   const tasks = useStore((s) => s.tasks)
   const [query, setQuery] = useState('')
+  // PR-47: each group shows its first few rows until you ask for the rest (a search always shows every match)
+  const [expanded, setExpanded] = useState<Partial<Record<ChatGroup, boolean>>>({})
   const shown = filterRows(rows, filter, query)
   const picked = view.name === 'chats' ? view.chat : undefined
   // the open conversation: the one picked, else the one ChatsView opened (the last one, else the first row)
@@ -68,9 +70,9 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
           ))}
         </nav>
       </div>
-      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New conversation in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
+      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New task in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
         <Icon name="edit" size={14} />
-        <span>New conversation</span>
+        <span>New task</span>
         <Kbd>⌥⌘N</Kbd>
       </button>
       <label className="side-chats__search">
@@ -129,20 +131,31 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
               : filter === 'live'
                 ? `Nothing is live in ${where} right now. Every conversation is under All.`
                 : company
-                  ? `No conversations in ${company.name} yet. New conversation starts one; it stays inside ${company.name}.`
+                  ? `No conversations in ${company.name} yet. New task starts one; it stays inside ${company.name}.`
                   : 'No chats yet. Ask Claude or Codex anything.'}
           </div>
         )}
-        {groupRows(shown).map((g) => (
-          <div key={g.group} role="group" aria-label={g.label} data-group={g.group}>
-            <div className="cx-side-group">{g.label}</div>
-            {g.rows.map((r) => (
-              <CompanyTagged key={r.key} companyId={r.companyId} chips={chips}>
-                <ChatRow row={r} selected={cur === r.key} onPick={(key) => go(filter, key ?? r.key)} />
-              </CompanyTagged>
-            ))}
-          </div>
-        ))}
+        {groupRows(shown).map((g) => {
+          const searching = !!query.trim()
+          const open = !!expanded[g.group]
+          const cut = visibleRows(g.group, g.rows, { expanded: false, selected: cur })
+          const vis = open || searching ? { rows: g.rows, hidden: 0 } : cut
+          return (
+            <div key={g.group} role="group" aria-label={g.label} data-group={g.group}>
+              <div className="cx-side-group">{g.label}</div>
+              {vis.rows.map((r) => (
+                <CompanyTagged key={r.key} companyId={r.companyId} chips={chips}>
+                  <ChatRow row={r} selected={cur === r.key} onPick={(key) => go(filter, key ?? r.key)} />
+                </CompanyTagged>
+              ))}
+              {!searching && cut.hidden > 0 && (
+                <button type="button" className="side-chats__more" data-chatux="group-more" aria-expanded={open} onClick={() => setExpanded((x) => ({ ...x, [g.group]: !open }))}>
+                  {open ? 'Show less' : `Show ${cut.hidden} more`}
+                </button>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

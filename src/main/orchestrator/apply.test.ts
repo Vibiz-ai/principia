@@ -165,6 +165,39 @@ describe('apply: after a run', () => {
     expect(after.blockReason).toBe('deps')
   })
 
+  it('a blocker that only waits on another open task waits for it instead of landing in Needs you (PR-47)', async () => {
+    const { w, co, dev, dev1 } = setup()
+    const other = w.task({ companyId: co.id, title: 'Ship the installer fix', departmentId: dev.id, agentId: dev1.id })
+    const t = w.task({ companyId: co.id, title: 'Remove the install note', departmentId: dev.id, agentId: dev1.id })
+    w.scripts.set(dev1.id, () => ({ output: report({ outcome: 'blocked', summary: `Waiting on ${other.identifier}`, blockers: [{ text: `Waiting on ${other.identifier} to merge before removing the lines.`, needs: 'decision' }] }) }))
+    await w.runNow(t.id)
+    await w.play(w.turns[0])
+    const after = w.c.task(t.id)
+    expect(after.dependencyIds).toEqual([other.id])
+    expect(after).toMatchObject({ status: 'blocked', blockReason: 'deps', ask: null })
+    expect(w.orch(w.turns[0].run.id)!.actions.find((a) => a.kind === 'blocker')).toMatchObject({ status: 'skipped' })
+  })
+
+  it('a blocked summary that only waits on another open task waits for it too (no blockers list)', async () => {
+    const { w, co, dev, dev1 } = setup()
+    const other = w.task({ companyId: co.id, title: 'Ship the fix', departmentId: dev.id, agentId: dev1.id })
+    const t = w.task({ companyId: co.id, title: 'Tidy the copy', departmentId: dev.id, agentId: dev1.id })
+    w.scripts.set(dev1.id, () => ({ output: report({ outcome: 'blocked', summary: `Nothing changed yet: waiting on ${other.identifier} to merge.` }) }))
+    await w.runNow(t.id)
+    await w.play(w.turns[0])
+    expect(w.c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'deps', dependencyIds: [other.id] })
+  })
+
+  it('a blocker naming a task but needing a person still comes to you', async () => {
+    const { w, co, dev, dev1 } = setup()
+    const other = w.task({ companyId: co.id, title: 'Other', departmentId: dev.id, agentId: dev1.id })
+    const t = w.task({ companyId: co.id, title: 'Connect it', departmentId: dev.id, agentId: dev1.id })
+    w.scripts.set(dev1.id, () => ({ output: report({ outcome: 'blocked', summary: 'Need Stripe', blockers: [{ text: `Waiting on ${other.identifier}: Stripe is not connected`, needs: 'connection', connectionId: 'stripe' }] }) }))
+    await w.runNow(t.id)
+    await w.play(w.turns[0])
+    expect(w.c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'needs_input', dependencyIds: [] })
+  })
+
   it('reads the report file when there is no fenced block (redacted like any output)', async () => {
     const { w, co, dev, dev1 } = setup()
     w.scripts.set(dev1.id, () => ({ output: 'All done, see the file.', file: { v: 1, outcome: 'review', summary: 'From the file, key sk-test-abc123' } }))

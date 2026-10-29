@@ -14,7 +14,7 @@ import { briefPromptBlock, contextFromDescription, planStartRefusal } from './br
 import { planBlockerMet } from '../../shared/plans'
 import { taskBranchName, workBrief, type TaskWork } from '../../shared/taskWork'
 import { taskWorkSchema } from './taskWorkSchema'
-import { assertEditable, assertReassignable, assertTransition, runEndState, type StopReason } from './taskState'
+import { assertEditable, assertReassignable, assertTransition, runEndState, waitsOnTasks, type StopReason } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
 export { buildPassportContext, CompanyScope } from './scope'
@@ -1084,7 +1084,13 @@ export class CompanyStore {
     if(!['passed','failed','canceled'].includes(run.status)) return false
     const rows=this.store.db.prepare('SELECT data FROM company_tasks WHERE run_id=?').all(run.id) as {data:string}[]
     let changed=false
-    for(const r of rows) { const t=readTask(r.data);if(t.status!=='in_progress')continue
+    for(const r of rows) { let t=readTask(r.data);if(t.status!=='in_progress')continue
+      // PR-47: blocked only on other open tasks ("Waiting on PR-40 to merge"): they become its dependencies, so it waits
+      // in blocked(deps) and heals once they are done, never in Needs you
+      if(t.report?.outcome==='blocked'&&!(t.ask&&!t.ask.answer)&&this.boardOn()) {
+        const on=waitsOnTasks(t.report.summary,this.listTasks(t.companyId),t.id).filter(d=>!t.dependencyIds.includes(d.id)&&!d.dependencyIds.includes(t.id))
+        if(on.length) t={...t,dependencyIds:[...t.dependencyIds,...on.map(d=>d.id)]}
+      }
       const end=runEndState(t,{status:run.status as 'passed'|'failed'|'canceled',reason:run.reason},this.depsDone(t),this.stopReasons.get(t.id))
       assertTransition(t,end.to,'system')
       this.stopReasons.delete(t.id)

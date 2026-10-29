@@ -178,6 +178,19 @@ interface RunEndTask {
   report?: { outcome: 'review' | 'blocked'; summary: string } | null
 }
 const clip = (s: string, n = 300) => s.length > n ? `${s.slice(0, n - 1)}…` : s
+/** "Waiting on PR-40", "blocked by NC-3", "once PR-40 merges", "until NC-8 ships" */
+const WAITS_ON = /\b(wait(s|ing)?\s+(on|for)|blocked\s+(on|by)|depends\s+on|until|once|after)\b/i
+const TASK_REF = /\b([A-Za-z][A-Za-z0-9]{0,9}-\d+)\b/g
+/**
+ * PR-47: the open tasks a blocked line only waits for ("Waiting on PR-40 to merge"), else []. Every id it names must be
+ * an open task of `tasks` other than `selfId` (an unknown, done or canceled one keeps it the founder's call). Pure.
+ */
+export function waitsOnTasks<T extends { id: string; identifier: string; status: string }>(text: string, tasks: readonly T[], selfId: string): T[] {
+  if (!WAITS_ON.test(text)) return []
+  const ids = [...new Set([...text.matchAll(TASK_REF)].map((m) => m[1]!.toUpperCase()))]
+  const on = ids.map((id) => tasks.find((t) => t.identifier.toUpperCase() === id)).filter((t): t is T => !!t && t.id !== selfId && t.status !== 'done' && t.status !== 'canceled')
+  return on.length && on.length === ids.length ? on : []
+}
 /**
  * Where a finished run leaves its task. The report and ask were cleared when the run started, so any present were set
  * by this run (task_report / task_ask, or the fenced report block of an inject adapter). `stopReason`: why main
@@ -185,9 +198,10 @@ const clip = (s: string, n = 300) => s.length > n ? `${s.slice(0, n - 1)}…` : 
  */
 export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 'canceled'; reason?: string | null }, depsDone: boolean, stopReason?: StopReason | null): RunEnd {
   if (t.ask && !t.ask.answer) return { to: { status: 'blocked', blockReason: 'needs_input' }, kind: 'asked', by: 'agent', message: `Agent asked: ${clip(t.ask.prompt)}` }
+  // task_create({blocksCurrent}) added a dependency during the run (or the agent is blocked only on other tasks): wait
+  // for it, then heal. Never Needs you: nothing in it waits on a person
+  if (!depsDone && (t.report || run.status === 'passed')) return { to: { status: 'blocked', blockReason: 'deps' }, kind: 'parked', by: 'system', message: t.report?.outcome === 'blocked' ? `Waiting for the tasks this one depends on: ${clip(t.report.summary)}` : 'Waiting for the tasks this one depends on' }
   if (t.report?.outcome === 'blocked') return { to: { status: 'blocked', blockReason: 'agent' }, kind: 'report', by: 'agent', message: `Agent is blocked: ${clip(t.report.summary)}` }
-  // task_create({blocksCurrent}) added a dependency during the run: wait for it, then heal
-  if (!depsDone && (t.report || run.status === 'passed')) return { to: { status: 'blocked', blockReason: 'deps' }, kind: 'parked', by: 'system', message: 'Waiting for the tasks this one depends on' }
   if (t.report?.outcome === 'review') return { to: { status: 'in_review' }, kind: 'report', by: 'agent', message: `Ready for review: ${clip(t.report.summary)}` }
   if (run.status === 'passed') return { to: { status: 'in_review' }, kind: 'run_finished', by: 'system', message: 'Agent finished without a report (no report). Human review required.', noReport: true }
   // five doors A4: its company was paused mid-turn. The work is saved: back to To do, and Resume starts it again

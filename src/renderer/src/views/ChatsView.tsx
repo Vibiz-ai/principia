@@ -124,7 +124,7 @@ function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; 
       <Toolbar title="Chats" sub={<span className="company-toolbar-meta">{companyName}</span>} />
       <div className="scroll view__body">
         <div className="cx-newpane" data-chatux="new-pane">
-          <h2 className="cx-newpane__title">New conversation</h2>
+          <h2 className="cx-newpane__title">New task</h2>
           <p className="cx-newpane__sub">Say what you need. Principia brings in the right people, or pick someone in To.</p>
           <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} dropRef={dropTo} />
           <div className="cx-newpane__sec">Recent conversations</div>

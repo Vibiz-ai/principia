@@ -28,7 +28,6 @@
 .home5-row__title { font-weight: var(--weight-semibold); color: var(--text-primary); font-size: var(--text-md); }
 .home5-row__role, .home5-row__what { font-weight: 400; color: var(--text-secondary); }
 .home5-row__desc { margin-top: 3px; font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.45; overflow-wrap: anywhere; }
-.home5-row__inline { margin-top: 10px; }
 .home5-row__acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; flex: none; max-width: 46%; }
 .home5-row__age { flex: none; width: 34px; text-align: right; font-size: var(--text-xs); color: var(--text-tertiary); padding-top: 4px; }
 
@@ -359,6 +358,8 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .side-chats__filter.is-on { color: var(--text-primary); border-color: var(--border-strong); background: var(--surface-2); }
 .side-chats__n { color: var(--status-running); font-size: 10.5px; }
 .side-chats__rows { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px 10px; }
+.side-chats__more { display: block; width: 100%; padding: 4px 8px 8px 48px; border: 0; background: none; text-align: left; font-size: var(--text-xs); color: var(--text-tertiary); }
+.side-chats__more:hover { color: var(--text-primary); }
 .side-chats__empty { padding: 14px 8px; font-size: var(--text-sm); color: var(--text-tertiary); line-height: 1.45; }
 .side-chats .chats5-paused { margin: 0 8px 8px; }
 .side-chats .chats5-row { position: relative; align-items: center; gap: 9px; padding: 7px 8px; border: 0; border-radius: var(--radius-md); }
