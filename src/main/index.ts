@@ -93,13 +93,15 @@ if (!app.requestSingleInstanceLock()) {
   // rest of startup create windows and start the scheduler after the shutdown. If startup never finishes, exit anyway.
   let booted = false
   let quitAfterBoot = false
+  let bootWatchdog: ReturnType<typeof setTimeout> | null = null
   const quitHive = (): void => {
     if (!hive) return
     if (!booted) {
       if (quitAfterBoot) return
       quitAfterBoot = true
       log.info('quit requested during startup; quitting once it finishes')
-      setTimeout(() => {
+      bootWatchdog = setTimeout(() => {
+        if (booted) return
         log.warn('startup did not finish; exiting')
         guardedExit(0)
       }, BOOT_QUIT_CAP_MS)
@@ -680,6 +682,9 @@ if (!app.requestSingleInstanceLock()) {
     h.updates.start()
   }).finally(() => {
     booted = true
+    // startup settled: the deferred quit now takes the normal path, whose confirm Cancel must stand
+    if (bootWatchdog) clearTimeout(bootWatchdog)
+    bootWatchdog = null
     if (quitAfterBoot) quitHive()
   })
 }
