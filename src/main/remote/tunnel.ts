@@ -55,7 +55,7 @@ export interface KeptTunnel {
   pid: number
   port: number
   url: string
-  /** the process that ends it after KEPT_TUNNEL_MS, once Principia quit */
+  /** the process that ends it KEPT_TUNNEL_MS after Principia is gone, however it went */
   reaper?: number
 }
 
@@ -96,10 +96,23 @@ export interface TunnelProcs {
   isOurs(pid: number, port: number): boolean
   running(pid: number): boolean
   kill(pid: number, signal: NodeJS.Signals): void
-  /** ends `pid` after `ms`, whoever is left to do it; its own pid */
+  /** ends `pid` `ms` after this process is gone, crash included, unless it stopped or its pid went to another; its own pid */
   reapAfter(pid: number, ms: number): number | null
   /** the reaper is not needed any more (a stale pid is someone else's: left alone) */
   endReaper(pid: number): void
+}
+
+/** Identifies a process across pid reuse: its start time, as `ps` writes it. */
+function startedAt(pid: number): string {
+  return execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).replace(/\n+$/, '')
+}
+
+/**
+ * The reaper, for `sh -c`: $1 is Principia's pid and $2 its start time, $3 and $4 the tunnel's. It waits for Principia to
+ * go, so a crash or a force quit is covered too, then for `ms`, and only ever ends the process it was given.
+ */
+export function reaperScript(ms: number, pollS = 30): string {
+  return `alive() { [ "$(ps -o lstart= -p "$1")" = "$2" ]; }; while alive "$1" "$2"; do alive "$3" "$4" || exit 0; sleep ${pollS}; done; sleep ${Math.ceil(ms / 1000)}; alive "$3" "$4" && kill "$3" # ${REAPER_MARK}`
 }
 
 const nodeProcs: TunnelProcs = {
@@ -127,9 +140,11 @@ const nodeProcs: TunnelProcs = {
     }
   },
   reapAfter(pid, ms) {
-    const script = `sleep ${Math.ceil(ms / 1000)}; ps -o command= -p ${pid} | grep -q cloudflared && kill ${pid} # ${REAPER_MARK}`
     try {
-      const p = nodeSpawn('/bin/sh', ['-c', script], { stdio: 'ignore', detached: true })
+      const self = startedAt(process.pid)
+      const tunnel = startedAt(pid)
+      if (!self || !tunnel) return null
+      const p = nodeSpawn('/bin/sh', ['-c', reaperScript(ms), 'reaper', String(process.pid), self, String(pid), tunnel], { stdio: 'ignore', detached: true })
       p.on('error', () => undefined)
       p.unref()
       return p.pid ?? null
@@ -202,7 +217,8 @@ export class Tunnel {
     this.tries = 0
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
-    if (pid) this.d.keep?.save({ pid, port, url })
+    // from the moment it is up: a crash leaves it running as much as a quit does
+    if (pid && this.d.keep) this.d.keep.save({ pid, port, url, reaper: this.procs.reapAfter(pid, KEPT_TUNNEL_MS) ?? undefined })
     this.set({ state: 'on', url, message: null })
   }
   /** It stopped or never came up, and it is still wanted: go again after a wait. */
@@ -342,7 +358,7 @@ export class Tunnel {
     if (this.s.state !== 'off') this.set({ state: 'off', url: null, message: null })
   }
 
-  /** RA8: Principia is quitting: the tunnel stays up for the next launch, and ends by itself after KEPT_TUNNEL_MS. */
+  /** RA8: Principia is quitting: the tunnel stays up for the next launch, and its reaper ends it after KEPT_TUNNEL_MS. */
   leaveRunning(): void {
     const pid = this.proc?.pid ?? this.adopted
     const url = this.s.url
@@ -352,7 +368,8 @@ export class Tunnel {
     this.proc = null
     this.adopted = null
     this.port = null
-    this.d.keep.save({ pid, port, url, reaper: this.procs.reapAfter(pid, KEPT_TUNNEL_MS) ?? undefined })
+    // its reaper has been waiting since the tunnel came up
+    this.d.keep.save({ pid, port, url, reaper: this.d.keep.load()?.reaper ?? this.procs.reapAfter(pid, KEPT_TUNNEL_MS) ?? undefined })
     this.set({ state: 'off', url: null, message: null })
   }
 }
