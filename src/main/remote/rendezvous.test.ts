@@ -125,6 +125,16 @@ describe('RA8: the store on the phone site', () => {
     expect((await get(id)).status).toBe(429)
     expect((await get(id, '2.2.2.2')).status).toBe(200)
   })
+  it('a caller over its own limit does not use up everyone else\'s', async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 30, 12, 0, 1), toFake: ['Date'] })
+    vi.stubGlobal('fetch', fakeRedis().f)
+    vi.spyOn(LIMITS, 'writesPerHourAll', 'get').mockReturnValue(LIMITS.writePerHour + 1)
+    const { id, write } = await rdvIds(HASH)
+    const sealed = await sealAddress(HASH, NEW)
+    for (let i = 0; i < LIMITS.writePerHour; i++) await put(id, { write, sealed })
+    for (let i = 0; i < 5; i++) expect((await put(id, { write, sealed })).status).toBe(429)
+    expect((await put(id, { write, sealed }, '2.2.2.2')).status).toBe(204)
+  })
   it('a store that fails answers 503, never a crash', async () => {
     vi.stubGlobal('fetch', async () => new Response('down', { status: 500 }))
     expect((await get((await rdvIds(HASH)).id)).status).toBe(503)

@@ -76,8 +76,11 @@ export async function PUT(req, env = process.env) {
   if (!db) return json(503, { message: 'No store' })
   try {
     const hour = Math.floor(Date.now() / 3_600_000)
-    const [mine, , all] = await pipeline(db, [...counted(`rdv:w:${caller(req)}:${hour}`, 7200), ...counted(`rdv:w:${hour}`, 7200)])
-    if (mine > LIMITS.writePerHour || all > LIMITS.writesPerHourAll) return json(429, { message: 'Too many tries' })
+    // one at a time: a caller already over its own limit must not use up everyone else's
+    const [mine] = await pipeline(db, counted(`rdv:w:${caller(req)}:${hour}`, 7200))
+    if (mine > LIMITS.writePerHour) return json(429, { message: 'Too many tries' })
+    const [all] = await pipeline(db, counted(`rdv:w:${hour}`, 7200))
+    if (all > LIMITS.writesPerHourAll) return json(429, { message: 'Too many tries' })
     await pipeline(db, [['SET', `rdv:${id}`, body.sealed, 'EX', TTL_S]])
     return json(204)
   } catch {
