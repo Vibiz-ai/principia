@@ -57,16 +57,24 @@ const emailHit = (column: string, parts: string[]): string => parts.map((p) => `
 
 /** One row per new user (`pid`, `signed_up`): the saved view when set, else each person's first signup event. */
 function signupsSql(s: Setup): string {
-  if (s.signupView) return `SELECT id AS pid, created_at AS signed_up FROM ${s.signupView} WHERE created_at >= now() - INTERVAL ${SIGNUP_DAYS} DAY`
+  if (s.signupView) {
+    // a view need not carry emails, so its ids are matched against the people they belong to
+    const left = s.emails.length ? ` AND toString(id) NOT IN (SELECT toString(id) FROM persons WHERE ${emailHit('toString(properties.email)', s.emails)})` : ''
+    return `SELECT id AS pid, created_at AS signed_up FROM ${s.signupView} WHERE created_at >= now() - INTERVAL ${SIGNUP_DAYS} DAY${left}`
+  }
   const skip = s.emails.length ? ` AND NOT (${emailHit('toString(person.properties.email)', s.emails)})` : ''
   return `SELECT person_id AS pid, min(timestamp) AS signed_up FROM events WHERE event = '${s.signupEvent}' AND timestamp >= now() - INTERVAL ${SIGNUP_DAYS} DAY${skip} GROUP BY pid`
 }
 
-/** Per signup day: new users, then how many reached each step within the activation window. */
+/**
+ * Per signup day: new users, then how many reached each step within the activation window. Events are matched to each
+ * person's own signup before they are grouped: something done before signing up is not activation.
+ */
 export function activationSql(s: Setup): string {
-  const reached = s.steps.map((_, i) => `countIf(e.step_${i} > toDateTime('2000-01-01') AND e.step_${i} <= u.signed_up + INTERVAL ${ACTIVATION_DAYS} DAY) AS reached_${i}`).join(', ')
-  const firsts = s.steps.map((step, i) => `minIf(timestamp, event = '${step}') AS step_${i}`).join(', ')
-  return `SELECT toDate(u.signed_up) AS day, count() AS users, ${reached} FROM (${signupsSql(s)}) u LEFT JOIN (SELECT person_id, ${firsts} FROM events WHERE event IN (${quoted(s.steps)}) AND timestamp >= now() - INTERVAL ${SIGNUP_DAYS + ACTIVATION_DAYS} DAY GROUP BY person_id) e ON e.person_id = u.pid GROUP BY day ORDER BY day`
+  const signups = signupsSql(s)
+  const reached = s.steps.map((_, i) => `countIf(e.step_${i} = 1) AS reached_${i}`).join(', ')
+  const hits = s.steps.map((step, i) => `max(ev.event = '${step}') AS step_${i}`).join(', ')
+  return `SELECT toDate(u.signed_up) AS day, count() AS users, ${reached} FROM (${signups}) u LEFT JOIN (SELECT s.pid AS pid, ${hits} FROM events ev INNER JOIN (${signups}) s ON ev.person_id = s.pid WHERE ev.event IN (${quoted(s.steps)}) AND ev.timestamp >= now() - INTERVAL ${SIGNUP_DAYS + ACTIVATION_DAYS} DAY AND ev.timestamp >= s.signed_up AND ev.timestamp <= s.signed_up + INTERVAL ${ACTIVATION_DAYS} DAY GROUP BY s.pid) e ON e.pid = u.pid GROUP BY day ORDER BY day`
 }
 
 /**

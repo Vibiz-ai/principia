@@ -41,6 +41,7 @@ const taskBoardShape = {
   /** WORKTREE.md: written by main only (taskWork.ts); the renderer's task channels omit it */
   work: taskWorkSchema.nullable(),
   limitWait: z.object({ resetAt: iso.nullable(), retryAt: iso, restarted: z.boolean() }).strict().nullable(),
+  startConsented: z.boolean().optional(),
   /** LINEAR.md §3 */
   labels: z.array(z.string().trim().min(1).max(80)).max(50),
   estimate: z.number().min(0).max(1000).nullable(),
@@ -59,6 +60,7 @@ export const taskInputSchema = z.object({
   ask: taskBoardShape.ask.default(null), report: taskBoardShape.report.default(null), doneNote: taskBoardShape.doneNote.default(null), routing: taskBoardShape.routing.default(null),
   pendingWake: taskBoardShape.pendingWake.default(null), agentSessionId: taskBoardShape.agentSessionId.default(null),
   autoWakes: taskBoardShape.autoWakes.default(()=>({windowStart:null,n:0})), handoffs: taskBoardShape.handoffs.default(0), work: taskBoardShape.work.default(null), limitWait: taskBoardShape.limitWait.default(null),
+  startConsented: taskBoardShape.startConsented,
   labels: taskBoardShape.labels.default(()=>[]), estimate: taskBoardShape.estimate.default(null), dueDate: taskBoardShape.dueDate.default(null)
 }).strict()
 /**

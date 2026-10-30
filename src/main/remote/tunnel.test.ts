@@ -3,9 +3,9 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fileKeep, KEPT_TUNNEL_MS, Tunnel, type KeptTunnel, type TunnelKeep, type TunnelProcs, type TunnelState } from './tunnel'
+import { fileKeep, KEPT_TUNNEL_MS, reaperScript, Tunnel, type KeptTunnel, type TunnelKeep, type TunnelProcs, type TunnelState } from './tunnel'
 
 const URL_A = 'https://quiet-tree-forty-two.trycloudflare.com'
 const URL_B = 'https://calm-sea-seven.trycloudflare.com'
@@ -53,7 +53,7 @@ function setup(o: { kept?: KeptTunnel | null; ours?: (pid: number, port: number)
     procs,
     retryMs: [10, 50]
   })
-  return { t, spawned, states, killed, reapers, kept: () => kept }
+  return { t, spawned, states, killed, reapers, procs, kept: () => kept }
 }
 
 let tmp: string
@@ -74,7 +74,17 @@ describe('the tunnel across a restart (RA8)', () => {
     fs.writeFileSync(logPath, `INF |  ${URL_A}  |`)
     vi.advanceTimersByTime(300)
     expect(t.state).toEqual({ state: 'on', url: URL_A, message: null })
-    expect(kept()).toEqual({ pid: spawned[0].pid, port: 5000, url: URL_A })
+    expect(kept()).toEqual({ pid: spawned[0].pid, port: 5000, url: URL_A, reaper: 777 })
+  })
+
+  it('has its end date from the moment it is up: a crash skips the Quit, and a Quit needs no second reaper', () => {
+    const { t, spawned, procs } = setup()
+    const reapAfter = vi.spyOn(procs, 'reapAfter')
+    t.start(5000)
+    spawned[0].say(URL_A)
+    expect(reapAfter).toHaveBeenCalledWith(spawned[0].pid, KEPT_TUNNEL_MS)
+    t.leaveRunning()
+    expect(reapAfter).toHaveBeenCalledOnce()
   })
 
   it('a Quit leaves it running, with an end date; it is not killed', () => {
@@ -96,7 +106,7 @@ describe('the tunnel across a restart (RA8)', () => {
     expect(t.state.url).toBe(URL_A)
     expect(t.host).toBe('quiet-tree-forty-two.trycloudflare.com')
     expect(reapers).toEqual([777])
-    expect(kept()).toEqual({ pid: 42, port: 5000, url: URL_A })
+    expect(kept()).toEqual({ pid: 42, port: 5000, url: URL_A, reaper: 777 })
   })
 
   it('a kept tunnel on another port is ended, then a new one starts', () => {
@@ -205,4 +215,30 @@ describe('fileKeep', () => {
     k.save(null)
     expect(fs.existsSync(file)).toBe(false)
   })
+})
+
+describe('the reaper (RA8)', () => {
+  const sleeper = (): ChildProcess => spawn('/bin/sleep', ['30'], { stdio: 'ignore' })
+  const startOf = (pid: number): string => execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).replace(/\n+$/, '')
+  const gone = (p: ChildProcess): Promise<void> => new Promise((res) => (p.exitCode !== null || p.signalCode ? res() : p.once('exit', () => res())))
+  const reap = (parent: ChildProcess, tunnel: ChildProcess, tunnelStart = startOf(tunnel.pid!)): ChildProcess =>
+    spawn('/bin/sh', ['-c', reaperScript(1000, 0.1), 'reaper', String(parent.pid), startOf(parent.pid!), String(tunnel.pid), tunnelStart], { stdio: 'ignore' })
+
+  it('ends the tunnel after Principia dies, however it died', async () => {
+    const [parent, tunnel] = [sleeper(), sleeper()]
+    const reaper = reap(parent, tunnel)
+    parent.kill('SIGKILL')
+    await gone(reaper)
+    await gone(tunnel)
+    expect(tunnel.signalCode).toBe('SIGTERM')
+  }, 10_000)
+
+  it('leaves alone a process that merely has the same pid', async () => {
+    const [parent, tunnel] = [sleeper(), sleeper()]
+    const reaper = reap(parent, tunnel, 'Thu Jan  1 00:00:00 1970')
+    await gone(reaper)
+    expect(tunnel.exitCode === null && !tunnel.signalCode).toBe(true)
+    parent.kill()
+    tunnel.kill()
+  }, 10_000)
 })

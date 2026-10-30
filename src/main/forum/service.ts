@@ -120,6 +120,8 @@ export class ForumService implements ForumBridge {
   private readonly stepWrites = new Set<string>()
   /** reply runs that posted, by themselves or through autoPost: settleReply tells the person about the others */
   private readonly answeredRuns = new Set<string>()
+  /** runId → its harvests still applying their fenced ops */
+  private readonly harvests = new Map<string, Set<Promise<number>>>()
   private readonly queuedTimers = new Map<string, NodeJS.Timeout>()
   /** runs answering a Forum message (the responder registers them) */
   private readonly replyRuns = new Map<string, ForumReplyRun>()
@@ -308,6 +310,19 @@ export class ForumService implements ForumBridge {
   forgetRun(runId: string): void {
     this.replyRuns.delete(runId)
     this.answeredRuns.delete(runId)
+  }
+
+  /**
+   * settleReply once this run's harvests are through: a fenced forum_ask_agent can hold one open for minutes, and only
+   * its end says whether the run answered. Never rejects.
+   */
+  async settleAfterHarvest(runId: string, status: string, reason: string | null): Promise<void> {
+    await Promise.allSettled(this.harvests.get(runId) ?? [])
+    try {
+      this.settleReply(runId, status, reason)
+    } catch (e) {
+      this.d.log?.warn('forum: could not settle the reply', { runId, error: String(e) })
+    }
   }
 
   /**
@@ -1148,7 +1163,18 @@ export class ForumService implements ForumBridge {
    * step wrote nothing to the Forum, post for it (a reply run answers its message; a task run posts its update in the
    * seat's channel). Never throws.
    */
-  async harvest(e: { runId: string; stepId: string; adapter: string; status: string; output: string; companyId: string | null }): Promise<number> {
+  harvest(e: { runId: string; stepId: string; adapter: string; status: string; output: string; companyId: string | null }): Promise<number> {
+    const done = this.harvestStep(e)
+    const all = this.harvests.get(e.runId) ?? new Set()
+    this.harvests.set(e.runId, all.add(done))
+    void done.finally(() => {
+      all.delete(done)
+      if (!all.size && this.harvests.get(e.runId) === all) this.harvests.delete(e.runId)
+    })
+    return done
+  }
+
+  private async harvestStep(e: { runId: string; stepId: string; adapter: string; status: string; output: string; companyId: string | null }): Promise<number> {
     try {
       if (!this.enabled() || e.adapter === 'shell' || e.status === 'canceled') return 0
       // read now: the run may end (and be forgotten) while the fenced ops below are applied

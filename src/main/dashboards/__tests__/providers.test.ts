@@ -244,6 +244,23 @@ describe('web analytics', () => {
   })
 })
 
+describe('page and referrer names', () => {
+  it('are asked for URL-encoded, so a `|` or a line break cannot pass for a separator, and read back as sent', async () => {
+    const seen: string[] = []
+    const http: HttpFn = async (req) => {
+      const q = (JSON.parse(req.body!) as { query: { query: string } }).query.query
+      seen.push(q)
+      if (q.includes('$pathname')) return { status: 200, body: { results: [[encodeURIComponent('/a|b\nc'), 5], ['%E0%A4%A', 1], [null, 1]] }, retryAfter: null }
+      if (q.includes('$referring_domain')) return { status: 200, body: { results: [['%24direct', 9], ['news.example', 2]] }, retryAfter: null }
+      return { status: 200, body: { results: [[10, 5, 8, 4]] }, retryAfter: null }
+    }
+    const snap = await posthogProvider.fetch(ctx({ http, keys: { POSTHOG_PERSONAL_API_KEY: 'phx_x' }, config: SAMPLE_CONFIG.posthog }))
+    expect(seen.filter((q) => q.includes('encodeURLComponent(properties.'))).toHaveLength(2)
+    expect(snap.tables.pages).toEqual([{ page: '/a|b\nc', views: 5 }, { page: '%E0%A4%A', views: 1 }, { page: '(unknown)', views: 1 }])
+    expect(snap.tables.referrers).toEqual([{ referrer: 'Direct', views: 9 }, { referrer: 'news.example', views: 2 }])
+  })
+})
+
 describe('activation and churn', () => {
   const config = { projectId: '12345', signupEvent: 'signed_up', steps: ['created', 'shipped'], excludeEmails: ['@acme.example'], excludeSubscriptionTypes: ['add_on'] }
   const keys = { POSTHOG_PERSONAL_API_KEY: 'phx_real' }
@@ -322,9 +339,19 @@ describe('activation and churn', () => {
     expect(signups).not.toContain("event = 'signed_up'")
     expect(stripe).toContain("position(lower(coalesce(email, '')), '@acme.example') > 0")
     expect(stripe).toContain("NOT IN ('add_on')")
+    // a saved view leaves out the same people as the event does, and the customers do
+    expect(signups).toContain("toString(id) NOT IN (SELECT toString(id) FROM persons WHERE position(lower(coalesce(toString(properties.email), '')), '@acme.example') > 0)")
     const byEvent = activationSql(activationSetup(ctx({ config })))
     expect(byEvent).toContain("event = 'signed_up'")
     expect(byEvent).toContain('person.properties.email')
+  })
+
+  it('only counts steps done between signing up and the end of the activation window', () => {
+    const q = activationSql(activationSetup(ctx({ config })))
+    expect(q).toContain('ev.timestamp >= s.signed_up AND ev.timestamp <= s.signed_up + INTERVAL 7 DAY')
+    // the window is applied per event before grouping: a first event before signup can't hide a later one that counts
+    expect(q.indexOf('ev.timestamp >= s.signed_up')).toBeLessThan(q.indexOf('GROUP BY s.pid'))
+    expect(q).not.toContain('minIf')
   })
 
   it('counts a customer once and a trial that never paid not at all', () => {

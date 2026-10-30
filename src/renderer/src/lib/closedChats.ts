@@ -14,10 +14,15 @@ export type ClosedChats = Readonly<Record<string, ClosedMark>>
 /** The most closed chats kept, newest activity first; the oldest are long gone from the list anyway. */
 const CLOSED_LIMIT = 500
 
+/** A chat's last activity. `turnAt`: a session's `at` only moves when it starts or ends, not when a turn finishes in it. */
+export function lastActivity(row: { at: string; turnAt?: string }): string {
+  return row.turnAt && row.turnAt > row.at ? row.turnAt : row.at
+}
+
 /** Closed until it has newer activity, or sorts higher than it did (it needs you now, went live, has news). */
-export function isClosed(row: { key: string; at: string }, rank: number, closed: ClosedChats): boolean {
+export function isClosed(row: { key: string; at: string; turnAt?: string }, rank: number, closed: ClosedChats): boolean {
   const mark = closed[row.key]
-  return !!mark && row.at <= mark.at && rank <= mark.rank
+  return !!mark && lastActivity(row) <= mark.at && rank <= mark.rank
 }
 
 /** The closed map with one more chat, trimmed to CLOSED_LIMIT. */

@@ -13,6 +13,7 @@ import { Icon } from '../Icon'
 import { IconButton, Kbd, useTick } from '../ui'
 import { CompanyTagged, useScope } from '../CompanyChip'
 import { closeChat, navigate, openNewChat, useStore } from '../../state/store'
+import { lastActivity } from '../../lib/closedChats'
 import { rowKeyOfLive } from '../../lib/liveRow'
 import { useTaskChannels } from '../../state/conversations'
 import { pausedChatsLine } from '../../state/desk'
@@ -51,7 +52,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   // closing the open chat moves off it: New task in a company, the first open chat in All companies (opening the next
   // row by itself would read it for you)
   const close = (r: ChatRowModel): void => {
-    closeChat(r.key, { at: r.at, rank: rowRank(r) })
+    closeChat(r.key, { at: lastActivity(r), rank: rowRank(r) })
     if (cur === r.key) go(filter)
   }
   const row = (r: ChatRowModel): React.JSX.Element => (

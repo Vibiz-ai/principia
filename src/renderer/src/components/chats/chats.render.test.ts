@@ -186,6 +186,24 @@ describe('closing a chat from the sidebar (PR-59)', () => {
     expect(isClosed({ key: 'session:a', at: T }, 0, { 'session:a': { at: T, rank: 3 } })).toBe(true)
   })
 
+  it('a turn that finishes in a running session brings it back, though the session itself has not ended', async () => {
+    const { isClosed, lastActivity } = await import('../../lib/closedChats')
+    const later = '2099-01-01T00:00:00.000Z'
+    const closed = { 'session:a': { at: T, rank: 2 } }
+    expect(isClosed({ key: 'session:a', at: T }, 0, closed)).toBe(true)
+    expect(isClosed({ key: 'session:a', at: T, turnAt: later }, 0, closed)).toBe(false)
+    // closed with the answer already there: nothing new, it stays closed
+    expect(lastActivity({ at: T, turnAt: later })).toBe(later)
+    expect(isClosed({ key: 'session:a', at: T, turnAt: later }, 0, { 'session:a': { at: later, rank: 0 } })).toBe(true)
+  })
+
+  it('knows when each session last came back to you, not while it works', async () => {
+    const { sessionTurns } = await import('./ChatList')
+    const node = (id: string, sessionId: string, status: string, updatedAt: string) => ({ id, kind: 'session', sessionId, status, updatedAt }) as never
+    const turns = JSON.parse(sessionTurns({ a: node('a', 's1', 'working', '2026-01-02'), b: node('b', 's1', 'needs_you', '2026-01-01'), c: node('c', 's2', 'needs_you', '2026-01-03') }))
+    expect(turns).toEqual({ s2: '2026-01-03' })
+  })
+
   it('keeps the chat you have open listed, and never hides live work with no chat', async () => {
     const { splitClosed } = await import('./ChatList')
     const run = { key: 'run:x', kind: 'run', agentId: 'x', title: 'Step', detail: null, companyId: 'co_a', live: true, at: T } as never

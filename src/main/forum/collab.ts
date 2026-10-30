@@ -91,6 +91,8 @@ const REFUSAL_TEXT: Record<CollabRefusal, (h: string, s: AgentCollabSettings) =>
 }
 
 const LIVE = "status IN ('started','queued','answered')"
+/** What the caps count: every wake that got a run, also one whose run ended unanswered (it still ran and spent tokens). */
+const SPENT = `(${LIVE} OR (status='refused' AND to_run IS NOT NULL))`
 
 export class AgentCollab {
   /**
@@ -141,11 +143,11 @@ export class AgentCollab {
     if (prov.chain.includes(target.id)) return r('cycle')
     if (prov.depth > st.maxHops) return r('hops')
     const t = this.now().getTime()
-    if (threadSeq != null && this.count(`thread_seq=? AND ${LIVE}`, threadSeq) >= st.perThread) return r('thread_cap')
+    if (threadSeq != null && this.count(`thread_seq=? AND ${SPENT}`, threadSeq) >= st.perThread) return r('thread_cap')
     const hourAgo = new Date(t - HOUR).toISOString()
-    if (this.count(`to_member=? AND created_at>=? AND ${LIVE}`, target.id, hourAgo) >= st.perAgentPerHour) return r('target_cap')
-    if (this.count(`from_member=? AND created_at>=? AND ${LIVE}`, caller.memberId, hourAgo) >= st.perAskerPerHour) return r('asker_cap')
-    if (this.count(`company_id=? AND created_at>=? AND ${LIVE}`, caller.companyId, new Date(t - 24 * HOUR).toISOString()) >= st.perCompanyPerDay) return r('company_cap')
+    if (this.count(`to_member=? AND created_at>=? AND ${SPENT}`, target.id, hourAgo) >= st.perAgentPerHour) return r('target_cap')
+    if (this.count(`from_member=? AND created_at>=? AND ${SPENT}`, caller.memberId, hourAgo) >= st.perAskerPerHour) return r('asker_cap')
+    if (this.count(`company_id=? AND created_at>=? AND ${SPENT}`, caller.companyId, new Date(t - 24 * HOUR).toISOString()) >= st.perCompanyPerDay) return r('company_cap')
     return r(null)
   }
 
@@ -255,9 +257,9 @@ export class AgentCollab {
       .run(r)
   }
 
-  /** responder: a queued wake got its run (or could not start). */
+  /** responder: a queued wake got its run, or a quit cut one off and recovery gave it a new one (or could not start). */
   noteStarted(wakeIds: string[], runId: string): void {
-    const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='started', to_run=? WHERE id=? AND status='queued'")
+    const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='started', to_run=? WHERE id=? AND status IN ('queued','started')")
     for (const id of wakeIds) st.run(runId, id)
   }
   noteFailed(wakeIds: string[], reason: string): void {
@@ -319,8 +321,8 @@ export class AgentCollab {
   usage(companyId: string): { wakesToday: number; refusedToday: number; capPerDay: number } {
     const day = new Date(this.now().getTime() - 24 * HOUR).toISOString()
     return {
-      wakesToday: this.count(`company_id=? AND created_at>=? AND ${LIVE}`, companyId, day),
-      refusedToday: this.count("company_id=? AND created_at>=? AND status='refused'", companyId, day),
+      wakesToday: this.count(`company_id=? AND created_at>=? AND ${SPENT}`, companyId, day),
+      refusedToday: this.count("company_id=? AND created_at>=? AND status='refused' AND to_run IS NULL", companyId, day),
       capPerDay: this.d.settings().perCompanyPerDay
     }
   }
