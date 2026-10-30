@@ -907,18 +907,18 @@ describe('agents answer people and post their work (§6.4)', () => {
 
     it('a message that was only queued never ran: its restart says nothing about a cut-off reply', () => {
       const before = app()
-      const first = say(before.s, 'first')
+      const first = say(before.s, 'opening ask')
       const second = say(before.s, 'second')
       const [runId] = before.r.onHumanPost(first)
       before.r.onHumanPost(second)
-      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: first.channelId, threadId: first.id, text: 'Answer to the first.' })
+      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: first.channelId, threadId: first.id, text: 'Answer to the opening ask.' })
       before.quitting.now = true
       ended(before, runId!, 'passed', null)
       const after = app()
       after.r.recover()
       expect(after.starts.map((x) => x.reply.messageId)).toEqual([second.id])
       expect(after.starts[0]!.prompt).not.toContain('Principia closed while')
-      expect(after.starts[0]!.prompt).not.toContain('first')
+      expect(after.starts[0]!.prompt).not.toContain('opening ask')
     })
 
     it('an answer that got out before the crash stands: no second reply and no line', () => {
