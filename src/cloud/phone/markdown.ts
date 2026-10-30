@@ -7,6 +7,7 @@
  * markdown (a reply still streaming in) renders as plain text until it closes.
  */
 import { h, type VNode } from '../console/dom'
+import { isNextStepLabel } from '../../shared/replyStyle'
 
 export type MdInline = VNode | string
 
@@ -139,13 +140,19 @@ function cells(row: string): string[] {
   return out
 }
 
+/** "**Next step:** …": what the founder has to do, set apart from the reply (shared/replyStyle.ts). */
+function isNextStep(line: string): boolean {
+  const lead = /^\s*\*\*(.+?)\*\*/.exec(line)
+  return !!lead && isNextStepLabel(lead[1]!)
+}
+
 /** Markdown -> block VNodes (class `md`). */
 export function markdown(src: string): VNode[] {
   const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n')
   const out: VNode[] = []
   let para: string[] = []
   const endPara = (): void => {
-    if (para.length) out.push(h('p', null, ...joinLines(para)))
+    if (para.length) out.push(h('p', isNextStep(para[0]!) ? { class: 'md-next' } : null, ...joinLines(para)))
     para = []
   }
   let i = 0

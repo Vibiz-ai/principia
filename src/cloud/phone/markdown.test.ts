@@ -15,6 +15,11 @@ describe('markdown', () => {
     expect(textOf(v)).toBe('This is bold, italic, also, npm test and gone.')
     expect(textOf(v)).not.toContain('**')
   })
+  it('sets a **Next step:** line apart, and only that one', () => {
+    const v = one('Done.\n\n**Note:** nothing else changed.\n\n**Next step:** merge PR #110.')
+    const next = findAll(v, (n) => n.tag === 'p' && n.attrs.class === 'md-next')
+    expect(next.map(textOf)).toEqual(['Next step: merge PR #110.'])
+  })
   it('keeps half-written markdown as plain text (a reply still streaming)', () => {
     expect(textOf(one('Working on **the menu'))).toBe('Working on **the menu')
     expect(textOf(one('2 * 3 = 6'))).toBe('2 * 3 = 6')

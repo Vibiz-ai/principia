@@ -1,6 +1,7 @@
 /** DEPARTMENTS.md §9: where a company or department chat runs, which folders it reaches, and what its brief says. */
 import { describe, expect, it } from 'vitest'
 import { AGENT_DATA_DEFAULTS, DEPARTMENT_DATA_DEFAULTS, type BoardTask, type CompanyAgent, type Department } from '../../shared/company'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 import { CHAT_CAPS, chatBrief, chatPlacement, routingRules, type ChatContextInput } from './chatContext'
 
 const T = '2026-10-20T10:00:00.000Z'
@@ -58,6 +59,11 @@ describe('chatPlacement: cwd and folders', () => {
 })
 
 describe('chatBrief', () => {
+  it('tells the agent how to write to the founder, in a department chat or not', () => {
+    expect(chatBrief(base())).toContain(REPLY_STYLE)
+    expect(chatBrief({ ...base(), departments: [] })).toContain(REPLY_STYLE)
+  })
+
   it('company chat: repos with paths, departments with their charter line, and the routing rules', () => {
     const b = chatBrief(base())
     expect(b).toContain('## This chat: Acme')

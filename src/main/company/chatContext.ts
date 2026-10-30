@@ -13,6 +13,7 @@
  *   need the founder's yes. With Settings → "Agents use Principia on their own" off: propose, and file only after a yes.
  */
 import type { BoardTask, CompanyAgent, Department } from '../../shared/company'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 
 /** Caps on what one chat brief lists (the Passport block has its own). */
 export const CHAT_CAPS = { repos: 20, departments: 12, agents: 12, tasks: 15, line: 160 } as const
@@ -145,5 +146,6 @@ export function chatBrief(input: ChatContextInput, at: ChatRepo | null = chatRep
     for (const d of departments) out.push(`- ${one(d.name, 60)} (${d.key})${d.data.charter.does.trim() ? `: ${one(d.data.charter.does, 140)}` : ''}`)
   }
   if (departments.length || dep) out.push('', ...routingRules(input.fileTool, dep ? dep.name : null, input.proactive !== false))
+  out.push('', REPLY_STYLE)
   return out.join('\n')
 }
