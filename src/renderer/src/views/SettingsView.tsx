@@ -310,7 +310,7 @@ function General(): React.JSX.Element {
       <SRow label="Keep Mac awake while agents run" desc="Prevents app suspension while a session or run is active.">
         <Switch checked={s.keepAwake} onChange={(v) => void updateSettings({ keepAwake: v })} label="Keep awake" />
       </SRow>
-      <SRow label="Max parallel workflow steps">
+      <SRow label="Max parallel agents" desc="Tasks and workflow steps, across all your companies; the rest wait for a free slot. Chat replies have their own slots, so they never wait behind this work.">
         <Stepper value={s.concurrency} min={1} max={16} onChange={(v) => void updateSettings({ concurrency: v })} />
       </SRow>
       <SRow label="Terminal font size" desc="⌘= / ⌘- in a session.">

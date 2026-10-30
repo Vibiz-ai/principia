@@ -87,7 +87,13 @@ export {
 export { AUTHORING_SLACK, SLACK_TRIGGER_EXAMPLES } from './authoring'
 export { ROOT_KEY, type HookEvent, type LiveOp, type PtyPrompt, type TrackedAsk, type AgentPatch } from './live/types'
 
+/** Chat replies at once, across companies, on top of Settings.concurrency: short, and someone is waiting on each. */
+export const REPLY_SLOTS = 4
+
 export interface EngineOverrides {
+  /** Reply lane size and how long a reply may linger after its result (tests). */
+  replySlots?: number
+  replyEndGraceMs?: number
   /** Replace adapters (tests use a fake claude). */
   adapters?: Partial<Record<AdapterId, Adapter>>
   /** Replace provider detection (tests). */
@@ -141,6 +147,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     const c = Number(ctx.getSettings().concurrency)
     return Number.isFinite(c) ? Math.min(16, Math.max(1, c)) : 4
   })
+  const replySemaphore = new Semaphore(() => overrides.replySlots ?? REPLY_SLOTS)
 
   /** Cached detection, falling back to a sync PATH lookup before the first detect finished. */
   const provider = (id: AdapterId): ProviderInfo => {
@@ -300,11 +307,12 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     ctx.store.insertRun(run, snapshot, task)
     ctx.emit({ type: 'run.updated', run })
     const exec = new Execution(
-      { ctx, adapters, provider, semaphore, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, taskMinuteMs: overrides.taskMinuteMs, harnessFallback: overrides.harnessFallback },
+      { ctx, adapters, provider, semaphore, replySemaphore, replyEndGraceMs: overrides.replyEndGraceMs, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, taskMinuteMs: overrides.taskMinuteMs, harnessFallback: overrides.harnessFallback },
       run,
       snapshot,
       task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null, runMinutes: taskRunMinutes(opts) } : null,
-      task ? null : (opts.agentId ?? null)
+      task ? null : (opts.agentId ?? null),
+      !!opts.reply && !task
     )
     stall.startTimer(overrides.stallSweepMs ?? 15_000)
     executions.set(id, exec)

@@ -235,7 +235,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         .filter((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile')
         .map((a) => a.id),
     start: ({ companyId, agentId, profileId, repoId, prompt, reply }) => {
-      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId })
+      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId, reply: true })
       // the seat on the run row: the step-end harvest posts for it when it does not reply itself
       h.db.prepare('UPDATE runs SET agent_id=?, company_id=? WHERE id=?').run(agentId, companyId, run.id)
       service.noteReplyRun(run.id, reply)
@@ -243,6 +243,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
     onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    onUnanswered: (messageId, memberId, reason) => service.noteUnanswered(messageId, memberId, reason),
     taskStates: (channelId) =>
       conversationTaskLines(
         c(),
@@ -310,6 +311,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   h.runHooks.push((run) => {
     if (!TERMINAL.has(run.status)) return
     responder.onRunEnded(run.id)
+    // after the step-end harvest, which applies the run's last writes
+    setTimeout(() => service.settleReply(run.id, run.status, run.reason), 2500).unref?.()
     // after the step-end harvest (it reads the reply target first)
     setTimeout(() => service.forgetRun(run.id), 60_000).unref?.()
   })

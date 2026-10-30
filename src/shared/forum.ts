@@ -183,7 +183,8 @@ export interface ForumInvite {
   link?: string
 }
 
-export type ForumPresenceState = 'working' | 'reading' | 'composing' | 'idle'
+/** 'queued': a reply run was started but has no free slot yet. */
+export type ForumPresenceState = 'queued' | 'working' | 'reading' | 'composing' | 'idle'
 export interface ForumPresence {
   companyId: string
   memberId: string

@@ -16,7 +16,7 @@ import { ForumStore, type ForumDirectory } from './store'
 import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
 import { ForumHttpServer } from './http'
 import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type ForumTool } from './protocol'
-import { formatBrief } from './format'
+import { flat, formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
@@ -30,6 +30,8 @@ const fail = (m: string): never => {
   throw new HiveError('bad_request', m)
 }
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+/** A reply run with no step after this long is waiting for a slot; shorter, every reply would flash "waiting". */
+const QUEUED_AFTER_MS = 3000
 
 /** A board task as the Forum needs it. */
 export interface ForumTaskView {
@@ -112,6 +114,9 @@ export class ForumService implements ForumBridge {
   private readonly presenceTimers = new Map<string, NodeJS.Timeout>()
   /** steps that wrote to the Forum themselves (tool, CLI or fenced block): no automatic post for them */
   private readonly stepWrites = new Set<string>()
+  /** reply runs that posted, by themselves or through autoPost: settleReply tells the person about the others */
+  private readonly answeredRuns = new Set<string>()
+  private readonly queuedTimers = new Map<string, NodeJS.Timeout>()
   /** runs answering a Forum message (the responder registers them) */
   private readonly replyRuns = new Map<string, ForumReplyRun>()
   /** responder.ts: a human posted (set by wire.ts; absent in tests that do not need it) */
@@ -274,12 +279,53 @@ export class ForumService implements ForumBridge {
     // the run may have opened its Forum before this note: its presence moves into the channel it answers
     const p = this.presence.get(reply.memberId)
     if (p && p.state !== 'idle' && !p.channelId) this.setPresence(p.companyId, reply.memberId, p.state, reply.channelId)
+    // still no step after a moment: every slot is taken. Say so, or the chat looks dead until one frees up
+    const timer = setTimeout(() => {
+      this.queuedTimers.delete(runId)
+      if (this.presence.has(reply.memberId) || !this.replyRuns.has(runId)) return
+      try {
+        const companyId = this.store.member(reply.memberId)?.companyId
+        if (companyId) this.setPresence(companyId, reply.memberId, 'queued', reply.channelId)
+      } catch (e) {
+        this.d.log?.warn('forum: queued presence failed', { runId, error: String(e) })
+      }
+    }, QUEUED_AFTER_MS)
+    timer.unref?.()
+    this.queuedTimers.set(runId, timer)
   }
   replyRunOf(runId: string): ForumReplyRun | null {
     return this.replyRuns.get(runId) ?? null
   }
   forgetRun(runId: string): void {
     this.replyRuns.delete(runId)
+    this.answeredRuns.delete(runId)
+  }
+
+  /**
+   * A reply run ended, after its harvest. A chat never just goes quiet: the person got an answer, canceled it, or reads
+   * here why there is none.
+   */
+  settleReply(runId: string, status: string, reason: string | null): void {
+    const reply = this.replyRuns.get(runId)
+    if (!reply) return
+    clearTimeout(this.queuedTimers.get(runId))
+    this.queuedTimers.delete(runId)
+    const p = this.presence.get(reply.memberId)
+    if (p?.state === 'queued' && p.channelId === reply.channelId) this.setPresence(p.companyId, reply.memberId, 'idle', null)
+    if (status === 'canceled' || this.answeredRuns.has(runId)) return
+    this.noteUnanswered(reply.messageId, reply.memberId, status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer', runId)
+  }
+
+  /** responder.ts, settleReply: a person's message got no answer. Posts one line in its thread, saying why. Never throws. */
+  noteUnanswered(messageId: string, memberId: string, reason: string, key: string = messageId): void {
+    try {
+      const msg = this.store.message(messageId)
+      const root = msg.threadId ? this.store.message(msg.threadId) : msg
+      const name = this.store.member(memberId)?.name ?? 'The agent'
+      this.store.systemPost(msg.channelId, `${name} could not answer this: ${clip(flat(reason), 160)}. Send it again to retry.`, root.seq, { origin: 'principia:reply', opKey: `unanswered:${memberId}:${key}` })
+    } catch (e) {
+      this.d.log?.warn('forum: could not post the unanswered line', { messageId, error: String(e) })
+    }
   }
   /** A human posted through the app (forum:post): wakes the agents it is for (responder.ts). Never throws. */
   humanPosted(m: ForumMessage): void {
@@ -344,6 +390,7 @@ export class ForumService implements ForumBridge {
     for (const set of this.waiters.values()) for (const w of set) { clearTimeout(w.timer); w.resolve(null) }
     this.waiters.clear()
     for (const t of this.presenceTimers.values()) clearTimeout(t)
+    for (const t of this.queuedTimers.values()) clearTimeout(t)
     await this.http.stop()
   }
 
@@ -1080,6 +1127,7 @@ export class ForumService implements ForumBridge {
       }
       const wrote = applied > 0 || this.stepWrites.has(e.stepId)
       this.stepWrites.delete(e.stepId)
+      if (wrote && reply) this.answeredRuns.add(e.runId)
       // ORCHESTRATOR.md §1.3: a task step with a run report gets its update from Principia instead (one post, not two)
       const deferred = !reply && !!this.deferAutoPost && safeBool(() => this.deferAutoPost!(e))
       if (!wrote && e.status === 'passed' && !deferred) this.autoPost(e, member, row.task_id, reply)
@@ -1098,6 +1146,7 @@ export class ForumService implements ForumBridge {
         const text = stepSummary(e.output, FORUM_LIMITS.agentText)
         if (!text) return
         const posted = this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
+        this.answeredRuns.add(e.runId)
         // AGENT-COLLAB.md: the answer of a woken agent that did not reply itself still answers the ask it was woken for
         const root = this.store.message(posted.threadId ?? reply.messageId)
         this.collab.noteReplied(member.id, root.seq, text)

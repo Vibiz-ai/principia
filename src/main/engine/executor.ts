@@ -66,11 +66,20 @@ import { SLACK_TOOLS, SLACK_WORK_TOOLS, slackAccessOf, type NotifySlackTarget, t
 import { UNTRUSTED_SLACK_NOTE, triggerVars } from './slackTriggers'
 import { FEEDBACK_TAIL, LineBuffer, OUTPUT_CAP, Semaphore, cap, isDir, tail } from './util'
 
+/** A chat reply normally takes under a minute (99% under 4), and someone is waiting: past this it failed, not slow. */
+export const REPLY_TIMEOUT_MIN = 15
+/** How long a chat reply's process may stay up after its result, with no new output, before it is ended. */
+export const REPLY_END_GRACE_MS = 60_000
+
 export interface ExecDeps {
   ctx: EngineContext
   adapters: Record<AdapterId, Adapter>
   provider(id: AdapterId): ProviderInfo
   semaphore: Semaphore
+  /** Chat replies run here, so long work holding every slot of `semaphore` never keeps a person waiting. */
+  replySemaphore: Semaphore
+  /** Tests: how long a reply may linger after its result. */
+  replyEndGraceMs?: number
   now(): Date
   /** Ask expiry (default 60 min; tests shorten it). */
   askTimeoutMs?: number
@@ -243,7 +252,9 @@ export class Execution {
     private workflow: WorkflowDraft | null,
     private task: TaskRun | null = null,
     /** FORUM.md §3: a seat run without a board task (a Forum reply): the step still gets that seat's Forum access */
-    private seatAgentId: string | null = null
+    private seatAgentId: string | null = null,
+    /** StartRunOptions.reply: a person is waiting on this run */
+    private reply = false
   ) {
     this.done = new Promise((r) => (this.resolveDone = r))
     const t = run.target
@@ -812,7 +823,7 @@ export class Execution {
       agentSessionId: null,
       verdict: null
     }
-    const release = await this.d.semaphore.acquire()
+    const release = await (this.reply ? this.d.replySemaphore : this.d.semaphore).acquire()
     let mem: OpenMemory | null = null
     let live: StepLive | null = null
     let liveStatus: 'done' | 'failed' | 'canceled' = 'failed'
@@ -1100,6 +1111,19 @@ export class Execution {
       }
 
       let handle: ProcHandle
+      // A reply is over at its result. A background job it left (a dev server) would hold the process for the whole
+      // timeout and lose the answer; other steps may still be waiting on their background work, so they keep waiting.
+      let replyEnd: NodeJS.Timeout | null = null
+      let replyEnded = false
+      const noteReplyEnd = (): void => {
+        if (!this.reply || !parser.result()) return
+        if (replyEnd) clearTimeout(replyEnd)
+        replyEnd = setTimeout(() => {
+          replyEnded = true
+          void handle.kill()
+        }, this.d.replyEndGraceMs ?? REPLY_END_GRACE_MS)
+        replyEnd.unref?.()
+      }
       try {
         handle = startProcess({
           file: info.binPath,
@@ -1115,6 +1139,7 @@ export class Execution {
             if (raw.length < MAX_RAW) raw += c
             combined = tail(combined + c, FEEDBACK_TAIL * 4)
             outBuf.push(c).forEach(onOutLine)
+            noteReplyEnd()
           },
           onStderr: (c) => {
             this.d.stall?.touch(stepId)
@@ -1144,6 +1169,7 @@ export class Execution {
       if (this.stopped) void handle.kill()
 
       const r = await handle.done
+      if (replyEnd) clearTimeout(replyEnd)
       set.delete(handle)
       const restOut = outBuf.flush()
       if (restOut) onOutLine(restOut)
@@ -1160,7 +1186,7 @@ export class Execution {
         agentSessionId,
         verdict: null as 'PASS' | 'FAIL' | null
       }
-      if (r.killed && !r.timedOut) {
+      if (r.killed && !r.timedOut && !replyEnded) {
         liveStatus = 'canceled'
         return end({ ...base, status: 'canceled', error: 'Canceled' })
       }
@@ -1169,6 +1195,7 @@ export class Execution {
       const result = parser.result()
       // CONTRACT §12.4: a denied tool is just a denied tool (the old "set bypass" failure is gone); end = process exit
       if (r.spawnError) error = `Could not start ${info.label}: ${r.spawnError}`
+      else if (replyEnded) error = result?.isError ? result.text || `Agent error (${result.subtype ?? 'unknown'})` : null
       else if (r.timedOut) error = `Timed out after ${s.timeoutMin} min`
       else if (r.exitCode !== 0) {
         const why = result?.isError && result.text ? result.text : tail(combined.trim(), 2000)
@@ -1451,7 +1478,7 @@ export class Execution {
       // DEPARTMENTS.md §4.2: a resumed Claude task turn continues its conversation (the prompt is only wake + rules)
       resumeId: profile.adapter === 'claude' ? (this.task?.resumeSessionId ?? null) : null,
       sourceStepIds: [],
-      timeoutMin: 60,
+      timeoutMin: this.reply ? REPLY_TIMEOUT_MIN : 60,
       // LIVE.md §7 / F4: prompt runs default to read-write like new steps (writes stay within the repo; no repo =
       // read-only global, see MemoryService.grant). An explicit 'off' is kept.
       memory: isMemoryMode(t.memory) ? t.memory : 'read-write',

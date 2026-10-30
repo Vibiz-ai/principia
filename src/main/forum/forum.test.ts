@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FORUM_LIMITS, messageRef, type ForumEvent } from '../../shared/forum'
 import { ForumStore, newInviteCode, normalizeInviteCode, type ForumDirectory } from './store'
 import * as policy from './policy'
@@ -750,7 +750,7 @@ describe('agents answer people and post their work (§6.4)', () => {
     expect(starts[1].reply.messageId).toBe(third.id)
   })
 
-  it('caps reply runs per agent per hour and skips inactive seats', () => {
+  it('a person is never capped: every message past the hourly cap still gets a reply run', () => {
     const { s, owner, post } = setup()
     const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
     const r = responder(s, starts)
@@ -758,10 +758,88 @@ describe('agents answer people and post their work (§6.4)', () => {
       r.onHumanPost(post(owner.id, 'marketing', `msg ${i}`))
       r.onRunEnded(`r_reply${starts.length}`)
     }
-    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour)
-    clock = new Date(clock.getTime() + 3601_000)
-    r.onHumanPost(post(owner.id, 'marketing', 'next hour'))
-    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour + 1)
+    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour + 2)
+  })
+
+  it('a message nobody can answer gets a line saying why, in its thread', () => {
+    const { s, owner, post, marcus } = setup()
+    const told: [string, string, string][] = []
+    const off = responder(s, [], { seat: () => null, onUnanswered: (...a) => told.push(a) })
+    const msg = post(owner.id, 'marketing', 'hi')
+    expect(off.onHumanPost(msg)).toEqual([])
+    expect(told).toHaveLength(1)
+    s.noteUnanswered(told[0]![0], told[0]![1], told[0]![2])
+    const line = s.store.thread(msg.id).replies.find((m) => m.kind === 'system')
+    expect(line?.text).toMatch(new RegExp(`^${marcus.name} could not answer this: .*Send it again to retry\\.$`))
+  })
+
+  it('a queued message whose run cannot start is told too', () => {
+    const { s, owner, post } = setup()
+    const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
+    const told: string[] = []
+    let up = true
+    const r = responder(s, starts, {
+      onUnanswered: (id) => told.push(id),
+      start: (input) => {
+        if (!up) throw new Error('no profile')
+        starts.push(input)
+        return `r_reply${starts.length}`
+      }
+    })
+    r.onHumanPost(post(owner.id, 'marketing', 'first'))
+    const queued = post(owner.id, 'marketing', 'second')
+    r.onHumanPost(queued)
+    up = false
+    r.onRunEnded('r_reply1')
+    expect(told).toEqual([queued.id])
+  })
+
+  it('a reply run that failed, or ended with nothing, says so once; an answered or canceled one stays quiet', async () => {
+    const { s, owner, post, marcus } = setup()
+    db.exec('CREATE TABLE runs (id TEXT PRIMARY KEY, agent_id TEXT, task_id TEXT, company_id TEXT)')
+    const reply = (id: string, text: string) => {
+      db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(id, 'agt_marcus', null, CO)
+      const msg = post(owner.id, 'marketing', text)
+      s.noteReplyRun(id, { memberId: marcus.id, channelId: msg.channelId, messageId: msg.id })
+      return msg
+    }
+    const lines = (id: string) => s.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    const failed = reply('r_f', 'a')
+    await s.harvest({ runId: 'r_f', stepId: 'st_f', adapter: 'claude', status: 'failed', output: '', companyId: CO })
+    s.settleReply('r_f', 'failed', 'Timed out after 15 min')
+    s.settleReply('r_f', 'failed', 'Timed out after 15 min')
+    expect(lines(failed.id)).toEqual([`${marcus.name} could not answer this: Timed out after 15 min. Send it again to retry.`])
+    const empty = reply('r_e', 'b')
+    await s.harvest({ runId: 'r_e', stepId: 'st_e', adapter: 'claude', status: 'passed', output: '', companyId: CO })
+    s.settleReply('r_e', 'passed', null)
+    expect(lines(empty.id)).toHaveLength(1)
+    const good = reply('r_g', 'c')
+    await s.harvest({ runId: 'r_g', stepId: 'st_g', adapter: 'claude', status: 'passed', output: 'Done.', companyId: CO })
+    s.settleReply('r_g', 'passed', null)
+    expect(lines(good.id)).toEqual([])
+    const stopped = reply('r_c', 'd')
+    s.settleReply('r_c', 'canceled', 'Canceled')
+    expect(lines(stopped.id)).toEqual([])
+  })
+
+  it('a reply run with no slot after a moment shows as queued, until it starts or ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { s, owner, post, marcus } = setup()
+      const msg = post(owner.id, 'marketing', 'hi')
+      s.noteReplyRun('r_q', { memberId: marcus.id, channelId: msg.channelId, messageId: msg.id })
+      expect(s.presenceOf(CO)).toEqual([])
+      vi.advanceTimersByTime(3000)
+      expect(s.presenceOf(CO)).toMatchObject([{ memberId: marcus.id, state: 'queued', channelId: msg.channelId }])
+      s.settleReply('r_q', 'canceled', 'Canceled')
+      expect(s.presenceOf(CO)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips inactive seats', () => {
+    const { s, owner, post } = setup()
     const off = responder(s, [], { seat: () => null })
     expect(off.onHumanPost(post(owner.id, 'development', 'hi'))).toEqual([])
   })

@@ -12,8 +12,9 @@
  *    the agents in it ("Everyone on the team" is a conversation with the whole team);
  * 4. else a department channel: that department's first agent; #general: the company's first agent.
  * Here only humans wake agents. Agents wake agents through collab.ts (AGENT-COLLAB.md), which checks hops, cycles
- * and caps first and then calls `wakeForAgent`; both kinds share the queue and the per-seat hourly cap. Only active
- * seats backed by a profile (not a workflow, not shell) answer. Each seat answers at most `perHour` times an hour.
+ * and caps first and then calls `wakeForAgent`; both kinds share the queue. Only active seats backed by a profile (not
+ * a workflow, not shell) answer. A seat answers other agents at most `perHour` times an hour; a person always gets a
+ * reply. A person's message that cannot get one gets a line saying why (`onUnanswered`), never silence.
  */
 import type { ForumChannel, ForumMember, ForumMessage } from '../../shared/forum'
 import { isConversationChannel } from '../../shared/forum'
@@ -48,6 +49,8 @@ export interface ResponderDeps {
   /** a queued agent wake got its run, or could not start (collab.ts bookkeeping) */
   onWakeStarted?: (wakeIds: string[], runId: string) => void
   onWakeFailed?: (wakeIds: string[], reason: string) => void
+  /** a person's message got no run: tell them why */
+  onUnanswered?: (messageId: string, memberId: string, reason: string) => void
   /** CHAT-UI.md §8: the open questions of tasks in a channel ("VO-15" and what it asks), for the reply run's rules */
   taskAsks?: (channelId: string) => { identifier: string; ref: string; prompt: string }[]
   /** CHAT-UI.md §8: one live line per task filed in a channel (taskStatus.ts), for status questions and go-aheads */
@@ -244,6 +247,7 @@ export class ForumResponder {
       for (const m of who) {
         const runId = this.wake(m, msg.companyId, [msg.id])
         if (typeof runId === 'string') started.push(runId)
+        else this.tellRefused(msg.id, m.id, runId)
       }
       return started
     } catch (e) {
@@ -267,7 +271,7 @@ export class ForumResponder {
       if (next.wakeIds.length) {
         if (typeof res === 'string') this.d.onWakeStarted?.(next.wakeIds, res)
         else this.d.onWakeFailed?.(next.wakeIds, 'the agent could not start its reply')
-      }
+      } else if (m && typeof res !== 'string') this.tellRefused(next.messageIds[next.messageIds.length - 1]!, m.id, res)
     } catch (e) {
       this.d.log?.warn('forum responder: follow-up failed', { agentId, error: String(e) })
     }
@@ -283,11 +287,16 @@ export class ForumResponder {
       const m = this.d.store().member(memberId)
       if (!m || m.kind !== 'agent' || m.status !== 'active' || !m.agentId || m.companyId !== msg.companyId) return null
       const r = this.wake(m, msg.companyId, [msg.id])
+      if (typeof r !== 'string') this.tellRefused(msg.id, m.id, r)
       return typeof r === 'string' ? r : null
     } catch (e) {
       this.d.log?.warn('forum responder: wake one failed', { memberId, messageId: msg.id, error: String(e) })
       return null
     }
+  }
+
+  private tellRefused(messageId: string, memberId: string, r: symbol | { error: string } | null): void {
+    if (r && typeof r === 'object') this.d.onUnanswered?.(messageId, memberId, r.error)
   }
 
   private safeAsks(channelId: string): { identifier: string; ref: string; prompt: string }[] {
@@ -340,7 +349,8 @@ export class ForumResponder {
     }
     const t = this.now()
     const recent = (this.starts.get(agentId) ?? []).filter((x) => t - x < HOUR)
-    if (recent.length >= RESPONDER_LIMITS.perHour) {
+    // the cap stops agents waking each other in a loop; a person is never that loop
+    if (opts.asker && recent.length >= RESPONDER_LIMITS.perHour) {
       this.d.log?.warn('forum responder: hourly cap', { agentId, cap: RESPONDER_LIMITS.perHour })
       return { error: `@${member.handle} already answered ${RESPONDER_LIMITS.perHour} messages in the last hour` }
     }

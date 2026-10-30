@@ -552,6 +552,11 @@ export interface StartRunOptions {
   taskId?: Id | null
   /** The task's agent seat (runs.agent_id). Without taskId: a seat run with no board task (a Forum reply, FORUM.md §3). */
   agentId?: Id | null
+  /**
+   * A chat reply (FORUM.md §6.4): someone is waiting on it, so it takes the reply lane instead of the work slots and
+   * ends soon after its answer. Prompt runs without a task only.
+   */
+  reply?: boolean
   /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
   resumeSessionId?: string | null
   /** Prompt runs: the title to show instead of one cut from the prompt (a board task turn: its key and title). */
