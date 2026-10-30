@@ -57,7 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyOnFailure: true,
   notificationSound: true,
   keepAwake: true,
-  concurrency: 4,
+  concurrency: 0,
   defaultAdapter: 'claude',
   lastRepoId: null,
   schedulesPaused: false,

@@ -469,7 +469,7 @@ turn · 3m" and nothing else. Now (`components/conversations/TaskCard.tsx`, `lib
 - **Queued says why** (`queuedReason`, the dispatcher's gates in order): nobody assigned / waiting to be routed, the
   company or seat paused, dependencies not done ("Waiting for VO-3 to finish"), an open question, backlog / triage,
   a session seat, Autopilot off ("Autopilot is off in Vibiz: it waits for you to press Run now"), a manual seat, the
-  company at maxInFlight, the agent already running AGENT_MAX_PARALLEL tasks ("Julia is running 3 tasks; VO-15 starts when one finishes"), else "Starting in a moment". When it can start, **Run now**
+  company at a maxInFlight it set, else "Starting in a moment". When it can start, **Run now**
   (Start without code) sits on the card and calls `tasks:start`, the Board drawer's Run now; a refusal is shown inline
   on the card (`task-run-error`), not as a toast.
 - **Needs you** after a run stopped (blocked, needs input) shows the report it stopped with as an outcome line.
@@ -569,7 +569,7 @@ task. It should come back and reply to the parent so the parent tells what it ne
   The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do with "Answer: …";
   while its run still runs, it is held and applied when it parks), and **the answer is the founder's go-ahead**:
   `Dispatcher.goAhead` resumes the same agent at once, with autopilot off or a manual seat, past the company's in-flight
-  limit, never on a paused or archived company or seat, a session seat, or past AGENT_MAX_PARALLEL (it then keeps a
+  limit, never on a paused or archived company or seat, or a session seat (it then keeps a
   "Go ahead: …" wake, `startsWithoutAutopilot`, and the pump starts it when the reason clears). The drawer and the
   phone's `tasks:answer` do the same. The parent says "Got it, back on VO-15." only when the run really started (or was
   running); otherwise the true state ("Got it. Julia is running 3 tasks; VO-15 starts when one finishes.",

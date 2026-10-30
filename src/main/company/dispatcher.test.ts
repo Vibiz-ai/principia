@@ -8,7 +8,7 @@ import { createEngineStore, runTaskLink } from '../db/engineStore'
 import { LiveStore } from '../db/liveStore'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge, type DispatcherSessions } from './dispatcher'
 import type { StartRunOptions } from '../../shared/engine'
-import { AGENT_MAX_PARALLEL, type CompanyTaskInput } from '../../shared/company'
+import type { CompanyTaskInput } from '../../shared/company'
 import type { Run, RunTarget, Session } from '../../shared/types'
 
 let db: DB; let store: Store; let c: HookedCompanyStore; let dir: string; let d: Dispatcher
@@ -167,19 +167,24 @@ describe('DEPARTMENTS.md §3 dispatcher: assignment is the wake', () => {
     // the human click reset the wake guard of the task it started
     expect(c.task(t2.id).autoWakes).toEqual({ windowStart: null, n: 0 })
   })
-  it('automatic starts stop at AGENT_MAX_PARALLEL tasks per agent; the next one starts when one finishes', async () => {
-    const { co, agent, task } = board({ autopilot: false })
-    const ts = [1, 2, 3, 4].map(n => task({ title: `Task ${n}` }))
-    c.setAutopilot(co.id, true, 10)
-    for (let i = 0; i < 5; i++) await d.pump(co.id)
-    expect(started).toHaveLength(AGENT_MAX_PARALLEL)
-    const waiting = ts.find(t => c.task(t.id).status === 'todo')!
-    // a system start of the waiting one is refused with the plain line; a human one is not
-    expect(() => c.startTask(waiting.id, undefined, () => { throw new Error('no run') }, { actor: 'system' })).toThrow(`${agent.name} is running ${AGENT_MAX_PARALLEL} tasks; ${waiting.identifier} starts when one finishes`)
-    end(started[0].run.id, 'passed')
-    await settle()
-    expect(c.task(waiting.id).status).toBe('in_progress')
-    expect((db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress'").get(agent.id) as { n: number }).n).toBe(AGENT_MAX_PARALLEL)
+  it('PR-69: with no limit set, one agent takes every task it has, past the old caps of 3', async () => {
+    const { co, task } = board({ autopilot: false })
+    const ts = [1, 2, 3, 4, 5, 6].map(n => task({ title: `Task ${n}` }))
+    c.setAutopilot(co.id, true)
+    expect(c.boardSettings(co.id).maxInFlight).toBe(0)
+    for (let i = 0; i < ts.length; i++) await d.pump(co.id)
+    expect(started).toHaveLength(ts.length)
+    expect(ts.every(t => c.task(t.id).status === 'in_progress')).toBe(true)
+  })
+  it('PR-69: a limit the founder sets still holds; 0 takes it off again', async () => {
+    const { co, task } = board({ autopilot: false })
+    const ts = [1, 2, 3].map(n => task({ title: `Task ${n}` }))
+    c.setAutopilot(co.id, true, 1)
+    for (let i = 0; i < 3; i++) await d.pump(co.id)
+    expect(started).toHaveLength(1)
+    c.setAutopilot(co.id, true, 0)
+    for (let i = 0; i < 3; i++) await d.pump(co.id)
+    expect(started).toHaveLength(ts.length)
   })
 })
 

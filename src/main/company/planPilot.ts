@@ -21,7 +21,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { AGENT_MAX_PARALLEL, agentFullLine, type BoardTask, type CompanyAgent } from '../../shared/company'
+import { atInFlightLimit, type BoardTask, type CompanyAgent } from '../../shared/company'
 import type { StartRunOptions } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import { briefOf, milestoneComplete, milestoneReady, proofOf, touchesOverlap, whoseTurn, type Milestone, type Plan, type PlanAutonomy, type PlanDetail, type PlanResultState, type PlanTask } from '../../shared/plans'
@@ -71,7 +71,7 @@ export class PlanPilot {
   private readonly checking = new Set<string>()
   private readonly drafting = new Map<string, AbortController>()
   private readonly waiting = new Map<string, string>()
-  /** per plan: why a ready milestone has not started (its agent runs AGENT_MAX_PARALLEL tasks, the cap, overlapping files), by milestone id */
+  /** per plan: why a ready milestone has not started (the company's limit, overlapping files), by milestone id */
   private readonly milestoneWaits = new Map<string, Map<string, string>>()
   private timer: NodeJS.Timeout | null = null
   private disposed = false
@@ -513,11 +513,11 @@ export class PlanPilot {
       }
     }
   }
-  /** The wait line when the company already has maxInFlight tasks in progress, else null. */
+  /** The wait line when the company set a maxInFlight and has that many tasks in progress, else null. */
   private atCap(companyId: string): string | null {
     const max = this.c.boardSettings(companyId).maxInFlight
     const n = (this.c.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress'").get(companyId) as { n: number }).n
-    return n >= max ? `${n} ${n === 1 ? 'task is' : 'tasks are'} already running (the limit is ${max}). The next one starts when a seat frees up.` : null
+    return atInFlightLimit(n, max) ? `${n} ${n === 1 ? 'task is' : 'tasks are'} already running (the limit is ${max}). The next one starts when a seat frees up.` : null
   }
   private milestoneRows(p: Plan, m: Milestone): BoardTask[] {
     return p.tasks.filter(t => t.milestoneId === m.id && t.taskId).map(t => { try { return this.c.task(t.taskId!) } catch { return null } }).filter((x): x is BoardTask => !!x)
@@ -567,10 +567,7 @@ export class PlanPilot {
     const t = c.task(pt.taskId!)
     const agent = (t.agentId ? c.departments.getAgent(t.agentId) : null) ?? fail(`${t.identifier} has no agent`)
     if (agent.pausedAt && by === 'pilot') fail(`${agent.name} is paused`)
-    // an agent works on several milestones at once (each in its own worktree); the pilot stops at AGENT_MAX_PARALLEL,
-    // the founder's start never waits
-    const n = (c.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(agent.id, t.id) as { n: number }).n
-    if (by === 'pilot' && n >= AGENT_MAX_PARALLEL) fail(agentFullLine(agent.data.persona?.name ?? agent.name, n, t.identifier))
+    // an agent works on several milestones at once, each in its own worktree
     // Pause is read live: right before the (slow) worktree work and again right before the start
     if (by === 'pilot' && !this.mayStart(p.id)) return
     let wt = m.worktree

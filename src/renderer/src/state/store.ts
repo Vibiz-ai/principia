@@ -1367,7 +1367,7 @@ export async function setCompanyPaused(companyId: Id, paused: boolean, opts: { u
 async function confirmResumeStarts(companyId: Id): Promise<boolean> {
   const pre = await hive.board.autopilotPreview({ companyId }).catch(() => null)
   if (!pre || pre.count <= 0) return true
-  const room = Math.max(1, pre.maxInFlight - pre.inFlight)
+  const room = pre.maxInFlight >= 1 ? Math.max(1, pre.maxInFlight - pre.inFlight) : pre.count
   const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
   const ok = await confirmNative({
     message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,
@@ -1400,7 +1400,8 @@ export async function requestAutopilot(q: { companyId: Id; on: boolean; maxInFli
   if (!q.on) return hive.board.autopilot(q)
   const pre = await hive.board.autopilotPreview({ companyId: q.companyId }).catch(() => null)
   if (pre && pre.count > 0) {
-    const room = Math.max(1, (q.maxInFlight ?? pre.maxInFlight) - pre.inFlight)
+    const max = q.maxInFlight ?? pre.maxInFlight
+    const room = max >= 1 ? Math.max(1, max - pre.inFlight) : pre.count
     const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
     const ok = await confirmNative({
       message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,

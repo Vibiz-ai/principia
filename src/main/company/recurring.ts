@@ -16,7 +16,7 @@
  * card with autopilot off and on a manual seat, and a card in review or done takes the fire as its next turn (Turn off,
  * or canceling the card, is how a routine stops).
  */
-import { AGENT_MAX_PARALLEL, agentFullLine, PERSONAL_COMPANY_ID, type BoardTask, type CompanyTaskInput, type PendingWake } from '../../shared/company'
+import { PERSONAL_COMPANY_ID, type BoardTask, type CompanyTaskInput, type PendingWake } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import type { RunTarget, Schedule } from '../../shared/types'
 import type { ScheduleBoard, ScheduleCardResult } from '../engine/scheduler'
@@ -114,8 +114,8 @@ function waitingFor(c: CompanyStore, t: BoardTask): string | null {
 /**
  * A schedule's standing card: what keeps this fire from starting now, or null when the dispatcher starts it. The
  * founder turned the schedule on, so autopilot and a manual seat do not hold it (dispatcher.ts scheduledFire); a
- * paused company or agent, a session seat and an agent at AGENT_MAX_PARALLEL do (a busy agent below it takes the fire
- * beside its other work), and the message says what to do in plain words.
+ * paused company or agent and a session seat do (a busy agent takes the fire beside its other work), and the message
+ * says what to do in plain words.
  */
 function scheduleWaiting(c: CompanyStore, t: BoardTask): string | null {
   if (t.status !== 'todo') return waitingFor(c, t)
@@ -125,8 +125,6 @@ function scheduleWaiting(c: CompanyStore, t: BoardTask): string | null {
   if (c.isPaused(t.companyId)) return `${c.passport(t.companyId).name} is paused; it runs once you resume`
   if (agent.pausedAt) return `${agent.name} is paused; resume ${agent.name} to run it`
   if (agent.data.mode === 'session') return `${agent.name} works in a session; open ${t.identifier} to run it`
-  const n = (c.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(agent.id, t.id) as { n: number }).n
-  if (n >= AGENT_MAX_PARALLEL) return agentFullLine(agent.name, n, t.identifier)
   return null
 }
 

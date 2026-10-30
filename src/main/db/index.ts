@@ -96,6 +96,20 @@ function healV2Columns(db: DB): void {
   db.exec(DDL_ORCHESTRATOR)
   // REMOTE.md RA2: paired phones (token hashes only), still schema v2
   db.exec(DDL_PHONE)
+  removeAgentLimits(db)
+}
+
+/**
+ * PR-69: agents run with no limit unless the founder sets one, so limits saved before that go, once: onboarding wrote
+ * maxInFlight 2 on every company nobody chose. A limit set after this stays. Idempotent.
+ */
+function removeAgentLimits(db: DB): void {
+  if (db.prepare('SELECT 1 FROM meta WHERE key = ?').get('agent_limits_removed')) return
+  db.transaction(() => {
+    db.prepare("DELETE FROM settings WHERE key = 'concurrency'").run()
+    db.prepare("UPDATE company_passports SET data = json_remove(data, '$.maxInFlight') WHERE json_valid(data) AND json_type(data, '$.maxInFlight') IS NOT NULL").run()
+    db.prepare("INSERT INTO meta(key, value) VALUES ('agent_limits_removed', '1')").run()
+  })()
 }
 
 /** Columns added to the v1 DDL during the build. CREATE IF NOT EXISTS won't add them to an older db, so add them here. */

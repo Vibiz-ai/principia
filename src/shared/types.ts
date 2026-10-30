@@ -553,7 +553,7 @@ export interface Settings {
   notifyOnFailure: boolean // default true
   notificationSound: boolean // default true; Settings › Notifications › "Sounds" (SOUNDS.md), every sound off when false
   keepAwake: boolean // default true
-  concurrency: number // default 4, 1..16 (engine node cap)
+  concurrency: number // default 0 = no limit, else 1..16 (engine node cap)
   defaultAdapter: AdapterId // provider switcher, default 'claude'
   lastRepoId: Id | null
   schedulesPaused: boolean // default false

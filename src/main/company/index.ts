@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { AGENT_MAX_PARALLEL, agentFullLine, DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
+import { atInFlightLimit, DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -920,13 +920,13 @@ export class CompanyStore {
     throw new HiveError('conflict', `${name} is paused. Resume it to start work.`)
   }
 
-  /** board:autopilot. Stored in the company row's JSON (§1.1); both default off / DEFAULT_MAX_IN_FLIGHT. */
+  /** board:autopilot. Stored in the company row's JSON (§1.1); both default off / no limit (0). */
   setAutopilot(companyId: string, on: boolean, maxInFlight?: number): BoardSettings {
     const c=this.passport(companyId)
     if(on&&c.archivedAt) fail(`Unarchive ${c.name} before turning Autopilot on`)
     // A4: a paused company starts nothing; Autopilot stays off until it resumes
     if(on&&this.isPaused(companyId)) throw new HiveError('conflict', `Autopilot is off while ${c.name} is paused. Resume it first.`)
-    if(maxInFlight!==undefined&&(!Number.isInteger(maxInFlight)||maxInFlight<1||maxInFlight>20)) fail('Tasks in flight must be between 1 and 20')
+    if(maxInFlight!==undefined&&(!Number.isInteger(maxInFlight)||maxInFlight<0||maxInFlight>20)) fail('Tasks in flight must be between 0 (no limit) and 20')
     this.store.db.transaction(()=> {
       const data=this.companyJson(companyId)
       this.store.db.prepare('UPDATE company_passports SET data=? WHERE id=?').run(JSON.stringify({...data,autopilot:on,...(maxInFlight!==undefined ? {maxInFlight} : {})}),companyId)
@@ -948,8 +948,7 @@ export class CompanyStore {
    * §4: starts a task turn. The seat (agentId) decides the profile or workflow; legacy tasks run their
    * assigneeProfileId (or the explicit `profileId` of "Run agent"). cwd: the task's repo, else the agent's default repo,
    * else the company workspace. `actor:'system'` is the dispatcher (paused agents refused); a human click skips the
-   * autopilot gate. An agent works on several tasks at once: a human start never waits for it, an automatic one only
-   * at AGENT_MAX_PARALLEL. A code task whose checkout another in-flight run already works in gets its own worktree
+   * autopilot gate. An agent works on any number of tasks at once. A code task whose checkout another in-flight run already works in gets its own worktree
    * (WORKTREE.md binding, made by TaskWorkService.workdir before the turn): two runs never edit one checkout.
    * `lease`: an interactive session (Open as session) opens in the folder as it is, shared or not.
    */
@@ -971,17 +970,12 @@ export class CompanyStore {
       this.validate(task,task.id,task)
       const agent=task.agentId ? this.departments.agent(task.agentId) : null
       // goAhead (Dispatcher.goAhead): the founder said go in so many words, so neither autopilot nor the company's
-      // in-flight limit holds it; the seat's pause and AGENT_MAX_PARALLEL below still do
+      // in-flight limit holds it; the seat's pause below still does
       if(actor==='system'&&!opts.work) this.assertAutoStart(task,agent,opts.goAhead===true||(opts.consented===true&&startsWithoutAutopilot(task)),opts.goAhead===true)
       if(agent) {
         if(agent.companyId!==task.companyId) fail(`${agent.name} belongs to another company`)
         if(agent.archivedAt) fail(`${agent.name} is archived. Assign another agent.`)
         if(actor==='system'&&agent.pausedAt) fail(`${agent.name} is paused`)
-        // parallel work: a busy agent takes the task beside the others; only automatic starts stop at the per-agent cap
-        if(actor==='system') {
-          const n=this.inFlightOf(agent.id,task.id)
-          if(n>=AGENT_MAX_PARALLEL) fail(agentFullLine(agent.name,n,task.identifier))
-        }
       }
       const company=this.passport(task.companyId)
       const repoId=task.repoId ?? agent?.data.defaultRepoId ?? null
@@ -1027,7 +1021,7 @@ export class CompanyStore {
   }
   /**
    * §0.6, §3.2: an automatic start (the dispatcher, a follow-up turn, a recurring fire) needs the board on, autopilot
-   * on for the company, an `auto` seat, and the company under maxInFlight. Checked inside startTask's transaction, so
+   * on for the company, an `auto` seat, and the company under its maxInFlight, if it set one. Checked inside startTask's transaction, so
    * the gate and the claim cannot interleave with another start. A human click skips it.
    */
   private assertAutoStart(task: BoardTask, agent: CompanyAgent|null, consented=false, goAhead=false): void {
@@ -1042,13 +1036,9 @@ export class CompanyStore {
     if(!consented&&!settings.autopilot) fail(`Autopilot is off for ${company.name}`)
     // PROACTIVE.md §3: a chat's own tracked work never takes an autopilot slot; LINEAR.md: nor does a task started in a tracker (no run of ours)
     const n=(this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>? AND COALESCE(json_extract(data,'$.externalId'),'') NOT LIKE 'track:%'").get(task.companyId,task.id) as {n:number}).n
-    if(n>=settings.maxInFlight&&!goAhead) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
+    if(atInFlightLimit(n,settings.maxInFlight)&&!goAhead) fail(`${company.name} already has ${n} tasks in flight (limit ${settings.maxInFlight})`)
   }
   /** The company workspace (`<userData>/companies/<slug>/workspace`), created on demand; null without company folders. */
-  /** The agent's tasks in flight, besides `taskId`. */
-  private inFlightOf(agentId: string, taskId: string): number {
-    return (this.store.db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(agentId,taskId) as {n:number}).n
-  }
   /**
    * WORKTREE.md: an in-flight task (with a run or session of ours) working in the repo's own checkout: no worktree
    * binding and not a plan task (those work in their milestone's worktree). Its repo: its own, else its agent's default.

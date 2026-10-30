@@ -87,12 +87,10 @@ describe('queuedReason: why a queued card waits, and whether Run now can start i
     expect(queuedReason({ ...base, agent: { ...agent, data: { autonomy: 'auto', mode: 'session' } } }).text).toBe('Julia works in a session: it starts when you press Run now')
     expect(queuedReason({ ...base, task: { ...task, status: 'backlog' } })).toEqual({ text: 'In the backlog: it starts when it moves to To do, or with Run now', canRun: true })
   })
-  it('the company is at its limit, or the agent already runs as many as it takes at once; else it starts in a moment', () => {
+  it('the company is at a limit it set; else it starts in a moment', () => {
     expect(queuedReason({ ...base, inFlight: 3 })).toEqual({ text: '3 tasks are already running in Vibiz (at most 3 at once)', canRun: true })
-    expect(queuedReason({ ...base, company: { ...company, maxInFlight: undefined }, inFlight: 3 }).text).toContain('at most 3')
-    // an agent works on several tasks at once: one or two others running do not hold it
-    expect(queuedReason({ ...base, inFlight: 2, agentRunning: 2 })).toEqual({ text: 'Starting in a moment', canRun: true })
-    expect(queuedReason({ ...base, task: { ...task, identifier: 'VO-15' }, company: { ...company, maxInFlight: 6 }, inFlight: 3, agentRunning: 3 })).toEqual({ text: 'Julia is running 3 tasks; VO-15 starts when one finishes', canRun: true })
+    // PR-69: no limit set, nothing holds it, however much runs
+    expect(queuedReason({ ...base, company: { ...company, maxInFlight: undefined }, inFlight: 30 })).toEqual({ text: 'Starting in a moment', canRun: true })
     expect(queuedReason(base)).toEqual({ text: 'Starting in a moment', canRun: true })
   })
 })

@@ -34,7 +34,7 @@ export interface CompanyPassport extends CompanyPassportInput {
   vaultPath?: string | null
   /** DEPARTMENTS.md §1.1: company-row JSON. Assignment wakes `auto` agents only with this on. Absent = false. */
   autopilot?: boolean
-  /** DEPARTMENTS.md §3: tasks in flight at once across the company's agents. Absent = DEFAULT_MAX_IN_FLIGHT. */
+  /** DEPARTMENTS.md §3: tasks in flight at once across the company's agents, if the founder set a limit. Absent = no limit. */
   maxInFlight?: number
   /**
    * Five doors A4: when this company was paused (company:pause). While set nothing of this company starts: no agent
@@ -185,7 +185,12 @@ export interface GithubTaskPreview { title: string; description: string; source:
 export function departmentsEnabled(flags: { companies?: boolean; departments?: boolean } | null | undefined): boolean {
   return !!flags?.companies && !!flags?.departments
 }
-export const DEFAULT_MAX_IN_FLIGHT = 3
+/** PR-69: no limit unless the founder sets one (Team & autonomy › Tasks at once; 0 = no limit). */
+export const DEFAULT_MAX_IN_FLIGHT = 0
+/** May nothing more start? `max` is a company's maxInFlight, 0 = no limit. */
+export const atInFlightLimit = (n: number, max: number): boolean => max >= 1 && n >= max
+/** "Up to 3 tasks at once", or "No limit on tasks at once". */
+export const tasksAtOnceLine = (max: number): string => (max >= 1 ? `Up to ${max} task${max === 1 ? '' : 's'} at once` : 'No limit on tasks at once')
 export const MAX_HANDOFFS = 4
 
 /** §1.3: why a `blocked` task is blocked. Only `deps` heals by itself; everything else waits for the human. */
@@ -322,13 +327,6 @@ export interface DepartmentSaveInput {
   data?: Partial<Omit<DepartmentData, 'charter'>> & { charter?: Partial<DepartmentCharter> }
 }
 
-/**
- * Tasks one agent works on at once when they start by themselves (the dispatcher, a follow-up, a schedule fire, the
- * plan pilot), under the company's maxInFlight. A human Run now / Start is never held by it, nor by a busy agent.
- */
-export const AGENT_MAX_PARALLEL = 3
-/** The wait line of a task whose agent is at AGENT_MAX_PARALLEL: "Julia is running 3 tasks; VO-15 starts when one finishes". */
-export const agentFullLine = (agent: string, n: number, task: string): string => `${agent} is running ${n} tasks; ${task} starts when one finishes`
 export const AGENT_LIMITS = { instructions: 4000, capabilities: 400, name: 80, runMinutes: { min: 1, max: 24 * 60 }, autoWakesPerHour: { min: 1, max: 4 } } as const
 export type CompanyAgentKind = 'profile' | 'workflow'
 export type AgentAutonomy = 'manual' | 'auto'

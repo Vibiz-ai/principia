@@ -6,7 +6,7 @@
  *
  * Pure: shared by main (the stored state, the phone), the renderer and the phone web app.
  */
-import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT, agentFullLine } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit } from './company'
 
 /** What the card says about its task. */
 export const TASK_CARD_STATES = ['queued', 'working', 'needs_you', 'in_review', 'done', 'failed'] as const
@@ -140,8 +140,6 @@ export interface QueueInput {
   depsOpen?: readonly string[]
   /** the company's tasks in flight right now (in progress with a run) */
   inFlight?: number
-  /** how many other tasks its agent is running right now (an agent works on up to AGENT_MAX_PARALLEL at once) */
-  agentRunning?: number
   /** work the founder already said go to starts with autopilot off too (startsWithoutAutopilot) */
   startsAnyway?: boolean
   /** "Run now" for a company with code, "Start" without */
@@ -175,9 +173,7 @@ export function queuedReason(i: QueueInput): QueueReason {
   if (i.agent?.data?.autonomy && i.agent.data.autonomy !== 'auto' && !i.startsAnyway) return { text: `${who} starts only when you say so: press ${run}`, canRun: true }
   const max = typeof company?.maxInFlight === 'number' && company.maxInFlight >= 1 ? company.maxInFlight : DEFAULT_MAX_IN_FLIGHT
   const inFlight = i.inFlight ?? 0
-  if (inFlight >= max) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
-  const mine = i.agentRunning ?? 0
-  if (mine >= AGENT_MAX_PARALLEL) return { text: agentFullLine(who, mine, t.identifier ?? 'this task'), canRun: true }
+  if (atInFlightLimit(inFlight, max)) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
   return { text: 'Starting in a moment', canRun: true }
 }
 

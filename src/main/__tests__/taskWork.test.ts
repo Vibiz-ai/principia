@@ -420,6 +420,14 @@ d('the worktree goes away by hand', () => {
 })
 
 d('several tasks at once, capped by maxInFlight', () => {
+  it('PR-69: with no limit set, every Start runs at once', async () => {
+    const { companyId, repoId } = company()
+    const ts = ['A', 'B', 'C', 'D', 'E'].map((title) => task({ companyId, repoId, title }))
+    const results = []
+    for (const t of ts) results.push(await svc.startTask(t.id))
+    expect(results.map((r) => r.queued)).toEqual([false, false, false, false, false])
+  })
+
   it('Start 4 with maxInFlight=3: three run, the fourth is queued and starts when one finishes', async () => {
     const { companyId, repoId } = company()
     c.setAutopilot(companyId, false, 3)
