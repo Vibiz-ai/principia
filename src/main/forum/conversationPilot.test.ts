@@ -6,6 +6,7 @@ import { ForumService } from './service'
 import type { ForumDirectory } from './store'
 import { ConversationPilot, PICKING_LINE, choosePick, cleanTitle, modelHandoff, parsePick, pickSystem, titleInput, type PilotSeat } from './conversationPilot'
 import { buildReplyPrompt } from './responder'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 
 const CO = 'co_acme'
 let db: Database.Database
@@ -328,6 +329,12 @@ describe('propose a new specialist → create (CHAT-UI.md §7.2)', () => {
     const hire = svc.store.memberForAgent('agt_adsbuyer')!
     expect(svc.store.channel(r.channel.id, owner.id).memberIds).toEqual(expect.arrayContaining([marcus.id, hire.id]))
     expect(woken.map((w) => [w.memberId, w.message.id])).toEqual([[hire.id, r.message.id]])
+  })
+
+  it('a reply to a person follows the reply style; an answer to another agent does not', () => {
+    const base = { seat: { name: 'Content writer', instructions: '' }, department: 'Marketing', me: 'marcus', channel: '“Ads”', messages: [{ ref: 'm1', author: 'founder', text: 'ads?' }], thread: [], replyTo: 'm1' }
+    expect(buildReplyPrompt(base)).toContain(REPLY_STYLE)
+    expect(buildReplyPrompt({ ...base, asker: { handle: 'ovid', label: null, why: '', depth: 1, maxHops: 3 } })).not.toContain(REPLY_STYLE)
   })
 
   it('the conversation reply prompt tells agents how to propose (and only in a conversation)', () => {

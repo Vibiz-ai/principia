@@ -20,6 +20,7 @@ import { isConversationChannel } from '../../shared/forum'
 import type { ForumStore } from './store'
 import { flat } from './format'
 import { TASK_STARTED_RULE } from '../company/principiaOps'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 
 export const RESPONDER_LIMITS = { agentsPerMessage: 3, conversationAgents: 8, perHour: 12, threadLines: 8, line: 400, pending: 5 } as const
 
@@ -169,6 +170,7 @@ export function buildReplyPrompt(input: {
   const rules = [
     `You are @${input.me} in the company Forum, and a person just wrote to you in ${input.channel}. Answer now, as yourself in your role.`,
     `Reply with forum_reply {"to":"${input.replyTo}","text":"…"} (or \`forum reply ${input.replyTo} "…"\`): one short, useful message. A greeting gets a short greeting and what you can help with; a question gets the answer.`,
+    REPLY_STYLE,
     'Use forum_read or the company notes only when you need them. Do not start long work in this run.',
     `When the person asks for work (do something, write or make something, track it, put it on the board), put it on the Board yourself, now: forum_reply {"to":"${input.replyTo}","text":"I started {task}: <title>. I'll post the result here.","task":{"title":"…"}} files their message as a task for you ({task} becomes its identifier). Never ask them to press Make task or to file it themselves.`,
     `${TASK_STARTED_RULE} If a teammate already filed it for this message (the reply tells you, or the thread shows "<name> started <ID>"), do not file another: say who is on it.`,

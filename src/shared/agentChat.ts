@@ -5,6 +5,8 @@
  * differs from a board task. Principia's team context (teammates, recent work) is appended by the orchestrator. Pure.
  */
 
+import { REPLY_STYLE } from './replyStyle'
+
 /** Words that decide what an agent asks before doing. First match wins, role before department. */
 const ASK_BEFORE: [RegExp, string][] = [
   [/support|customer|reception|front desk|office|liaison|inbox|reply|responder|patient/i, 'replying'],
@@ -72,6 +74,7 @@ export function agentChatBrief(i: AgentChatBriefInput): string {
       : `- ${autonomy.replace(/^Asks/, 'Ask the founder here')}, and wait for a yes.`,
     ...(i.code ? ['- Code work: keep changes on a branch and say what changed; never push to the main branch without the founder\'s yes.'] : []),
     '- No run report block is needed in this chat.',
+    REPLY_STYLE,
     '</principia-agent-chat>'
   ]
   return lines.join('\n')
