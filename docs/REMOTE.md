@@ -16,7 +16,8 @@ continue a chat, message an agent, talk in the team room. Everything else stays 
 - **Turn off** stops the tunnel and the server and closes every socket. Quitting closes the server too but, while
   Phone comes back at launch, leaves the tunnel running for the next launch (RA8). Paired phones stay paired (RA2):
   they get back in when Phone is on again. Signing them out is its own action (Sign out all phones).
-- The tunnel is the only outbound traffic Phone adds, and only while it is on. While it runs, `cloudflared` also opens
+- The tunnel, and one small sealed address per phone when the tunnel's address changes (RA8), are the only outbound
+  traffic Phone adds, and only while it is on. While it runs, `cloudflared` also opens
   its own metrics listener on `localhost` (20241-20245 by default), loopback only, and it closes with the tunnel.
 - An address `cloudflared` prints in an error line (`https://api.trycloudflare.com`, its own service) is never taken as
   the tunnel address.
@@ -148,7 +149,7 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
   (Phone off, Principia closed, or a new quick-tunnel address), the app keeps the token, tries that address again every
   20 s and on the foreground, and asks for the Mac's new address (RA8), with Try again and Forget this Mac.
 - **Site headers** (`phone-site/vercel.json`): `default-src 'none'`; scripts, styles, fonts, images and the manifest
-  from `'self'` only; `connect-src https://*.trycloudflare.com wss://*.trycloudflare.com` (plus
+  from `'self'` only; `connect-src 'self' https://*.trycloudflare.com wss://*.trycloudflare.com` (`'self'` for the address lookup, RA8; plus
   `PHONE_SITE_CLOUD_ORIGIN` when set at build time); `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'none'`;
   `require-trusted-types-for 'script'` with `trusted-types 'none'` (the app never writes HTML, so any HTML sink is
   refused); nosniff, `Referrer-Policy: no-referrer`, COOP and CORP same-origin, HSTS. No third-party script, style or
@@ -156,7 +157,8 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
 
 ### Threat model (hosted)
 
-- **The static site holds no data.** It is HTML, CSS, JS, a font and four pictures. Everything on screen comes from the
+- **The site holds no readable data.** It is HTML, CSS, JS, a font and four pictures, plus sealed addresses it cannot
+  open (RA8). Everything on screen comes from the
   Mac, which is the authority: it decides who is paired, what a phone can see and do (RA3), and it can sign everyone out.
 - **The token** is on the phone (the site's `localStorage`) and as a hash on the Mac. Anyone who runs script on the
   site's origin could read it, so the site runs none but its own (the CSP above, no third parties, no inline script).
@@ -225,6 +227,40 @@ message. See docs/IOS.md.
   page, and says nothing beyond "known" or "not known" for a random 64-bit device id. The hashes in hive.db could make
   such a proof, so whoever can read hive.db can pose as this Mac to a paired phone; that person already has the Mac.
 
+- The iPhone app (RA7) does the same: its "Waiting for your Mac" screen takes the words, the move link (pasted, scanned
+  from the Mac's QR, or opened as `principia://pair?site=<site>#move=<the Mac's address>`) or a full
+  `https://<words>.trycloudflare.com` address, runs the same `POST /api/hello` check (same nonce, message and key,
+  compared in constant time) and only then keeps the new address and reconnects. It treats Cloudflare's answers for a
+  gone tunnel (530, error 1033 in HTML or JSON, a 502/503/504 page) and a name that no longer resolves, a refused or
+  timed-out connection as "the Mac moved or is off", never a status code, keeps its token, and tries the last
+  address again on the foreground and every 20 s.
+### By itself: the sealed address lookup
+
+The words cover any restart, but they need someone at the Mac. So the Mac also leaves its address where only this phone
+can read it (`src/shared/rendezvous.ts`, `src/main/remote/rendezvous.ts`, `phone-site/api/where.mjs`).
+
+- **When.** Each time the tunnel gets an address, while a phone app address is set: one record per paired phone. A
+  record is needed only after the address changed, and then every phone's current hash goes up, so rotation (RA2) needs
+  nothing more. A failed write is tried again after 30 s, 2 min, 10 min, then every hour. A site with no lookup (a
+  self-hosted static site answers 404) is left alone. With the phone app address empty, nothing is sent.
+- **What the site keeps.** Both sides start from `h = sha256hex(token)`. `write = HMAC(h, "principia-rdv-write-v1")`,
+  `id = sha256hex(write)`, `key = HMAC(h, "principia-rdv-key-v1")`; the record is `base64url(iv + AES-256-GCM(key,
+  address))`. The site only ever holds random ids and ciphertext, for 30 days. It lets a write in only when
+  `sha256hex(write) = id`, so an id seen in a log cannot be used to replace a record. There is no index: nothing links
+  one phone's records, or a phone to a Mac, beyond who called from where.
+- **The phone.** While it waits (every 20 s and on the foreground, and with the app open but its socket down), once
+  the last address has not answered: `GET <site>/api/where?id=<id>`, opens the record, and runs the hello check above
+  on the address inside. Only then does it keep the address and send its token. No record, one that does not open, or
+  a Mac that does not answer yet all just mean it keeps waiting, with no error on screen. Never signed out by it.
+- **What it does not do.** The Mac has to be on, online and running Principia, so a reboot needs "Launch Principia at login"
+  (or someone opening it). A phone away for longer than 30 days after the last new address finds no record, and uses the
+  words. It is a convenience and adds no trust: the site cannot read an address, and a site that lies gets a failed
+  hello check, never the token. At worst a broken or hostile site means typing the words, as before.
+- **Hosting.** The function runs on the phone site, so the app needs no CORS and only `'self'` added to `connect-src`.
+  It needs a Redis with the Upstash REST API (`KV_REST_API_URL` and `KV_REST_API_TOKEN`, from the Vercel Marketplace, or
+  the `UPSTASH_REDIS_REST_*` pair). Abuse limits: 30 reads a minute and 20 writes an hour per caller, 2000 writes an hour
+  across everyone, 1 KB a body. A phone waits at 3 reads a minute.
+
 ### Options we did not build (yet)
 
 - **(a) A named Cloudflare tunnel with a stable hostname.** The founder creates a tunnel in their own Cloudflare account
@@ -234,17 +270,3 @@ message. See docs/IOS.md.
   Cloudflare, the tunnel token kept with safeStorage like other keys, a Settings field for it and the hostname, and the
   hosted site built with that host in `connect-src` (`PHONE_SITE_CLOUD_ORIGIN`-style build variable). The best
   experience for a founder who has a domain; not built because it needs an account and a domain we cannot test here.
-- **(b) A rendezvous on the phone site.** The Mac would publish its current address to a tiny endpoint on the
-  principia-phone site (a Vercel function with a KV store) under `id = HMAC(sha256hex(token), "rdv-id")`, sealed with
-  AES-GCM under `HMAC(sha256hex(token), "rdv-key")`, so the store only ever holds random ids and ciphertext; the phone
-  derives both, fetches, decrypts, and still runs the hello check above before it sends its token. Fully automatic, but
-  it needs a server-side store on the site (today a static site with no data), its own abuse limits and a deploy we
-  cannot exercise from here, and it adds a write path from every Mac to a shared service. Worth doing once the site
-  has a backend (or with Principia Cloud, CLOUD.md §13.2).
-- The iPhone app (RA7) does the same: its "Waiting for your Mac" screen takes the words, the move link (pasted, scanned
-  from the Mac's QR, or opened as `principia://pair?site=<site>#move=<the Mac's address>`) or a full
-  `https://<words>.trycloudflare.com` address, runs the same `POST /api/hello` check (same nonce, message and key,
-  compared in constant time) and only then keeps the new address and reconnects. It treats Cloudflare's answers for a
-  gone tunnel (530, error 1033 in HTML or JSON, a 502/503/504 page) and a name that no longer resolves, a refused or
-  timed-out connection as "the Mac moved or is off", never a status code, keeps its token, and tries the last
-  address again on the foreground and every 20 s.

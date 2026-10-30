@@ -9,6 +9,7 @@ import { pairLinkFor, phoneAutoStartOn, type RemotePairLink, type RemoteState } 
 import { RemoteAuth } from './auth'
 import type { DeviceStore } from './devices'
 import { PhoneApi, type PhoneHost } from './api'
+import { Rendezvous, type RendezvousDeps } from './rendezvous'
 import { RemoteServer, type RemoteApi } from './server'
 import { Tunnel, type TunnelDeps } from './tunnel'
 
@@ -23,6 +24,8 @@ export interface RemoteServiceDeps {
   devices?: DeviceStore
   /** RA8: the "Turn Phone on when Principia starts" setting (null/undefined: on once a phone is paired) */
   autoStart?: () => boolean | null | undefined
+  /** RA8: how the sealed address reaches the phone site (tests) */
+  rendezvous?: Pick<RendezvousDeps, 'fetch' | 'retryMs'>
   log?: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
 }
 
@@ -31,11 +34,16 @@ export class RemoteService {
   private api: PhoneApi | null = null
   private server: RemoteServer | null = null
   private readonly tunnel: Tunnel
+  private readonly rendezvous: Rendezvous
   private busy: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly d: RemoteServiceDeps) {
     this.auth = new RemoteAuth({ store: d.devices })
-    this.tunnel = new Tunnel({ ...d.tunnel, log: d.log, onChange: () => this.changed() })
+    this.rendezvous = new Rendezvous({ ...d.rendezvous, site: () => this.site(), hashes: () => this.auth.hashes(), log: d.log })
+    this.tunnel = new Tunnel({ ...d.tunnel, log: d.log, onChange: (t) => {
+      this.rendezvous.address(t.url)
+      this.changed()
+    } })
   }
 
   state(): RemoteState {
