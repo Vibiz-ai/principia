@@ -265,7 +265,10 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)
   service.wakeOne = (memberId, m) => void responder.wakeOne(memberId, m)
-  service.recoverReplies = () => responder.recover()
+  service.recoverReplies = () => {
+    responder.recover()
+    service.settleDelivered()
+  }
   // CHAT-UI.md §7.1, §7.2: conversation titles and "Principia picks", on the cheap tier (routeCall.ts: haiku, no tools)
   service.pilot = new ConversationPilot({
     store: () => service.store,

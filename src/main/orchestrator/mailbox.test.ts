@@ -3,7 +3,7 @@
  * answer wakes the asker. Seats here run on a stub Codex: they never call a tool, only write their final answer.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { OrchWorld, report, type Turn } from './__tests__/world'
+import { OrchWorld, report, type Script, type Turn } from './__tests__/world'
 
 const worlds: OrchWorld[] = []
 afterEach(() => {
@@ -157,6 +157,137 @@ describe('mailbox: questions from run reports', () => {
     expect(w.c.task(ft.id).report?.summary).toBe('Button is blue')
     const ask = w.posts(co.id).find((m) => m.kind === 'ask')!
     expect(ask.ask).toMatchObject({ status: 'answered', answer: 'Blue, the brand colour.' })
+  })
+
+  describe('a question delivered into a teammate\'s task', () => {
+    /** The writer is on a task when the fixer's blocking question arrives; `script` plays the writer's task turns. */
+    async function delivered(writerScript: (t: Turn, turn: number) => ReturnType<Script>, autonomy: 'auto' | 'manual' = 'auto') {
+      const { w, co, dev, mkt } = setup()
+      let wTurns = 0
+      const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', autonomy, (t) => writerScript(t, ++wTurns))
+      const prompts: string[] = []
+      const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'auto', (t) => {
+        prompts.push(t.prompt)
+        if (prompts.length === 1) return { output: report({ outcome: 'blocked', summary: 'Need the colour', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which colour?', why: '', blocking: true }] }) }
+        return { output: report({ outcome: 'review', summary: `Turn ${prompts.length}` }) }
+      })
+      const wt = w.task({ companyId: co.id, title: 'Draft the launch post', departmentId: mkt.id, agentId: writer.id })
+      const ft = w.task({ companyId: co.id, title: 'Button', departmentId: dev.id, agentId: fixer.id })
+      await w.runNow(wt.id)
+      await w.runNow(ft.id)
+      await w.play(w.turns.find((t) => t.taskId === ft.id)!)
+      expect((w.db.prepare('SELECT delivery FROM orch_mailbox').get() as { delivery: string }).delivery).toBe('task')
+      expect(w.db.prepare('SELECT status, to_run FROM forum_agent_wakes').get()).toEqual({ status: 'started', to_run: w.c.task(wt.id).runId })
+      const card = () => w.posts(co.id).find((m) => m.kind === 'ask')!
+      return { w, co, mkt, writer, wt, ft, prompts, card }
+    }
+
+    it.each([
+      ['failed', 'failed' as const, 'its task run failed'],
+      ['canceled', 'canceled' as const, 'its task was stopped']
+    ])('a %s task run: the asker wakes with why, and a later turn\'s answer still counts', async (_name, status, why) => {
+      const { w, wt, prompts, card } = await delivered((t, turn) => {
+        if (turn === 1) return { status, output: '' }
+        expect(t.prompt).toContain('Which colour?')
+        return { output: report({ outcome: 'review', summary: 'Answered', answers: [{ ref: /\((m[0-9a-z]+)\)/.exec(t.prompt)![1]!, text: 'Blue.' }] }) }
+      })
+      await w.drain()
+      expect(w.c.task(wt.id).status).toBe('blocked')
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]).toContain('could not answer')
+      expect(prompts[1]).toContain(why)
+      expect(card().ask).toMatchObject({ status: 'answered', noAnswer: true })
+      expect(w.db.prepare('SELECT status, refusal FROM forum_agent_wakes').get()).toEqual({ status: 'refused', refusal: 'start_failed' })
+      // the question still waits in the task's wake: when the founder retries it, the real answer replaces the first
+      expect(w.c.task(wt.id).pendingWake?.reasons.join(' ')).toContain('Which colour?')
+      w.d.runNow(wt.id)
+      await w.drain()
+      expect(card().ask).toMatchObject({ status: 'answered', answer: 'Blue.' })
+      expect(card().ask?.noAnswer).toBeFalsy()
+      expect(w.db.prepare('SELECT status FROM forum_agent_wakes').get()).toEqual({ status: 'answered' })
+      expect(prompts.join('\n')).toContain('Blue.')
+    })
+
+    it('the turn that follows up carries the question: the asker waits for that turn, not the one before', async () => {
+      const seen: string[] = []
+      const { w, wt, prompts, card } = await delivered((t) => {
+        seen.push(t.run.id)
+        return { output: report({ outcome: 'review', summary: `Turn ${seen.length}` }) }
+      })
+      await w.play(w.turns.find((t) => t.taskId === wt.id)!)
+      // the first turn passed and its follow-up took the question: nobody gave up yet
+      expect(w.c.task(wt.id).status).toBe('in_progress')
+      expect(card().ask?.status).toBe('open')
+      expect(w.db.prepare('SELECT status, to_run FROM forum_agent_wakes').get()).toEqual({ status: 'started', to_run: w.c.task(wt.id).runId })
+      await w.drain()
+      // the follow-up ended without answering either: now the asker stops waiting
+      expect(seen).toHaveLength(2)
+      expect(card().ask).toMatchObject({ status: 'answered', noAnswer: true, answer: expect.stringContaining('its task ended without an answer') })
+      expect(prompts[1]).toContain('could not answer')
+    })
+
+    it('a seat with no follow-up turn (manual) releases the asker, and the question stays in the task', async () => {
+      const { w, wt, prompts, card } = await delivered(() => ({ output: report({ outcome: 'review', summary: 'Draft written' }) }), 'manual')
+      await w.drain()
+      expect(w.c.task(wt.id).status).toBe('in_review')
+      expect(card().ask).toMatchObject({ status: 'answered', noAnswer: true })
+      expect(prompts[1]).toContain('could not answer')
+      expect(w.c.task(wt.id).pendingWake?.reasons.join(' ')).toContain('Which colour?')
+    })
+
+    it('a task handed to someone else: its next turn cannot answer for the one asked, so the asker is released now', async () => {
+      const { w, co, mkt, wt, card } = await delivered((t, turn) => {
+        if (turn === 1) {
+          const other = w.seat(co.id, mkt, 'Stand-in', 'codex', 'auto')
+          w.db.prepare("UPDATE company_tasks SET agent_id=?, data=json_set(data, '$.agentId', ?) WHERE id=?").run(other.id, other.id, t.taskId)
+        }
+        return { output: report({ outcome: 'review', summary: 'Handed over' }) }
+      })
+      const first = w.c.task(wt.id).runId
+      await w.play(w.turns.find((t) => t.taskId === wt.id)!)
+      expect(w.c.task(wt.id).status).toBe('in_progress')
+      expect(w.c.task(wt.id).runId).not.toBe(first)
+      expect(card().ask).toMatchObject({ status: 'answered', noAnswer: true })
+    })
+
+    it('a quit leaves it for the boot pass, which releases the asker once', async () => {
+      const { w, wt, prompts, card } = await delivered(() => ({ status: 'canceled', output: '' }))
+      w.quitting = true
+      await w.play(w.turns.find((t) => t.taskId === wt.id)!)
+      expect(card().ask?.status).toBe('open')
+      expect(w.db.prepare('SELECT status FROM forum_agent_wakes').get()).toEqual({ status: 'started' })
+      w.quitting = false
+      w.forum.settleDelivered()
+      await w.drain()
+      expect(card().ask).toMatchObject({ status: 'answered', noAnswer: true })
+      expect(prompts[1]).toContain('could not answer')
+      const answer = card().ask?.answeredAt
+      w.forum.settleDelivered()
+      expect(card().ask?.answeredAt).toBe(answer)
+    })
+
+    it('the boot pass leaves a turn that is still running alone', async () => {
+      const { w, card } = await delivered(() => ({ output: report({ outcome: 'review', summary: 'Done' }) }))
+      w.forum.settleDelivered()
+      expect(card().ask?.status).toBe('open')
+      expect(w.db.prepare('SELECT status FROM forum_agent_wakes').get()).toEqual({ status: 'started' })
+    })
+
+    it('a task held by an interactive session has no run that ends: the question goes to a reply run instead', async () => {
+      const { w, co, dev, mkt } = setup()
+      const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', 'manual', (t) => {
+        expect(t.kind).toBe('reply')
+        return { output: 'Blue.' }
+      })
+      const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'manual', () => ({ output: report({ outcome: 'blocked', summary: 'Need the colour', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which colour?', why: '', blocking: true }] }) }))
+      const wt = w.task({ companyId: co.id, title: 'Draft the launch post', departmentId: mkt.id, agentId: writer.id })
+      w.db.prepare("UPDATE company_tasks SET status='in_progress', run_id='ses_live' WHERE id=?").run(wt.id)
+      const ft = w.task({ companyId: co.id, title: 'Button', departmentId: dev.id, agentId: fixer.id })
+      await w.runNow(ft.id)
+      await w.drain()
+      expect((w.db.prepare('SELECT delivery FROM orch_mailbox').get() as { delivery: string }).delivery).toBe('seat')
+      expect(w.posts(co.id).find((m) => m.kind === 'ask')!.ask).toMatchObject({ status: 'answered', answer: 'Blue.' })
+    })
   })
 
   it('the collab guards apply to report questions: self, unknown, cycle and the daily cap', async () => {

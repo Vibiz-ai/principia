@@ -42,6 +42,8 @@ export interface ForumTaskView {
   title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string; createdAt?: string
 }
 
+const ENDED = "('passed','failed','canceled')"
+
 /** Dispatcher.goAhead's result: whether the task's run started, and the true state in one line. */
 export interface TaskGo { state: 'started' | 'running' | 'queued' | 'refused'; line: string }
 const resumed = (go: TaskGo | null | undefined): boolean => !go || go.state === 'started' || go.state === 'running'
@@ -316,7 +318,7 @@ export class ForumService implements ForumBridge {
    */
   settleReply(runId: string, status: string, reason: string | null): void {
     const reply = this.replyRuns.get(runId)
-    if (!reply) return
+    if (!reply) return this.settleTaskRun(runId, status, reason)
     clearTimeout(this.queuedTimers.get(runId))
     this.queuedTimers.delete(runId)
     const p = this.presence.get(reply.memberId)
@@ -330,6 +332,43 @@ export class ForumService implements ForumBridge {
     // a post elsewhere is not an answer: whatever the run wrote, an agent still waiting on it stops waiting
     this.wakeFailed(wakes.map((w) => w.id), status === 'canceled' ? 'its run was canceled' : why)
     this.owed.finished(runId)
+  }
+
+  /**
+   * A task run ended with a teammate's question delivered into it (Mailbox.send), which no reply run settles. The next
+   * turn carries the question, so the wake follows that turn. With no next turn (the run failed or was stopped, the seat
+   * does not follow up by itself, the task went to someone else) the agent that asked stops waiting; the question stays
+   * in the task's wake and a later turn can still answer it. A quit waits for settleDelivered at the next boot.
+   */
+  private settleTaskRun(runId: string, status: string, reason: string | null): void {
+    if (this.d.quitting?.()) return
+    try {
+      const wakes = this.collab.wakesOfRun(runId).filter((w) => w.via === 'report' && w.status === 'started')
+      if (!wakes.length) return
+      const taskId = (this.d.db.prepare('SELECT task_id FROM runs WHERE id=?').get(runId) as { task_id: string | null } | undefined)?.task_id
+      if (!taskId) return
+      const t = this.d.tasks?.get(taskId)
+      const next = t?.status === 'in_progress' && t.runId && t.runId !== runId && this.d.db.prepare(`SELECT 1 FROM runs WHERE id=? AND status NOT IN ${ENDED}`).get(t.runId) ? t.runId : null
+      const why = status === 'failed' ? (reason ?? 'its task run failed') : status === 'canceled' ? 'its task was stopped' : 'its task ended without an answer'
+      for (const w of wakes) {
+        if (next && t?.agentId === w.to_agent) this.collab.moveWake(w.id, next)
+        else this.wakeFailed([w.id], why)
+      }
+    } catch (e) {
+      this.d.log?.warn('forum: could not settle a delivered question', { runId, error: String(e) })
+    }
+  }
+
+  /** Boot, once the engine failed the runs a quit or a crash left behind: settleTaskRun for each of them. Never throws. */
+  settleDelivered(): void {
+    try {
+      const runs = this.d.db
+        .prepare(`SELECT DISTINCT r.id, r.status, r.reason FROM forum_agent_wakes w JOIN runs r ON r.id=w.to_run WHERE w.via='report' AND w.status='started' AND r.task_id IS NOT NULL AND r.status IN ${ENDED}`)
+        .all() as { id: string; status: string; reason: string | null }[]
+      for (const r of runs) this.settleTaskRun(r.id, r.status, r.reason)
+    } catch (e) {
+      this.d.log?.warn('forum: could not settle delivered questions', { error: String(e) })
+    }
   }
 
   /** responder.ts, settleReply: a person's message got no answer. Posts one line in its thread, saying why. Never throws. */
