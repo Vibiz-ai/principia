@@ -224,7 +224,7 @@ describe('RA8: the phone finds the Mac', () => {
     const asked: { url: string; auth: string | null; body: string }[] = []
     const f = (async (url: string, init?: RequestInit) => {
       asked.push({ url, auth: new Headers(init?.headers).get('authorization'), body: String(init?.body ?? '') })
-      if (url.startsWith(SITE)) return sealed ? new Response(JSON.stringify({ sealed }), { status: o.site ?? 200 }) : new Response('{}', { status: 404 })
+      if (new URL(url).origin === SITE) return sealed ? new Response(JSON.stringify({ sealed }), { status: o.site ?? 200 }) : new Response('{}', { status: 404 })
       const { nonce } = JSON.parse(String(init?.body)) as { nonce: string }
       const { createHmac } = await import('node:crypto')
       return new Response(JSON.stringify({ proof: createHmac('sha256', o.proofFor ?? hash).update(helloMessage(url.replace('/api/hello', ''), nonce)).digest('hex') }))
