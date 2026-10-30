@@ -55,7 +55,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   const view = (id: string): ForumTaskView | null => {
     try {
       const t = c().task(id)
-      return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report, title: t.title, agentId: t.agentId, doneNote: t.doneNote, prUrl: t.work?.pr?.url ?? null, updatedAt: t.updatedAt }
+      return { id: t.id, companyId: t.companyId, identifier: t.identifier, status: t.status, blockReason: t.blockReason, runId: t.runId, ask: t.ask, report: t.report, title: t.title, agentId: t.agentId, doneNote: t.doneNote, prUrl: t.work?.pr?.url ?? null, updatedAt: t.updatedAt, createdAt: t.createdAt }
     } catch {
       return null
     }

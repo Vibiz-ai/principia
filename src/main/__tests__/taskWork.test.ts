@@ -479,6 +479,46 @@ d('QA fixes', () => {
     expect(c.task(t.id).status).toBe('done')
   })
 
+  it('PR-55: an In Review task shipped from the checkout (no worktree) goes Done once the PRs its report links merged', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId, status: 'in_review' })
+    const a = gh.open('hive/pr-a')
+    const b = gh.open('hive/pr-b')
+    c.patchInFlight(t.id, { report: { outcome: 'review', summary: `Combined into #${b}.`, evidence: [gh.of('hive/pr-a').url, `${gh.of('hive/pr-b').url} (CI green)`], at: new Date().toISOString() } })
+    // one still open: it waits
+    gh.of('hive/pr-a').state = 'CLOSED'
+    await svc.poll()
+    expect(c.task(t.id).status).toBe('in_review')
+    // merged on GitHub: done on a later pass, the closed one left out of the note
+    gh.of('hive/pr-b').state = 'MERGED'
+    gh.of('hive/pr-b').mergedAt = '2026-10-29T12:00:00Z'
+    ;(svc as unknown as { reviewSeen: Map<string, number> }).reviewSeen.clear()
+    await svc.poll()
+    const done = c.task(t.id)
+    expect(done.status).toBe('done')
+    expect(done.doneNote).toBe(`Merged #${b}`)
+    expect(a).not.toBe(b)
+  })
+
+  it('PR-55: a closed-not-merged PR, a report without links or a task not In Review never moves', async () => {
+    const { companyId, repoId } = company()
+    const closed = task({ companyId, repoId, status: 'in_review' })
+    const bare = task({ companyId, repoId, status: 'in_review' })
+    const blocked = task({ companyId, repoId, status: 'todo' })
+    gh.open('hive/x')
+    gh.of('hive/x').state = 'CLOSED'
+    const at = new Date().toISOString()
+    c.patchInFlight(closed.id, { report: { outcome: 'review', summary: 'Closed it', evidence: [gh.of('hive/x').url], at } })
+    c.patchInFlight(bare.id, { report: { outcome: 'review', summary: 'Fixed it', evidence: ['npm test'], at } })
+    gh.open('hive/y')
+    gh.of('hive/y').state = 'MERGED'
+    c.patchInFlight(blocked.id, { report: { outcome: 'review', summary: 'Merged', evidence: [gh.of('hive/y').url], at } })
+    await svc.poll()
+    expect(c.task(closed.id).status).toBe('in_review')
+    expect(c.task(bare.id).status).toBe('in_review')
+    expect(c.task(blocked.id).status).toBe('todo')
+  })
+
   it('after Keep As Is (or Remove Worktree…) the next turn gets its worktree back on its branch, never the founder checkout', async () => {
     const { companyId, repoId } = company()
     const t = task({ companyId, repoId })

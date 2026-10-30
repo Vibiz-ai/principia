@@ -469,6 +469,27 @@ describe('agent API (§4)', () => {
     expect(s.decide({ messageId: p2.id, decision: 'reject', note: 'later' }, s.store.owner(CO).id).proposal).toMatchObject({ status: 'rejected', note: 'later' })
   })
 
+  it("PR-55: the founder's go-ahead on a task approves the hire its agent proposed for it; a 'not yet' does not", async () => {
+    const s = service()
+    const c = callerFor(s, 'agt_marcus', { taskId: 'task_9' })
+    tasks.set('task_9', { id: 'task_9', companyId: CO, identifier: 'PRN-9', status: 'in_progress', blockReason: null, runId: 'r_run1', ask: null, report: null, agentId: 'agt_marcus', createdAt: clock.toISOString() })
+    await s.api.call(c, 'forum_post', { channel: '#marketing', text: 'Need a release manager', proposal: { kind: 'agent', role: 'Release manager', department: 'marketing', instructions: 'Merge and deploy', capabilities: 'deploy', reason: 'Nobody can merge' } })
+    await s.api.call(c, 'forum_ask', { question: 'Approve the Release manager hire?' })
+    Object.assign(tasks.get('task_9')!, { status: 'blocked', blockReason: 'needs_input' })
+    const ask = s.store.openAsks(CO)[0]
+    s.answer(ask.id, s.store.owner(CO).id, 'not yet, wait for Monday')
+    expect(created.agent).toEqual([])
+    // asked again; this time the founder says go
+    Object.assign(tasks.get('task_9')!, { status: 'in_progress', ask: null })
+    await s.api.call(c, 'forum_ask', { question: 'Approve it now?' })
+    Object.assign(tasks.get('task_9')!, { status: 'blocked', blockReason: 'needs_input' })
+    const again = s.store.openAsks(CO)[0]
+    s.answer(again.id, s.store.owner(CO).id, 'sounds good go ahead, just hire it')
+    expect(created.agent).toEqual(['Release manager'])
+    expect(s.store.openProposals(CO)).toEqual([])
+    expect(tasks.get('task_9')!.answered).toBe('sounds good go ahead, just hire it')
+  })
+
   it('agents create at most 3 channels a day', async () => {
     const s = service()
     const c = callerFor(s, 'agt_marcus')
