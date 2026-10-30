@@ -10,15 +10,17 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AdapterId } from '../../shared/types'
 import type { ForumBridge, ForumSpawn, McpServerSpec } from '../../shared/engine'
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, takesAnswer, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumStore, type ForumDirectory } from './store'
+import { ReplyJournal } from './replyJournal'
 import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
 import { ForumHttpServer } from './http'
 import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type ForumTool } from './protocol'
-import { formatBrief } from './format'
+import { flat, formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
+import type { AgentAsker } from './responder'
 import { TeamTools, type TeamTask } from './teamTools'
 import { isFinishedCard, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
 import type { ConversationPilot } from './conversationPilot'
@@ -30,6 +32,8 @@ const fail = (m: string): never => {
   throw new HiveError('bad_request', m)
 }
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+/** A reply run with no step after this long is waiting for a slot; shorter, every reply would flash "waiting". */
+const QUEUED_AFTER_MS = 3000
 
 /** A board task as the Forum needs it. */
 export interface ForumTaskView {
@@ -48,6 +52,8 @@ export interface ForumServiceDeps {
   /** experimental.companies + .departments: off = no agent access, IPC refuses */
   enabled: () => boolean
   emit: (e: ForumEvent) => void
+  /** the app is quitting: reply runs canceled now were not canceled by the person */
+  quitting?: () => boolean
   redact?: (s: string) => string
   /** board tasks (CompanyStore); absent = asks never park a task */
   tasks?: {
@@ -112,11 +118,16 @@ export class ForumService implements ForumBridge {
   private readonly presenceTimers = new Map<string, NodeJS.Timeout>()
   /** steps that wrote to the Forum themselves (tool, CLI or fenced block): no automatic post for them */
   private readonly stepWrites = new Set<string>()
+  /** reply runs that posted, by themselves or through autoPost: settleReply tells the person about the others */
+  private readonly answeredRuns = new Set<string>()
+  private readonly queuedTimers = new Map<string, NodeJS.Timeout>()
   /** runs answering a Forum message (the responder registers them) */
   private readonly replyRuns = new Map<string, ForumReplyRun>()
   /** responder.ts: a human posted (set by wire.ts; absent in tests that do not need it) */
   onHumanPost: ((m: ForumMessage) => void) | null = null
 
+  /** what agents owe people, on disk (the rows behind `replyRuns`, and the responder's queue) */
+  readonly owed: ReplyJournal
   readonly team: TeamTools
   readonly collab: AgentCollab
   /** responder.ts wakeForAgent (set by wire.ts; absent in tests that do not wake) */
@@ -130,11 +141,14 @@ export class ForumService implements ForumBridge {
   pilot: ConversationPilot | null = null
   /** responder.ts wakeOne: one agent answers one person's message (a new hire, or "Use Julia instead"). Set by wire.ts. */
   wakeOne: ((memberId: string, message: ForumMessage) => void) | null = null
+  /** responder.ts recover: boot picks up what a quit left owed. Set by wire.ts. */
+  recoverReplies: (() => void) | null = null
   /** ORCHESTRATOR.md §2: an ask was answered (the mailbox wakes a blocked asker). Set by its wire. */
   onAskAnswered: ((m: ForumMessage, opts: { waited: boolean }) => void) | null = null
 
   constructor(private readonly d: ForumServiceDeps) {
     this.store = new ForumStore(d.db, { directory: d.directory, now: d.now, redact: d.redact, onEvent: (e) => this.onStoreEvent(e) })
+    this.owed = new ReplyJournal(d.db)
     const settings = () => collabSettings(d.collabSettings?.())
     this.team = new TeamTools({
       db: d.db,
@@ -274,13 +288,91 @@ export class ForumService implements ForumBridge {
     // the run may have opened its Forum before this note: its presence moves into the channel it answers
     const p = this.presence.get(reply.memberId)
     if (p && p.state !== 'idle' && !p.channelId) this.setPresence(p.companyId, reply.memberId, p.state, reply.channelId)
+    // still no step after a moment: every slot is taken. Say so, or the chat looks dead until one frees up
+    const timer = setTimeout(() => {
+      this.queuedTimers.delete(runId)
+      if (this.presence.has(reply.memberId) || !this.replyRuns.has(runId)) return
+      try {
+        const companyId = this.store.member(reply.memberId)?.companyId
+        if (companyId) this.setPresence(companyId, reply.memberId, 'queued', reply.channelId)
+      } catch (e) {
+        this.d.log?.warn('forum: queued presence failed', { runId, error: String(e) })
+      }
+    }, QUEUED_AFTER_MS)
+    timer.unref?.()
+    this.queuedTimers.set(runId, timer)
   }
   replyRunOf(runId: string): ForumReplyRun | null {
     return this.replyRuns.get(runId) ?? null
   }
   forgetRun(runId: string): void {
     this.replyRuns.delete(runId)
+    this.answeredRuns.delete(runId)
   }
+
+  /**
+   * A reply run ended, after its harvest. A chat never just goes quiet: the person got an answer, canceled it, or reads
+   * here why there is none.
+   */
+  settleReply(runId: string, status: string, reason: string | null): void {
+    const reply = this.replyRuns.get(runId)
+    if (!reply) return
+    clearTimeout(this.queuedTimers.get(runId))
+    this.queuedTimers.delete(runId)
+    const p = this.presence.get(reply.memberId)
+    if (p?.state === 'queued' && p.channelId === reply.channelId) this.setPresence(p.companyId, reply.memberId, 'idle', null)
+    // the quit canceled it, not the person: it stays owed and the next boot answers it (ForumResponder.recover)
+    if (this.d.quitting?.()) return
+    const why = status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer'
+    const wakes = this.collab.wakesOfRun(runId)
+    // a run report's answers reach the ask through the applier, not this run's posts
+    if (status !== 'canceled' && !this.answeredRuns.has(runId) && !wakes.some((w) => w.status === 'answered')) this.noteUnanswered(reply.messageId, reply.memberId, why, runId)
+    // a post elsewhere is not an answer: whatever the run wrote, an agent still waiting on it stops waiting
+    this.wakeFailed(wakes.map((w) => w.id), status === 'canceled' ? 'its run was canceled' : why)
+    this.owed.finished(runId)
+  }
+
+  /** responder.ts, settleReply: a person's message got no answer. Posts one line in its thread, saying why. Never throws. */
+  noteUnanswered(messageId: string, memberId: string, reason: string, key: string = messageId): void {
+    try {
+      const msg = this.store.message(messageId)
+      const root = msg.threadId ? this.store.message(msg.threadId) : msg
+      const name = this.store.member(memberId)?.name ?? 'Principia'
+      this.store.systemPost(msg.channelId, `${name} could not answer this: ${clip(flat(reason), 160)}. Send it again to retry.`, root.seq, { origin: 'principia:reply', opKey: `unanswered:${memberId}:${key}` })
+    } catch (e) {
+      this.d.log?.warn('forum: could not post the unanswered line', { messageId, error: String(e) })
+    }
+  }
+  /** responder.ts recover: the wake behind an agent's ask to `memberId`, while it still needs an answer. */
+  askOf(msg: ForumMessage, memberId: string): { wakeId: string; asker: AgentAsker } | null {
+    const w = this.collab.liveWakes(msg.seq, memberId)[0]
+    const from = w ? this.store.member(w.from_member) : null
+    if (!w || !from) return null
+    return { wakeId: w.id, asker: { handle: from.handle, label: from.agentId ? (this.d.company?.seatLabel(from.agentId) ?? null) : null, depth: w.depth, maxHops: collabSettings(this.d.collabSettings?.()).maxHops, why: w.why } }
+  }
+
+  /**
+   * An agent's ask will get no answer from its reply run: the agent that asked must not wait forever. An ask card
+   * closes with why (once no other agent it went to can still answer), which wakes a waiting tool or task like any
+   * answer; a question asked by @mention reaches the asking task the same way. A real answer may still come (a
+   * teammate's task report, a reply in the thread): ForumAsk.noAnswer lets it replace this one. Never throws.
+   */
+  wakeFailed(wakeIds: string[], reason: string): void {
+    for (const id of wakeIds) {
+      try {
+        const w = this.collab.wake(id)
+        if (!w || (w.status !== 'queued' && w.status !== 'started')) continue
+        this.collab.noteFailed([id], reason)
+        const msg = this.store.message(w.message_seq)
+        const text = `@${this.store.member(w.to_member)?.handle ?? 'a teammate'} could not answer: ${clip(flat(reason), 160)}`
+        if (msg.ask?.status !== 'open') this.collab.onReplied?.({ rows: [w], text })
+        else if (!this.collab.liveWakes(msg.seq).length) this.answer(msg.id, w.to_member, text, msg.id, { noAnswer: true })
+      } catch (e) {
+        this.d.log?.warn('forum: could not tell the asker', { wakeId: id, error: String(e) })
+      }
+    }
+  }
+
   /** A human posted through the app (forum:post): wakes the agents it is for (responder.ts). Never throws. */
   humanPosted(m: ForumMessage): void {
     try {
@@ -344,6 +436,7 @@ export class ForumService implements ForumBridge {
     for (const set of this.waiters.values()) for (const w of set) { clearTimeout(w.timer); w.resolve(null) }
     this.waiters.clear()
     for (const t of this.presenceTimers.values()) clearTimeout(t)
+    for (const t of this.queuedTimers.values()) clearTimeout(t)
     await this.http.stop()
   }
 
@@ -417,7 +510,7 @@ export class ForumService implements ForumBridge {
    * A human (or an asked agent) answers an ask: from an option button, the answer field or a thread reply
    * (`replyId` = that reply, so no second reply is posted). Wakes waiting tools; a parked task gets tasks:answer.
    */
-  answer(messageId: string, byId: string, answer: string, replyId?: string, opts: { ack?: boolean } = {}): ForumMessage {
+  answer(messageId: string, byId: string, answer: string, replyId?: string, opts: { ack?: boolean; noAnswer?: boolean } = {}): ForumMessage {
     const msg = this.store.message(messageId)
     if (msg.kind !== 'ask' || !msg.ask) fail('That message is not an ask')
     const by = this.store.mustMember(byId)
@@ -425,13 +518,13 @@ export class ForumService implements ForumBridge {
     const text = answer.trim()
     if (!text) fail('The answer is empty')
     const ask = msg.ask!
-    if (ask.status !== 'open') fail('This ask was already answered')
+    if (!takesAnswer(ask)) fail('This ask was already answered')
     if (!(by.role === 'owner' || by.role === 'admin' || ask.to.includes(by.id))) fail('This ask is for someone else')
     if (!replyId) this.store.post(by.id, { channelId: msg.channelId, threadId: msg.id, text })
-    const next: ForumAsk = { ...ask, status: 'answered', answer: clip(this.d.redact ? this.d.redact(text) : text, 4000), answeredBy: by.id, answeredAt: this.now().toISOString() }
+    const next: ForumAsk = { ...ask, status: 'answered', answer: clip(this.d.redact ? this.d.redact(text) : text, 4000), answeredBy: by.id, answeredAt: this.now().toISOString(), noAnswer: opts.noAnswer || undefined }
     let updated = this.store.patchPayload(msg.id, { ask: next })
     // AGENT-COLLAB.md: an answer in the thread answers the wakes there too
-    if (by.kind === 'agent') this.collab.noteReplied(by.id, msg.seq)
+    if (by.kind === 'agent' && !opts.noAnswer) this.collab.noteReplied(by.id, msg.seq)
     // a tool still waiting for this answer gets it in the same turn (the asking task needs no wake)
     const hadWaiter = !!this.waiters.get(msg.id)?.size
     try {
@@ -575,10 +668,14 @@ export class ForumService implements ForumBridge {
             return null
           }
         })()
+        if (call && t?.ask) this.owed.awaitPick(msg)
         const kind = call && t?.ask ? await classifyReply(call, { question: t.ask.prompt, options: q.ask!.options ?? t.ask.options ?? null, reply: msg.text }, { redact: this.d.redact }) : null
         // still the one open question and still unanswered once the model is back
         const now = this.messageOrNull(q.id)
-        if (kind === 'answer' && now?.ask?.status === 'open' && this.answerQuietly(now, byId, msg)) return 'answered'
+        if (kind === 'answer' && now?.ask?.status === 'open' && this.answerQuietly(now, byId, msg)) {
+          this.owed.picked(msg.id)
+          return 'answered'
+        }
       }
     } catch (e) {
       this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })
@@ -1080,6 +1177,7 @@ export class ForumService implements ForumBridge {
       }
       const wrote = applied > 0 || this.stepWrites.has(e.stepId)
       this.stepWrites.delete(e.stepId)
+      if (wrote && reply) this.answeredRuns.add(e.runId)
       // ORCHESTRATOR.md §1.3: a task step with a run report gets its update from Principia instead (one post, not two)
       const deferred = !reply && !!this.deferAutoPost && safeBool(() => this.deferAutoPost!(e))
       if (!wrote && e.status === 'passed' && !deferred) this.autoPost(e, member, row.task_id, reply)
@@ -1098,10 +1196,11 @@ export class ForumService implements ForumBridge {
         const text = stepSummary(e.output, FORUM_LIMITS.agentText)
         if (!text) return
         const posted = this.store.post(member.id, { channelId: reply.channelId, threadId: reply.messageId, text, origin: `agent:${e.stepId}`, opKey })
+        this.answeredRuns.add(e.runId)
         // AGENT-COLLAB.md: the answer of a woken agent that did not reply itself still answers the ask it was woken for
         const root = this.store.message(posted.threadId ?? reply.messageId)
         this.collab.noteReplied(member.id, root.seq, text)
-        if (root.kind === 'ask' && root.ask?.status === 'open' && root.ask.to.includes(member.id)) {
+        if (root.kind === 'ask' && takesAnswer(root.ask) && root.ask!.to.includes(member.id)) {
           try {
             this.answer(root.id, member.id, text, posted.id)
           } catch {

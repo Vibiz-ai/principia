@@ -185,6 +185,8 @@ export function addWorkflow(ctx: FakeCtx, draft: WorkflowDraft): Workflow {
 // ---------- fake agent adapter ----------
 
 export interface FakeReply {
+  /** Stay up this long after the result, like a CLI held open by a background job. */
+  lingerMs?: number
   output?: string
   exitCode?: number
   delayMs?: number
@@ -210,7 +212,8 @@ w({ type: 'system', subtype: 'init', session_id: r.sid });
 setTimeout(() => {
   w({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: {} }, { type: 'text', text }] } });
   w({ type: 'result', subtype: r.isError ? 'error_during_execution' : 'success', is_error: !!r.isError, result: text, total_cost_usd: 0.001, num_turns: 1, usage: { input_tokens: 3, output_tokens: 1 } });
-  process.exit(r.exitCode ?? 0);
+  if (r.lingerMs) setTimeout(() => process.exit(0), r.lingerMs);
+  else process.exit(r.exitCode ?? 0);
 }, r.delayMs ?? 0);
 `
 

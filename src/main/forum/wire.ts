@@ -15,6 +15,7 @@ import { boardActions } from '../handlers/board'
 import { createTaskGuarded, departmentActions } from '../handlers/company'
 import { ForumService, type ForumTaskView } from './service'
 import { ForumResponder } from './responder'
+import { UNPICKED } from './replyJournal'
 import { ConversationPilot } from './conversationPilot'
 import { routeModelCall } from '../company/routeCall'
 import { conversationTaskLines } from './taskStatus'
@@ -64,6 +65,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     db: h.db,
     enabled: () => departmentsEnabled(h.settings().experimental),
     emit: (e) => emit('forum:event', e),
+    quitting: () => h.quitting,
     redact: (s) => h.vault.redact(s),
     directory: {
       departments: (companyId) => c().departments.list(companyId, { includeArchived: true }).map((d) => ({ id: d.id, key: d.key, name: d.name, archivedAt: d.archivedAt })),
@@ -213,6 +215,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   const responder = new ForumResponder({
     store: () => service.store,
     enabled: () => service.enabled(),
+    quitting: () => h.quitting,
+    journal: service.owed,
     seat: (agentId) => {
       const a = c().departments.getAgent(agentId)
       if (!a) return null
@@ -235,14 +239,17 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         .filter((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile')
         .map((a) => a.id),
     start: ({ companyId, agentId, profileId, repoId, prompt, reply }) => {
-      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId })
+      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId, reply: true })
       // the seat on the run row: the step-end harvest posts for it when it does not reply itself
       h.db.prepare('UPDATE runs SET agent_id=?, company_id=? WHERE id=?').run(agentId, companyId, run.id)
       service.noteReplyRun(run.id, reply)
       return run.id
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
-    onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    onWakeFailed: (wakeIds, reason) => service.wakeFailed(wakeIds, reason),
+    askOf: (m, memberId) => service.askOf(m, memberId),
+    repick: (m) => service.pilot?.repick(m) ?? false,
+    onUnanswered: (messageId, memberId, reason) => service.noteUnanswered(messageId, memberId, reason),
     taskStates: (channelId) =>
       conversationTaskLines(
         c(),
@@ -258,6 +265,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)
   service.wakeOne = (memberId, m) => void responder.wakeOne(memberId, m)
+  service.recoverReplies = () => responder.recover()
   // CHAT-UI.md §7.1, §7.2: conversation titles and "Principia picks", on the cheap tier (routeCall.ts: haiku, no tools)
   service.pilot = new ConversationPilot({
     store: () => service.store,
@@ -291,6 +299,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
       return (FORUM_AGENT_ADAPTERS as readonly string[]).includes(a) ? (a as ForumAgentAdapter) : null
     },
     humanPosted: (m) => service.humanPosted(m),
+    journal: service.owed,
+    onUnanswered: (messageId, reason) => service.noteUnanswered(messageId, UNPICKED, reason),
     redact: (s) => h.vault.redact(s),
     log
   })
@@ -310,6 +320,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   h.runHooks.push((run) => {
     if (!TERMINAL.has(run.status)) return
     responder.onRunEnded(run.id)
+    // after the step-end harvest, which applies the run's last writes
+    setTimeout(() => service.settleReply(run.id, run.status, run.reason), 2500).unref?.()
     // after the step-end harvest (it reads the reply target first)
     setTimeout(() => service.forgetRun(run.id), 60_000).unref?.()
   })

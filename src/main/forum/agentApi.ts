@@ -3,7 +3,7 @@
  * with a caller resolved from the step token (never from the arguments). Results are the compact text of §4.3; a
  * refusal throws ForumRefusal with the one line the agent sees. Rate limits (§2.3) are enforced here.
  */
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, parseSeqRef, type ForumAsk, type ForumChannel, type ForumMember, type ForumMessage, type ForumProposal } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, parseSeqRef, takesAnswer, type ForumAsk, type ForumChannel, type ForumMember, type ForumMessage, type ForumProposal } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumArgError, parseForumArgs, type ForumArgs, type ForumTool, type ProposalArg } from './protocol'
 import { flat, formatDigest, formatList, messageLine, type FormatLookup } from './format'
@@ -314,7 +314,7 @@ export class ForumAgentApi {
       /* bookkeeping only */
     }
     const woke = this.wakeMentions(c, me, m) + filing.note + passed
-    if (t.root.kind === 'ask' && t.root.ask?.status === 'open' && t.root.ask.to.includes(me.id) && this.d.answerAsk) {
+    if (t.root.kind === 'ask' && takesAnswer(t.root.ask) && t.root.ask!.to.includes(me.id) && this.d.answerAsk) {
       try {
         this.d.answerAsk(t.root.id, me.id, text, m.id)
         return `ok ${m.ref} ↳${t.root.ref} · answered the ask${woke}`

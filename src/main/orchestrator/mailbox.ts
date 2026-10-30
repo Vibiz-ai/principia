@@ -179,17 +179,18 @@ export class Mailbox {
    * ForumService.onAskAnswered: an ask got its answer. A mailbox ask (a run report's question) wakes the asker's task
    * when it was blocking. An ask an agent made with the Forum tool from a task run (forum_ask_agent, or forum_ask to
    * agents) picks that task back up the same way, unless the agent was still waiting for it in the same turn
-   * (`waited`: the tool returned the answer). Never throws.
+   * (`waited`: the tool returned the answer). A real answer after a "could not answer" (ForumAsk.noAnswer) comes through
+   * here again: it replaces the first, and the asker hears it the same way. Never throws.
    */
   onAnswered(m: ForumMessage, opts: { waited?: boolean } = {}): void {
     try {
       if (m.kind !== 'ask' || m.ask?.status !== 'answered') return
-      const row = this.d.db.prepare("SELECT * FROM orch_mailbox WHERE message_id=? AND status='open'").get(m.id) as MailRow | undefined
+      const row = this.d.db.prepare("SELECT * FROM orch_mailbox WHERE message_id=? AND status IN ('open','answered')").get(m.id) as MailRow | undefined
       const answer = clip(m.ask.answer ?? '', 2000)
       const by = m.ask.answeredBy ? this.d.forum()?.store.member(m.ask.answeredBy) : null
       const who = `@${by?.handle ?? 'a teammate'}`
       if (row) {
-        this.d.db.prepare("UPDATE orch_mailbox SET status='answered', answer=?, answered_at=? WHERE id=? AND status='open'").run(answer, this.now().toISOString(), row.id)
+        this.d.db.prepare("UPDATE orch_mailbox SET status='answered', answer=?, answered_at=?, answer_seen_run=NULL WHERE id=?").run(answer, this.now().toISOString(), row.id)
         if (!row.blocking || !row.from_task) return
         this.d.db.prepare('UPDATE orch_mailbox SET answer_seen_run=? WHERE id=?').run('wake', row.id)
         this.resumeAsker(row.from_task, row.ref, who, answer)

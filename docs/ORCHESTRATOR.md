@@ -147,6 +147,9 @@ same shapes. A fact that held a secret is not kept, not even as a proposal.
    no turn starts (a manual agent, Autopilot off, the guard), a task its agent parked (`blocked(agent)`) goes back to
    To do (`CompanyStore.resumeOnAnswer`, a system move allowed only for a teammate's answer), and the task's Activity
    says who answered and what happens next ("… picks it up when you press Start").
+5. A reply run that fails, is canceled or ends without answering closes the ask with why (`ForumService.settleReply`,
+   `wakeFailed`), so the asker resumes instead of waiting (a quit keeps it open: the next boot asks again). Such an ask
+   is `noAnswer`: a real answer that comes later still replaces it and reaches the asker, once.
 
 **No loops across woken turns.** Each woken turn of a task is a new run, so the collab chain starts again at hop 1.
 The mailbox therefore never sends a task's same question to the same teammate twice (the earlier answer is quoted in

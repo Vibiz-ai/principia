@@ -21,6 +21,7 @@ import type { StepOutputEvent } from '../../shared/engine'
 import { orchestratorFor, orchestratorSettings, type OrchAction, type OrchestratorSettings, type RunFollowUp, type RunOrchestration, type RunReport, type RunReportSource } from '../../shared/orchestrator'
 import type { Run } from '../../shared/types'
 import { connectLink } from '../../shared/deepLink'
+import { takesAnswer } from '../../shared/forum'
 import type { CompanyStore } from '../company'
 import { queueCountsFrom, route } from '../company/router'
 import { runReportPath } from '../engine/env'
@@ -669,7 +670,7 @@ export class RunApplier {
       if (!me || msg.companyId !== x.companyId) return { kind: 'answer', status: 'failed', detail: `No question ${a.ref} for this agent` }
       if (own.some((m) => m.threadId === msg.id)) return { kind: 'answer', status: 'skipped', detail: `The agent already replied to ${a.ref} itself` }
       if (msg.kind !== 'ask' || !msg.ask) return { kind: 'answer', status: 'failed', detail: `${a.ref} is not a question` }
-      if (msg.ask.status !== 'open') return { kind: 'answer', status: 'skipped', detail: `${a.ref} was already answered` }
+      if (!takesAnswer(msg.ask)) return { kind: 'answer', status: 'skipped', detail: `${a.ref} was already answered` }
       if (!msg.ask.to.includes(me.id)) return { kind: 'answer', status: 'failed', detail: `${a.ref} was asked to someone else` }
       if (x.shadow) return { kind: 'answer', status: 'shadow', detail: `Would answer ${a.ref}: ${clip(flat(a.text), 160)}` }
       const reply = forum.postAsAgent({ companyId: x.companyId, agentId: x.agentId, runId: x.runId, text: a.text, channelId: msg.channelId, threadId: msg.id, opKey: `orch:${x.runId}:a:${i}` })

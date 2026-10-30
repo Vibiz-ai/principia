@@ -313,6 +313,8 @@ export class OrchWorld {
     this.d.onRunUpdated(run)
     this.responder.onRunEnded(runId)
     await this.applier.afterRun(run)
+    // forum/wire.ts: a moment after the run end, so after the applier
+    this.forum.settleReply(runId, status, null)
     this.coord?.runEnded(runId)
     await settle()
   }

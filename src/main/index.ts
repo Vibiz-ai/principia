@@ -600,6 +600,9 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('orchestrator unavailable', { e: String(e) })
     }
+    // after engine.init (it failed the runs the quit left) and the orchestrator (an ask closed here resumes its task):
+    // every owed reply gets its turn
+    h.safe(() => h.forum?.recoverReplies?.(), undefined)
     h.safe(() => h.taskWork?.start(), undefined)
 
     // artifacts indexer

@@ -520,6 +520,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   const agentMembers = (channel?.memberIds ?? []).filter((id) => display(id)?.kind === 'agent')
   // working IN this conversation (a run answering here), never because the same agent works somewhere else
   const busyMembers = new Set((state?.presence ?? []).filter((p) => p.state !== 'idle' && p.channelId === channelId).map((p) => p.memberId))
+  const queuedMembers = new Set((state?.presence ?? []).filter((p) => p.state === 'queued' && p.channelId === channelId).map((p) => p.memberId))
   useEffect(() => {
     setViewing({ companyId, channelId })
     return () => setViewing(null)
@@ -578,7 +579,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   useEffect(() => {
     if (replyTo && !replyOpen) setReplyTo(null)
   }, [replyTo, replyOpen])
-  const pending = usePending(msgs, agentMembers, busyMembers, (id) => display(id)?.kind === 'human')
+  const pending = usePending(msgs, agentMembers, busyMembers, (id) => display(id)?.kind === 'human', queuedMembers)
   const said = mentionedAll(text, agents)
   const inIt = (a: DeskAgent): boolean => agentMembers.some((id) => state?.members.find((m) => m.id === id)?.agentId === a.id)
   const adds = (said.everyone ? agents.filter((a) => !a.paused) : said.found).filter((a) => !inIt(a))
@@ -691,7 +692,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           <div key={p.id} className="cx-pending" data-chatux="thread-pending">
             <MemberAvatar display={display(p.id)} size={20} working />
             <span className="shimmer-text">
-              {display(p.id)?.name} is {p.state}…
+              {display(p.id)?.name} is {p.state === 'queued' ? 'waiting for a free slot' : p.state}…
             </span>
           </div>
         ))}
@@ -757,8 +758,11 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   )
 }
 
-/** Who still owes an answer to your last message: "working" while their run is on here, "reading" in the first minutes. */
-function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<string>, isHuman: (id: string) => boolean): { id: string; state: 'working' | 'reading' }[] {
+/**
+ * Who still owes an answer to your last message: "working" while their run is on here, "queued" while it waits for a
+ * slot, "reading" in the first minutes.
+ */
+function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<string>, isHuman: (id: string) => boolean, queued: Set<string>): { id: string; state: 'working' | 'reading' | 'queued' }[] {
   let lastHuman = -1
   for (let i = msgs.length - 1; i >= 0; i--)
     if (msgs[i]!.kind !== 'system' && isHuman(msgs[i]!.authorId)) {
@@ -771,7 +775,7 @@ function usePending(msgs: ForumMessage[], agentMembers: string[], busy: Set<stri
   const expect = asked.length ? asked : agentMembers
   const answered = new Set(msgs.slice(lastHuman + 1).map((m) => m.authorId))
   const fresh = Date.now() - Date.parse(last.createdAt) < 3 * 60_000
-  return expect.filter((id) => !answered.has(id) && (busy.has(id) || fresh)).map((id) => ({ id, state: busy.has(id) ? 'working' : 'reading' }))
+  return expect.filter((id) => !answered.has(id) && (busy.has(id) || fresh)).map((id) => ({ id, state: queued.has(id) ? 'queued' : busy.has(id) ? 'working' : 'reading' }))
 }
 
 /**
