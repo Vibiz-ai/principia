@@ -350,11 +350,11 @@ export interface DepartmentSaveInput {
   data?: Partial<Omit<DepartmentData, 'charter'>> & { charter?: Partial<DepartmentCharter> }
 }
 
-export const AGENT_LIMITS = { instructions: 4000, capabilities: 400, name: 80, runMinutes: { min: 1, max: 24 * 60 }, autoWakesPerHour: { min: 1, max: 4 } } as const
+export const AGENT_LIMITS = { instructions: 4000, capabilities: 400, name: 80, autoWakesPerHour: { min: 1, max: 4 } } as const
 export type CompanyAgentKind = 'profile' | 'workflow'
 export type AgentAutonomy = 'manual' | 'auto'
 export type AgentMode = 'headless' | 'session'
-export interface AgentLimits { runMinutes: number; autoWakesPerHour: number }
+export interface AgentLimits { autoWakesPerHour: number }
 /** company_agents.data */
 export interface CompanyAgentData {
   /** ≤4000, prepended to every task turn */
@@ -370,7 +370,7 @@ export interface CompanyAgentData {
   /** VOICE.md §4: presentation only (name stays the role label). Absent on agents created before personas. */
   persona?: AgentPersona
 }
-export const AGENT_DATA_DEFAULTS: CompanyAgentData = { instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } }
+export const AGENT_DATA_DEFAULTS: CompanyAgentData = { instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } }
 /** A company-scoped agent seat over a global profile (adapter, model, keys stay global) or a workflow of the company. */
 export interface CompanyAgent {
   id: string; companyId: string

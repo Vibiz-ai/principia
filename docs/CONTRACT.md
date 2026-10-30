@@ -1612,12 +1612,11 @@ changes.
 
 ### De.4 Engine boundary (`src/shared/engine.ts`, add-only)
 - `StartRunOptions.trigger: RunTrigger | 'task'`, `taskId`, `agentId` (persisted in `runs.task_id / agent_id`; the
-  run's company is the task's), `resumeSessionId` (a resumed Claude task turn) and `runMinutes` (the seat's time cap;
-  the agent is warned about 2 minutes before, `TASK_WRAP_UP_TEXT`, then the run is canceled and the task parks with
-  `limit`).
+  run's company is the task's), `resumeSessionId` (a resumed Claude task turn). Task runs have no time limit: they end when
+  the agent does or on Stop (`limit` is the auto-wake park, plus tasks parked by the old time cap).
 - `RunTrigger` gains `'task'`, and `Run` gains optional `taskId` / `agentId` (read back from `runs.task_id / agent_id`).
   `tasks:start` goes through the dispatcher's `runNow`, so a board Run always records its task and seat.
-- `CompanyBridge.tasks?: TaskRunBridge` (`companyOf`, `runMinutes`, `toolset`, `sessionCaptured`, `timeLimit`,
+- `CompanyBridge.tasks?: TaskRunBridge` (`companyOf`, `toolset`, `sessionCaptured`,
   `passportContext` with the department slot) and `CompanyBridge.boards?` (task-mode schedules and Slack triggers,
   `company/recurring.ts`). The engine never imports `src/main/company/**`.
 - `EngineStore.insertRun(run, snapshot, task?: RunTaskLink)`.

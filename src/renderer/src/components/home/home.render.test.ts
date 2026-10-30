@@ -24,7 +24,7 @@ const task = (id: string, p: Partial<CompanyTask> = {}): CompanyTask =>
 const company = (id: string, name: string, p: Partial<CompanyPassport> = {}): CompanyPassport =>
   ({ id, name, slug: id, color: '#5b8def', sortOrder: 0, system: null, archivedAt: null, repoIds: [], createdAt: '2026-10-01T00:00:00Z', updatedAt: '', mission: '', brandVoice: '', audience: '', products: '', goals: '', context: '', constraints: '', ...p }) as CompanyPassport
 const marketing = { id: 'dep_m', companyId: 'co_a', key: 'marketing', name: 'Marketing', color: '#d97757', icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: {} } as unknown as Department
-const agentData = { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } }
+const agentData = { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } }
 const copywriter = { id: 'agt_copy', companyId: 'co_a', departmentId: 'dep_m', kind: 'profile', refId: 'p1', name: 'Copywriter', archivedAt: null, pausedAt: null, createdAt: '2026-10-01T00:00:00Z', updatedAt: '', data: agentData } as unknown as CompanyAgent
 const builder = { ...copywriter, id: 'agt_site', name: 'Site builder', createdAt: '2026-10-02T00:00:00Z' } as CompanyAgent
 const asking = (id: string, agentId = 'agt_copy'): CompanyTask => task(id, { status: 'blocked', blockReason: 'needs_input', agentId, departmentId: 'dep_m', title: `Pick a draft ${id}`, ask: { kind: 'confirm', prompt: 'Publish on Friday?' } })

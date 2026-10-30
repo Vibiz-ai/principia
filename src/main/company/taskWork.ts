@@ -149,8 +149,7 @@ export class TaskWorkService {
         autoWakes: { windowStart: null, n: 0 }
       })
       const out = this.c.startTask(taskId, profileId, (target, companyId, link) => this.d.startRun(target, {
-        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null,
-        runMinutes: link.agentId ? this.c.departments.getAgent(link.agentId)?.data.limits?.runMinutes ?? null : null
+        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null
       }), { actor, ...(work ? { work } : {}) })
       this.changed(out.companyId)
       return out

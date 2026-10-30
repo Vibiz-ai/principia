@@ -96,9 +96,8 @@ export const departmentPresetsSchema = z.object({ companyId: id, keys: z.array(z
 export const departmentReorderSchema = z.object({ companyId: id, ids: z.array(id).max(500) }).strict()
 
 const limits = z.object({
-  runMinutes: z.number().int().min(AGENT_LIMITS.runMinutes.min).max(AGENT_LIMITS.runMinutes.max),
   autoWakesPerHour: z.number().int().min(AGENT_LIMITS.autoWakesPerHour.min).max(AGENT_LIMITS.autoWakesPerHour.max)
-}).strict()
+})
 /** company_agents.data as stored (same rules as departmentDataSchema). */
 export const companyAgentDataSchema = z.object({
   instructions: z.string().max(AGENT_LIMITS.instructions).default(''),
@@ -106,6 +105,7 @@ export const companyAgentDataSchema = z.object({
   autonomy: z.enum(['manual','auto']).default('manual'),
   mode: z.enum(['headless','session']).default('headless'),
   defaultRepoId: id.nullable().default(null),
+  // not strict: agents saved before PR-80 still carry limits.runMinutes, and a failed parse here would reset the whole agent
   limits: limits.partial().default(()=>({})).transform(l=>({...AGENT_DATA_DEFAULTS.limits, ...l})),
   /** VOICE.md §4.2; readAgentData drops only this field when it fails to parse. */
   persona: personaSchema.optional()
@@ -116,7 +116,7 @@ export const companyAgentSaveSchema = z.object({
   id: id.optional(), companyId: id, departmentId: id.nullable(), kind: z.enum(['profile','workflow']), refId: id, name: z.string().trim().min(1).max(AGENT_LIMITS.name),
   data: z.object({
     instructions: companyAgentDataSchema.shape.instructions.unwrap(), capabilities: companyAgentDataSchema.shape.capabilities.unwrap(),
-    autonomy: z.enum(['manual','auto']), mode: z.enum(['headless','session']), defaultRepoId: id.nullable(), limits: limits.partial(),
+    autonomy: z.enum(['manual','auto']), mode: z.enum(['headless','session']), defaultRepoId: id.nullable(), limits: limits.partial().strict(),
     persona: personaSchema
   }).partial().strict().optional()
 }).strict()

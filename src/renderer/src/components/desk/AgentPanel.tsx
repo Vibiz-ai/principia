@@ -250,7 +250,7 @@ function AgentDetails({ agent, session }: { agent: CompanyAgent; session: Sessio
           <Switch checked={agent.data.autonomy === 'auto'} disabled={!!agent.archivedAt} onChange={(v) => void setAuto(v)} label="Starts its tasks on its own" />
         </label>
         <div className="desk-opt desk-opt--muted">{agent.data.autonomy !== 'auto' ? 'Off: it waits for you to press Start on each task.' : autopilot ? 'On: it picks up its next task when one is ready.' : `On, once Autopilot is on for ${short} (Settings › Team & autonomy). Until then it waits for you.`}</div>
-        <div className="desk-opt desk-opt--muted">One task at a time · up to {agent.data.limits.runMinutes} min each</div>
+        <div className="desk-opt desk-opt--muted">One task at a time</div>
         {!agent.archivedAt && !companyPaused && (
           <div className="convo-sec__acts">
             <Button size="sm" variant="ghost" icon={agent.pausedAt ? 'play' : 'pause'} onClick={() => void setAgentPaused(agent, !agent.pausedAt)} title={agent.pausedAt ? `Let ${who.name} take tasks again` : `${who.name} takes no new task until you resume; the current one keeps its work`}>

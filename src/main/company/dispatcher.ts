@@ -248,7 +248,7 @@ export class Dispatcher {
         if (!this.cas(t.id)) return 'skipped'
         const reasons = t.pendingWake?.reasons.length ? t.pendingWake.reasons : ['Assigned: this task is yours.']
         this.c.activity(t.id, 'woke', `Woke ${agent.name}: ${clip(reasons.join(' · '))}`)
-        this.c.startTask(t.id, undefined, this.starter(agent, id => { runId = id }), { actor: 'system', consented: scheduled })
+        this.c.startTask(t.id, undefined, this.starter(id => { runId = id }), { actor: 'system', consented: scheduled })
         this.c.patchInFlight(t.id, { autoWakes: guard })
         return 'started' as const
       })()
@@ -304,12 +304,11 @@ export class Dispatcher {
     if (r.changes) this.c.activity(taskId, kind, message)
     return r.changes === 1
   }
-  /** startTask's engine call: trigger 'task', the run's task and seat, a Claude resume id, the seat's time cap. */
-  private starter(agent: CompanyAgent | null, onRun?: (runId: string) => void) {
+  /** startTask's engine call: trigger 'task', the run's task and seat, a Claude resume id. */
+  private starter(onRun?: (runId: string) => void) {
     return (target: RunTarget, companyId: string, link: TaskRunLink): Run => {
       const run = this.d.startRun(target, {
-        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null,
-        runMinutes: agent?.data.limits?.runMinutes ?? null
+        trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null
       })
       onRun?.(run.id)
       return run
@@ -320,9 +319,7 @@ export class Dispatcher {
 
   /** "Run now": a human start (no autopilot gate), never held by a busy agent: it works on this task beside the others. */
   runNow(taskId: string, profileId?: string): BoardTask {
-    const t = this.c.task(taskId)
-    const agent = t.agentId ? this.c.departments.getAgent(t.agentId) : null
-    this.c.startTask(taskId, profileId, this.starter(agent), { actor: 'human' })
+    this.c.startTask(taskId, profileId, this.starter(), { actor: 'human' })
     const out = this.c.patchInFlight(taskId, { autoWakes: RESET })
     this.d.onChange?.(out.companyId)
     return out
@@ -370,7 +367,7 @@ export class Dispatcher {
       this.db.transaction(() => {
         if (!this.cas(t.id)) fail(`${id} already started`)
         this.c.activity(t.id, 'woke', `Woke ${agent.name} on your go-ahead: ${clip(why)}`, 'human')
-        this.c.startTask(t.id, undefined, this.starter(agent, rid => { runId = rid }), { actor: 'system', goAhead: true })
+        this.c.startTask(t.id, undefined, this.starter(rid => { runId = rid }), { actor: 'system', goAhead: true })
       })()
     } catch (err) {
       if (runId) void this.d.cancelRun(runId).catch(() => undefined)
@@ -447,7 +444,7 @@ export class Dispatcher {
       if (run.status === 'failed' && t.agentSessionId && t.status !== 'in_progress' && !t.limitWait) {
         try { t = this.c.patchInFlight(id, { agentSessionId: null }) } catch (err) { this.warn('clearing the session failed', { taskId: id, error: String(err) }) }
       }
-      // only a turn that ended by itself continues: a human Stop, a failure or a time cap never follows up, whatever
+      // only a turn that ended by itself continues: a human Stop or a failure never follows up, whatever
       // the agent reported before it ended
       if (run.status === 'passed' && !this.takeovers.has(id)) this.followUp(t)
       this.d.onChange?.(t.companyId)
@@ -471,7 +468,7 @@ export class Dispatcher {
         const n = t.pendingWake!.count
         if (!this.moveRaw(t.id, [from], { status: 'todo', blockReason: null }, 'woke', `Follow-up turn for ${agent.name}: ${n} wake${n === 1 ? '' : 's'} arrived during the run`)) return
         if (!this.cas(t.id)) fail(`${t.identifier} already started`)
-        this.c.startTask(t.id, undefined, this.starter(agent), { actor: 'system' })
+        this.c.startTask(t.id, undefined, this.starter(), { actor: 'system' })
         this.c.patchInFlight(t.id, { autoWakes: guard })
       })()
     } catch (err) {
@@ -772,7 +769,6 @@ export function taskRunBridge(o: {
 }): TaskRunBridge {
   return {
     companyOf: taskId => { try { return o.company().task(taskId).companyId } catch { return null } },
-    runMinutes: agentId => o.company().departments.getAgent(agentId)?.data.limits?.runMinutes ?? null,
     toolset: req => o.toolset()?.(req) ?? null,
     sessionCaptured: e => {
       const d = o.dispatcher()
@@ -781,7 +777,6 @@ export function taskRunBridge(o: {
       const t = c.task(e.taskId)
       if (t.runId === e.runId && t.status === 'in_progress') c.patchInFlight(t.id, { agentSessionId: e.agentSessionId })
     },
-    timeLimit: e => o.company().expectStop(e.taskId, 'limit'),
     ...(o.workdir ? { workdir: o.workdir } : {}),
     ...(o.passport ? {
       passportContext: (e: { taskId: string; companyId: string }) => {

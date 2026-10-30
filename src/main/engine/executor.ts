@@ -10,7 +10,7 @@ import { isHarnessAuthFailure } from './harnessFailure'
 import { createWriteStream, existsSync, mkdirSync, rmdirSync, writeFileSync, type WriteStream } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { TASK_WRAP_UP_MS, TASK_WRAP_UP_TEXT, type EngineContext, type ForumSpawn, type McpServerSpec, type MemoryGrant, type RunTaskLink, type TaskToolset } from '../../shared/engine'
+import { type EngineContext, type ForumSpawn, type McpServerSpec, type MemoryGrant, type RunTaskLink, type TaskToolset } from '../../shared/engine'
 import type { NotifyResult } from '../../shared/authoring'
 import type { Ask, AskAnswer } from '../../shared/live'
 import type { MemoryMode } from '../../shared/memory'
@@ -58,7 +58,6 @@ import {
 import { startProcess, type ProcHandle, type ProcResult } from './process'
 import { StepLive } from './stepLive'
 import { classifyLimitText, classifyStreamLine, laterReset, type LimitHit } from './live/limits'
-import { claudeUserMessage } from './live/claudeControl'
 import type { StallMonitor } from './live/stall'
 import { parseRefs, render, type RenderScope, type TriggerVars } from './templates'
 import { TRIGGER_IN_COMMAND, hiveOutVar, slackCommandHint } from './validate'
@@ -88,8 +87,6 @@ export interface ExecDeps {
   stall?: StallMonitor
   /** Length of one wait-node "second" (interval, per-try cap, timeoutMin budget). Default 1000; tests shrink it. */
   waitSecondMs?: number
-  /** Length of one task-run cap "minute" (TaskRun.runMinutes). Default 60 000; tests shrink it. */
-  taskMinuteMs?: number
   /**
    * May a step of this run fall back to another harness (usage limit, auth failure)? Absent = yes, whenever it is
    * installed (desktop). The cloud allows only harnesses the run has an account for (CLOUD.md §7.2).
@@ -101,8 +98,6 @@ export interface ExecDeps {
 export interface TaskRun extends RunTaskLink {
   /** a resumed Claude turn: `--resume` this conversation (prompt runs) */
   resumeSessionId: string | null
-  /** the time cap; warned in-band ~2 min before, then the run is canceled. null = no cap */
-  runMinutes: number | null
 }
 
 /** Step error for the other steps of a run that a HIVE_STOP ended (AUTHORING.md §5). */
@@ -168,7 +163,8 @@ interface StepSpec {
   prompt: string
   resumeId: string | null
   sourceStepIds: string[]
-  timeoutMin: number
+  /** null = no time limit (a run of its own that is not a chat reply); it ends when the agent does or on Stop */
+  timeoutMin: number | null
   /** Memory gate for this spawn (already clamped for the node type). Absent = off. */
   memory?: MemoryMode
   /** Text the memory brief's relevance search runs on (original prompt / room topic / criteria). */
@@ -425,7 +421,6 @@ export class Execution {
 
   private slotWaiters = 0
   private slotHolders = 0
-  private capStarted = false
   /** A step takes its slot here, so a run with nothing to do but wait for one says so (Run.slotWaitSince). */
   private async takeSlot(): Promise<() => void> {
     let waited = false
@@ -436,11 +431,6 @@ export class Execution {
     })
     if (waited) this.slotWaiters--
     this.slotHolders++
-    // the time limit is for the work: a task must not use it up before it has a slot
-    if (!this.capStarted && (this.run.status === 'queued' || this.run.status === 'running')) {
-      this.capStarted = true
-      this.startTaskCap()
-    }
     this.syncSlotWait()
     let released = false
     return () => {
@@ -525,8 +515,6 @@ export class Execution {
     const limited = status === 'failed' && this.limit ? this.limit : null
     const extra: Partial<Run> = limited ? { stopReason: 'rate_limited', resetAt: limited.resetAt, ...this.autoRetry(limited.resetAt) } : {}
     this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), slotWaitSince: null, ...extra, ...more })
-    for (const t of this.capTimers) clearTimeout(t)
-    this.capTimers = []
     this.cleanupRunDir()
     this.resolveDone()
   }
@@ -550,40 +538,6 @@ export class Execution {
 
   // ---------- board task runs (DEPARTMENTS.md §3.6, §4.3, §6) ----------
 
-  private capTimers: NodeJS.Timeout[] = []
-  /** Running claude steps with stream-json stdin open: the in-band channel of the wrap-up warning. */
-  private inband = new Map<string, ProcHandle>()
-  /** §3.6: limits.runMinutes as a run-wide timer: the in-band warning ~2 min before, then cancel (the task parks limit). */
-  private startTaskCap(): void {
-    const minutes = this.task?.runMinutes
-    if (!minutes) return
-    const unit = this.d.taskMinuteMs ?? 60_000
-    const total = minutes * unit
-    const lead = Math.min((TASK_WRAP_UP_MS / 60_000) * unit, total / 2)
-    const warn = setTimeout(() => this.warnWrapUp(), Math.max(0, total - lead))
-    const stop = setTimeout(() => void this.hitTimeLimit(minutes), total)
-    warn.unref?.()
-    stop.unref?.()
-    this.capTimers.push(warn, stop)
-  }
-  /** Claude reads it as a user message on its open stdin; every running step also shows it as a notice in its tree. */
-  private warnWrapUp(): void {
-    if (this.run.status !== 'running' || this.stopped) return
-    for (const [stepId, live] of this.lives) {
-      live.hook({ kind: 'notice', text: TASK_WRAP_UP_TEXT })
-      const h = this.inband.get(stepId)
-      if (h && !h.write(claudeUserMessage(TASK_WRAP_UP_TEXT))) this.ctx.log.info('engine: wrap-up warning not delivered in-band', { runId: this.run.id, stepId })
-    }
-  }
-  private async hitTimeLimit(minutes: number): Promise<void> {
-    if ((this.run.status !== 'queued' && this.run.status !== 'running') || !this.task) return
-    try {
-      this.ctx.company?.tasks?.timeLimit?.({ runId: this.run.id, taskId: this.task.taskId, minutes })
-    } catch (e) {
-      this.ctx.log.warn('engine: task time limit hook failed', { runId: this.run.id, error: String(e) })
-    }
-    await this.cancel(`Time limit reached (${minutes} min)`)
-  }
   /** §4.3: the provider conversation id of a claude step of a task run, once per value (task.agentSessionId). */
   private lastTaskSession: string | null = null
   private noteTaskSession(adapter: AdapterId, agentSessionId: string | null): void {
@@ -1163,7 +1117,7 @@ export class Execution {
           cwd: s.cwd,
           env,
           stdin: inv.stdin ? 'pipe' : 'ignore',
-          timeoutMs: Math.max(1, s.timeoutMin) * 60_000,
+          timeoutMs: s.timeoutMin === null ? 0 : Math.max(1, s.timeoutMin) * 60_000,
           ...(this.ctx.reaper ? { reap: { spawnId: stepId, reaper: this.ctx.reaper } } : {}),
           user: this.ctx.spawnUser?.() ?? null,
           onStdout: (c) => {
@@ -1197,7 +1151,6 @@ export class Execution {
         this.ctx.emit({ type: 'step.updated', step: u })
       }
       this.noteTaskSession(s.adapterId, agentSessionId)
-      if (inv.stdin && this.task) this.inband.set(stepId, handle)
       if (this.stopped) void handle.kill()
 
       const r = await handle.done
@@ -1246,7 +1199,6 @@ export class Execution {
       return end({ ...base, status: o.status, error, harnessUnavailable })
     } finally {
       if (liveStepId) this.d.stall?.untrack(liveStepId)
-      if (liveStepId) this.inband.delete(liveStepId)
       if (live) {
         if (this.stopped === 'canceled' && liveStatus === 'failed') liveStatus = 'canceled'
         live.finish(liveStatus)
@@ -1510,7 +1462,7 @@ export class Execution {
       // DEPARTMENTS.md §4.2: a resumed Claude task turn continues its conversation (the prompt is only wake + rules)
       resumeId: profile.adapter === 'claude' ? (this.task?.resumeSessionId ?? null) : null,
       sourceStepIds: [],
-      timeoutMin: this.reply ? REPLY_TIMEOUT_MIN : 60,
+      timeoutMin: this.reply ? REPLY_TIMEOUT_MIN : null,
       // LIVE.md §7 / F4: prompt runs default to read-write like new steps (writes stay within the repo; no repo =
       // read-only global, see MemoryService.grant). An explicit 'off' is kept.
       memory: isMemoryMode(t.memory) ? t.memory : 'read-write',

@@ -8,7 +8,7 @@ const dep = (id: string, key: string): Department =>
   ({ id, companyId: 'co_a', key, name: key[0]!.toUpperCase() + key.slice(1), color: null, icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: {} as Department['data'] }) as Department
 const agent = (id: string, departmentId: string | null, refId = 'prof_claude'): CompanyAgent =>
   ({ id, companyId: 'co_a', departmentId, kind: 'profile', refId, name: `Agent ${id}`, archivedAt: null, pausedAt: null, createdAt: '', updatedAt: '',
-    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } } }) as CompanyAgent
+    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } } }) as CompanyAgent
 
 const ctx = (p: Partial<RoutineContext> = {}): RoutineContext => ({
   companyId: 'co_a',

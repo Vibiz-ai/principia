@@ -6,7 +6,7 @@ import { openDatabase, type DB } from '../db'
 import { Store } from '../db/store'
 import { CompanyStore } from './index'
 import { assertDepartmentsEnabled, DepartmentStore } from './departments'
-import { companyAgentDataSchema, departmentSaveSchema, taskInputSchema, taskPatchSchema } from './schemas'
+import { companyAgentDataSchema, companyAgentSaveSchema, departmentSaveSchema, taskInputSchema, taskPatchSchema } from './schemas'
 import { REQUEST_SCHEMAS } from '../ipcSchemas'
 import { buildTaskPrompt } from './taskPrompt'
 import { route } from './router'
@@ -103,10 +103,10 @@ describe('company agents', () => {
     const a = d.saveAgent({ companyId: acme.id, departmentId: dep.id, kind: 'profile', refId: p.id, name: 'Copywriter' })
     expect(a.id).toMatch(/^agt_/)
     const { persona, ...rest } = a.data
-    expect(rest).toEqual({ instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } })
+    expect(rest).toEqual({ instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } })
     expect(persona).toMatchObject({ key: 'marcus', name: 'Marcus' })
-    const u = d.saveAgent({ id: a.id, companyId: acme.id, departmentId: dep.id, kind: 'profile', refId: p.id, name: 'Copywriter', data: { autonomy: 'auto', limits: { runMinutes: 10 } } })
-    expect(u.data).toMatchObject({ autonomy: 'auto', limits: { runMinutes: 10, autoWakesPerHour: 4 } })
+    const u = d.saveAgent({ id: a.id, companyId: acme.id, departmentId: dep.id, kind: 'profile', refId: p.id, name: 'Copywriter', data: { autonomy: 'auto', limits: { autoWakesPerHour: 2 } } })
+    expect(u.data).toMatchObject({ autonomy: 'auto', limits: { autoWakesPerHour: 2 } })
     expect(() => d.saveAgent({ companyId: acme.id, departmentId: null, kind: 'profile', refId: p.id, name: 'X', data: { instructions: 'x'.repeat(4001) } })).toThrow()
     expect(() => d.saveAgent({ companyId: acme.id, departmentId: null, kind: 'profile', refId: p.id, name: 'X', data: { limits: { autoWakesPerHour: 5 } } })).toThrow()
     expect(d.listAgents({ companyId: acme.id, departmentId: dep.id }).map(x => x.name)).toEqual(['Copywriter'])
@@ -197,7 +197,15 @@ describe('company agents', () => {
     db.prepare("UPDATE company_departments SET data='not json' WHERE id=?").run(dep.id)
     expect(d.department(dep.id).data.charter).toEqual({ does: '', doesNot: '' })
     db.prepare(`INSERT INTO company_agents(id,company_id,department_id,kind,ref_id,name,data) VALUES('agt_old',?,NULL,'profile','prof_x','Old','{"autonomy":"auto","future":1}')`).run(acme.id)
-    expect(d.agent('agt_old').data).toMatchObject({ autonomy: 'auto', mode: 'headless', limits: { runMinutes: 30, autoWakesPerHour: 4 } })
+    expect(d.agent('agt_old').data).toMatchObject({ autonomy: 'auto', mode: 'headless', limits: { autoWakesPerHour: 4 } })
+  })
+  it('an agent saved with the old minutes-per-run limit keeps everything else, and the old key is gone', () => {
+    const old = JSON.stringify({ instructions: 'Write the launch post', capabilities: 'copy', autonomy: 'auto', mode: 'session', defaultRepoId: null, limits: { runMinutes: 90, autoWakesPerHour: 2 } })
+    db.prepare(`INSERT INTO company_agents(id,company_id,department_id,kind,ref_id,name,data) VALUES('agt_cap',?,NULL,'profile','prof_x','Capped',?)`).run(acme.id, old)
+    expect(d.agent('agt_cap').data).toEqual({ instructions: 'Write the launch post', capabilities: 'copy', autonomy: 'auto', mode: 'session', defaultRepoId: null, limits: { autoWakesPerHour: 2 } })
+    const saved = d.saveAgent({ id: 'agt_cap', companyId: acme.id, departmentId: null, kind: 'profile', refId: 'prof_x', name: 'Capped', data: { capabilities: 'copy, seo' } })
+    expect(saved.data).toMatchObject({ instructions: 'Write the launch post', capabilities: 'copy, seo', limits: { autoWakesPerHour: 2 } })
+    expect(saved.data.limits).not.toHaveProperty('runMinutes')
   })
 })
 
@@ -372,7 +380,9 @@ describe('task schema and IPC contract', () => {
     expect(REQUEST_SCHEMAS['board:autopilot'].safeParse({ companyId: 'co_a', on: true }).success).toBe(true)
     expect(REQUEST_SCHEMAS['companyAgents:list'].parse(undefined)).toBeUndefined()
     expect(departmentSaveSchema.safeParse({ companyId: 'co_a', name: 'X', data: { slackChannels: ['general'] } }).success).toBe(false)
-    expect(companyAgentDataSchema.parse({}).limits).toEqual({ runMinutes: 30, autoWakesPerHour: 4 })
+    expect(companyAgentDataSchema.parse({}).limits).toEqual({ autoWakesPerHour: 4 })
+    expect(companyAgentDataSchema.parse({ limits: { runMinutes: 30 } }).limits).toEqual({ autoWakesPerHour: 4 })
+    expect(companyAgentSaveSchema.safeParse({ companyId: 'co_a', departmentId: null, kind: 'profile', refId: 'p', name: 'X', data: { limits: { runMinutes: 30 } } }).success).toBe(false)
     expect(REQUEST_SCHEMAS['settings:update'].safeParse({ experimental: { departments: true } }).success).toBe(true)
   })
   it('schedules and Slack triggers accept task mode and a department', () => {

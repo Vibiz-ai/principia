@@ -209,7 +209,7 @@ export class Hive {
   companyBridge(): CompanyBridge {
     return {
       ...createCompanyBridge(this.company, this.store),
-      // DEPARTMENTS.md §4.3: task runs inherit the task's company, take the seat's time cap and report their session id
+      // DEPARTMENTS.md §4.3: task runs inherit the task's company and report their session id
       tasks: taskRunBridge({
         company: () => this.company,
         dispatcher: () => this.dispatcher,

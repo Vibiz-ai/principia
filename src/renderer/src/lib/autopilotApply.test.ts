@@ -9,7 +9,7 @@ const dep = (id: string, key: string, name: string): Department =>
   ({ id, companyId: 'co_a', key, name, color: null, icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: {} as Department['data'] }) as Department
 const agent = (id: string, departmentId: string): CompanyAgent =>
   ({ id, companyId: 'co_a', departmentId, kind: 'profile', refId: 'prof_c', name: id, archivedAt: null, pausedAt: null, createdAt: '', updatedAt: '',
-    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } } }) as CompanyAgent
+    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } } }) as CompanyAgent
 
 const ctx = (p: Partial<AutopilotContext> = {}): AutopilotContext => ({
   companyId: 'co_a', companyName: 'Acme', departmentsOn: true,

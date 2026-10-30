@@ -106,8 +106,6 @@ export interface EngineOverrides {
   stallThresholdMs?: number
   /** Wait-node time unit (tests). Default 1000 ms. */
   waitSecondMs?: number
-  /** Task-run time cap unit (tests). Default 60 000 ms (StartRunOptions.runMinutes are minutes). */
-  taskMinuteMs?: number
   /** Harness fallback filter (ExecDeps.harnessFallback). Absent = the desktop's rule. */
   harnessFallback?: (runId: string, to: AdapterId) => boolean
 }
@@ -229,19 +227,6 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       return null
     }
   }
-  /** §3.6: the explicit cap, else the seat's limits.runMinutes; null = no cap (non-task runs, no seat). */
-  const taskRunMinutes = (opts: StartRunOptions): number | null => {
-    if (!opts.taskId) return null
-    let m: number | null | undefined = opts.runMinutes
-    if (m == null && opts.agentId) {
-      try {
-        m = ctx.company?.tasks?.runMinutes?.(opts.agentId) ?? null
-      } catch {
-        m = null
-      }
-    }
-    return typeof m === 'number' && Number.isFinite(m) && m > 0 ? m : null
-  }
 
   const startRun = (target: RunTarget, opts: StartRunOptions): Run => {
     if (!target || typeof target !== 'object') throw new HiveError('bad_request', 'Missing run target')
@@ -304,10 +289,10 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
     ctx.store.insertRun(run, snapshot, task)
     ctx.emit({ type: 'run.updated', run })
     const exec = new Execution(
-      { ctx, adapters, provider, semaphore, replySemaphore, replyEndGraceMs: overrides.replyEndGraceMs, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, taskMinuteMs: overrides.taskMinuteMs, harnessFallback: overrides.harnessFallback },
+      { ctx, adapters, provider, semaphore, replySemaphore, replyEndGraceMs: overrides.replyEndGraceMs, now, askTimeoutMs: overrides.askTimeoutMs, stall, waitSecondMs: overrides.waitSecondMs, harnessFallback: overrides.harnessFallback },
       run,
       snapshot,
-      task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null, runMinutes: taskRunMinutes(opts) } : null,
+      task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null } : null,
       task ? null : (opts.agentId ?? null),
       !!opts.reply && !task
     )

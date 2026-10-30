@@ -154,7 +154,7 @@ export function registerCompanyHandlers(h: Hive): void {
   handle('tasks:create',({task})=>{const t=createTaskGuarded(h,task);changed('tasks');return t})
   handle('tasks:update',({id,patch})=>{noBoardFields(patch);if(!boardOff())d.assertTaskPatch(c.task(id),patch);const t=c.updateTask(id,patch);changed('tasks');return t})
   handle('tasks:get',({id})=>c.detail(id))
-  // §3.4: a board Run goes through the dispatcher (task link, seat, time cap, task tools, session capture, wake reset)
+  // §3.4: a board Run goes through the dispatcher (task link, seat, task tools, session capture, wake reset)
   handle('tasks:start',async({id,profileId})=>{if(c.task(id).plan){const pt=await planBoardStart(id);changed('tasks');h.statusChanged();return pt};const t=h.dispatcher?h.dispatcher.runNow(id,profileId):c.startTask(id,profileId,(target,companyId,link)=>h.engine.runs.start(target.kind==='prompt'?{...target,prompt:h.vault.redact(target.prompt)}:target,{trigger:'task',companyId,taskId:link.taskId,agentId:link.agentId,resumeSessionId:link.resumeSessionId}));changed('tasks');h.statusChanged();return t})
   // a human comment: by 'human' so its wake resets the guard (§3.5)
   handle('tasks:comment',({id,message,by})=>{const a=c.activity(id,'comment',h.vault.redact(message),by??'human');changed('tasks');return a})
