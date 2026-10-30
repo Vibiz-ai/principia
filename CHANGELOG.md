@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2](https://github.com/Vibiz-ai/principia/compare/v0.4.1...v0.4.2) (2026-10-30)
+
+
+### Features
+
+* act on "go ahead", close review tasks whose PRs merged, a chat box that grows (PR-55) ([4a6a1c8](https://github.com/Vibiz-ai/principia/commit/4a6a1c87cd925d0edf7e025980ded8340cd5c03b))
+* act on "go ahead", close review tasks whose PRs merged, a chat box that grows (PR-55) ([4be4035](https://github.com/Vibiz-ai/principia/commit/4be403566d5a7337dd53b1554f18977e10940802))
+* **chat:** fold the task dock to one line, close a card with ×, show two at a time ([e2a04d1](https://github.com/Vibiz-ai/principia/commit/e2a04d168c01a1f924aa29e878e206924f129201))
+* **chat:** fold the task dock, close Needs-you cards, show two at a time (PR-53) ([a502536](https://github.com/Vibiz-ai/principia/commit/a502536827a39d01c92942769ba21feac4ac0738))
+
 ## [0.4.1](https://github.com/Vibiz-ai/principia/compare/v0.4.0...v0.4.1) (2026-10-29)
 
 
