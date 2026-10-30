@@ -257,6 +257,8 @@ export interface TaskBoardFields {
   work?: TaskWork | null
   /** LIVE.md §16.1: waiting for (or on) its one automatic restart after a usage limit. Absent on older rows. */
   limitWait?: LimitWait | null
+  /** LIVE.md §16.1: its last start needed no autopilot, so only a person could have made it. Absent on older rows. */
+  startConsented?: boolean
 }
 export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0, labels: [], estimate: null, dueDate: null, work: null, limitWait: null }
 /** Fills the §1.3 fields an older row lacks (no validation; taskInputSchema validates). */
