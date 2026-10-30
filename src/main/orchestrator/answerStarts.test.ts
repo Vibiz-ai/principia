@@ -250,11 +250,11 @@ describe('the agent starts a filed task when the founder says go', () => {
   it('cannot start: the reply says what holds it instead of "Starting"', async () => {
     const said = { prompt: '', result: '' }
     let id = ''
-    const { w, owner, julia, conv, say, fromJulia } = setup({ fileFirst: false, reply: goAhead(said, () => id) })
+    const { w, co, owner, julia, conv, say, fromJulia } = setup({ fileFirst: false, reply: goAhead(said, () => id) })
     const req = w.forum.store.post(owner.id, { channelId: conv.id, text: 'Pricing page for the new plan' })
     const t = w.forum.toTask(req.id, owner.id, julia.id)
     id = t.identifier
-    const dep = w.task({ companyId: t.companyId, agentId: julia.id, title: 'First this' })
+    const dep = w.task({ companyId: co.id, agentId: julia.id, title: 'First this' })
     w.c.updateTask(t.id, { dependencyIds: [dep.id] })
     await say('go ahead')
     await w.drain()
