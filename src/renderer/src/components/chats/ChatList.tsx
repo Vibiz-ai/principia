@@ -41,8 +41,8 @@ import { useForum } from '../../state/forum'
 import { MemberAvatar, useMemberDisplay } from '../forum/Avatar'
 
 export type ChatRowModel =
-  | { key: string; kind: 'agent'; agent: CompanyAgent; companyId: Id; live: boolean; at: string; chat: Session | null }
-  | { key: string; kind: 'session'; session: Session; companyId: Id; live: boolean; at: string }
+  | { key: string; kind: 'agent'; agent: CompanyAgent; companyId: Id; live: boolean; at: string; turnAt?: string; chat: Session | null }
+  | { key: string; kind: 'session'; session: Session; companyId: Id; live: boolean; at: string; turnAt?: string }
   | { key: string; kind: 'run'; agentId: Id; title: string; detail: string | null; companyId: Id; live: true; at: string }
   /** CHAT-UI.md §7: a conversation with the team (Principia brought them in), or your private one with one agent */
   | { key: string; kind: 'conv'; conv: ConversationRow; companyId: Id; live: boolean; at: string; work?: ConvWork<CompanyTask> }
@@ -109,6 +109,22 @@ export function rememberChat(scope: Id | undefined, key: string): void {
   if (lastChat(scope) !== key) saveJson(LAST_KEY(scope), key)
 }
 
+/**
+ * When each session last came back to you (session id → time): an answer or a question waiting. JSON, so the rows only
+ * recompute when one of these moves, not on every live event.
+ */
+export function sessionTurns(agents: Record<string, AgentNode>): string {
+  const best = new Map<string, AgentNode>()
+  for (const a of Object.values(agents)) {
+    if (a.kind !== 'session' || !a.sessionId) continue
+    const had = best.get(a.sessionId)
+    if (!had || a.updatedAt > had.updatedAt) best.set(a.sessionId, a)
+  }
+  const turns: Record<string, string> = {}
+  for (const [id, a] of best) if (a.status === 'needs_you') turns[id] = a.updatedAt
+  return JSON.stringify(turns)
+}
+
 /** Every conversation of the scope, newest first; Live rows are exactly the one live source's working items. */
 export function useChatRows(scope: Id | undefined): ChatRowModel[] {
   const sessions = useStore((s) => s.sessions)
@@ -120,7 +136,9 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
   const convs = useConversations(on ? scope : null)
   const taskChannels = useTaskChannels(on ? scope : null)
   const seen = useStore((s) => s.taskSeen)
+  const turnsJson = useStore((s) => sessionTurns(s.agents))
   return useMemo(() => {
+    const turns = JSON.parse(turnsJson) as Record<string, string>
     const rows: ChatRowModel[] = []
     // CHAT-UI.md §8.6: a conversation's tasks are its subagents: their work is on its row
     for (const c of convs) {
@@ -152,7 +170,8 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
         for (const c of chats) covered.add(c.id)
         const at = [...chats.map((s) => s.endedAt ?? s.startedAt), a.createdAt].reduce((m, x) => (x > m ? x : m), '')
         if (!chats.length) continue
-        rows.push({ key: `agent:${a.id}`, kind: 'agent', agent: a, companyId: a.companyId, live, at, chat: chats[0] ?? null })
+        const turnAt = chats.map((s) => turns[s.id] ?? '').reduce((m, x) => (x > m ? x : m), '') || undefined
+        rows.push({ key: `agent:${a.id}`, kind: 'agent', agent: a, companyId: a.companyId, live, at, turnAt, chat: chats[0] ?? null })
       }
     // CHAT-UI.md §8.6: a task nobody filed from a conversation is a row of its own while it works, needs you, or came
     // back unread; one filed from a conversation never is (its conversation's row carries it)
@@ -173,7 +192,7 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
       if (s.taskId && tasks.some((t) => t.id === s.taskId && (!isOrphanTask(t, taskChannels) || rows.some((r) => r.key === liveTaskKey(t.id))))) continue
       // a session that is a board task's run belongs to that agent's thread
       if (covered.has(s.id)) continue
-      rows.push({ key: `session:${s.id}`, kind: 'session', session: s, companyId: s.companyId ?? '', live: liveSessions.has(s.id), at: s.endedAt ?? s.startedAt })
+      rows.push({ key: `session:${s.id}`, kind: 'session', session: s, companyId: s.companyId ?? '', live: liveSessions.has(s.id), at: s.endedAt ?? s.startedAt, turnAt: turns[s.id] })
       covered.add(s.id)
     }
     // working items with no thread or chat (a workflow step, a schedule's prompt): still live, still listed
@@ -186,7 +205,7 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
       rows.push({ key: `run:${i.agentId}`, kind: 'run', agentId: i.agentId, title: i.title, detail: i.detail, companyId: i.companyId, live: true, at: i.at })
     }
     return byWork(rows.map((r) => ({ r, rank: rowRank(r), at: r.at }))).map((x) => x.r)
-  }, [sessions, agents, tasks, on, working, scope, convs, taskChannels, seen])
+  }, [sessions, agents, tasks, on, working, scope, convs, taskChannels, seen, turnsJson])
 }
 
 /**
