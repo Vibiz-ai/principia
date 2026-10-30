@@ -192,9 +192,9 @@ export function mcpRows(res: unknown): unknown[][] {
 
 /**
  * The table text PostHog's `execute-sql` answers with: a `|`-separated header line, then a line per row. Values are not
- * escaped, so a `|` or a line break inside one looks like a separator. Every cell is text and nulls are `(null)`; `num`
- * reads the numbers. A row with too many cells gives the extra back to its first column, the one text column in every
- * dashboard query. Null when a row stays short.
+ * escaped, so a `|` or a line break inside one looks like a separator; our queries URL-encode their text columns for
+ * that. Every cell is text and nulls are `(null)`; `num` reads the numbers. A row with too many cells gives the extra
+ * back to its first column, the one text column in every dashboard query. Null when a row stays short.
  */
 function tableRows(text: string): unknown[][] | null {
   const [header, ...lines] = text.split('\n')
@@ -234,6 +234,16 @@ function findResults(v: unknown, depth: number): unknown[][] | null {
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v) || 0)
 
+/** A text column as sent: the queries URL-encode them, so a `|` or a line break in a value can't pass for a separator. */
+function plain(v: unknown): string {
+  if (v == null) return ''
+  try {
+    return decodeURIComponent(String(v))
+  } catch {
+    return String(v)
+  }
+}
+
 export const posthogProvider: DashboardProvider = {
   kind: 'posthog',
   async validate(ctx) {
@@ -269,8 +279,8 @@ export const posthogProvider: DashboardProvider = {
         `SELECT countIf(timestamp >= now() - ${W}) AS views, uniqIf(person_id, timestamp >= now() - ${W}) AS users, countIf(timestamp < now() - ${W}) AS prev_views, uniqIf(person_id, timestamp < now() - ${W}) AS prev_users FROM events WHERE event = '$pageview' AND timestamp >= now() - INTERVAL ${2 * WINDOW} DAY`
       ),
       hogql(ctx, `SELECT toDate(timestamp) AS day, uniq(person_id) AS users, count() AS views FROM events WHERE event = '$pageview' AND timestamp >= now() - ${W} GROUP BY day ORDER BY day`),
-      hogql(ctx, `SELECT properties.$pathname AS page, count() AS views FROM events WHERE event = '$pageview' AND timestamp >= now() - ${W} GROUP BY page ORDER BY views DESC LIMIT 10`),
-      hogql(ctx, `SELECT properties.$referring_domain AS referrer, count() AS views FROM events WHERE event = '$pageview' AND timestamp >= now() - ${W} GROUP BY referrer ORDER BY views DESC LIMIT 10`)
+      hogql(ctx, `SELECT encodeURLComponent(properties.$pathname) AS page, count() AS views FROM events WHERE event = '$pageview' AND timestamp >= now() - ${W} GROUP BY page ORDER BY views DESC LIMIT 10`),
+      hogql(ctx, `SELECT encodeURLComponent(properties.$referring_domain) AS referrer, count() AS views FROM events WHERE event = '$pageview' AND timestamp >= now() - ${W} GROUP BY referrer ORDER BY views DESC LIMIT 10`)
     ])
     const [views, users, prevViews, prevUsers] = (totals[0] ?? [0, 0, 0, 0]).map(num)
     if (!views && !prevViews) throw new DashboardFetchError('no_data', 'PostHog has no pageviews in the last 8 weeks for this project.')
@@ -289,8 +299,11 @@ export const posthogProvider: DashboardProvider = {
         ]
       },
       tables: {
-        pages: pages.map((r) => ({ page: r[0] == null || r[0] === '' ? '(unknown)' : String(r[0]), views: num(r[1]) })),
-        referrers: refs.map((r) => ({ referrer: r[0] == null || r[0] === '' || r[0] === '$direct' ? 'Direct' : String(r[0]), views: num(r[1]) }))
+        pages: pages.map((r) => ({ page: plain(r[0]) || '(unknown)', views: num(r[1]) })),
+        referrers: refs.map((r) => {
+          const referrer = plain(r[0])
+          return { referrer: !referrer || referrer === '$direct' ? 'Direct' : referrer, views: num(r[1]) }
+        })
       }
     } satisfies DashboardSnapshot
   }
