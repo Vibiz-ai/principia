@@ -14,7 +14,7 @@ import type { Session } from '@shared/types'
 import type { ForumChannel, ForumMember, ForumMessage } from '@shared/forum'
 import type { ChatSnapshot } from '@shared/chat'
 import { EMPTY_CHAT_META } from '@shared/chat'
-import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneServerMsg, type PhoneSession, type PhoneTaskDetail, type PhoneTasks } from '@shared/remote'
+import { REMOTE_COOKIE, REMOTE_CSRF_HEADER, REMOTE_PAIR_TTL_MS, matchRemoteRoute, remoteRoutePath, remoteStatusLine, REMOTE_ROUTES, type PhoneNeeds, type PhoneNow, type PhoneServerMsg, type PhoneSession, type PhoneTaskDetail, type PhoneTasks } from '@shared/remote'
 import { HiveError } from '@shared/errors'
 import { PairError, RemoteAuth } from './auth'
 import { RemoteServer, bundleFiles, parseCookies } from './server'
@@ -22,7 +22,7 @@ import type { OrchSuggestion } from '../../shared/orchestrator'
 import { PHONE_CHANNELS, PhoneApi, terminalReply, type PhoneHost } from './api'
 import { RemoteService } from './service'
 import { findCloudflared, parseTunnelUrl } from './tunnel'
-import { askHeading, deskHistory, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
+import { agentStatus, askHeading, deskHistory, phoneChats, phoneCompanies, phoneNeeds, phoneNow, phoneOptions, runTitle, type PhoneData } from './views'
 
 const T = '2026-10-25T10:00:00.000Z'
 
@@ -57,7 +57,7 @@ function world() {
     sessions: [sess('se_a', 'co_a'), sess('se_b', 'co_b')],
     channels: [channel('ch_a', 'co_a'), channel('ch_b', 'co_b')],
     members: [member('mb_owner_a', 'co_a', { kind: 'human', role: 'owner', handle: 'you' }), member('mb_ag_a', 'co_a', { agentId: 'ag_a', handle: 'livia', name: 'Livia' }), member('mb_ag_b', 'co_b', { agentId: 'ag_b', handle: 'marcus' })],
-    runs: [] as { id: string; companyId: string; agentId: string | null; title: string; status: string }[],
+    runs: [] as { id: string; companyId: string; agentId: string | null; title: string; status: string; slotWaitSince?: string | null }[],
     calls: [] as { channel: string; req: unknown }[],
     suggestions: [] as OrchSuggestion[],
     /** the room's messages (null: one "hello") */
@@ -666,6 +666,18 @@ describe('terminal replies from the phone', () => {
     const room = (await api.handle('room', { companyId: 'co_a' }, {}, dev)) as { answering: string[] }
     expect(room.answering).toEqual(['Livia'])
   })
+  it('a working task card says when its run waits for a free slot, and counts the wait', async () => {
+    const { host, d } = world()
+    const card = (runId: string): ForumMessage => ({ ...msg('fm_w', 'co_a', 'ch_a', 'Livia started'), kind: 'system', task: { taskId: 'ta_run', identifier: 'TA-RUN', title: 'Spring menu', agentId: 'ag_a', filedBy: null, state: 'working', runId, startedAt: T } })
+    d.roomMessages = [card('run_a')]
+    const since = '2026-10-25T09:30:00.000Z'
+    d.runs = [{ id: 'run_a', companyId: 'co_a', agentId: 'ag_a', title: 'Spring menu', status: 'running', slotWaitSince: since }]
+    const api = new PhoneApi(host)
+    const look = async () => ((await api.handle('room', { companyId: 'co_a' }, {}, dev)) as { messages: { id: string; task?: { label: string; startedAt: string } }[] }).messages.find((m) => m.id === 'fm_w')!.task!
+    expect(await look()).toMatchObject({ label: 'Waiting for a slot', startedAt: since })
+    d.runs[0]!.slotWaitSince = null
+    expect(await look()).toMatchObject({ label: 'Working', startedAt: T })
+  })
   it('a working task card carries what its run is doing now (the phone working line, CHAT-UI.md §8)', async () => {
     const { host, d } = world()
     const card = (id: string, taskId: string, state: 'working' | 'queued', runId: string | null): ForumMessage => ({ ...msg(id, 'co_a', 'ch_a', `Livia started ${taskId}`), kind: 'system', task: { taskId, identifier: taskId.toUpperCase(), title: 'Spring menu', agentId: 'ag_a', filedBy: null, state, runId, startedAt: T } })
@@ -689,6 +701,18 @@ describe('PhoneApi live (RA3)', () => {
     const ws = { OPEN: 1, readyState: 1, send: (t: string) => sent.push(JSON.parse(t)), on: (e: string, f: (x?: unknown) => void) => (handlers[e] ??= []).push(f) }
     return { ws: ws as unknown as WebSocket, sent, emit: (e: string, x?: unknown) => handlers[e]?.forEach((f) => f(x)) }
   }
+  it('a run update tells the phone to look again, so a wait for a slot shows and clears on its own', async () => {
+    const { host, fire } = world()
+    const api = new PhoneApi(host)
+    const a = fakeWs()
+    api.socket(a.ws, dev)
+    await api.subscribe(api.subscriptions()[0]!, { t: 'sub', companyId: 'co_a', sessionId: null, channelId: null })
+    a.sent.length = 0
+    fire('run:updated', { id: 'run_a', companyId: 'co_a', status: 'running', slotWaitSince: null })
+    await new Promise((r) => setTimeout(r, 550))
+    // the board reloads on "now" while it is open
+    expect(a.sent).toEqual([expect.objectContaining({ t: 'changed', companyId: 'co_a', what: expect.arrayContaining(['now']) })])
+  })
   it('chat ops go only to the socket subscribed to that chat, room messages only to that company', async () => {
     const { host, fire } = world()
     const api = new PhoneApi(host)
@@ -769,6 +793,44 @@ describe('Phone views (the desktop’s one live source)', () => {
     expect(now.working[0]!.open).toEqual({ kind: 'agent', id: 'ag_a' })
     expect(now.done.map((x) => x.status)).toEqual(['review'])
     expect(now.needs).toBe(phoneNeeds(data(), 'co_a').count)
+  })
+  it('a task whose run waits for a free slot says so on the board, its details, Now and the agent line, and clears when the step starts', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    const since = '2026-10-25T09:30:00.000Z'
+    const run = { id: 'run_a', companyId: 'co_a', agentId: 'ag_a', title: 'Spring menu', status: 'running', slotWaitSince: since as string | null }
+    d.runs = [run]
+    d.asks = d.asks.filter((a) => a.id !== 'ask_a')
+    const looks = async () => {
+      const board = (await api.handle('tasks', { companyId: 'co_a' }, {}, dev)) as PhoneTasks
+      const task = (await api.handle('task', { companyId: 'co_a', taskId: 'ta_run' }, {}, dev)) as PhoneTaskDetail
+      const now = (await api.handle('now', { companyId: 'co_a' }, {}, dev)) as PhoneNow
+      return { row: board.working[0]!, task, now: now.working.find((w) => w.title === 'Spring menu')! }
+    }
+    const waiting = await looks()
+    expect(waiting.row).toMatchObject({ line: 'Waiting for a free slot', slotWaitSince: since })
+    expect(waiting.task).toMatchObject({ line: 'Waiting for a free slot', slotWaitSince: since })
+    expect(waiting.now).toMatchObject({ activity: 'Waiting for a free slot', slotWaitSince: since, startedAt: since })
+    const loaded = await api.load()
+    expect(agentStatus(loaded, loaded.companyAgents.find((a) => a.id === 'ag_a')!)).toBe('Spring menu · Waiting for a free slot')
+
+    run.slotWaitSince = null
+    const started = await looks()
+    expect(started.row.slotWaitSince).toBeNull()
+    expect(started.row.line).not.toBe('Waiting for a free slot')
+    expect(started.task.slotWaitSince).toBeNull()
+    expect(started.now.slotWaitSince).toBeNull()
+    expect(started.now.activity).not.toBe('Waiting for a free slot')
+  })
+  it('a finished run never shows a wait, and neither does a task that moved on', async () => {
+    const { host, d } = world()
+    const api = new PhoneApi(host)
+    d.runs = [{ id: 'run_a', companyId: 'co_a', agentId: 'ag_a', title: 'Spring menu', status: 'passed', slotWaitSince: T }]
+    expect(((await api.handle('tasks', { companyId: 'co_a' }, {}, dev)) as PhoneTasks).working[0]!.slotWaitSince).toBeNull()
+    d.runs[0]!.status = 'running'
+    d.tasks.find((t) => t.id === 'ta_run')!.status = 'in_review'
+    const b = (await api.handle('tasks', { companyId: 'co_a' }, {}, dev)) as PhoneTasks
+    expect(b.needs.find((t) => t.id === 'ta_run')).toMatchObject({ line: 'Ready for your OK', slotWaitSince: null })
   })
   it('Now: a session\'s working time counts from its current turn, not from when the session began (PQ-19)', () => {
     const d = data()

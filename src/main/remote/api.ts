@@ -11,7 +11,7 @@ import { departmentsEnabled, PERSONAL_COMPANY_ID } from '../../shared/company'
 import type { EventMap, EventName, InvokeReq, InvokeRes } from '../../shared/ipc'
 import type { Id, Session } from '../../shared/types'
 import type { ForumMessage } from '../../shared/forum'
-import { TASK_CARD_LABEL } from '../../shared/taskCard'
+import { SLOT_WAIT_LABEL, TASK_CARD_LABEL } from '../../shared/taskCard'
 import type { ChatImage, ChatItem, ChatSnapshot } from '../../shared/chat'
 import { CHAT_IMAGE_TYPES } from '../../shared/chat'
 import type { AgentNode } from '../../shared/live'
@@ -19,7 +19,7 @@ import type { PhoneAgent, PhoneClientMsg, PhoneImage, PhoneLiveView, PhoneMe, Ph
 import { REMOTE_LIMITS } from '../../shared/remote'
 import { firstLine } from '../../renderer/src/lib/format'
 import { taskTitleFor } from '../../renderer/src/lib/desk'
-import { isIdleWaiting } from '../../renderer/src/lib/live'
+import { isIdleWaiting, slotWaitsWith } from '../../renderer/src/lib/live'
 import { plainActivity } from '../../renderer/src/lib/plainActivity'
 import { reposOf } from '../../renderer/src/lib/companyModel'
 import { HttpError, type RemoteApi } from './server'
@@ -192,7 +192,7 @@ export class PhoneApi implements RemoteApi {
     const h = this.h
     const settings = await h.invoke('settings:get', undefined)
     const on = departmentsEnabled(settings.experimental)
-    const [companies, agents, asks, sessions, tasks, companyAgents, departments, repos, suggestions, playbooks] = await Promise.all([
+    const [companies, agents, asks, sessions, tasks, companyAgents, departments, repos, suggestions, playbooks, runs] = await Promise.all([
       h.invoke('company:list', undefined),
       this.safe(() => h.invoke('agents:list', { status: ['starting', 'working', 'needs_you', 'idle'], since: new Date(Date.now() - DAY).toISOString(), limit: 1000 }), []),
       this.safe(() => h.invoke('asks:list', { status: 'open', limit: 500 }), []),
@@ -202,9 +202,10 @@ export class PhoneApi implements RemoteApi {
       on ? this.safe(() => h.invoke('departments:list', undefined), []) : Promise.resolve([]),
       this.safe(() => h.invoke('repos:list', undefined), []),
       on ? this.safe(() => h.invoke('orchestrator:suggestions', {}), []) : Promise.resolve([]),
-      on ? this.safe(() => h.invoke('playbooks:summary', undefined), {}) : Promise.resolve({})
+      on ? this.safe(() => h.invoke('playbooks:summary', undefined), {}) : Promise.resolve({}),
+      this.safe(() => h.invoke('runs:list', { status: ['queued', 'running'] }), [])
     ])
-    return { companies: companies.filter((c) => !c.archivedAt), agents, asks, sessions, tasks, companyAgents, departments, repos, personas: settings.personas !== false, departmentsOn: on, seen: this.seen, suggestions: Array.isArray(suggestions) ? suggestions : [], playbooks: playbooks ?? {} }
+    return { companies: companies.filter((c) => !c.archivedAt), agents, asks, sessions, tasks, companyAgents, departments, repos, personas: settings.personas !== false, departmentsOn: on, seen: this.seen, suggestions: Array.isArray(suggestions) ? suggestions : [], playbooks: playbooks ?? {}, slotWaits: runs.reduce<Record<Id, string>>(slotWaitsWith, {}) }
   }
 
   private company(d: PhoneData, companyId: string | undefined): Id {
@@ -567,7 +568,7 @@ export class PhoneApi implements RemoteApi {
       answering: [...new Set(answering)],
       members: members
         .map((m) => ({ id: m.id, handle: m.handle, name: m.name, kind: m.kind, role: m.agentId ? (seats.find((a) => a.id === m.agentId)?.name ?? null) : null })),
-      messages: await this.withReplies(page.messages.filter((m) => !m.deletedAt && !m.threadId), await this.cardActivity(companyId, page.messages))
+      messages: await this.withReplies(page.messages.filter((m) => !m.deletedAt && !m.threadId), await this.cardActivity(companyId, page.messages), runs.reduce<Record<Id, string>>(slotWaitsWith, {}))
     }
   }
 
@@ -590,11 +591,11 @@ export class PhoneApi implements RemoteApi {
   }
 
   /** Agents answer in a thread under your message (the Forum responder): replies follow their root, in order. */
-  private async withReplies(roots: ForumMessage[], activity: ReadonlyMap<string, string> = new Map()): Promise<PhoneRoomMessage[]> {
+  private async withReplies(roots: ForumMessage[], activity: ReadonlyMap<string, string> = new Map(), slotWaits: Readonly<Record<Id, string>> = {}): Promise<PhoneRoomMessage[]> {
     const out: PhoneRoomMessage[] = []
     const recent = new Set(roots.slice(-20).map((m) => m.id))
     for (const m of roots) {
-      out.push(roomMessage(m, m.task ? activity.get(m.task.taskId) : undefined))
+      out.push(roomMessage(m, m.task ? activity.get(m.task.taskId) : undefined, m.task?.runId ? slotWaits[m.task.runId] : undefined))
       if (!m.replyCount || !recent.has(m.id)) continue
       const t = await this.safe(() => this.h.invoke('forum:thread', { messageId: m.id }), null)
       for (const r of t?.replies ?? []) if (!r.deletedAt && r.companyId === m.companyId) out.push(roomMessage(r))
@@ -810,13 +811,17 @@ export function terminalMessage(raw: string): string {
   return text
 }
 
-/** `activity`: what a working card's run is doing now (the phone's working line); only a working card carries it. */
-export function roomMessage(m: ForumMessage, activity?: string | null): PhoneRoomMessage {
+/**
+ * `activity`: what a working card's run is doing now (the phone's working line); only a working card carries it.
+ * `slotWait`: since when that run waits for a free slot (Run.slotWaitSince): the card's label and clock say so.
+ */
+export function roomMessage(m: ForumMessage, activity?: string | null, slotWait?: string | null): PhoneRoomMessage {
   const t = m.task
   const doing = t?.state === 'working' && activity ? activity : null
+  const wait = t?.state === 'working' ? (slotWait ?? null) : null
   return {
     id: m.id, seq: m.seq, channelId: m.channelId, threadId: m.threadId, authorId: m.authorId, kind: m.kind, text: m.text, at: m.createdAt,
-    ...(t ? { task: { identifier: t.identifier, title: t.title, state: t.state, label: TASK_CARD_LABEL[t.state] ?? t.state, result: t.result ?? null, prUrl: t.prUrl ?? null, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null, ...(doing ? { activity: doing } : {}) } } : {})
+    ...(t ? { task: { identifier: t.identifier, title: t.title, state: t.state, label: wait ? SLOT_WAIT_LABEL : (TASK_CARD_LABEL[t.state] ?? t.state), result: t.result ?? null, prUrl: t.prUrl ?? null, startedAt: wait ?? t.startedAt, finishedAt: t.finishedAt ?? null, ...(doing ? { activity: doing } : {}) } } : {})
   }
 }
 

@@ -36,6 +36,8 @@ struct PhoneWorking: Codable, Hashable, Identifiable, Sendable {
     var title: String
     var activity: String?
     var startedAt: String
+    /// its run waits for a free slot since then, and `activity` says so (nil: it runs, or an older Mac)
+    var slotWaitSince: String?
     var open: PhoneChatRef?
     var id: String { key }
 }
@@ -107,6 +109,8 @@ struct PhoneTaskRow: Codable, Hashable, Identifiable, Sendable {
     var line: String?
     var priority: Int
     var at: String
+    /// working: its run waits for a free slot since then, and `line` says so (nil: it runs, or an older Mac)
+    var slotWaitSince: String?
 }
 
 struct PhoneTasks: Codable, Sendable {
@@ -129,6 +133,7 @@ struct PhoneTaskDetail: Codable, Sendable {
     var line: String?
     var priority: Int
     var at: String
+    var slotWaitSince: String?
     var description: String
     var summary: String?
     var doneNote: String?
@@ -141,6 +146,9 @@ struct PhoneTaskDetail: Codable, Sendable {
     static func statusWords(_ s: String) -> String {
         ["triage": "New", "backlog": "Backlog", "todo": "To do", "in_progress": "Working", "in_review": "Waiting for your OK", "blocked": "Blocked", "done": "Done", "canceled": "Canceled"][s] ?? s
     }
+    /// The Mac's SLOT_WAIT_LABEL and SLOT_WAIT_WHY (shared/taskCard.ts).
+    static let slotWaitLabel = "Waiting for a slot"
+    static let slotWaitWhy = "Every shared slot is in use, so this waits and starts by itself when one frees up."
 }
 
 struct PhoneNeeds: Codable, Sendable {

@@ -309,6 +309,8 @@ export interface PhoneWorking {
   /** the live activity sentence, the same one the desktop shows */
   activity: string | null
   startedAt: string
+  /** its run waits for a free slot since then (Run.slotWaitSince); `activity` says so and `startedAt` is this */
+  slotWaitSince?: string | null
   open: PhoneChatRef | null
 }
 export interface PhoneDone {
@@ -384,6 +386,8 @@ export interface PhoneTaskRow {
   /** 0 none … 1 urgent … 4 low (the board's priority) */
   priority: number
   at: string
+  /** working: its run waits for a free slot since then (Run.slotWaitSince), and `line` says so */
+  slotWaitSince?: string | null
 }
 export interface PhoneTasks {
   companyId: Id

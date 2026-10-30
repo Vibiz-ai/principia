@@ -39,4 +39,32 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(t.requests.map(\.httpMethod), ["GET", "GET"])
         XCTAssertEqual(t.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer tok_abcdefghijklmnop")
     }
+
+    func testDecodesAWaitForASlotAndAnOlderMacWithoutOne() async throws {
+        let waiting = #"""
+        {"id":"ta_2","identifier":"NW-2","title":"Spring menu","status":"in_progress","column":"working","who":null,"agentId":"ag_a","line":"Waiting for a free slot","priority":0,"at":"2026-10-25T10:00:00.000Z","slotWaitSince":"2026-10-25T10:05:00.000Z",
+         "description":"","summary":null,"doneNote":null,"createdAt":"2026-10-24T10:00:00.000Z","updatedAt":"2026-10-25T10:00:00.000Z","need":null}
+        """#
+        let board = #"""
+        {"companyId":"co_a","more":0,"planned":[],"needs":[],"done":[],
+         "working":[{"id":"ta_2","identifier":"NW-2","title":"Spring menu","status":"in_progress","column":"working","who":null,"agentId":"ag_a","line":"Editing the menu","priority":0,"at":"2026-10-25T10:00:00.000Z"}]}
+        """#
+        let now = #"""
+        {"companyId":"co_a","name":"Northwind","paused":false,"needs":0,"done":[],
+         "working":[{"key":"task:ta_2","who":null,"title":"Spring menu","activity":"Waiting for a free slot","startedAt":"2026-10-25T10:05:00.000Z","slotWaitSince":"2026-10-25T10:05:00.000Z","open":null}]}
+        """#
+        let t = FakeTransport { req in
+            let path = req.url!.path
+            return (200, path.hasSuffix("/now") ? now : path.hasSuffix("/tasks") ? board : waiting)
+        }
+        let api = APIClient(transport: t, target: target)
+        let d = try await api.task("co_a", "ta_2")
+        XCTAssertEqual(d.slotWaitSince, "2026-10-25T10:05:00.000Z")
+        XCTAssertEqual(d.line, "Waiting for a free slot")
+        let n = try await api.now("co_a")
+        XCTAssertEqual(n.working.first?.slotWaitSince, "2026-10-25T10:05:00.000Z")
+        // the wait ended, or an older Mac: the field is simply not there
+        let b = try await api.tasks("co_a")
+        XCTAssertNil(b.working.first?.slotWaitSince)
+    }
 }

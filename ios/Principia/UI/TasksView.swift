@@ -61,7 +61,8 @@ struct TaskRowView: View {
     let r: PhoneTaskRow
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Tile(kind: tile).padding(.top, 7)
+            // a new identity: the pulse starts on appear, so a task whose wait ends must get a fresh tile
+            Tile(kind: tile).id(tile).padding(.top, 7)
             VStack(alignment: .leading, spacing: 2) {
                 Text(r.title).fontWeight(.semibold).foregroundStyle(Theme.ink).multilineTextAlignment(.leading)
                 let sub = [r.who?.name, r.column == .planned || r.column == .done ? PhoneTaskDetail.statusWords(r.status) : nil].compactMap { $0 }.joined(separator: " · ")
@@ -72,7 +73,7 @@ struct TaskRowView: View {
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 6) {
-                Text(Words.ago(r.at)).font(.caption).foregroundStyle(Theme.faint).monospacedDigit()
+                Text(Words.ago(r.slotWaitSince ?? r.at)).font(.caption).foregroundStyle(Theme.faint).monospacedDigit()
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(Theme.faint)
             }
         }
@@ -83,7 +84,7 @@ struct TaskRowView: View {
     private var tile: Tile.Kind {
         switch r.column {
         case .planned: return .quiet
-        case .working: return .run
+        case .working: return r.slotWaitSince == nil ? .run : .quiet
         case .needs: return .needs
         case .done: return .ok
         }
@@ -101,9 +102,13 @@ struct TaskDetailView: View {
                     Text(t.identifier).font(Theme.display(11, semibold: true)).tracking(2).foregroundStyle(Theme.muted).padding(.top, 4)
                     Text(t.title).font(Theme.display(24)).foregroundStyle(Theme.ink)
                     VStack(alignment: .leading, spacing: 8) {
-                        fact("Status", PhoneTaskDetail.statusWords(t.status))
+                        fact("Status", t.slotWaitSince == nil ? PhoneTaskDetail.statusWords(t.status) : PhoneTaskDetail.slotWaitLabel)
                         fact("Assigned to", t.who?.name ?? "No one yet")
                         if let l = t.line { fact(t.column == .working ? "Now" : "Why", l) }
+                        if let s = t.slotWaitSince {
+                            fact("Since", "\(date(s)) (\(Words.ago(s)))")
+                            Text(PhoneTaskDetail.slotWaitWhy).font(.footnote).foregroundStyle(Theme.muted)
+                        }
                         fact("Created", date(t.createdAt))
                         fact("Updated", "\(date(t.updatedAt)) (\(Words.ago(t.updatedAt)))")
                     }

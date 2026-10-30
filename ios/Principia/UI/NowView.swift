@@ -92,7 +92,8 @@ struct WorkingRow: View {
                     Text(w.title).font(.subheadline).foregroundStyle(Theme.muted).lineLimit(2)
                     if let a = w.activity {
                         HStack(spacing: 7) {
-                            Tile(kind: .run)
+                            // a new identity: the pulse starts on appear, so a task whose wait ends must get a fresh tile
+                            Tile(kind: w.slotWaitSince == nil ? .run : .quiet).id(w.slotWaitSince == nil)
                             Text(a).font(.subheadline).foregroundStyle(Theme.soft).lineLimit(2)
                         }
                         .padding(.top, 2)

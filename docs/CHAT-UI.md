@@ -717,7 +717,8 @@ A run takes one of the shared slots (Settings.concurrency) per step. With all of
 step, so `Run.slotWaitSince` marks it: set while no step of the run holds a slot and one is waiting for it, cleared when
 the step gets its slot (or the run ends). Every surface says so instead of "Working": the board card, the task's
 details, its card and dock row, the strip, the task chat, the run page and the status line agents read. The clock
-counts the wait.
+counts the wait. The phone gets the same words from the Mac: `line` and `activity` say so, and `slotWaitSince` on its
+board rows, task details and Now rows lets the app quiet the working tile and count the wait.
 
 ### 8.6 Tasks are the conversation's subagents (2026-10-28)
 
