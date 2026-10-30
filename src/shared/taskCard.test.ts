@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { chatTaskCard, chatTaskCards, clockLabel, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskStatusLine, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
 import { buildBlocks } from './chatView'
 
@@ -219,5 +219,29 @@ describe('saysGoAhead (PR-55)', () => {
   })
   it('never reads a no, a wait or something else as one', () => {
     for (const t of ['no', 'not yet, wait for Monday', "don't hire anyone", 'hold on', 'what is the status?', 'use the PostHog events instead', '', 'I know']) expect(saysGoAhead(t), t).toBe(false)
+  })
+})
+
+describe('a task waiting for the usage limit to reset', () => {
+  const company = { name: 'Acme', autopilot: true, maxInFlight: 3 }
+  const agent = { name: 'Julia', data: { autonomy: 'auto' } }
+  const retryAt = new Date(2026, 9, 20, 15, 1).toISOString()
+  const task = { status: 'todo', agentId: 'a1', limitWait: { resetAt: null, retryAt, restarted: false } }
+  const now = new Date(2026, 9, 20, 14, 0).getTime()
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  it('says so and the time it restarts, and Run now can still start it', () => {
+    vi.setSystemTime(now)
+    expect(queuedReason({ task, agent, company })).toEqual({ text: 'Waiting for the usage limit to reset · restarts at 15:01', canRun: true })
+  })
+  it('a paused company says that first; past the restart time the usual reason shows', () => {
+    vi.setSystemTime(now)
+    expect(queuedReason({ task, agent, company: { ...company, pausedAt: 'x' } }).text).toContain('paused')
+    vi.setSystemTime(new Date(2026, 9, 20, 15, 2))
+    expect(queuedReason({ task, agent, company }).text).toBe('Starting in a moment')
+  })
+  it('reads as queued on the card', () => {
+    expect(taskCardState(task)).toBe('queued')
   })
 })

@@ -5,7 +5,7 @@
  * the monthly cap) and what it did lately. Pure: main gathers the rows (playbooks:overview), this words them, so the
  * rules mirror the dispatcher's (company/dispatcher.ts) in one place a test can read.
  */
-import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit, tasksAtOnceLine } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit, limitHeld, tasksAtOnceLine, type LimitWait } from './company'
 import { levelLabel, limitsLine, playbookDef, type PlaybookView } from './autopilotPlaybooks'
 
 export interface OverviewAgent {
@@ -29,6 +29,8 @@ export interface OverviewTask {
   plan?: boolean
   /** the founder paused this task (it waits for Start) */
   heldByYou?: boolean
+  /** waiting in To do for its restart at the usage limit's reset */
+  limitWait?: LimitWait | null
   /** a schedule's standing card */
   scheduleCard?: boolean
 }
@@ -112,6 +114,7 @@ export function autopilotOverview(i: OverviewInput): AutopilotOverview {
       if (deps.length > 1) why += ` (and ${plural(deps.length - 1, 'other task')})`
     } else if (t.heldByYou) why = 'you paused it: it waits for your Start'
     else if (i.paused) why = `${i.companyName} is paused: nothing starts until you resume it`
+    else if (limitHeld(t)) why = 'waits for the usage limit to reset, then restarts by itself'
     else if (!a.auto && !t.scheduleCard) why = `${a.name} works only when you press Start`
     else if (!i.switchOn && !t.scheduleCard) why = 'Autopilot is off: it waits for your Start'
     else if (firstOf.has(a.id)) why = `next in ${a.name}’s queue`

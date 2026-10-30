@@ -3,7 +3,8 @@
  * the Home Overnight strip. Lanes come from `taskLane` (laneOf with the renderer's live inputs, lib/departments), so a
  * card's column, its reason chip and every count agree. No hive / DOM access: the tests drive these directly.
  */
-import { LANE_LABELS, TASK_LANES, agentActive, type BlockReason, type BoardSettings, type CompanyAgent, type CompanyTask, type Department, type NeedsYouReason, type TaskActivity, type TaskActivityKind, type TaskLane } from '@shared/company'
+import { LANE_LABELS, TASK_LANES, agentActive, limitHeld, type BlockReason, type BoardSettings, type CompanyAgent, type CompanyTask, type Department, type NeedsYouReason, type TaskActivity, type TaskActivityKind, type TaskLane } from '@shared/company'
+import { limitWaitLine } from '@shared/taskCard'
 import type { Id } from '@shared/types'
 import { taskDepartment, taskLane, taskReason, type LaneContext } from './departments'
 
@@ -97,6 +98,7 @@ export function laneText(t: CompanyTask, ctx: LaneContext): string {
   const reason = taskReason(t, ctx)
   if (reason) return `${LANE_WORD[lane]} · ${REASON_LABEL[reason]}`
   if (t.status === 'blocked' && t.blockReason === 'deps') return `${LANE_WORD[lane]} · ${REASON_LABEL.deps}`
+  if (limitHeld(t)) return `${LANE_WORD[lane]} · ${limitWaitLine(t.limitWait!)}`
   if (t.status === 'backlog') return `${LANE_WORD[lane]} · Backlog`
   if (t.status === 'canceled') return `${LANE_WORD[lane]} · Canceled`
   return LANE_WORD[lane]

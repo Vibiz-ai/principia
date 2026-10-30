@@ -357,6 +357,7 @@ describe('task schema and IPC contract', () => {
   it('the renderer cannot write main-only task fields', () => {
     expect(REQUEST_SCHEMAS['tasks:update'].safeParse({ id: 'task_1', patch: { doneNote: 'ok' } }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:update'].safeParse({ id: 'task_1', patch: { report: null } }).success).toBe(false)
+    expect(REQUEST_SCHEMAS['tasks:update'].safeParse({ id: 'task_1', patch: { limitWait: null } }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:create'].safeParse({ task: { ...old, autoWakes: { windowStart: null, n: 0 } } }).success).toBe(false)
     expect(REQUEST_SCHEMAS['tasks:create'].safeParse({ task: { ...old, departmentId: 'dep_a', agentId: 'agt_a' } }).success).toBe(true)
   })

@@ -966,6 +966,16 @@ wording counts, never an agent's prose about rate limiting:
   retry found more than 12 h late is dropped. "Retry now" = `runs:rerun`.
 - **Scheduled runs** (`trigger` `schedule` | `catchup`) that hit the limit get exactly one automatic retry at the reset
   when `Settings.autoRetryRateLimit` (default on). The retry is a `rerun`, so it never retries again.
+- **Board tasks** (a task with an agent, not a plan's) whose run failed on the limit get one automatic restart too, same
+  setting. The task goes back to To do instead of Needs you (`task.limitWait: {resetAt, retryAt, restarted}`, Queued lane,
+  the conversation kept for `--resume`) and the dispatcher skips it until `retryAt`, so the 60 s tick starts it at the
+  reset + 1 min (unknown reset: in 1 h). A pending restart is never dropped as late. It passes the same gates as any start
+  (company and seat pause, wake guard, `maxInFlight`). With autopilot off or a manual seat only a person could have
+  started the run, so their start carries over (a `Go ahead:` wake); with autopilot on, turning it off before the reset
+  stops the restart. A person's start ahead of time spends nothing and counts fresh; a restart that hits the limit again
+  parks `blocked(run_failed)` in Needs you, saying so. A report or question the agent left before the limit wins (§ run
+  end). `runs:retryAt` refuses a run whose task already waits, so nothing runs beside the restart. Cards, the list view and
+  the Autopilot overview say "Waiting for the usage limit to reset · restarts at 15:01".
 - Sessions: `sessions:retry` types `continue` + Return into the pane now, or at the reset (a main-process timer; the
   root shows `retryAt`), only if the session is still live and still limited.
 - UI: run banner, step chip ("usage limit"), hub row, Home result card and session banner show "Hit usage limit ·

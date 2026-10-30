@@ -7,7 +7,7 @@
  * tasks:openSession / tasks:takeover and session stops belong to the dispatcher (D4), reached through the optional
  * `h.dispatcher`; until it is wired they refuse with "not available".
  */
-import { agentActive, departmentsEnabled, startsWithoutAutopilot, type AutopilotPreview, type BoardSettings, type CompanyTask } from '../../shared/company'
+import { agentActive, departmentsEnabled, limitHeld, startsWithoutAutopilot, type AutopilotPreview, type BoardSettings, type CompanyTask } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
 import type { ExperimentalFlags, Session } from '../../shared/types'
 import type { CompanyStore } from '../company'
@@ -159,7 +159,7 @@ export function autopilotPreview(c: CompanyStore, companyId: string): AutopilotP
   const seats = new Set(c.departments.listAgents({ companyId }).filter((a) => a.companyId === companyId && agentActive(a) && a.data.autonomy === 'auto' && a.data.mode !== 'session').map((a) => a.id))
   const held = c.store.db.prepare('SELECT kind, actor FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1')
   const tasks = c.listTasks(companyId).filter((t) => {
-    if (t.companyId !== companyId || t.status !== 'todo' || !t.agentId || !seats.has(t.agentId) || t.plan || startsWithoutAutopilot(t)) return false
+    if (t.companyId !== companyId || t.status !== 'todo' || !t.agentId || !seats.has(t.agentId) || t.plan || startsWithoutAutopilot(t) || limitHeld(t)) return false
     const last = held.get(t.id) as { kind: string; actor: string | null } | undefined
     return !(last?.kind === 'paused' && last.actor === 'human')
   }).sort((x, y) => num(x.identifier) - num(y.identifier))

@@ -18,12 +18,14 @@
  * turn starts if the outcome is not needs_input and the wake guard allows it. Guard (§0.7): at most
  * limits.autoWakesPerHour (≤4) automatic starts per task per hour; the next one parks blocked(limit). Human actions
  * reset it. Agent comments and @-mentions never wake anyone. Nothing here ever reruns a failed, canceled or
- * interrupted task: only `todo` tasks are picked, and a run end only ever continues with queued wakes.
+ * interrupted task: only `todo` tasks are picked, and a run end only ever continues with queued wakes. The one
+ * exception is a run stopped by the plan's usage limit: its task waits in To do and restarts once at the reset
+ * (LIVE.md §16.1, CompanyStore.limitEnd), with the same gates as any other start.
  *
  * Moves CompanyStore has no method for (todo or in_review → blocked(limit) / blocked(run_failed), in_review →
  * todo for a follow-up) are written here as compare-and-set updates on the status, like the claim.
  */
-import { AGENT_LIMITS, agentActive, GO_AHEAD, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
+import { AGENT_LIMITS, agentActive, GO_AHEAD, limitHeld, startsWithoutAutopilot, trackedBy, type ActivityBy, type AutoWakes, type BlockReason, type BoardTask, type CompanyAgent, type PendingWake, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions, TaskRunBridge, TaskToolset } from '../../shared/engine'
 import { HiveError } from '../../shared/errors'
 import type { Run, RunTarget, Session } from '../../shared/types'
@@ -179,6 +181,8 @@ export class Dispatcher {
           if (!auto && !startsWithoutAutopilot(t)) continue
           // five doors C9: a task the founder paused waits for their Start (a comment from them wakes it again)
           if (this.heldByYou(t.id)) continue
+          // LIVE.md §16.1: stopped at the usage limit, it waits for the reset (the 60 s tick picks it up)
+          if (limitHeld(t, this.now().getTime())) continue
           const r = this.claim(t.id, agent, !auto)
           if (r !== 'skipped') changed = true
           if (r === 'started') started.push(t.id)
@@ -431,14 +435,16 @@ export class Dispatcher {
     if (this.ended.size > 2000) for (const id of [...this.ended].slice(0, 1000)) this.ended.delete(id)
     // §0.8: with departments off a plain task's next Run stays a fresh prompt (no conversation to resume)
     const on = this.d.enabled()
-    if (on && run.status !== 'failed') this.captureSession(run.id)
+    // a usage limit is no dead conversation: the restart at the reset picks it up
+    const limited = run.status === 'failed' && run.stopReason === 'rate_limited'
+    if (on && (run.status !== 'failed' || limited)) this.captureSession(run.id)
     try { this.c.syncRun(run) } catch (err) { this.warn('run sync failed', { runId: run.id, error: String(err) }) }
     for (const id of ids) {
       let t: BoardTask
       try { t = this.c.task(id) } catch { continue }
       // a failed turn may be a dead --resume (conversation gone): the next turn starts fresh with the full prompt
       // instead of failing the same way on every retry
-      if (run.status === 'failed' && t.agentSessionId && t.status !== 'in_progress') {
+      if (run.status === 'failed' && t.agentSessionId && t.status !== 'in_progress' && !t.limitWait) {
         try { t = this.c.patchInFlight(id, { agentSessionId: null }) } catch (err) { this.warn('clearing the session failed', { taskId: id, error: String(err) }) }
       }
       // only a turn that ended by itself continues: a human Stop, a failure or a time cap never follows up, whatever

@@ -211,6 +211,25 @@ export interface PendingWake { reasons: string[]; count: number }
  * (a rolling hour, so no burst straddles a window edge); windowStart is the oldest of them and n their count.
  */
 export interface AutoWakes { windowStart: string | null; n: number; at?: string[] }
+/**
+ * LIVE.md §16.1: the task's run stopped at the plan's usage limit, so it waits in To do for one automatic restart at
+ * `retryAt` (the pump skips it until then). `restarted`: that restart's run holds the task now; a second limit parks it.
+ */
+export interface LimitWait { resetAt: string | null; retryAt: string; restarted: boolean }
+/** Auto retry when the reset time is unknown (CONTRACT §13). */
+export const RETRY_FALLBACK_MS = 60 * 60_000
+/** Retry a little after the reset so the window has really reopened. */
+export const RETRY_AFTER_RESET_MS = 60_000
+/** When a "Retry at reset" should fire: reset + 1 min, never in the past; unknown reset = in 1 h. */
+export function retryTime(resetAt: string | null | undefined, now: Date): string {
+  const r = resetAt ? Date.parse(resetAt) : NaN
+  const at = Number.isFinite(r) ? Math.max(r + RETRY_AFTER_RESET_MS, now.getTime() + RETRY_AFTER_RESET_MS) : now.getTime() + RETRY_FALLBACK_MS
+  return new Date(at).toISOString()
+}
+/** A To do task still waiting for the reset: nothing starts it by itself until `retryAt` (a person's start still does). */
+export function limitHeld(t: { status: string; limitWait?: LimitWait | null }, now: number = Date.now()): boolean {
+  return t.status === 'todo' && !!t.limitWait && !t.limitWait.restarted && Date.parse(t.limitWait.retryAt) > now
+}
 /** DEPARTMENTS.md §1.3 task fields. Optional on input (old rows and old callers); taskInputSchema fills the defaults. */
 export interface TaskBoardFields {
   departmentId: string | null
@@ -236,13 +255,15 @@ export interface TaskBoardFields {
   dueDate: string | null
   /** WORKTREE.md: the task's own worktree, branch and PR once Started. Absent on older rows (read as null). */
   work?: TaskWork | null
+  /** LIVE.md §16.1: waiting for (or on) its one automatic restart after a usage limit. Absent on older rows. */
+  limitWait?: LimitWait | null
 }
-export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0, labels: [], estimate: null, dueDate: null, work: null }
+export const TASK_BOARD_DEFAULTS: TaskBoardFields = { departmentId: null, agentId: null, blockReason: null, ask: null, report: null, doneNote: null, routing: null, pendingWake: null, agentSessionId: null, autoWakes: { windowStart: null, n: 0 }, handoffs: 0, labels: [], estimate: null, dueDate: null, work: null, limitWait: null }
 /** Fills the §1.3 fields an older row lacks (no validation; taskInputSchema validates). */
 export function withTaskDefaults<T extends CompanyTaskInput>(t: T): T & TaskBoardFields {
   const d = TASK_BOARD_DEFAULTS
   return { ...t, departmentId: t.departmentId ?? null, agentId: t.agentId ?? null, blockReason: t.blockReason ?? null, ask: t.ask ?? null, report: t.report ?? null, doneNote: t.doneNote ?? null,
-    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0, work: t.work ?? null,
+    routing: t.routing ?? null, pendingWake: t.pendingWake ?? null, agentSessionId: t.agentSessionId ?? null, autoWakes: t.autoWakes ?? { ...d.autoWakes }, handoffs: t.handoffs ?? 0, work: t.work ?? null, limitWait: t.limitWait ?? null,
     labels: Array.isArray(t.labels) ? t.labels : [], estimate: t.estimate ?? null, dueDate: t.dueDate ?? null }
 }
 

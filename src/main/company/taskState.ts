@@ -5,7 +5,7 @@
  * free status edits; CompanyStore only routes their run start and end through here.
  *
  * Rules that are never relaxed (§0.7): an agent never marks a task done; done needs a non-empty done note; only a
- * dependency block heals automatically.
+ * dependency block heals automatically (a run stopped by a usage limit is not a block: it waits in To do, LIVE.md §16.1).
  */
 import type { ActivityBy, BlockReason, TaskStatus } from '../../shared/company'
 import { HiveError } from '../../shared/errors'
@@ -162,6 +162,11 @@ export function assertReassignable(old: EditSubject, next: { departmentId?: stri
 
 // ---------- run end (§1.4 rows from in_progress, §4.5) ----------
 
+/**
+ * LIVE.md §16.1: a failed run that stopped at the usage limit. 'wait': back to To do for its one restart at the reset;
+ * 'again': that restart stopped at the limit too, so it parks like any failed run.
+ */
+export type LimitEnd = 'wait' | 'again'
 /** Why main canceled a run: a time or wake cap, a restart, its company's pause, or "Pause this task" (task_paused). */
 export type StopReason = 'limit' | 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused'
 
@@ -172,6 +177,8 @@ export interface RunEnd {
   message: string
   /** in_review with no report: the card shows "no report" */
   noReport?: boolean
+  /** back in To do to wait for the usage limit's reset (LIVE.md §16.1) */
+  limitWait?: boolean
 }
 interface RunEndTask {
   ask?: { prompt: string; answer?: string } | null
@@ -196,7 +203,7 @@ export function waitsOnTasks<T extends { id: string; identifier: string; status:
  * by this run (task_report / task_ask, or the fenced report block of an inject adapter). `stopReason`: why main
  * canceled the run (time or wake cap), when it did.
  */
-export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 'canceled'; reason?: string | null }, depsDone: boolean, stopReason?: StopReason | null): RunEnd {
+export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 'canceled'; reason?: string | null }, depsDone: boolean, stopReason?: StopReason | null, limit?: LimitEnd | null): RunEnd {
   if (t.ask && !t.ask.answer) return { to: { status: 'blocked', blockReason: 'needs_input' }, kind: 'asked', by: 'agent', message: `Agent asked: ${clip(t.ask.prompt)}` }
   // task_create({blocksCurrent}) added a dependency during the run (or the agent is blocked only on other tasks): wait
   // for it, then heal. Never Needs you: nothing in it waits on a person
@@ -210,6 +217,7 @@ export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 
   if (stopReason === 'task_paused') return { to: { status: 'todo' }, kind: 'paused', by: 'human', message: 'Paused by you. The work so far is saved; Start picks it up again.' }
   const why = run.reason ? `: ${clip(run.reason, 200)}` : ''
   if (stopReason) return { to: { status: 'blocked', blockReason: stopReason as 'limit' | 'interrupted' | 'handoff_cap' }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
-  if (run.status === 'failed') return { to: { status: 'blocked', blockReason: 'run_failed' }, kind: 'run_finished', by: 'system', message: `Run failed${why}` }
+  if (run.status === 'failed' && limit === 'wait') return { to: { status: 'todo' }, kind: 'paused', by: 'system', message: 'Stopped at the usage limit. The work so far is saved; it restarts by itself once the limit resets.', limitWait: true }
+  if (run.status === 'failed') return { to: { status: 'blocked', blockReason: 'run_failed' }, kind: 'run_finished', by: 'system', message: `Run failed${why}${limit === 'again' ? '. It stopped at the usage limit again after its one automatic restart.' : ''}` }
   return { to: { status: 'blocked', blockReason: 'no_report' }, kind: 'run_finished', by: 'system', message: `Run canceled${why} before the agent reported. Review and Unpark or retry.` }
 }

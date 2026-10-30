@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { atInFlightLimit, DEFAULT_MAX_IN_FLIGHT, PERSONAL_COMPANY_ID, PROFILE_FIELDS, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
+import { atInFlightLimit, DEFAULT_MAX_IN_FLIGHT, GO_AHEAD, limitHeld, PERSONAL_COMPANY_ID, PROFILE_FIELDS, retryTime, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -14,7 +14,7 @@ import { briefPromptBlock, contextFromDescription, planStartRefusal } from './br
 import { planBlockerMet } from '../../shared/plans'
 import { taskBranchName, workBrief, type TaskWork } from '../../shared/taskWork'
 import { taskWorkSchema } from './taskWorkSchema'
-import { assertEditable, assertReassignable, assertTransition, runEndState, waitsOnTasks, type StopReason } from './taskState'
+import { assertEditable, assertReassignable, assertTransition, runEndState, waitsOnTasks, type LimitEnd, type StopReason } from './taskState'
 import { suggestionApplies } from './router'
 import { CompanyScope, type CompanyRef, type PassportContextOptions, type PassportRenderer, type ResolveQuery, type Resolved, type SameCompanyRefs } from './scope'
 export { buildPassportContext, CompanyScope } from './scope'
@@ -1012,7 +1012,9 @@ export class CompanyStore {
       // §6: a task's run belongs to the task's company, whatever the engine inferred; §1.2 runs.task_id / agent_id
       this.store.db.prepare('UPDATE runs SET company_id=? WHERE id=?').run(task.companyId,run.id)
       if(this.runLinks) this.store.db.prepare('UPDATE runs SET task_id=?,agent_id=? WHERE id=?').run(task.id,agent?.id ?? null,run.id)
-      const updated:BoardTask={...task,status:'in_progress',blockReason:null,runId:run.id,assigneeProfileId:selected,report:null,ask:null,pendingWake:null,updatedAt:new Date().toISOString()}
+      // LIVE.md §16.1: an automatic start spends the one restart; a person's start begins a fresh count
+      const limitWait=task.limitWait&&actor==='system' ? {...task.limitWait,restarted:true} : null
+      const updated:BoardTask={...task,status:'in_progress',blockReason:null,runId:run.id,assigneeProfileId:selected,report:null,ask:null,pendingWake:null,limitWait,updatedAt:new Date().toISOString()}
       this.stopReasons.delete(id)
       this.writeTask(updated);this.activity(id,'started',`${agent ? `${agent.name} started` : 'Agent started'} run ${run.id}`,actor)
       this.syncRun(run)
@@ -1081,18 +1083,40 @@ export class CompanyStore {
         const on=waitsOnTasks(t.report.summary,this.listTasks(t.companyId),t.id).filter(d=>!t.dependencyIds.includes(d.id)&&!d.dependencyIds.includes(t.id))
         if(on.length) t={...t,dependencyIds:[...t.dependencyIds,...on.map(d=>d.id)]}
       }
-      const end=runEndState(t,{status:run.status as 'passed'|'failed'|'canceled',reason:run.reason},this.depsDone(t),this.stopReasons.get(t.id))
+      const limit=this.limitEnd(t,run)
+      const end=runEndState(t,{status:run.status as 'passed'|'failed'|'canceled',reason:run.reason},this.depsDone(t),this.stopReasons.get(t.id),limit)
       assertTransition(t,end.to,'system')
       this.stopReasons.delete(t.id)
-      const next:BoardTask={...t,status:end.to.status,blockReason:end.to.blockReason ?? null,updatedAt:new Date().toISOString()}
+      const next:BoardTask={...t,status:end.to.status,blockReason:end.to.blockReason ?? null,limitWait:null,updatedAt:new Date().toISOString()}
       // five doors A4: the next turn picks up where the paused one stopped (the provider session resumes when it can)
-      if(end.kind==='paused') next.pendingWake=addWake(t.pendingWake,'Paused by the founder mid-turn. Your work so far is saved: continue where you left off.')
+      if(end.kind==='paused'&&!end.limitWait) next.pendingWake=addWake(t.pendingWake,'Paused by the founder mid-turn. Your work so far is saved: continue where you left off.')
+      if(end.limitWait) {
+        next.limitWait={resetAt:run.resetAt ?? null,retryAt:retryTime(run.resetAt,new Date()),restarted:false}
+        // with autopilot off or a manual seat only a person could have started this run, so their start carries over;
+        // with autopilot on, turning it off before the reset (Pause all agents) stops the restart
+        const auto=this.boardSettings(t.companyId).autopilot&&this.departments.getAgent(t.agentId!)?.data.autonomy==='auto'
+        next.pendingWake=addWake(t.pendingWake,`${auto ? '' : GO_AHEAD}Your last turn stopped at the usage limit, which has reset. Your work so far is saved: continue where you left off.`)
+      }
       // waiting on a dependency that was canceled during the run: it would never heal
       const parked=this.parkOnCanceledDep(next)
       this.writeTask(next);this.activity(t.id,end.kind,end.message,end.by);changed=true
       if(parked) this.activity(t.id,'parked',parked)
     }
     return changed
+  }
+  /**
+   * LIVE.md §16.1: how a run that stopped at the usage limit ends its task. Only a board task of an agent waits for the
+   * reset (a plan's tasks are the plan pilot's), once per start, and not with Settings.autoRetryRateLimit off.
+   */
+  private limitEnd(t: BoardTask, run: Run): LimitEnd|null {
+    if(run.status!=='failed'||run.stopReason!=='rate_limited') return null
+    if(t.limitWait?.restarted) return 'again'
+    return t.agentId&&!t.plan&&this.boardOn()&&this.store.getSettings().autoRetryRateLimit!==false ? 'wait' : null
+  }
+  /** The run a task still waits to restart after a usage limit (a second retry of that run would work beside it). */
+  limitWaitOfRun(runId: string): BoardTask|null {
+    const rows=this.store.db.prepare("SELECT data FROM company_tasks WHERE run_id=? AND status='todo'").all(runId) as {data:string}[]
+    return rows.map(r=>readTask(r.data)).find(t=>limitHeld(t)) ?? null
   }
   /** Called once at startup, after engine recovery and before accepting requests. Interrupted tasks are never rerun. */
   reconcile(): void {
