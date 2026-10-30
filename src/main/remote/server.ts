@@ -137,7 +137,8 @@ export class RemoteServer {
     return new Set(this.sockets.values())
   }
 
-  async start(): Promise<number> {
+  /** `prefer`: the port to listen on when it is free (RA8: the one a kept tunnel serves), else a random one */
+  async start(prefer = 0): Promise<number> {
     if (this.server) return this.port
     this.files = bundleFiles(this.o.bundleDir)
     const server = http.createServer((req, res) => void this.onRequest(req, res))
@@ -181,13 +182,18 @@ export class RemoteServer {
     })
     this.server = server
     this.wss = wss
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      // RA1: loopback only. Never 0.0.0.0, never '::'.
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', reject)
-        resolve()
+    const listen = (port: number): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        // RA1: loopback only. Never 0.0.0.0, never '::'.
+        server.listen(port, '127.0.0.1', () => {
+          server.off('error', reject)
+          resolve()
+        })
       })
+    await listen(prefer).catch((e) => {
+      if (!prefer) throw e
+      return listen(0)
     })
     this.port = (server.address() as AddressInfo).port
     return this.port

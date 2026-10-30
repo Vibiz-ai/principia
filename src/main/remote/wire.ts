@@ -14,11 +14,11 @@ import type { PhoneTerminalHost } from './terminalFeed'
 import type { DB } from '../db'
 import { SqliteDeviceStore } from './devices'
 import { RemoteService } from './service'
-import { findCloudflared } from './tunnel'
+import { fileKeep, findCloudflared } from './tunnel'
 
 const allowed = new Set<string>(PHONE_CHANNELS)
 
-export function createRemote(o: { mainDir: string; envPath: () => string | undefined; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined; terminal?: PhoneTerminalHost }): RemoteService {
+export function createRemote(o: { mainDir: string; envPath: () => string | undefined; dataDir: string; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined; terminal?: PhoneTerminalHost }): RemoteService {
   const host: PhoneHost = {
     invoke: <C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> => {
       // defense in depth: the type already limits the list
@@ -35,7 +35,8 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
     host,
     bundleDir: path.join(o.mainDir, '..', 'phone'),
     emit: (s) => emit('remote:changed', s),
-    tunnel: { bin: () => findCloudflared(o.envPath()) },
+    // RA8: the tunnel outlives a Quit, so its address does
+    tunnel: { bin: () => findCloudflared(o.envPath()), keep: fileKeep(path.join(o.dataDir, 'phone-tunnel.json'), path.join(o.dataDir, 'logs', 'phone-tunnel.log')) },
     // RA6: read each time, so a new Phone app address applies to the next code and request
     site: () => phoneSiteOrigin(o.siteSetting?.()),
     // RA2: paired phones survive restarts (token hashes only)

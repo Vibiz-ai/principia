@@ -198,6 +198,9 @@ final class AppModel {
         retrying = true
         defer { retrying = false }
         await loadMe()
+        guard case .out(.gone) = phase, let p = paired else { return }
+        // still gone: after a reboot the Mac has a new address, and leaves it sealed on the phone site
+        if let mac = await MacFinder.find(transport: api.transport, paired: p), paired == p { await settle(p, at: mac) }
     }
 
     // ---------- RA8: the Mac's new address ----------
@@ -230,16 +233,7 @@ final class AppModel {
         let r = await MacMove.check(transport: api.transport, mac: mac, site: p.site, deviceId: p.deviceId, token: p.token)
         switch r {
         case .ok:
-            var n = p
-            n.mac = mac
-            store.save(n)
-            paired = n
-            live?.stop()
-            live = nil
-            api.target = APITarget(mac: n.mac, site: n.site, token: n.token)
-            PushManager.shared.mac = n.mac
-            await loadMe()
-            if phase == .main { say("Connected to your Mac at its new address") }
+            await settle(p, at: mac)
         case .unknown:
             forget()
             outError = "That Mac does not know this phone any more. Scan a new code on your Mac."
@@ -248,6 +242,20 @@ final class AppModel {
         case .wrong:
             moveError = "That address is not your Mac. Check the words in Settings › App › Phone on your Mac."
         }
+    }
+
+    /// The Mac at `mac` has proved itself: keep the address and reconnect.
+    private func settle(_ p: PairedMac, at mac: String) async {
+        var n = p
+        n.mac = mac
+        store.save(n)
+        paired = n
+        live?.stop()
+        live = nil
+        api.target = APITarget(mac: n.mac, site: n.site, token: n.token)
+        PushManager.shared.mac = n.mac
+        await loadMe()
+        if phase == .main { say("Connected to your Mac at its new address") }
     }
 
     /// Forget this Mac: its address and token leave this phone.
