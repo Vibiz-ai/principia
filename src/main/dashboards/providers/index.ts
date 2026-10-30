@@ -4,6 +4,7 @@ import { claudeCliAvailable, cliText, emptyCwd, startOneshot, type ExecFn } from
 import { planArgs, planChildEnv } from '../../onboarding/plan'
 import type { ProviderInfo } from '../../../shared/types'
 import { DashboardFetchError } from '../http'
+import { activationProvider } from './activation'
 import { plausibleProvider, posthogProvider } from './analytics'
 import { geoProvider } from './geo'
 import { githubProvider } from './github'
@@ -16,6 +17,7 @@ export const PROVIDERS: Record<DashboardKind, DashboardProvider> = {
   geo: geoProvider,
   plausible: plausibleProvider,
   posthog: posthogProvider,
+  activation: activationProvider,
   stripe: stripeProvider,
   github: githubProvider
 }

@@ -9,11 +9,11 @@
 import type { DepartmentPresetKey } from './company'
 import { keyField, type ServiceKeyField } from './services'
 
-export type DashboardKind = 'gsc' | 'geo' | 'plausible' | 'posthog' | 'stripe' | 'github'
-export const DASHBOARD_KINDS: readonly DashboardKind[] = ['gsc', 'geo', 'plausible', 'posthog', 'stripe', 'github']
+export type DashboardKind = 'gsc' | 'geo' | 'plausible' | 'posthog' | 'activation' | 'stripe' | 'github'
+export const DASHBOARD_KINDS: readonly DashboardKind[] = ['gsc', 'geo', 'plausible', 'posthog', 'activation', 'stripe', 'github']
 
-export type DashboardCategory = 'SEO' | 'AI visibility' | 'Web analytics' | 'Revenue' | 'Engineering'
-export const DASHBOARD_CATEGORIES: readonly DashboardCategory[] = ['SEO', 'AI visibility', 'Web analytics', 'Revenue', 'Engineering']
+export type DashboardCategory = 'SEO' | 'AI visibility' | 'Web analytics' | 'Growth' | 'Revenue' | 'Engineering'
+export const DASHBOARD_CATEGORIES: readonly DashboardCategory[] = ['SEO', 'AI visibility', 'Web analytics', 'Growth', 'Revenue', 'Engineering']
 
 /** How a number is shown. `position` is a rank (lower is better, one decimal); `duration` is seconds. */
 export type MetricFormat = 'number' | 'currency' | 'percent' | 'position' | 'duration' | 'score'
@@ -177,6 +177,40 @@ export const DASHBOARD_CATALOG: readonly DashboardDef[] = [
       { id: 'referrers', kind: 'table', title: 'Top referrers', columns: [{ key: 'referrer', label: 'Referrer' }, { key: 'views', label: 'Views', format: 'number' }] }
     ],
     refreshMinutes: 60
+  },
+  {
+    id: 'activation',
+    name: 'Activation & churn · PostHog',
+    provider: 'PostHog',
+    services: ['posthog'],
+    category: 'Growth',
+    tagline: 'New users, who activates, who pays and who leaves, in one place.',
+    description: 'Follows your users from signup to churn: new users, the share who reach your activation event within 7 days, new and current paying customers, and who asked to cancel. Churn reads the Stripe tables synced into PostHog, so a trial that never paid does not count.',
+    departments: ['development', 'marketing'],
+    keys: [keyField('posthog', 'POSTHOG_PERSONAL_API_KEY', { hint: 'PostHog → Settings → Personal API keys → Create. Scope: Query Read and Project Read, limited to this project.' })],
+    config: [
+      { key: 'projectId', label: 'Project ID', required: true, kind: 'text', placeholder: '12345', hint: 'Settings → Project → Project ID.' },
+      { key: 'host', label: 'Host', required: false, kind: 'text', placeholder: 'https://us.posthog.com', hint: 'https://eu.posthog.com for the EU cloud, or your own host.' },
+      { key: 'signupEvent', label: 'Signup event', required: false, kind: 'text', placeholder: 'user_signed_up', hint: 'The event that marks a new user. Needed unless you set a signups view.' },
+      { key: 'signupView', label: 'Signups view', required: false, kind: 'text', placeholder: 'real_signups', hint: 'A saved PostHog view with one row per real signup, with columns id (the person) and created_at. Used instead of the event.' },
+      { key: 'steps', label: 'Activation steps', required: true, kind: 'list', placeholder: 'project_created\nfirst_report_sent', hint: 'One event per line, in order. Reaching the last one within 7 days counts as activated.', max: 5 },
+      { key: 'excludeEmails', label: 'Leave out', required: false, kind: 'list', placeholder: '@yourcompany.com\nyou@gmail.com', hint: 'Your team and test accounts: any email containing one of these lines.', max: 20 },
+      { key: 'excludeSubscriptionTypes', label: 'Subscription types to skip', required: false, kind: 'list', placeholder: 'add_on', hint: 'The `type` in a Stripe subscription’s metadata, for anything that is not your main plan.', max: 10 }
+    ],
+    viaSignIn: { service: 'posthog', config: ['projectId', 'host'] },
+    widgets: [
+      { id: 'newUsers', kind: 'kpi', title: 'New users', format: 'number', good: 'up', hint: PERIOD },
+      { id: 'activation', kind: 'kpi', title: 'Activated', format: 'percent', good: 'up', hint: 'Share of new users who reached the last step within 7 days. Reads signups at least 7 days old.' },
+      { id: 'newPaying', kind: 'kpi', title: 'New paying', format: 'number', good: 'up', hint: 'Customers whose first paid invoice is in the period' },
+      { id: 'paying', kind: 'kpi', title: 'Paying customers', format: 'number', good: 'up', hint: 'Still being billed today, scheduled cancels included. Compared with 28 days ago.' },
+      { id: 'churned', kind: 'kpi', title: 'Churned', format: 'number', good: 'down', hint: 'Paying customers who asked to cancel in the period, scheduled cancels included' },
+      { id: 'churnRate', kind: 'kpi', title: 'Churn rate', format: 'percent', good: 'down', hint: 'Churned ÷ customers paying during the period' },
+      { id: 'signups', kind: 'line', title: 'New users and activated, by signup week', format: 'number' },
+      { id: 'customers', kind: 'line', title: 'New paying and churned, by week', format: 'number' },
+      { id: 'weeks', kind: 'table', title: 'Week by week', columns: [{ key: 'week', label: 'Week of' }, { key: 'users', label: 'New users', format: 'number' }, { key: 'activated', label: 'Activated', format: 'number' }, { key: 'rate', label: 'Rate', format: 'percent' }, { key: 'newPaying', label: 'New paying', format: 'number' }, { key: 'churned', label: 'Churned', format: 'number' }] },
+      { id: 'steps', kind: 'table', title: 'Activation steps (within 7 days)', columns: [{ key: 'step', label: 'Step' }, { key: 'people', label: 'People', format: 'number' }, { key: 'share', label: 'Of new users', format: 'percent' }] }
+    ],
+    refreshMinutes: 3 * 60
   },
   {
     id: 'stripe',

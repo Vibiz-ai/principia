@@ -160,6 +160,8 @@ function posthogRoute(req: HttpReq, now: Date): HttpRes {
   if (!req.body) return ok({ id: 12345, name: 'Acme' })
   const q = (JSON.parse(req.body) as { query: { query: string } }).query.query
   const rnd = prng(23)
+  if (q.includes('stripe.subscription')) return ok({ results: [sampleCustomers(now)] })
+  if (q.includes('reached_0')) return ok({ results: sampleSignupDays(now) })
   if (q.includes('countIf')) return ok({ results: [[52310, 9120, 47800, 8030]] })
   if (q.includes('toDate(timestamp)')) {
     const results = []
@@ -172,6 +174,26 @@ function posthogRoute(req: HttpReq, now: Date): HttpRes {
   }
   if (q.includes('$pathname')) return ok({ results: ['/app', '/app/invoices', '/', '/pricing', '/app/clients', '/app/settings', '/blog/invoice-template', '/signup', '/app/reports', '/docs'].map((p, i) => [p, Math.round(14000 / (i + 1.1))]) })
   return ok({ results: ['$direct', 'www.google.com', 'chatgpt.com', 'news.ycombinator.com', 't.co', 'www.linkedin.com', 'www.perplexity.ai', 'www.bing.com'].map((r, i) => [r, Math.round(9000 / (i + 1.3))]) })
+}
+
+/** Sample signups for the activation dashboard: one row per day, new users then each step. */
+function sampleSignupDays(now: Date): unknown[][] {
+  const rnd = prng(31)
+  const results: unknown[][] = []
+  for (let i = 69; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * DAY * 1000)
+    const users = Math.round((58 - i * 0.2) * (d.getUTCDay() % 6 === 0 ? 0.7 : 1) * (0.9 + rnd() * 0.2))
+    const created = Math.round(users * 0.64)
+    results.push([d.toISOString().slice(0, 10), users, created, Math.round(created * (0.44 + (70 - i) * 0.002))])
+  }
+  return results
+}
+
+/** Sample customer totals, in the order of the activation dashboard's Stripe query. */
+function sampleCustomers(now: Date): unknown[] {
+  const rnd = prng(37)
+  const days = (n: number): string => Array.from({ length: n }, () => new Date(now.getTime() - Math.floor(rnd() * 62) * DAY * 1000).toISOString().slice(0, 10)).join(',')
+  return [812, 764, 96, 81, 48, 52, 860, 816, days(180), days(96)]
 }
 
 // ---------- GitHub ----------
@@ -255,6 +277,7 @@ export const SAMPLE_CONFIG: Record<DashboardKind, DashboardConfig> = {
   geo: { brand: 'Acme', domain: 'acme.example', competitors: ['Globex', 'Initech', 'Umbrella'], prompts: ['What is the best invoicing tool for freelancers?', 'Alternatives to Globex for small teams', 'How do I automate recurring invoices?', 'Best Stripe-based billing tools'] },
   plausible: { siteId: 'acme.example' },
   posthog: { projectId: '12345' },
+  activation: { projectId: '12345', signupEvent: 'user_signed_up', steps: ['project_created', 'first_invoice_sent'], excludeEmails: ['@acme.example'] },
   stripe: {},
   github: { repo: 'acme/app' }
 }
@@ -270,4 +293,4 @@ export function sampleServiceAccount(): string {
 }
 
 export const sampleKeys = (kind: DashboardKind): Record<string, string> =>
-  kind === 'stripe' ? { STRIPE_RESTRICTED_KEY: 'rk_test_samplesamplesample' } : kind === 'gsc' ? { GSC_SERVICE_ACCOUNT_JSON: sampleServiceAccount() } : kind === 'plausible' ? { PLAUSIBLE_API_KEY: 'sample' } : kind === 'posthog' ? { POSTHOG_PERSONAL_API_KEY: 'phx_sample' } : kind === 'github' ? { GITHUB_TOKEN: 'sample' } : {}
+  kind === 'stripe' ? { STRIPE_RESTRICTED_KEY: 'rk_test_samplesamplesample' } : kind === 'gsc' ? { GSC_SERVICE_ACCOUNT_JSON: sampleServiceAccount() } : kind === 'plausible' ? { PLAUSIBLE_API_KEY: 'sample' } : kind === 'posthog' || kind === 'activation' ? { POSTHOG_PERSONAL_API_KEY: 'phx_sample' } : kind === 'github' ? { GITHUB_TOKEN: 'sample' } : {}
