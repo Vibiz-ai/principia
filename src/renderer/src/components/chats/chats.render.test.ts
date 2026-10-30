@@ -171,6 +171,63 @@ describe('Grok-style reading', () => {
   })
 })
 
+describe('closing a chat from the sidebar (PR-59)', () => {
+  const session = (id: string, at: string, live = false) => ({ key: `session:${id}`, kind: 'session', session: chat(id), companyId: 'co_a', live, at }) as never
+  const mark = { at: T, rank: 0 }
+
+  it('leaves the list until there is news: newer activity or a higher rank brings it back', async () => {
+    const { isClosed } = await import('../../lib/closedChats')
+    const closed = { 'session:a': mark }
+    expect(isClosed({ key: 'session:a', at: T }, 0, closed)).toBe(true)
+    expect(isClosed({ key: 'session:a', at: new Date(Date.now()).toISOString() }, 0, closed)).toBe(false)
+    expect(isClosed({ key: 'session:a', at: T }, 3, closed)).toBe(false)
+    expect(isClosed({ key: 'session:b', at: T }, 0, closed)).toBe(false)
+    // closed while it needed you, and it calmed down: it stays closed
+    expect(isClosed({ key: 'session:a', at: T }, 0, { 'session:a': { at: T, rank: 3 } })).toBe(true)
+  })
+
+  it('keeps the chat you have open listed, and never hides live work with no chat', async () => {
+    const { splitClosed } = await import('./ChatList')
+    const run = { key: 'run:x', kind: 'run', agentId: 'x', title: 'Step', detail: null, companyId: 'co_a', live: true, at: T } as never
+    const rows = [session('a', T), session('b', T), run]
+    const keys = (r: { key: string }[]): string[] => r.map((x) => x.key)
+    const map = { 'session:a': mark, 'run:x': { at: T, rank: 9 } }
+    expect(keys(splitClosed(rows, map).open)).toEqual(['session:b', 'run:x'])
+    expect(keys(splitClosed(rows, map).closed)).toEqual(['session:a'])
+    expect(keys(splitClosed(rows, map, 'session:a').open)).toEqual(['session:a', 'session:b', 'run:x'])
+  })
+
+  it('remembers across a reload and keeps only the newest', async () => {
+    const { withClosed, withoutClosed } = await import('../../lib/closedChats')
+    let all = {}
+    for (let i = 0; i < 510; i++) all = withClosed(all, `session:${i}`, { at: new Date(i * 1000).toISOString(), rank: 0 })
+    expect(Object.keys(all)).toHaveLength(500)
+    expect(all).not.toHaveProperty(['session:0'])
+    expect(all).toHaveProperty(['session:509'])
+    expect(withoutClosed(all, 'session:509')).not.toHaveProperty(['session:509'])
+  })
+
+  it('takes a closed chat off the sidebar, says how many, and search still finds it', async () => {
+    const store = await import('../../state/store')
+    const { Sidebar } = await import('../../shell/Sidebar')
+    store.setState({ view: { name: 'chats', filter: 'all', chat: 'session:sess_direct' } })
+    expect(renderToStaticMarkup(createElement(Sidebar))).toContain('Pricing ideas')
+    // the open chat stays listed; once you leave it, it is gone
+    store.closeChat('session:sess_direct', { at: T, rank: 0 })
+    expect(renderToStaticMarkup(createElement(Sidebar))).toContain('Pricing ideas')
+    store.setState({ view: { name: 'chats', filter: 'all', chat: 'agent:agt_julia' } })
+    const html = renderToStaticMarkup(createElement(Sidebar))
+    expect(html).not.toContain('Pricing ideas')
+    expect(html).toContain('data-chatux="closed-more"')
+    expect(html).toContain('>1 closed<')
+    const { filterRows } = await import('./ChatList')
+    expect(filterRows([{ ...(session('sess_direct', T) as object), session: chat('sess_direct', { title: 'Pricing ideas' }) } as never], 'all', 'pricing')).toHaveLength(1)
+    store.reopenChat('session:sess_direct')
+    expect(store.getState().closedChats).toEqual({})
+    expect(renderToStaticMarkup(createElement(Sidebar))).toContain('Pricing ideas')
+  })
+})
+
 describe('a calmer list (PR-47)', () => {
   it('each group shows its first rows (what needs you sorts first), the open one stays, the rest wait behind Show N more', async () => {
     const { GROUP_LIMIT, visibleRows } = await import('./ChatList')
