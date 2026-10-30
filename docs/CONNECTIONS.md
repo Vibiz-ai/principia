@@ -611,11 +611,12 @@ One component pair, one status, every surface:
   and a working (non key-backed) MCP connection to the service, `DashboardService` reads through it
   (`deps.mcp` → `GatewayService.toolNames` / `callTool`, main only, never over IPC). The PostHog provider runs its
   HogQL with the server's SQL tool, either `execute-sql` or the single `exec` tool (`call --json execute-sql {…}`);
-  answers are read from structured content or JSON text (`mcpRows`); vendor text is never quoted. A key always wins;
+  answers are read from structured content, JSON text, or the `|`-separated table text the live server sends, as JSON
+  `results` or bare (`mcpRows`, checked against the live server 2026-10-30); a busy server is retried once; vendor text
+  is never quoted. A key always wins;
   the project id and host become optional through a sign-in. `InstalledDashboard.via` says which. The registry's
   PostHog `dashboard` capability is `via: ['key', 'mcp']`; Stripe's stays key only (its MCP has no REST-equivalent read).
-  Not yet checked against a live PostHog sign-in (only fakes of both tool shapes); a server answer the reader can't
-  parse fails with "add a personal API key instead".
+  A server answer the reader can't parse fails with "add a personal API key instead".
 - Dashboards also read a key from the company a service is reused from (`dashboards/wire.ts` `resolve`).
 
 Surfaces (§4.3):
