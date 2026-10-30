@@ -3,7 +3,7 @@
  * the A3 "seen" rule, next-needs-you order, labels, memory chip text and dashboard chart math. No DOM, no IPC.
  */
 import type { AgentEvent, AgentNode, AgentStatus, Ask, AskOption } from '@shared/live'
-import type { Id } from '@shared/types'
+import type { Id, Run } from '@shared/types'
 import type { VisualStatus } from './graph'
 import { promptTitle } from './format'
 
@@ -547,4 +547,14 @@ export function retryAtResetLabel(resetAt: string | null | undefined): string {
 /** True for a rate-limited row whose scheduled retry has not started yet. */
 export function isRateLimited(x: { stopReason?: string | null } | null | undefined): boolean {
   return x?.stopReason === 'rate_limited'
+}
+
+/** The run ids waiting for a free slot, after one run's update (the same map when nothing changed). */
+export function slotWaitsWith(waits: Readonly<Record<Id, string>>, run: Pick<Run, 'id' | 'status' | 'slotWaitSince'>): Record<Id, string> {
+  const since = run.status === 'queued' || run.status === 'running' ? (run.slotWaitSince ?? null) : null
+  if (since === (waits[run.id] ?? null)) return waits
+  const next = { ...waits }
+  if (since) next[run.id] = since
+  else delete next[run.id]
+  return next
 }

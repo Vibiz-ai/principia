@@ -124,6 +124,8 @@ describe('runs', () => {
     expect(isNothingToDo({ status: 'passed', outcome: 'nothing_to_do' })).toBe(true)
     expect(runStatusLabel({ status: 'passed', outcome: 'nothing_to_do' })).toBe('Passed · nothing to do')
     expect(runStatusLabel({ status: 'failed', outcome: null })).toBe('failed')
+    expect(runStatusLabel({ status: 'running', outcome: null, slotWaitSince: '2026-10-30T10:00:00.000Z' })).toBe('waiting for a free slot')
+    expect(runStatusLabel({ status: 'canceled', outcome: null, slotWaitSince: '2026-10-30T10:00:00.000Z' })).toBe('canceled')
   })
   it('worktree chip states (PO6 reasons)', () => {
     const wt = (p: Partial<RunWorktree>): Pick<RunWorktree, 'branch' | 'status' | 'keptReason' | 'error'> => ({ branch: 'hive/pr-roundup-r_1', status: 'kept', keptReason: 'pushed', error: null, ...p })

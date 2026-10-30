@@ -138,6 +138,10 @@ describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
     expect(dockSummary([st('a', 'queued', T), st('b', 'working', T), st('c', 'needs_you', T)])).toBe('1 needs you · 1 working · 1 queued')
     expect(dockSummary([])).toBe('')
   })
+  it('a task waiting for a free slot is not counted or named as working', () => {
+    expect(dockSummary([st('a', 'working', T), { ...st('b', 'working', T), slotWait: T }])).toBe('1 working · 1 waiting for a slot')
+    expect(dockRefLine('VO-1', 'working', true)).toBe('VO-1 · waiting for a slot · see below')
+  })
   it('a card closed with × stays hidden until the task moves on (a new question, back to work)', () => {
     const a = st('a', 'needs_you', T)
     const b = st('b', 'working', T)
@@ -170,5 +174,23 @@ describe('the dock above the composer (CHAT-UI.md §8.5)', () => {
     expect(out).toContain("Reply here and I'll pass it on to VO-15.")
     expect(questionText(text, [])).toBe(text)
     expect(questionText(text, undefined)).toBe(text)
+  })
+})
+
+describe('taskCardView: waiting for a free slot', () => {
+  const now = Date.parse(T0) + 36 * 60_000
+  const task = { status: 'in_progress', runId: 'r1', updatedAt: T0 } as never
+  const root = { runId: 'r1', parentId: null, status: 'working', activity: 'Bash npm test', startedAt: T0 } as never
+  it('says so, with no activity from an older step and the wait on its clock', () => {
+    const v = taskCardView(card({ state: 'working', runId: 'r1' }), task, { root, now, slotWaitSince: T0 })
+    expect(v).toMatchObject({ state: 'working', label: 'Waiting for a slot', slotWait: T0, activity: null, since: T0 })
+  })
+  it('goes back to Working when its step starts', () => {
+    const v = taskCardView(card({ state: 'working', runId: 'r1' }), task, { root, now, slotWaitSince: null })
+    expect(v).toMatchObject({ label: 'Working', slotWait: null })
+  })
+  it('only a working task can be waiting', () => {
+    const done = taskCardView(card({ runId: 'r1' }), { status: 'in_review', runId: 'r1', updatedAt: T0 } as never, { now, slotWaitSince: T0 })
+    expect(done.slotWait).toBeNull()
   })
 })

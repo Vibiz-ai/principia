@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AgentEvent, AgentNode, Ask, AskAnswer } from '@shared/live'
 import type { Id } from '@shared/types'
 import { errorCode, errorMessage, hive } from '../lib/hive'
-import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, type AgentIndex } from '../lib/live'
+import { indexAgents, isIdleWaiting, isLive, mergeAgent, mergeAsk, mergeEvents, needsOwners, needsYouCount, nextNeedsYou, slotWaitsWith, type AgentIndex } from '../lib/live'
 import { departmentsOn, focusSession, followCompany, getState, loadJson, navigate, openBoard, scopeCompanyId, setState, toast, toastError, useStore, type State } from './store'
 import { lastChatKey } from '../lib/agentChatView'
 import { needsYouTasks } from '../lib/board'
@@ -107,6 +107,8 @@ export async function loadLive(): Promise<void> {
     pendingAsks.push(...asks)
     setState({ liveAvailable: true })
     flush()
+    // the runs waiting for a free slot when this window opened; run:updated keeps them from here
+    void hive.runs.list({ status: ['running'], limit: 200 }).then((runs) => setState((s) => ({ slotWaits: runs.reduce<Record<Id, string>>(slotWaitsWith, s.slotWaits) })), () => undefined)
   } catch (e) {
     // not implemented yet in main, or memory-less build: the hub stays empty, the rest of the app is unaffected
     setState({ liveAvailable: false })
@@ -129,6 +131,8 @@ export function wireLiveEvents(): void {
   // A2: a run or session that ended takes its live agents with it in the same render, even when the agents' own
   // final update is still on its way (or never comes: a killed CLI)
   hive.on('run:updated', (run) => {
+    const slotWaits = slotWaitsWith(getState().slotWaits, run)
+    if (slotWaits !== getState().slotWaits) setState({ slotWaits })
     if (run.status === 'queued' || run.status === 'running') return
     endOwned((a) => a.runId === run.id && a.kind !== 'session', run.status === 'passed' ? 'done' : run.status === 'failed' ? 'failed' : 'canceled')
   })

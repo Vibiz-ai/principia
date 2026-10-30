@@ -339,6 +339,8 @@ export interface Run extends CompanyStamped {
   createdAt: ISODate
   startedAt: ISODate | null
   endedAt: ISODate | null
+  /** Since when the run has nothing to do but wait for a free slot (Settings.concurrency). null = it is not waiting. */
+  slotWaitSince?: ISODate | null
   artifactsDir: string // <userData>/artifacts/<runId>/
   artifactCount: number
   /** 'rate_limited' when the run failed because a step hit a usage / rate limit. */

@@ -432,6 +432,48 @@ export class Execution {
     this.ctx.emit({ type: 'run.updated', run: this.run })
   }
 
+  private slotWaiters = 0
+  private slotHolders = 0
+  private capStarted = false
+  /** A step takes its slot here, so a run with nothing to do but wait for one says so (Run.slotWaitSince). */
+  private async takeSlot(): Promise<() => void> {
+    let waited = false
+    const release = await (this.reply ? this.d.replySemaphore : this.d.semaphore).acquire(() => {
+      waited = true
+      this.slotWaiters++
+      this.syncSlotWait()
+    })
+    if (waited) this.slotWaiters--
+    this.slotHolders++
+    // the time limit is for the work: a task must not use it up before it has a slot
+    if (!this.capStarted && (this.run.status === 'queued' || this.run.status === 'running')) {
+      this.capStarted = true
+      this.startTaskCap()
+    }
+    this.syncSlotWait()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      release()
+      this.slotHolders--
+      this.syncSlotWait()
+    }
+  }
+  private slotSync: NodeJS.Immediate | null = null
+  /**
+   * Parallel steps: one of them holding a slot is work going on, so the run only waits when none does. Read a tick
+   * later: a slot handed from one step to the next, in the same run, is no wait.
+   */
+  private syncSlotWait(): void {
+    this.slotSync ??= setImmediate(() => {
+      this.slotSync = null
+      if (this.run.status !== 'queued' && this.run.status !== 'running') return
+      const waiting = this.slotWaiters > 0 && this.slotHolders === 0
+      if (waiting !== !!this.run.slotWaitSince) this.updateRun({ slotWaitSince: waiting ? this.iso() : null })
+    })
+  }
+
   /** Entry point; never throws. */
   async execute(): Promise<void> {
     if (this.stopped) return this.close('canceled', this.stopReason ?? 'Canceled')
@@ -439,7 +481,6 @@ export class Execution {
       const missing = this.missingAdapter()
       if (missing) return this.close('failed', missing)
       this.updateRun({ status: 'running', startedAt: this.iso() })
-      this.startTaskCap()
       await this.loadSlackImages()
       if (this.run.target.kind === 'prompt') await this.executePrompt()
       else await this.executeWorkflow()
@@ -492,7 +533,7 @@ export class Execution {
     // CONTRACT §13: one write carries the stop reason (and an automatic retry), so main notifies once
     const limited = status === 'failed' && this.limit ? this.limit : null
     const extra: Partial<Run> = limited ? { stopReason: 'rate_limited', resetAt: limited.resetAt, ...this.autoRetry(limited.resetAt) } : {}
-    this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), ...extra, ...more })
+    this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), slotWaitSince: null, ...extra, ...more })
     for (const t of this.capTimers) clearTimeout(t)
     this.capTimers = []
     this.cleanupRunDir()
@@ -823,7 +864,7 @@ export class Execution {
       agentSessionId: null,
       verdict: null
     }
-    const release = await (this.reply ? this.d.replySemaphore : this.d.semaphore).acquire()
+    const release = await this.takeSlot()
     let mem: OpenMemory | null = null
     let live: StepLive | null = null
     let liveStatus: 'done' | 'failed' | 'canceled' = 'failed'
@@ -2047,7 +2088,7 @@ export class Execution {
         let out = ''
         let errText = ''
         let r: ProcResult
-        const release = await this.d.semaphore.acquire()
+        const release = await this.takeSlot()
         try {
           if (this.stopped) {
             res = { status: 'canceled', error: 'Canceled', activity: null }

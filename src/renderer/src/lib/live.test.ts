@@ -31,6 +31,7 @@ import {
   niceMax,
   pillsFor,
   sinceLabel,
+  slotWaitsWith,
   treeMemReads
 } from './live'
 import { canvasGraph, cardHeight, NODE_H, PILL_H, type CardData } from './graph'
@@ -393,5 +394,18 @@ describe('saidPreview: a chat row reads the gist in plain words', () => {
     expect(plainText('see <principia://board?task=LA-2>')).toBe('see')
     expect(plainText('LA-2 is now in review (principia://board?task=LA-2). Done.')).toBe('LA-2 is now in review. Done.')
     expect(saidPreview({ report: '' })).toBeNull()
+  })
+})
+
+describe('slotWaitsWith', () => {
+  const since = '2026-10-30T10:00:00.000Z'
+  it('adds a waiting run, keeps the same map when nothing changed, and drops it when its step starts', () => {
+    const on = slotWaitsWith({}, { id: 'r', status: 'running', slotWaitSince: since })
+    expect(on).toEqual({ r: since })
+    expect(slotWaitsWith(on, { id: 'r', status: 'running', slotWaitSince: since })).toBe(on)
+    expect(slotWaitsWith(on, { id: 'r', status: 'running', slotWaitSince: null })).toEqual({})
+  })
+  it('a run that ended is not waiting, whatever its row says', () => {
+    expect(slotWaitsWith({ r: since }, { id: 'r', status: 'canceled', slotWaitSince: since })).toEqual({})
   })
 })

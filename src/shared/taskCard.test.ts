@@ -127,6 +127,25 @@ describe('workingStrip: "Working on it" under the header', () => {
   })
 })
 
+describe('a task waiting for a free slot', () => {
+  const T = '2026-10-30T10:00:00.000Z'
+  const now = Date.parse('2026-10-30T10:36:00.000Z')
+  const wait = (over: Partial<StripTask> = {}): StripTask => ({ taskId: 'a', identifier: 'VO-1', who: 'Julia', state: 'working', startedAt: T, slotWait: T, ...over })
+
+  it('the strip says so, with the wait on its clock', () => {
+    expect(workingStrip([wait()], now)!.line).toBe('VO-1 is waiting for a free slot · 36m')
+  })
+  it('the strip does not count it as running', () => {
+    expect(workingStrip([wait(), wait({ taskId: 'b', identifier: 'VO-2', slotWait: null })], now)!.line).toBe('2 tasks · 1 working · 1 waiting for a slot')
+  })
+  it('an agent asked about it gets the same answer', () => {
+    const line = taskStatusLine({ identifier: 'VO-1', status: 'in_progress', who: 'Julia', since: T, slotWait: T }, now)
+    expect(line).toContain('not started yet')
+    expect(line).toContain('36m')
+    expect(line).not.toContain('working now')
+  })
+})
+
 describe('chat-filed tasks (company_file_task, task_create)', () => {
   const summary = { id: 'task_1', identifier: 'PC-9', title: 'Lift UGC conversion', status: 'todo', agent: { id: 'agt_m', name: 'Copywriter' } }
   const item = (name: string, resultText: string, status = 'ok') => ({ kind: 'tool', id: `i_${name}`, parent: null, toolUseId: 'tu', name, input: {}, inputPartial: '', status, resultText, resultTruncated: false, startedAt: Date.parse('2026-10-27T10:00:00.000Z'), ms: 1 })
