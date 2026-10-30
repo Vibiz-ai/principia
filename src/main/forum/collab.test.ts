@@ -19,6 +19,7 @@ const CO2 = 'co_other'
 let db: Database.Database
 let clock: Date
 let settings: Partial<AgentCollabSettings>
+let quitting: boolean
 let board: TeamTask[]
 const departments = [
   { id: 'dep_mkt', key: 'marketing', name: 'Marketing', archivedAt: null },
@@ -49,6 +50,7 @@ beforeEach(() => {
   clock = new Date('2026-10-21T10:00:00.000Z')
   n = 0
   settings = {}
+  quitting = false
   board = []
   for (const a of agents) a.archivedAt = null
 })
@@ -68,6 +70,7 @@ function setup() {
     emit: () => undefined,
     now: () => clock,
     collabSettings: () => settings,
+    quitting: () => quitting,
     board: () => board,
     company: {
       saveDepartment: () => ({ id: 'x', key: 'x', name: 'x' }),
@@ -557,6 +560,106 @@ describe('an agent is never left waiting by a quit (AGENT-COLLAB.md)', () => {
     expect(a.s.store.message(card.id).ask?.status).toBe('open')
     a.s.wakeFailed(ids.slice(1), 'it could not start')
     expect(a.s.store.message(card.id).ask?.status).toBe('answered')
+  })
+})
+
+describe('a reply run to an agent that ends without an answer', () => {
+  const asked = async () => {
+    const a = setup()
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask_agent', { to: '@livia', question: 'Is staging up?', wait_s: 0 })
+    const card = a.s.store.openAsks(CO)[0]!
+    return { ...a, card, runId: a.starts[0]!.runId }
+  }
+
+  it.each([
+    ['failed', 'Timed out after 15 min', 'Timed out after 15 min'],
+    ['canceled', 'Canceled', 'its run was canceled'],
+    ['passed', null, 'it ended without an answer']
+  ])('%s: the ask closes with why, and the wake stops waiting', async (status, reason, why) => {
+    const a = await asked()
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status, output: '', companyId: CO })
+    a.s.settleReply(a.runId, status, reason)
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ status: 'answered', noAnswer: true, answer: expect.stringContaining(why) })
+    expect(a.wakes()[0]).toMatchObject({ status: 'refused', refusal: 'start_failed' })
+    // run hooks fire more than once for one run
+    a.s.settleReply(a.runId, status, reason)
+    expect(a.s.store.message(a.card.id).ask?.answer).toContain(why)
+  })
+
+  it('a woken agent that only posted elsewhere did not answer: its asker stops waiting too', async () => {
+    const a = await asked()
+    const output = 'Looked.\n```forum\n{"op":"post","channel":"#general","text":"Looking at staging."}\n```'
+    expect(await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output, companyId: CO })).toBe(1)
+    a.s.settleReply(a.runId, 'passed', null)
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ status: 'answered', noAnswer: true })
+  })
+
+  it('the final answer of a reply run is never deferred: the run report path cannot lose it to the close', async () => {
+    const a = await asked()
+    a.s.deferAutoPost = () => true
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output: 'Staging is up.', companyId: CO })
+    a.s.settleReply(a.runId, 'passed', null)
+    const ask = a.s.store.message(a.card.id).ask
+    expect(ask).toMatchObject({ status: 'answered', answer: 'Staging is up.' })
+    expect(ask?.noAnswer).toBeFalsy()
+    expect(a.wakes()[0]!.status).toBe('answered')
+  })
+
+  it('a quit keeps it open: the next boot asks again', async () => {
+    quitting = true
+    const a = await asked()
+    a.s.settleReply(a.runId, 'canceled', 'Canceled')
+    expect(a.s.store.message(a.card.id).ask?.status).toBe('open')
+    expect(a.wakes()[0]!.status).toBe('started')
+  })
+
+  it('a late reply replaces the close, once; an answer after that is refused as before', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'failed', 'Timed out')
+    const out = await a.s.api.call(a.caller('agt_livia', 'r_later'), 'forum_reply', { to: a.card.ref, text: 'Staging is up after all.' })
+    expect(out).toMatch(/answered the ask/)
+    const ask = a.s.store.message(a.card.id).ask
+    expect(ask).toMatchObject({ status: 'answered', answer: 'Staging is up after all.', answeredBy: a.member('agt_livia').id })
+    expect(ask?.noAnswer).toBeFalsy()
+    expect(a.wakes()[0]!.status).toBe('answered')
+    expect(() => a.s.answer(a.card.id, a.member('agt_livia').id, 'Again.')).toThrow(/already answered/)
+  })
+
+  it('a person can still answer it, and the wake of the run that ended stays as it was', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'failed', 'Timed out')
+    const owner = a.s.store.owner(CO)
+    a.s.answer(a.card.id, owner.id, 'Yes, I checked.')
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ answer: 'Yes, I checked.', answeredBy: owner.id })
+    expect(a.wakes()[0]!.status).toBe('refused')
+  })
+
+  it('a late harvest of the same run still answers', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'passed', null)
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output: 'Staging is up.', companyId: CO })
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ answer: 'Staging is up.' })
+  })
+
+  it('a question by @mention reaches the asker with why, then with the late reply', async () => {
+    const a = setup()
+    const room = a.s.store.channelByName(CO, 'development')!
+    const replied: string[] = []
+    a.s.collab.onReplied = (e) => void replied.push(e.text)
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_post', { channel: `#${room.name}`, text: '@livia is staging up?' })
+    const runId = a.starts[0]!.runId
+    a.s.settleReply(runId, 'failed', 'Timed out')
+    expect(replied).toEqual([expect.stringContaining('could not answer')])
+    await a.s.api.call(a.caller('agt_livia', 'r_later'), 'forum_reply', { to: a.s.store.message(a.starts[0]!.reply.messageId).ref, text: 'Yes, it is up.' })
+    expect(replied[1]).toBe('Yes, it is up.')
+    expect(a.wakes()[0]!.status).toBe('answered')
+  })
+
+  it('a wake refused at the start is not revived by a later reply in the thread', async () => {
+    const a = await asked()
+    db.prepare("UPDATE forum_agent_wakes SET status='refused', refusal='start_failed', to_run=NULL").run()
+    a.s.collab.noteReplied(a.member('agt_livia').id, a.card.seq, 'hello')
+    expect(a.wakes()[0]!.status).toBe('refused')
   })
 })
 

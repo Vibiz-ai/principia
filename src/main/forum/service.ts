@@ -10,7 +10,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AdapterId } from '../../shared/types'
 import type { ForumBridge, ForumSpawn, McpServerSpec } from '../../shared/engine'
-import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
+import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, takesAnswer, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumStore, type ForumDirectory } from './store'
 import { ReplyJournal } from './replyJournal'
@@ -323,7 +323,12 @@ export class ForumService implements ForumBridge {
     if (p?.state === 'queued' && p.channelId === reply.channelId) this.setPresence(p.companyId, reply.memberId, 'idle', null)
     // the quit canceled it, not the person: it stays owed and the next boot answers it (ForumResponder.recover)
     if (this.d.quitting?.()) return
-    if (status !== 'canceled' && !this.answeredRuns.has(runId)) this.noteUnanswered(reply.messageId, reply.memberId, status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer', runId)
+    const why = status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer'
+    const wakes = this.collab.wakesOfRun(runId)
+    // a run report's answers reach the ask through the applier, not this run's posts
+    if (status !== 'canceled' && !this.answeredRuns.has(runId) && !wakes.some((w) => w.status === 'answered')) this.noteUnanswered(reply.messageId, reply.memberId, why, runId)
+    // a post elsewhere is not an answer: whatever the run wrote, an agent still waiting on it stops waiting
+    this.wakeFailed(wakes.map((w) => w.id), status === 'canceled' ? 'its run was canceled' : why)
     this.owed.finished(runId)
   }
 
@@ -347,9 +352,10 @@ export class ForumService implements ForumBridge {
   }
 
   /**
-   * An agent's ask will get no reply run: the agent that asked must not wait forever. An ask card closes with why (once
-   * no other agent it went to can still answer), which wakes a waiting tool or task like any answer; a question asked
-   * by @mention reaches the asking task the same way. Never throws.
+   * An agent's ask will get no answer from its reply run: the agent that asked must not wait forever. An ask card
+   * closes with why (once no other agent it went to can still answer), which wakes a waiting tool or task like any
+   * answer; a question asked by @mention reaches the asking task the same way. A real answer may still come (a
+   * teammate's task report, a reply in the thread): ForumAsk.noAnswer lets it replace this one. Never throws.
    */
   wakeFailed(wakeIds: string[], reason: string): void {
     for (const id of wakeIds) {
@@ -360,7 +366,7 @@ export class ForumService implements ForumBridge {
         const msg = this.store.message(w.message_seq)
         const text = `@${this.store.member(w.to_member)?.handle ?? 'a teammate'} could not answer: ${clip(flat(reason), 160)}`
         if (msg.ask?.status !== 'open') this.collab.onReplied?.({ rows: [w], text })
-        else if (!this.collab.liveWakes(msg.seq).length) this.answer(msg.id, w.to_member, text, msg.id)
+        else if (!this.collab.liveWakes(msg.seq).length) this.answer(msg.id, w.to_member, text, msg.id, { noAnswer: true })
       } catch (e) {
         this.d.log?.warn('forum: could not tell the asker', { wakeId: id, error: String(e) })
       }
@@ -504,7 +510,7 @@ export class ForumService implements ForumBridge {
    * A human (or an asked agent) answers an ask: from an option button, the answer field or a thread reply
    * (`replyId` = that reply, so no second reply is posted). Wakes waiting tools; a parked task gets tasks:answer.
    */
-  answer(messageId: string, byId: string, answer: string, replyId?: string, opts: { ack?: boolean } = {}): ForumMessage {
+  answer(messageId: string, byId: string, answer: string, replyId?: string, opts: { ack?: boolean; noAnswer?: boolean } = {}): ForumMessage {
     const msg = this.store.message(messageId)
     if (msg.kind !== 'ask' || !msg.ask) fail('That message is not an ask')
     const by = this.store.mustMember(byId)
@@ -512,13 +518,13 @@ export class ForumService implements ForumBridge {
     const text = answer.trim()
     if (!text) fail('The answer is empty')
     const ask = msg.ask!
-    if (ask.status !== 'open') fail('This ask was already answered')
+    if (!takesAnswer(ask)) fail('This ask was already answered')
     if (!(by.role === 'owner' || by.role === 'admin' || ask.to.includes(by.id))) fail('This ask is for someone else')
     if (!replyId) this.store.post(by.id, { channelId: msg.channelId, threadId: msg.id, text })
-    const next: ForumAsk = { ...ask, status: 'answered', answer: clip(this.d.redact ? this.d.redact(text) : text, 4000), answeredBy: by.id, answeredAt: this.now().toISOString() }
+    const next: ForumAsk = { ...ask, status: 'answered', answer: clip(this.d.redact ? this.d.redact(text) : text, 4000), answeredBy: by.id, answeredAt: this.now().toISOString(), noAnswer: opts.noAnswer || undefined }
     let updated = this.store.patchPayload(msg.id, { ask: next })
     // AGENT-COLLAB.md: an answer in the thread answers the wakes there too
-    if (by.kind === 'agent') this.collab.noteReplied(by.id, msg.seq)
+    if (by.kind === 'agent' && !opts.noAnswer) this.collab.noteReplied(by.id, msg.seq)
     // a tool still waiting for this answer gets it in the same turn (the asking task needs no wake)
     const hadWaiter = !!this.waiters.get(msg.id)?.size
     try {
@@ -1194,7 +1200,7 @@ export class ForumService implements ForumBridge {
         // AGENT-COLLAB.md: the answer of a woken agent that did not reply itself still answers the ask it was woken for
         const root = this.store.message(posted.threadId ?? reply.messageId)
         this.collab.noteReplied(member.id, root.seq, text)
-        if (root.kind === 'ask' && root.ask?.status === 'open' && root.ask.to.includes(member.id)) {
+        if (root.kind === 'ask' && takesAnswer(root.ask) && root.ask!.to.includes(member.id)) {
           try {
             this.answer(root.id, member.id, text, posted.id)
           } catch {

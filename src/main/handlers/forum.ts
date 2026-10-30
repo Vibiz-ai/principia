@@ -4,6 +4,7 @@
  * one the renderer names.
  */
 import { HiveError } from '../../shared/errors'
+import { takesAnswer } from '../../shared/forum'
 import type { Hive } from '../hive'
 import { handle } from '../ipc'
 import type { ForumService } from '../forum/service'
@@ -59,7 +60,7 @@ export function registerForumHandlers(h: Hive): void {
     let answered = false
     if (msg.threadId) {
       const root = s.store.message(msg.threadId)
-      if (root.kind === 'ask' && root.ask?.status === 'open') {
+      if (root.kind === 'ask' && takesAnswer(root.ask)) {
         try {
           s.answer(root.id, me, text, msg.id)
           answered = true

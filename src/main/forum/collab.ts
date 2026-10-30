@@ -273,11 +273,20 @@ export class AgentCollab {
     return memberId ? rows.filter((r) => r.to_member === memberId) : rows
   }
 
-  /** The target wrote in the thread (reply, answered ask): its wakes there are answered. */
+  /** The wakes this run was started for. */
+  wakesOfRun(runId: string): WakeRow[] {
+    return this.d.db.prepare('SELECT * FROM forum_agent_wakes WHERE to_run=?').all(runId) as WakeRow[]
+  }
+
+  /**
+   * The target wrote in the thread (reply, answered ask): its wakes there are answered, also one whose run ended
+   * without an answer (noteFailed): the asker gave up on it, and hears the late answer.
+   */
   noteReplied(memberId: string, threadSeq: number, text?: string): void {
-    const rows = this.d.db.prepare("SELECT * FROM forum_agent_wakes WHERE thread_seq=? AND to_member=? AND status IN ('started','queued')").all(threadSeq, memberId) as WakeRow[]
+    const unanswered = `(status IN ('started','queued') OR (status='refused' AND refusal='start_failed' AND to_run IS NOT NULL))`
+    const rows = this.d.db.prepare(`SELECT * FROM forum_agent_wakes WHERE thread_seq=? AND to_member=? AND ${unanswered}`).all(threadSeq, memberId) as WakeRow[]
     if (!rows.length) return
-    this.d.db.prepare("UPDATE forum_agent_wakes SET status='answered', answered_at=? WHERE thread_seq=? AND to_member=? AND status IN ('started','queued')").run(this.now().toISOString(), threadSeq, memberId)
+    this.d.db.prepare(`UPDATE forum_agent_wakes SET status='answered', answered_at=? WHERE thread_seq=? AND to_member=? AND ${unanswered}`).run(this.now().toISOString(), threadSeq, memberId)
     if (text === undefined || !this.onReplied) return
     try {
       this.onReplied({ rows, text })

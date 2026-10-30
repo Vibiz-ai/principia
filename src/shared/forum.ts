@@ -93,7 +93,12 @@ export interface ForumAsk {
   answeredAt?: string
   /** an answer given while the task's run was still running: applied when it parks */
   pendingTaskAnswer?: boolean
+  /** `answer` says why nobody could answer (ForumService.wakeFailed): the asker stopped waiting, a real answer still replaces it */
+  noAnswer?: boolean
 }
+
+/** Can this ask still take an answer? Open, or closed only because nobody could answer. */
+export const takesAnswer = (ask: ForumAsk | null | undefined): boolean => ask?.status === 'open' || !!ask?.noAnswer
 
 export const FORUM_PROPOSAL_KINDS = ['department', 'agent'] as const
 export type ForumProposalKind = (typeof FORUM_PROPOSAL_KINDS)[number]
