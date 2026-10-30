@@ -163,6 +163,8 @@ Some native database tests need an appropriate Node/Electron ABI. See the contri
 
 The desktop renderer is sandboxed, uses typed IPC and has no production network listener. Agent CLIs and connected tools communicate with their providers. The cloud worker is a separate authenticated server; run it in an isolated environment with only the repositories and credentials it needs. Project folder scopes are application access controls, not an operating-system sandbox for arbitrary code.
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/vibiz-ai/principia)](https://m8ven.ai/mcp/vibiz-ai/principia?s=readme)
+
 ## License
 
 [MIT](LICENSE).
