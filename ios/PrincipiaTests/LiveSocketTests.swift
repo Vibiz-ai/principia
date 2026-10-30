@@ -1,32 +1,44 @@
 import XCTest
 @testable import Principia
 
-/// A socket that records what is sent and plays back what the Mac says.
+/// A socket that records what is sent and plays back what the Mac says. Its async calls run off the main actor while
+/// a test delivers from it, so the lock keeps "nothing yet, wait" and "here it is" from missing each other.
 final class FakeConnection: LiveConnection {
-    var sent: [String] = []
-    var inbox: [String] = []
-    var closeCode: Int?
+    private let lock = NSLock()
+    private var outbox: [String] = []
+    private var inbox: [String] = []
+    private var code: Int?
     private var waiters: [CheckedContinuation<String, Error>] = []
     private var closed = false
 
+    var sent: [String] { lock.withLock { outbox } }
+    var closeCode: Int? { lock.withLock { code } }
+
     func send(_ text: String) async throws {
-        if closed { throw URLError(.networkConnectionLost) }
-        sent.append(text)
+        try lock.withLock {
+            if closed { throw URLError(.networkConnectionLost) }
+            outbox.append(text)
+        }
     }
     func receive() async throws -> String {
-        if !inbox.isEmpty { return inbox.removeFirst() }
-        if closed { throw URLError(.networkConnectionLost) }
-        return try await withCheckedThrowingContinuation { waiters.append($0) }
+        try await withCheckedThrowingContinuation { w in
+            lock.withLock {
+                if !inbox.isEmpty { w.resume(returning: inbox.removeFirst()) } else if closed { w.resume(throwing: URLError(.networkConnectionLost)) } else { waiters.append(w) }
+            }
+        }
     }
     func deliver(_ text: String) {
-        if let w = waiters.first { waiters.removeFirst(); w.resume(returning: text) } else { inbox.append(text) }
+        lock.withLock {
+            if let w = waiters.first { waiters.removeFirst(); w.resume(returning: text) } else { inbox.append(text) }
+        }
     }
     func serverClose(_ code: Int) {
-        closeCode = code
-        closed = true
-        let w = waiters
-        waiters = []
-        w.forEach { $0.resume(throwing: URLError(.networkConnectionLost)) }
+        lock.withLock {
+            self.code = code
+            closed = true
+            waiters.forEach { $0.resume(throwing: URLError(.networkConnectionLost)) }
+            waiters = []
+        }
     }
     func close() { serverClose(closeCode ?? 1000) }
 }
@@ -53,7 +65,20 @@ final class LiveSocketTests: XCTestCase {
         return s
     }
 
-    func settle() async { for _ in 0..<20 { await Task.yield() } }
+    struct TimedOut: Error {}
+
+    /// Waits for what the last step set off. No fixed number of yields is enough: the fake's calls run off the main
+    /// actor, and on a busy machine they finish late. A timeout ends the test, so a missing socket fails it, not the run.
+    func until(_ what: @autoclosure () -> String, file: StaticString = #filePath, line: UInt = #line, _ done: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        while !done() {
+            if Date() > deadline {
+                XCTFail("timed out waiting for: \(what())", file: file, line: line)
+                throw TimedOut()
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
 
     func testAuthGoesFirstThenTheSubscription() async throws {
         let k = FakeConnector()
@@ -61,8 +86,8 @@ final class LiveSocketTests: XCTestCase {
         let s = make(k) { events.append($0) }
         s.subscribe(companyId: "co_a", sessionId: "se_1")
         s.start()
-        await settle()
         let (url, origin, c) = try XCTUnwrap(k.opened.first)
+        try await until("auth and subscription, sent: \(c.sent)") { c.sent.count == 2 }
         XCTAssertEqual(url.absoluteString, "wss://quiet-tree-42.trycloudflare.com/api/live")
         XCTAssertEqual(origin, "https://principia-phone.vibiz.dev")
         XCTAssertFalse(url.absoluteString.contains("tok_"), "the token is never in the URL")
@@ -70,7 +95,7 @@ final class LiveSocketTests: XCTestCase {
         XCTAssertEqual(c.sent.count, 2)
         XCTAssertTrue(c.sent[1].contains(#""t":"sub""#) && c.sent[1].contains("co_a") && c.sent[1].contains("se_1"))
         c.deliver(#"{"t":"hello"}"#)
-        await settle()
+        try await until("connected") { s.connected }
         XCTAssertTrue(events.contains("up:true"))
         XCTAssertTrue(s.connected)
         s.stop()
@@ -81,10 +106,10 @@ final class LiveSocketTests: XCTestCase {
         var events: [String] = []
         let s = make(k) { events.append($0) }
         s.start()
-        await settle()
-        k.opened[0].2.serverClose(4401)
-        await settle()
-        XCTAssertTrue(events.contains("unauthorized"))
+        let c = k.opened[0].2
+        try await until("auth") { c.sent.count == 1 }
+        c.serverClose(4401)
+        try await until("unauthorized, events: \(events)") { events.contains("unauthorized") }
         XCTAssertEqual(k.opened.count, 1, "no reconnect after a refused token")
     }
 
@@ -93,17 +118,15 @@ final class LiveSocketTests: XCTestCase {
         var events: [String] = []
         let s = make(k) { events.append($0) }
         s.start()
-        await settle()
         k.opened[0].2.deliver(#"{"t":"hello"}"#)
-        await settle()
+        try await until("connected") { s.connected }
         k.opened[0].2.serverClose(1006)
-        await settle()
-        XCTAssertEqual(k.opened.count, 2)
+        try await until("a second socket") { k.opened.count == 2 }
         let again = k.opened[1].2
+        try await until("auth on the second socket") { !again.sent.isEmpty }
         XCTAssertEqual(again.sent.first, #"{"t":"auth","token":"tok_abcdefghijklmnop"}"#)
         again.deliver(#"{"t":"hello"}"#)
-        await settle()
-        XCTAssertTrue(events.contains("reconnect"))
+        try await until("reconnect, events: \(events)") { events.contains("reconnect") }
         XCTAssertFalse(events.contains("unauthorized"))
         s.stop()
     }
@@ -113,13 +136,12 @@ final class LiveSocketTests: XCTestCase {
         var events: [String] = []
         let s = make(k) { events.append($0) }
         s.start()
-        await settle()
         let c = k.opened[0].2
         c.deliver(#"{"t":"bye","reason":"revoked"}"#)
-        await settle()
+        try await until("bye, events: \(events)") { events.contains { $0.contains("bye") } }
         c.serverClose(4401)
-        await settle()
-        XCTAssertTrue(events.contains { $0.contains("bye") })
+        // the next socket is the proof the close was handled: a signed-out phone would not open one
+        try await until("a slow retry") { k.opened.count == 2 }
         XCTAssertFalse(events.contains("unauthorized"))
         s.stop()
     }
@@ -131,9 +153,8 @@ final class LiveSocketTests: XCTestCase {
         s.subscribe(companyId: "co_a")
         s.start()
         s.subscribe(companyId: "co_a", sessionId: "se_9")
-        await settle()
         let c = k.opened[0].2
-        XCTAssertTrue(c.sent.last?.contains("se_9") == true, "sent: \(c.sent)")
+        try await until("the newest subscription, sent: \(c.sent)") { c.sent.last?.contains("se_9") == true }
         s.stop()
     }
 
@@ -144,28 +165,34 @@ final class LiveSocketTests: XCTestCase {
         let s = make(k) { events.append($0) }
         var release: CheckedContinuation<Void, Never>?
         s.pongWait = { _ in await withCheckedContinuation { release = $0 } }
+        let ping = #"{"t":"ping"}"#
         s.start()
-        await settle()
         k.opened[0].2.deliver(#"{"t":"hello"}"#)
-        await settle()
+        try await until("connected") { s.connected }
         s.kick()
-        await settle()
-        XCTAssertTrue(k.opened[0].2.sent.contains(#"{"t":"ping"}"#))
+        try await until("a ping and its deadline") { k.opened[0].2.sent.contains(ping) && release != nil }
         release?.resume()
-        await settle()
-        XCTAssertEqual(k.opened.count, 2, "no pong: a new socket")
+        release = nil
+        try await until("no pong: a new socket") { k.opened.count == 2 }
         XCTAssertTrue(events.contains("up:false"))
         // one that answers stays
-        k.opened[1].2.deliver(#"{"t":"hello"}"#)
-        await settle()
+        let second = k.opened[1].2
+        second.deliver(#"{"t":"hello"}"#)
+        try await until("connected again") { s.connected }
         s.kick()
-        await settle()
-        k.opened[1].2.deliver(#"{"t":"pong"}"#)
-        await settle()
+        try await until("a ping and its deadline") { second.sent.contains(ping) && release != nil }
+        second.deliver(#"{"t":"pong"}"#)
+        try await until("the pong, events: \(events)") { events.contains { $0.contains("pong") } }
         release?.resume()
-        await settle()
+        release = nil
+        // a later kick only pings once that deadline has passed, on the same socket if it was kept
+        try await until("another ping on the same socket") {
+            s.kick()
+            return second.sent.filter { $0 == ping }.count == 2 && release != nil
+        }
         XCTAssertEqual(k.opened.count, 2)
         s.stop()
+        release?.resume()
     }
 
     func testServerMessagesDecode() {
