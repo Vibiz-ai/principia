@@ -13,6 +13,7 @@ import type { ForumBridge, ForumSpawn, McpServerSpec } from '../../shared/engine
 import { FORUM_LIMITS, FORUM_PROTOCOL_VERSION, isConversationChannel, type ForumAsk, type ForumChannel as ForumChannelView, type ForumDecideRequest, type ForumEvent, type ForumMember, type ForumMessage, type ForumPresence, type ForumProposal, type ForumState } from '../../shared/forum'
 import { HiveError } from '../../shared/errors'
 import { ForumStore, type ForumDirectory } from './store'
+import { ReplyJournal } from './replyJournal'
 import { ForumAgentApi, ForumRefusal, type ForumCaller } from './agentApi'
 import { ForumHttpServer } from './http'
 import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type ForumTool } from './protocol'
@@ -50,6 +51,8 @@ export interface ForumServiceDeps {
   /** experimental.companies + .departments: off = no agent access, IPC refuses */
   enabled: () => boolean
   emit: (e: ForumEvent) => void
+  /** the app is quitting: reply runs canceled now were not canceled by the person */
+  quitting?: () => boolean
   redact?: (s: string) => string
   /** board tasks (CompanyStore); absent = asks never park a task */
   tasks?: {
@@ -122,6 +125,8 @@ export class ForumService implements ForumBridge {
   /** responder.ts: a human posted (set by wire.ts; absent in tests that do not need it) */
   onHumanPost: ((m: ForumMessage) => void) | null = null
 
+  /** what agents owe people, on disk (the rows behind `replyRuns`, and the responder's queue) */
+  readonly owed: ReplyJournal
   readonly team: TeamTools
   readonly collab: AgentCollab
   /** responder.ts wakeForAgent (set by wire.ts; absent in tests that do not wake) */
@@ -135,11 +140,14 @@ export class ForumService implements ForumBridge {
   pilot: ConversationPilot | null = null
   /** responder.ts wakeOne: one agent answers one person's message (a new hire, or "Use Julia instead"). Set by wire.ts. */
   wakeOne: ((memberId: string, message: ForumMessage) => void) | null = null
+  /** responder.ts recover: boot picks up what a quit left owed. Set by wire.ts. */
+  recoverReplies: (() => void) | null = null
   /** ORCHESTRATOR.md §2: an ask was answered (the mailbox wakes a blocked asker). Set by its wire. */
   onAskAnswered: ((m: ForumMessage, opts: { waited: boolean }) => void) | null = null
 
   constructor(private readonly d: ForumServiceDeps) {
     this.store = new ForumStore(d.db, { directory: d.directory, now: d.now, redact: d.redact, onEvent: (e) => this.onStoreEvent(e) })
+    this.owed = new ReplyJournal(d.db)
     const settings = () => collabSettings(d.collabSettings?.())
     this.team = new TeamTools({
       db: d.db,
@@ -312,8 +320,10 @@ export class ForumService implements ForumBridge {
     this.queuedTimers.delete(runId)
     const p = this.presence.get(reply.memberId)
     if (p?.state === 'queued' && p.channelId === reply.channelId) this.setPresence(p.companyId, reply.memberId, 'idle', null)
-    if (status === 'canceled' || this.answeredRuns.has(runId)) return
-    this.noteUnanswered(reply.messageId, reply.memberId, status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer', runId)
+    // the quit canceled it, not the person: it stays owed and the next boot answers it (ForumResponder.recover)
+    if (this.d.quitting?.()) return
+    if (status !== 'canceled' && !this.answeredRuns.has(runId)) this.noteUnanswered(reply.messageId, reply.memberId, status === 'failed' ? (reason ?? 'the run failed') : 'it ended without an answer', runId)
+    this.owed.finished(runId)
   }
 
   /** responder.ts, settleReply: a person's message got no answer. Posts one line in its thread, saying why. Never throws. */

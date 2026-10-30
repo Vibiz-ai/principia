@@ -838,6 +838,159 @@ describe('agents answer people and post their work (§6.4)', () => {
     }
   })
 
+  describe('a quit or a crash does not lose a person\'s message', () => {
+    type Start = { agentId: string; prompt: string; reply: { memberId: string; channelId: string; messageId: string } }
+    /** The app: a new service and responder over the same db, wired like wire.ts. `start` numbers runs across restarts. */
+    let runs = 0
+    function app(over: Partial<ResponderDeps> = {}, quitting: { now: boolean } = { now: false }) {
+      const s = service({ quitting: () => quitting.now })
+      s.store.sync(CO)
+      const starts: Start[] = []
+      const r = responder(s, starts, {
+        journal: s.owed,
+        quitting: () => quitting.now,
+        onUnanswered: (messageId, memberId, reason) => s.noteUnanswered(messageId, memberId, reason),
+        start: (input) => {
+          const id = `r_run${++runs}`
+          starts.push(input)
+          s.noteReplyRun(id, input.reply)
+          return id
+        },
+        ...over
+      })
+      return { s, r, starts, quitting }
+    }
+    const say = (s: ForumService, text: string, threadId?: string) => s.store.post(s.store.owner(CO).id, { channelId: s.store.channelByName(CO, 'marketing')!.id, text, threadId: threadId ?? null })
+    const lines = (s: ForumService, id: string) => s.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    const interrupted = (s: ForumService) => `${s.store.memberForAgent('agt_marcus')!.name} could not answer this: Principia closed before the reply finished. Send it again to retry.`
+    /** What the run hook does when a run ends (wire.ts). */
+    const ended = (a: ReturnType<typeof app>, runId: string, status: string, reason: string | null) => {
+      a.r.onRunEnded(runId)
+      a.s.settleReply(runId, status, reason)
+    }
+
+    it('a crash mid-reply: the message is answered again after the restart, told so, and only once', () => {
+      const before = app()
+      const msg = say(before.s, 'hello?')
+      expect(before.r.onHumanPost(msg)).toHaveLength(1)
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+      expect(after.starts[0]!.prompt).toContain('Principia closed while you were answering this')
+      // a second crash while answering: no third try, the person reads why
+      const third = app()
+      third.r.recover()
+      expect(third.starts).toEqual([])
+      expect(lines(third.s, msg.id)).toEqual([interrupted(third.s)])
+      expect(third.s.owed.all()).toEqual([])
+    })
+
+    it('a clean quit: canceled runs start nothing new, and the running and queued messages both come back', () => {
+      const before = app()
+      const first = say(before.s, 'first')
+      const second = say(before.s, 'second')
+      const [runId] = before.r.onHumanPost(first)
+      before.r.onHumanPost(second)
+      before.quitting.now = true
+      ended(before, runId!, 'canceled', 'Hive quit during run')
+      expect(before.starts).toHaveLength(1)
+      expect(lines(before.s, first.id)).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toHaveLength(1)
+      expect(after.starts[0]!.reply.messageId).toBe(second.id)
+      expect(after.starts[0]!.prompt).toContain('first')
+      expect(after.starts[0]!.prompt).toContain('second')
+    })
+
+    it('a message that was only queued never ran: its restart says nothing about a cut-off reply', () => {
+      const before = app()
+      const first = say(before.s, 'first')
+      const second = say(before.s, 'second')
+      const [runId] = before.r.onHumanPost(first)
+      before.r.onHumanPost(second)
+      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: first.channelId, threadId: first.id, text: 'Answer to the first.' })
+      before.quitting.now = true
+      ended(before, runId!, 'passed', null)
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([second.id])
+      expect(after.starts[0]!.prompt).not.toContain('Principia closed while')
+      expect(after.starts[0]!.prompt).not.toContain('first')
+    })
+
+    it('an answer that got out before the crash stands: no second reply and no line', () => {
+      const before = app()
+      const msg = say(before.s, 'hello?')
+      before.r.onHumanPost(msg)
+      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: msg.channelId, threadId: msg.id, text: 'Hi!' })
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toEqual([])
+      expect(lines(after.s, msg.id)).toEqual([])
+      expect(after.s.owed.all()).toEqual([])
+    })
+
+    it('settled replies leave nothing owed: answered, failed with its line, canceled by the person', () => {
+      const a = app()
+      for (const [status, reason] of [['passed', null], ['failed', 'Timed out'], ['canceled', 'Canceled']] as const) {
+        const msg = say(a.s, status)
+        const [runId] = a.r.onHumanPost(msg)
+        expect(a.s.owed.all()).toHaveLength(1)
+        if (status === 'passed') a.s.store.post(a.s.store.memberForAgent('agt_marcus')!.id, { channelId: msg.channelId, threadId: msg.id, text: 'Hi!' })
+        ended(a, runId!, status, reason)
+      }
+      expect(a.s.owed.all()).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toEqual([])
+    })
+
+    it('old messages and seats that cannot answer get a line, never a late answer or silence', () => {
+      const before = app()
+      const old = say(before.s, 'from days ago')
+      before.r.onHumanPost(old)
+      clock = new Date(clock.getTime() + 25 * 3600_000)
+      const later = app()
+      later.r.recover()
+      expect(later.starts).toEqual([])
+      expect(lines(later.s, old.id)).toEqual([interrupted(later.s)])
+
+      const paused = say(later.s, 'hi')
+      later.r.onHumanPost(paused)
+      const off = app({ seat: () => null })
+      off.r.recover()
+      expect(off.starts).toEqual([])
+      expect(lines(off.s, paused.id)[0]).toContain('cannot answer')
+      expect(off.s.owed.all()).toEqual([])
+    })
+
+    it('a reply that cannot start gets a line, the next agent still recovers, and a message gone since is dropped', () => {
+      const a = app()
+      const owner = a.s.store.owner(CO)
+      const gone = say(a.s, 'never mind')
+      a.r.onHumanPost(gone)
+      db.prepare('DELETE FROM forum_messages WHERE id=?').run(gone.id)
+      const conv = a.s.store.createChannel(owner.id, { name: 'chat-both-ab12', kind: 'private', purpose: 'x', memberIds: [a.s.store.memberForAgent('agt_marcus')!.id, a.s.store.memberForAgent('agt_livia')!.id] })
+      const both = a.s.store.post(owner.id, { channelId: conv.id, text: 'both of you', threadId: null })
+      a.r.onHumanPost(both)
+      expect(a.s.owed.all()).toHaveLength(2)
+      const started: string[] = []
+      const after = app({
+        start: (input) => {
+          if (input.agentId === 'agt_marcus') throw new Error('no slot')
+          started.push(input.agentId)
+          return 'r_ok'
+        }
+      })
+      after.r.recover()
+      expect(started).toEqual(['agt_livia'])
+      expect(lines(after.s, both.id)).toEqual([expect.stringContaining('could not start @')])
+      // Livia's reply is running; nothing else is left
+      expect(after.s.owed.all().map((r) => [r.memberId, r.runId])).toEqual([[after.s.store.memberForAgent('agt_livia')!.id, 'r_ok']])
+    })
+  })
+
   it('skips inactive seats', () => {
     const { s, owner, post } = setup()
     const off = responder(s, [], { seat: () => null })

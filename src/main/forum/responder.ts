@@ -14,15 +14,20 @@
  * Here only humans wake agents. Agents wake agents through collab.ts (AGENT-COLLAB.md), which checks hops, cycles
  * and caps first and then calls `wakeForAgent`; both kinds share the queue. Only active seats backed by a profile (not
  * a workflow, not shell) answer. A seat answers other agents at most `perHour` times an hour; a person always gets a
- * reply. A person's message that cannot get one gets a line saying why (`onUnanswered`), never silence.
+ * reply. A person's message that cannot get one gets a line saying why (`onUnanswered`), never silence. What is owed to
+ * a person is also on disk (replyJournal.ts), so a quit or a crash loses neither: `recover` picks it up at the next boot.
  */
 import type { ForumChannel, ForumMember, ForumMessage } from '../../shared/forum'
 import { isConversationChannel } from '../../shared/forum'
 import type { ForumStore } from './store'
+import type { OwedReply, ReplyJournal } from './replyJournal'
 import { flat } from './format'
 import { TASK_STARTED_RULE } from '../company/principiaOps'
 
 export const RESPONDER_LIMITS = { agentsPerMessage: 3, conversationAgents: 8, perHour: 12, threadLines: 8, line: 400, pending: 5 } as const
+/** A message older than this gets a line at boot, not a late answer: a request from days ago may no longer stand. */
+const RECOVER_WITHIN_MS = 24 * 3600_000
+export const INTERRUPTED_REASON = 'Principia closed before the reply finished'
 
 export interface ResponderSeat {
   id: string
@@ -40,6 +45,10 @@ export interface ResponderSeat {
 export interface ResponderDeps {
   store: () => ForumStore
   enabled: () => boolean
+  /** the app is quitting: a reply run that ends now starts nothing new, the journal carries the queue to the next boot */
+  quitting?: () => boolean
+  /** what is owed to people, on disk; absent = forgotten on quit (tests that do not need it) */
+  journal?: ReplyJournal
   seat(agentId: string): ResponderSeat | null
   departmentName(departmentId: string): string | null
   /** active seats of a company in display order (department ones for a department) */
@@ -151,6 +160,8 @@ export function buildReplyPrompt(input: {
   conversation?: boolean
   /** the agent's display name for that title (persona name) */
   name?: string
+  /** a run answering this was cut off by a quit (ForumResponder.recover): it may have done part of the work */
+  resumed?: boolean
   /** CHAT-UI.md §8: questions of tasks in this conversation still waiting for the person */
   taskAsks?: { identifier: string; ref: string; prompt: string }[]
   /** CHAT-UI.md §8: the live state of the tasks filed in this conversation (taskStatusLine), newest first */
@@ -173,6 +184,7 @@ export function buildReplyPrompt(input: {
     `You are @${input.me} in the company Forum, and a person just wrote to you in ${input.channel}. Answer now, as yourself in your role.`,
     `Reply with forum_reply {"to":"${input.replyTo}","text":"…"} (or \`forum reply ${input.replyTo} "…"\`): one short, useful message. A greeting gets a short greeting and what you can help with; a question gets the answer.`,
     'Use forum_read or the company notes only when you need them. Do not start long work in this run.',
+    ...(input.resumed ? ['Principia closed while you were answering this. Part of it may already be done: check the thread and the Board before repeating anything.'] : []),
     `When the person asks for work (do something, write or make something, track it, put it on the board), put it on the Board yourself, now: forum_reply {"to":"${input.replyTo}","text":"I started {task}: <title>. I'll post the result here.","task":{"title":"…"}} files their message as a task for you ({task} becomes its identifier). Never ask them to press Make task or to file it themselves.`,
     `${TASK_STARTED_RULE} If a teammate already filed it for this message (the reply tells you, or the thread shows "<name> started <ID>"), do not file another: say who is on it.`,
     `Without the Forum tools, put the task in your run report's "followUps" (a principia-run-report block at the end) and Principia files it for you; say plainly "I'm starting a task for this. I'll post the result here." (its card names it).`,
@@ -245,7 +257,7 @@ export class ForumResponder {
       const who = pickResponders(store, msg, this.d)
       if (!who.length) this.d.log?.info('forum responder: no agent for this message', { messageId: msg.id, channelId: msg.channelId })
       for (const m of who) {
-        const runId = this.wake(m, msg.companyId, [msg.id])
+        const runId = this.wakeOwed(m, msg.companyId, [msg.id])
         if (typeof runId === 'string') started.push(runId)
         else this.tellRefused(msg.id, m.id, runId)
       }
@@ -258,6 +270,7 @@ export class ForumResponder {
 
   /** runHooks: a reply run ended; the next queued messages of that agent get their turn. */
   onRunEnded(runId: string): void {
+    if (this.d.quitting?.()) return
     const agentId = this.runAgent.get(runId)
     if (!agentId) return
     this.runAgent.delete(runId)
@@ -268,6 +281,7 @@ export class ForumResponder {
     try {
       const m = this.d.store().memberForAgent(agentId)
       const res = m ? this.wake(m, next.companyId, next.messageIds, { asker: next.asker, wakeIds: next.wakeIds }) : null
+      this.noteOwed(m?.id ?? null, next.messageIds, res)
       if (next.wakeIds.length) {
         if (typeof res === 'string') this.d.onWakeStarted?.(next.wakeIds, res)
         else this.d.onWakeFailed?.(next.wakeIds, 'the agent could not start its reply')
@@ -286,13 +300,76 @@ export class ForumResponder {
       if (!this.d.enabled()) return null
       const m = this.d.store().member(memberId)
       if (!m || m.kind !== 'agent' || m.status !== 'active' || !m.agentId || m.companyId !== msg.companyId) return null
-      const r = this.wake(m, msg.companyId, [msg.id])
+      const r = this.wakeOwed(m, msg.companyId, [msg.id])
       if (typeof r !== 'string') this.tellRefused(msg.id, m.id, r)
       return typeof r === 'string' ? r : null
     } catch (e) {
       this.d.log?.warn('forum responder: wake one failed', { memberId, messageId: msg.id, error: String(e) })
       return null
     }
+  }
+
+  /**
+   * Boot, once the engine failed the runs the quit left behind: each message still owed is answered or told why. An
+   * answer that got out stands; a reply is started again at most once, so a run that takes the app down cannot loop.
+   * Never throws.
+   */
+  recover(): void {
+    const journal = this.d.journal
+    if (!journal || !this.d.enabled()) return
+    try {
+      const byMember = new Map<string, OwedReply[]>()
+      for (const r of journal.all()) byMember.set(r.memberId, [...(byMember.get(r.memberId) ?? []), r])
+      for (const [memberId, rows] of byMember) {
+        try {
+          this.recoverMember(journal, memberId, rows)
+        } catch (e) {
+          this.d.log?.warn('forum responder: recovery failed', { memberId, error: String(e) })
+          journal.drop(rows.map((r) => r.messageId), memberId)
+        }
+      }
+    } catch (e) {
+      this.d.log?.warn('forum responder: recovery failed', { error: String(e) })
+    }
+  }
+
+  private recoverMember(journal: ReplyJournal, memberId: string, rows: OwedReply[]): void {
+    // a run answers its last message; a reply there covers every message that run took
+    const runs = new Map<string, string>()
+    for (const r of rows) if (r.runId) runs.set(r.runId, r.messageId)
+    const replied = new Set([...runs].filter(([, last]) => journal.replied(last, memberId)).map(([runId]) => runId))
+    const left = rows.filter((r) => !r.runId || !replied.has(r.runId))
+    const answered = rows.filter((r) => !left.includes(r)).map((r) => r.messageId)
+    if (answered.length) journal.drop(answered, memberId)
+    if (!left.length) return
+    const ids = left.map((r) => r.messageId)
+    const last = ids[ids.length - 1]!
+    const member = this.d.store().member(memberId)
+    if (!member?.agentId) return journal.drop(ids, memberId)
+    const stale = left.every((r) => this.now() - new Date(r.createdAt).getTime() > RECOVER_WITHIN_MS)
+    if (stale || left.some((r) => r.attempts > 0)) {
+      this.d.onUnanswered?.(last, memberId, INTERRUPTED_REASON)
+      return journal.drop(ids, memberId)
+    }
+    journal.retried(ids, memberId)
+    const r = this.wake(member, left[0]!.companyId, ids.slice(-RESPONDER_LIMITS.pending), { resumed: left.some((x) => x.runId) })
+    if (typeof r !== 'string' && r !== QUEUED) this.tellRefused(last, memberId, r)
+    this.noteOwed(memberId, ids, r)
+    this.d.log?.info('forum responder: recovered a reply', { memberId, messages: ids.length, started: typeof r === 'string' })
+  }
+
+  /** `wake` for a person's message: owed on disk first, so a quit from here on loses nothing. */
+  private wakeOwed(member: ForumMember, companyId: string, messageIds: string[]): ReturnType<ForumResponder['wake']> {
+    this.d.journal?.add(messageIds, member.id, companyId, new Date(this.now()).toISOString())
+    const r = this.wake(member, companyId, messageIds)
+    this.noteOwed(member.id, messageIds, r)
+    return r
+  }
+
+  private noteOwed(memberId: string | null, messageIds: string[], r: ReturnType<ForumResponder['wake']>): void {
+    if (!this.d.journal || !memberId || r === QUEUED) return
+    if (typeof r === 'string') this.d.journal.started(messageIds, memberId, r)
+    else this.d.journal.drop(messageIds, memberId)
   }
 
   private tellRefused(messageId: string, memberId: string, r: symbol | { error: string } | null): void {
@@ -332,11 +409,13 @@ export class ForumResponder {
     }
   }
 
-  private wake(member: ForumMember, companyId: string, messageIds: string[], opts: { asker?: AgentAsker | null; wakeIds?: string[] } = {}): string | typeof QUEUED | { error: string } | null {
+  private wake(member: ForumMember, companyId: string, messageIds: string[], opts: { asker?: AgentAsker | null; wakeIds?: string[]; resumed?: boolean } = {}): string | typeof QUEUED | { error: string } | null {
     const agentId = member.agentId!
     if (this.running.has(agentId)) {
       const p = this.pending.get(agentId) ?? { companyId, messageIds: [], wakeIds: [], asker: null }
-      p.messageIds = [...new Set([...p.messageIds, ...messageIds])].slice(-RESPONDER_LIMITS.pending)
+      const queued = [...new Set([...p.messageIds, ...messageIds])]
+      p.messageIds = queued.slice(-RESPONDER_LIMITS.pending)
+      if (queued.length > p.messageIds.length) this.d.journal?.drop(queued.slice(0, -RESPONDER_LIMITS.pending), member.id)
       p.wakeIds = [...new Set([...p.wakeIds, ...(opts.wakeIds ?? [])])]
       if (opts.asker) p.asker = opts.asker
       this.pending.set(agentId, p)
@@ -376,6 +455,7 @@ export class ForumResponder {
       asker: opts.asker ?? null,
       conversation,
       name: member.name,
+      resumed: opts.resumed,
       taskAsks: opts.asker ? [] : this.safeAsks(last.channelId),
       tasks: opts.asker || !conversation ? [] : this.safeStates(last.channelId)
     })

@@ -64,6 +64,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
     db: h.db,
     enabled: () => departmentsEnabled(h.settings().experimental),
     emit: (e) => emit('forum:event', e),
+    quitting: () => h.quitting,
     redact: (s) => h.vault.redact(s),
     directory: {
       departments: (companyId) => c().departments.list(companyId, { includeArchived: true }).map((d) => ({ id: d.id, key: d.key, name: d.name, archivedAt: d.archivedAt })),
@@ -213,6 +214,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   const responder = new ForumResponder({
     store: () => service.store,
     enabled: () => service.enabled(),
+    quitting: () => h.quitting,
+    journal: service.owed,
     seat: (agentId) => {
       const a = c().departments.getAgent(agentId)
       if (!a) return null
@@ -259,6 +262,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   })
   service.onHumanPost = (m) => void responder.onHumanPost(m)
   service.wakeOne = (memberId, m) => void responder.wakeOne(memberId, m)
+  service.recoverReplies = () => responder.recover()
   // CHAT-UI.md §7.1, §7.2: conversation titles and "Principia picks", on the cheap tier (routeCall.ts: haiku, no tools)
   service.pilot = new ConversationPilot({
     store: () => service.store,
