@@ -341,6 +341,10 @@ a short title (3-6 words: "Unscheduled posts on Acme workspace", "Onboarding flo
 - Rename: click the title in the conversation, or right-click a row in Chats › Rename… (F2). A person's rename sets
   `titleBy: 'you'` in the channel's data, and ForumStore.autoTitle checks it inside its own write, so a rename made
   while the model was thinking still wins and the generator never touches it again.
+- Close: right-click a row in Chats › Close. It only leaves the list, per viewer (`lib/closedChats.ts`): nothing stops
+  or is deleted, and the row comes back by itself on newer activity or when it sorts higher (it needs you, went live,
+  has news). Search and Live only still reach it; "N closed" at the bottom of the list shows them, with right-click ›
+  Reopen. Closing the open chat lands on New task (the first open chat in All companies), so nothing gets read for you.
 - The title shows in the Chats list, Recent conversations and the conversation header (channel topic). Older
   conversations (no `titleBy`) are named once per app run when their company's conversations load (at most twelve,
   newest first); one with a second "set the topic" line was renamed by hand and keeps its title.

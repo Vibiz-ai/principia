@@ -31,6 +31,7 @@ import { loadDrafts, openApproval, wireAuthorEvents } from './authoring'
 import { loadSlack, wireSlackEvents } from './slack'
 import { wireUpdateEvents } from './updates'
 import { departmentNotePath } from '../lib/departments'
+import { withClosed, withoutClosed, type ClosedChats, type ClosedMark } from '../lib/closedChats'
 import {
   clearStoredDraft,
   createDraftSaver,
@@ -169,6 +170,8 @@ export interface State {
   seenIdle: Record<Id, true>
   /** CHAT-UI.md §8.6: when each task's chat was last open (task id → ISO), so a result you have not read is marked */
   taskSeen: Record<Id, string>
+  /** PR-59: chats closed from the Chats sidebar (row key → how it looked then), per viewer */
+  closedChats: ClosedChats
   /** Last "jump to this agent" request (hub row, ⌘J, notification): views expand / scroll to it. */
   agentFocus: { agentId: Id; askId: Id | null; nonce: number } | null
   /** AUTHORING.md §2: agent-authored drafts by id (pending ones, plus any decided while Principia was open). */
@@ -258,6 +261,7 @@ const initial: State = {
   liveAvailable: null,
   seenIdle: {},
   taskSeen: loadJson<Record<Id, string>>('principia.taskSeen', {}),
+  closedChats: loadJson<ClosedChats>('principia.closedChats', {}),
   agentFocus: null,
   drafts: {},
   authorAvailable: null,
@@ -306,6 +310,19 @@ export function markTaskSeen(taskId: Id, at: string = new Date().toISOString()):
   for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete all[k]
   setState({ taskSeen: all })
   saveJson(TASK_SEEN_KEY, all)
+}
+
+const CLOSED_CHATS_KEY = 'principia.closedChats'
+/** PR-59: a chat leaves the Chats sidebar until something new happens in it (lib/closedChats.ts). */
+export function closeChat(key: string, mark: ClosedMark): void {
+  const closedChats = withClosed(state.closedChats, key, mark)
+  setState({ closedChats })
+  saveJson(CLOSED_CHATS_KEY, closedChats)
+}
+export function reopenChat(key: string): void {
+  const closedChats = withoutClosed(state.closedChats, key)
+  setState({ closedChats })
+  saveJson(CLOSED_CHATS_KEY, closedChats)
 }
 
 function loadJson<T>(key: string, fallback: T): T {
