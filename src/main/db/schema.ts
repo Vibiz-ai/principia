@@ -270,6 +270,7 @@ export const V2_ADDED_COLUMNS: [table: string, column: string, ddl: string][] = 
   ['runs', 'reset_at', 'TEXT'],
   ['runs', 'retry_at', 'TEXT'],
   ['runs', 'retry_run_id', 'TEXT'],
+  ['runs', 'slot_wait_since', 'TEXT'],
   ['run_steps', 'stop_reason', "TEXT CHECK (stop_reason IN ('rate_limited'))"],
   ['run_steps', 'reset_at', 'TEXT'],
   ['agents', 'stop_reason', "TEXT CHECK (stop_reason IN ('rate_limited'))"],

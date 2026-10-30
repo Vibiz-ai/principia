@@ -38,6 +38,7 @@ const RUN_COLS: Record<string, { col: string; kind?: 'json' | 'bool' }> = {
   resetAt: { col: 'reset_at' },
   retryAt: { col: 'retry_at' },
   retryRunId: { col: 'retry_run_id' },
+  slotWaitSince: { col: 'slot_wait_since' },
   // AUTHORING.md §5/§2.4 (trigger 'agent' and worktree are special-cased in updateRun)
   outcome: { col: 'outcome' },
   startedBy: { col: 'started_by_json', kind: 'json' }

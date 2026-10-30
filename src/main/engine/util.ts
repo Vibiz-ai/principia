@@ -65,9 +65,12 @@ export class Semaphore {
   private active = 0
   private waiters: (() => void)[] = []
   constructor(private limit: () => number) {}
-  async acquire(): Promise<() => void> {
-    if (this.active >= Math.max(1, this.limit())) await new Promise<void>((r) => this.waiters.push(r))
-    else this.active++
+  /** `onWait` is called, synchronously, only when every slot is taken and the caller has to wait. */
+  async acquire(onWait?: () => void): Promise<() => void> {
+    if (this.active >= Math.max(1, this.limit())) {
+      onWait?.()
+      await new Promise<void>((r) => this.waiters.push(r))
+    } else this.active++
     let released = false
     return () => {
       if (released) return

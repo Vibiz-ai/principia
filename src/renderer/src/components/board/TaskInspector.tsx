@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { agentActive, type CompanyPassport, type CompanyTask, type CompanyTaskInput, type TaskDetail } from '@shared/company'
+import { SLOT_WAIT_LABEL, SLOT_WAIT_WHY } from '@shared/taskCard'
 import type { Artifact, Run, Session } from '@shared/types'
 import { Button, IconButton, Loading, Pill, RelativeTime } from '../ui'
 import { Icon } from '../Icon'
@@ -93,6 +94,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
   const elsewhere = startedInLinear(task, linear)
   const inFlight = task.status === 'in_progress' && !elsewhere
   const run = runs.find((r) => r.id === task.runId) ?? null
+  const slotWait = inFlight && !!run?.slotWaitSince && (run.status === 'running' || run.status === 'queued')
   const taskSessions = (sessions as TaskSession[]).filter((s) => s.taskId === task.id)
   const liveSession = taskSessions.find((s) => s.status === 'running')
   const headlessRun = inFlight && !liveSession && !!task.runId
@@ -164,7 +166,7 @@ export function TaskInspector({ id, tasks, companies, linear = null, onClose, on
       </section>
   )
   return <aside className="task-inspector board-inspector" aria-label="Task details">
-    <header className="task-inspector-top"><span className="board-inspector__id">{code ? task.identifier : 'Task'}{elsewhere ? <Pill tone="idle">{linearWorkLabel(linear).replace(/^i/, 'I')}</Pill> : <Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{COLUMN_LABEL[columnOfLane(lane)]}</Pill>}</span><div><IconButton icon="edit" label="Edit task" disabled={busy || inFlight} title={inFlight ? 'Stop the agent before editing' : 'Edit task'} onClick={() => setEditing(true)} /><IconButton icon="close" label="Close task details" onClick={onClose} /></div></header>
+    <header className="task-inspector-top"><span className="board-inspector__id">{code ? task.identifier : 'Task'}{elsewhere ? <Pill tone="idle">{linearWorkLabel(linear).replace(/^i/, 'I')}</Pill> : slotWait ? <Pill tone="idle" title={SLOT_WAIT_WHY}>{SLOT_WAIT_LABEL}</Pill> : <Pill tone={lane === 'needs_you' ? 'warning' : lane === 'working' ? 'running' : lane === 'done' ? 'passed' : 'idle'}>{COLUMN_LABEL[columnOfLane(lane)]}</Pill>}</span><div><IconButton icon="edit" label="Edit task" disabled={busy || inFlight} title={inFlight ? 'Stop the agent before editing' : 'Edit task'} onClick={() => setEditing(true)} /><IconButton icon="close" label="Close task details" onClick={onClose} /></div></header>
     {error && <div className="company-error" role="alert">{error}</div>}
     <div className="task-inspector-scroll">
       <div className="task-detail-company"><Icon name="passport" size={12} />{companies.find((c) => c.id === task.companyId)?.name}{department && <> · <span className="board-dot" style={{ background: department.color ?? 'var(--series-other)' }} />{department.name}</>}</div>

@@ -159,6 +159,7 @@ export interface RunRow {
   reset_at?: string | null
   retry_at?: string | null
   retry_run_id?: string | null
+  slot_wait_since?: string | null
   outcome?: string | null
   started_by_json?: string | null
   worktree_obj?: string | null
@@ -195,6 +196,7 @@ export const runFromRow = (r: RunRow): Run => ({
   resetAt: r.reset_at ?? null,
   retryAt: r.retry_at ?? null,
   retryRunId: r.retry_run_id ?? null,
+  slotWaitSince: r.slot_wait_since ?? null,
   outcome: r.outcome === 'nothing_to_do' ? 'nothing_to_do' : null,
   worktree: json<Run['worktree']>(r.worktree_obj ?? null, null),
   startedBy: json<Run['startedBy']>(r.started_by_json ?? null, null),

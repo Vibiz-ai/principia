@@ -221,8 +221,9 @@ export function isNothingToDo(run: Pick<Run, 'status' | 'outcome'>): boolean {
   return run.status === 'passed' && run.outcome === 'nothing_to_do'
 }
 /** "Passed · nothing to do" or the plain status. */
-export function runStatusLabel(run: Pick<Run, 'status' | 'outcome'>): string {
+export function runStatusLabel(run: Pick<Run, 'status' | 'outcome' | 'slotWaitSince'>): string {
   if (isNothingToDo(run)) return 'Passed · nothing to do'
+  if (run.slotWaitSince && (run.status === 'queued' || run.status === 'running')) return 'waiting for a free slot'
   return run.status
 }
 

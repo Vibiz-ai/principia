@@ -198,6 +198,8 @@ export interface State {
   tasks: CompanyTask[]
   /** ORCHESTRATOR.md §3: open suggestions per company (they count in every Needs you badge) */
   suggestionCounts: Record<Id, number>
+  /** Run id → since when it waits for a free slot (Run.slotWaitSince); see slotWaitsWith. */
+  slotWaits: Record<Id, string>
   /** AUTOPILOT.md §7: the autopilots (playbooks) on per company; the header chip, Home, the rail and All companies read it */
   playbooksOn: import('@shared/autopilotPlaybooks').PlaybookSummary
   /** DEPARTMENTS.md: every company's departments (archived included), loaded with the companies. Empty while the flag is off. */
@@ -272,6 +274,7 @@ const initial: State = {
   logoPickerFor: null,
   tasks: [],
   suggestionCounts: {},
+  slotWaits: {},
   playbooksOn: {},
   departments: [],
   companyAgents: [],

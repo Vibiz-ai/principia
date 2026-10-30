@@ -7,13 +7,15 @@
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { CompanyTask } from '@shared/company'
 import type { ForumMessage } from '@shared/forum'
-import { elapsedLabel, isFinishedCard, isOpenCard, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
+import { elapsedLabel, isFinishedCard, isOpenCard, SLOT_WAIT_LABEL, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
 import { parseDeepLink } from '@shared/deepLink'
 import { plainActivity } from './plainActivity'
 
 export interface TaskCardView {
   state: TaskCardState
   label: string
+  /** since when its run has been waiting for a free slot; null = not waiting */
+  slotWait: string | null
   /** the live activity line while it works ("Reading the PostHog funnel"); null otherwise */
   activity: string | null
   elapsed: string
@@ -47,7 +49,7 @@ export function openAskOfRun(asks: Iterable<Ask>, runId: string | null | undefin
   return null
 }
 
-export function taskCardView(card: ForumTaskCard, task: LiveTask | null | undefined, live: { root?: AgentNode | null; ask?: Ask | null; code?: boolean; now?: number } = {}): TaskCardView {
+export function taskCardView(card: ForumTaskCard, task: LiveTask | null | undefined, live: { root?: AgentNode | null; ask?: Ask | null; code?: boolean; now?: number; slotWaitSince?: string | null } = {}): TaskCardView {
   const now = live.now ?? Date.now()
   const state = task ? taskCardState({ status: task.status, blockReason: task.blockReason ?? null, ask: task.ask ?? null, runId: task.runId }, { openAsk: !!live.ask }) : card.state
   const finished = isFinishedCard(state)
@@ -66,8 +68,9 @@ export function taskCardView(card: ForumTaskCard, task: LiveTask | null | undefi
     else if (task?.ask && !task.ask.answer) needs = { prompt: task.ask.prompt, options: task.ask.options ?? [], live: false }
     else needs = { prompt: task?.status === 'blocked' ? 'It is blocked and waits for you' : 'It waits for you', options: [], live: false }
   }
-  const since = state === 'working' && root && root.runId === runId && root.startedAt ? root.startedAt : card.startedAt
-  return { state, label: TASK_CARD_LABEL[state], activity, elapsed: elapsedLabel(since, end, now), since, result, prUrl, runId, needs, onBoard: !!task }
+  const slotWait = state === 'working' ? (live.slotWaitSince ?? null) : null
+  const since = slotWait ?? (state === 'working' && root && root.runId === runId && root.startedAt ? root.startedAt : card.startedAt)
+  return { state, label: slotWait ? SLOT_WAIT_LABEL : TASK_CARD_LABEL[state], slotWait, activity: slotWait ? null : activity, elapsed: elapsedLabel(since, end, now), since, result, prUrl, runId, needs, onBoard: !!task }
 }
 
 /** One line of what the agent is doing, for the card's live tail ("Reading taskCard.ts", "Running npm test"). */
@@ -129,12 +132,12 @@ export function cardsOfMessages(msgs: readonly ForumMessage[]): ForumTaskCard[] 
 }
 
 /** The "Working on it" strip's tasks from cards (a conversation's, or a chat's), with the live state. */
-export function stripTasks(cards: readonly ForumTaskCard[], tasks: readonly LiveTaskWithId[], who: (agentId: string | null) => string | null, openRuns: ReadonlySet<string> = new Set(), runSince: (runId: string) => string | null = () => null): StripTask[] {
+export function stripTasks(cards: readonly ForumTaskCard[], tasks: readonly LiveTaskWithId[], who: (agentId: string | null) => string | null, openRuns: ReadonlySet<string> = new Set(), runSince: (runId: string) => string | null = () => null, slotWaitOf: (runId: string) => string | null = () => null): StripTask[] {
   return cards.map((card) => {
     const t = tasks.find((x) => x.id === card.taskId)
     const state = t ? taskCardState({ status: t.status, blockReason: t.blockReason ?? null, ask: t.ask ?? null, runId: t.runId }, { openAsk: !!t.runId && openRuns.has(t.runId) }) : card.state
     const runId = t?.runId ?? card.runId ?? null
-    return { taskId: card.taskId, identifier: card.identifier, who: who(t?.agentId ?? card.agentId), state, startedAt: card.startedAt, since: state === 'working' && runId ? runSince(runId) : null }
+    return { taskId: card.taskId, identifier: card.identifier, who: who(t?.agentId ?? card.agentId), state, startedAt: card.startedAt, since: state === 'working' && runId ? runSince(runId) : null, slotWait: state === 'working' && runId ? slotWaitOf(runId) : null }
   })
 }
 
@@ -193,10 +196,12 @@ export function openDocked<T extends Pick<StripTask, 'taskId'>>(docked: readonly
 }
 
 /** The dock's summary line, needs you first: "2 need you · 1 working · 1 queued". */
-export function dockSummary(items: readonly Pick<StripTask, 'state'>[]): string {
+export function dockSummary(items: readonly Pick<StripTask, 'state' | 'slotWait'>[]): string {
   const n = (s: TaskCardState): number => items.filter((t) => t.state === s).length
   const needs = n('needs_you')
-  const parts = [needs ? `${needs} ${needs === 1 ? 'needs' : 'need'} you` : '', n('working') ? `${n('working')} working` : '', n('queued') ? `${n('queued')} queued` : ''].filter(Boolean)
+  const slots = items.filter((t) => t.state === 'working' && t.slotWait).length
+  const working = n('working') - slots
+  const parts = [needs ? `${needs} ${needs === 1 ? 'needs' : 'need'} you` : '', working ? `${working} working` : '', slots ? `${slots} waiting for a slot` : '', n('queued') ? `${n('queued')} queued` : ''].filter(Boolean)
   return parts.join(' · ')
 }
 /** The rows the dock shows and how many more wait behind "+N more" (all of them once expanded). */
@@ -205,9 +210,15 @@ export function dockRows<T>(docked: readonly T[], expanded: boolean, max = DOCK_
   // the newest stay in view (closest to the composer); the oldest fold behind "+N more"
   return { shown: docked.slice(docked.length - max), more: docked.length - max }
 }
+/** A task's state in the strip's and the dock's words. */
+export function stripWord(state: TaskCardState, slotWait = false): string {
+  if (state === 'needs_you') return 'needs you'
+  if (state === 'working') return slotWait ? 'waiting for a slot' : 'working'
+  return 'queued'
+}
 /** The one-line reference the history keeps while its task is docked: "VO-15 · working · see below". */
-export function dockRefLine(identifier: string, state: TaskCardState): string {
-  return `${identifier} · ${state === 'needs_you' ? 'needs you' : state === 'working' ? 'working' : 'queued'} · see below`
+export function dockRefLine(identifier: string, state: TaskCardState, slotWait = false): string {
+  return `${identifier} · ${stripWord(state, slotWait)} · see below`
 }
 
 /**

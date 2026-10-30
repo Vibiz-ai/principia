@@ -711,6 +711,14 @@ back on VO-15") the live card scrolls away to the top and the work is "hidden". 
   reference and the full card once done, the options as buttons without the "Options:" line, `startsGroup`, the strip's
   link to the dock), `cloud/phone/phone.test.ts` (pinned cards, references, "+N more").
 
+### 8.5.1 Waiting for a free slot (2026-10-30)
+
+A run takes one of the shared slots (Settings.concurrency) per step. With all of them taken it is `running` with no
+step, so `Run.slotWaitSince` marks it: set while no step of the run holds a slot and one is waiting for it, cleared when
+the step gets its slot (or the run ends). Every surface says so instead of "Working": the board card, the task's
+details, its card and dock row, the strip, the task chat, the run page and the status line agents read. The clock
+counts the wait.
+
 ### 8.6 Tasks are the conversation's subagents (2026-10-28)
 
 "At the end these tasks are like subagents, and I was working within the other chat. That chat should show as live, or
