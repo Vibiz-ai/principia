@@ -13,8 +13,9 @@ continue a chat, message an agent, talk in the team room. Everything else stays 
 - **Reach it from the phone** (one button, "Share over the internet"): Principia runs `cloudflared tunnel --url
   http://127.0.0.1:<port>` (a quick tunnel: outbound only, a random `https://….trycloudflare.com` address). If
   `cloudflared` is not installed, the page says `brew install cloudflared`. Principia never downloads it.
-- **Turn off** stops the tunnel and the server and closes every socket. Quitting does the same. Paired phones stay
-  paired (RA2): they get back in when Phone is on again. Signing them out is its own action (Sign out all phones).
+- **Turn off** stops the tunnel and the server and closes every socket. Quitting closes the server too but, while
+  Phone comes back at launch, leaves the tunnel running for the next launch (RA8). Paired phones stay paired (RA2):
+  they get back in when Phone is on again. Signing them out is its own action (Sign out all phones).
 - The tunnel is the only outbound traffic Phone adds, and only while it is on. While it runs, `cloudflared` also opens
   its own metrics listener on `localhost` (20241-20245 by default), loopback only, and it closes with the tunnel.
 - An address `cloudflared` prints in an error line (`https://api.trycloudflare.com`, its own service) is never taken as
@@ -144,8 +145,8 @@ Mac's own bundle (`out/phone`, same-origin, cookie + CSRF) keeps working unchang
   real phone sends its auth within one round trip, so a flood can at worst make it reconnect, never keep it out.
 - **Signed out.** Revoke and Sign out all phones say bye, then close; the app then deletes its token. Turn off closes
   the sockets without a bye (1001), so the app keeps its token. When the Mac's last address does not answer at all
-  (Phone off, or a new quick-tunnel address after a restart), the app keeps the token and asks for the Mac's new address
-  (RA8), with Try again and Forget this Mac.
+  (Phone off, Principia closed, or a new quick-tunnel address), the app keeps the token, tries that address again every
+  20 s and on the foreground, and asks for the Mac's new address (RA8), with Try again and Forget this Mac.
 - **Site headers** (`phone-site/vercel.json`): `default-src 'none'`; scripts, styles, fonts, images and the manifest
   from `'self'` only; `connect-src https://*.trycloudflare.com wss://*.trycloudflare.com` (plus
   `PHONE_SITE_CLOUD_ORIGIN` when set at build time); `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'none'`;
@@ -196,7 +197,18 @@ message. See docs/IOS.md.
 - **"Turn Phone on when Principia starts"** (Settings › App › Phone; `phoneAutoStart`). Unset: on once at least one
   phone is paired, off while none is. On: at launch Principia turns the server on and asks for the tunnel, exactly as
   the founder's two clicks would. Off: every launch starts off.
-- **The address problem.** A quick tunnel gets a new random `https://<words>.trycloudflare.com` address each time it
+- **The address stays across a restart.** A quick tunnel's address lives as long as its `cloudflared` process, so that
+  process outlives Principia. It runs detached and writes to `logs/phone-tunnel.log` (a pipe would kill it when
+  Principia exits), and `phone-tunnel.json` keeps its pid, local port and address. A Quit or an update leaves it running
+  and starts a small `sh` process that ends it after 24 hours, so a Quit never leaves a public address up for good. The
+  next launch listens on the same local port, checks that the pid is still `cloudflared` for that port (`ps`; a pid
+  from before a reboot is never touched) and takes it back: same address, nothing for the phone to do. The phone
+  sees the Mac gone for those seconds and comes back by itself (every 20 s and on the foreground). While Principia is
+  closed the address answers 502 from `cloudflared`, and any process that took that local port would be served through
+  it. Turn off, "Turn Phone on when Principia starts" off, and a port another program took all end the tunnel at once.
+- **The tunnel comes back by itself.** `cloudflared` exiting, or giving no address at launch (no internet), is tried
+  again after 5 s, 15 s, 1 min, then every 5 min, for as long as Phone is on. That one has a new address.
+- **The address problem.** What is left: a Mac reboot, a crash of `cloudflared`, or more than 24 hours closed. A quick tunnel gets a new random `https://<words>.trycloudflare.com` address each time it
   starts, and the Mac cannot reach the phone to tell it. The phone still holds a valid token, so what it needs is only
   the new address, and a way to be sure the new address is its own Mac before it sends that token there.
 - **What we built (option c, made short).** Settings › App › Phone, under Paired phones, shows the tunnel's words

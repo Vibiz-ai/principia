@@ -1027,6 +1027,13 @@ window.addEventListener('hashchange', () => {
   if (HOSTED && parseMoveHash(location.hash)) return void start()
   void onRoute()
 })
+// RA8: the Mac keeps its address across a restart, so it comes back here by itself (the iPhone app waits the same 20 s)
+async function macBack(): Promise<void> {
+  if (st.phase !== 'out' || st.outReason !== 'gone' || !paired || st.busy.has('move') || document.visibilityState !== 'visible') return
+  if ((await checkMac((...a) => fetch(...a), paired.mac, paired)) === 'ok' && st.phase === 'out' && st.outReason === 'gone') void start()
+}
+setInterval(() => void macBack(), 20_000)
+document.addEventListener('visibilitychange', () => void macBack())
 // ticking times ("4m") stay true without a refetch
 setInterval(() => st.phase === 'in' && render({ live: true }), 30_000)
 void start()

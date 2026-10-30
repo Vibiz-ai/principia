@@ -1,9 +1,9 @@
 /**
- * REMOTE.md: the Phone switch. On = the 127.0.0.1 server; the tunnel is a second, separate switch. Off (or quit) =
+ * REMOTE.md: the Phone switch. On = the 127.0.0.1 server; the tunnel is a second, separate switch. Off =
  * tunnel and server stopped, every socket closed; paired phones stay paired (kept in hive.db) and get back in when
  * Phone is on again. "Sign out all phones" and Revoke sign phones out. RA8: with "Turn Phone on when Principia starts"
- * (default: on once a phone is paired) both come back by themselves at launch. No Electron imports: wire.ts gives it
- * the host, the device store and the event sink.
+ * (default: on once a phone is paired) both come back by themselves at launch, at the same address: a Quit leaves the
+ * tunnel running for that launch. No Electron imports: wire.ts gives it the host, the device store and the event sink.
  */
 import { pairLinkFor, phoneAutoStartOn, type RemotePairLink, type RemoteState } from '../../shared/remote'
 import { RemoteAuth } from './auth'
@@ -16,7 +16,7 @@ export interface RemoteServiceDeps {
   host: PhoneHost
   bundleDir: string | null
   emit: (s: RemoteState) => void
-  tunnel: Pick<TunnelDeps, 'bin' | 'spawn' | 'timeoutMs'>
+  tunnel: Pick<TunnelDeps, 'bin' | 'spawn' | 'timeoutMs' | 'keep' | 'procs' | 'retryMs'>
   /** RA6: the hosted phone app's origin (Settings › App › Phone › Phone app address), or null: the Mac's own page only */
   site?: () => string | null
   /** RA2: where paired phones are kept (hive.db); default memory */
@@ -35,7 +35,7 @@ export class RemoteService {
 
   constructor(private readonly d: RemoteServiceDeps) {
     this.auth = new RemoteAuth({ store: d.devices })
-    this.tunnel = new Tunnel({ ...d.tunnel, onChange: () => this.changed() })
+    this.tunnel = new Tunnel({ ...d.tunnel, log: d.log, onChange: () => this.changed() })
   }
 
   state(): RemoteState {
@@ -60,7 +60,11 @@ export class RemoteService {
   }
   /** RA8: at launch, Phone and its tunnel come back by themselves when wanted. */
   async autoStartIfWanted(): Promise<boolean> {
-    if (!this.autoStartWanted()) return false
+    if (!this.autoStartWanted()) {
+      // a tunnel a crash left behind, and nobody wants it now
+      this.tunnel.stop()
+      return false
+    }
     await this.setEnabled(true)
     await this.setTunnel(true)
     this.d.log?.info('[remote] Phone on at launch', { devices: this.auth.count })
@@ -95,7 +99,7 @@ export class RemoteService {
           }
         }
         const s = new RemoteServer({ auth: this.auth, api: counted, bundleDir: this.d.bundleDir, extraHosts: () => (this.tunnel.host ? [this.tunnel.host] : []), allowedOrigins: () => this.siteOrigins(), log: this.d.log })
-        await s.start()
+        await s.start(this.tunnel.keptPort ?? 0)
         this.api = api
         this.server = s
         this.d.log?.info('[remote] Phone on', { url: s.localUrl })
@@ -159,9 +163,10 @@ export class RemoteService {
     return this.state()
   }
 
-  private async shutdown(): Promise<void> {
+  private async shutdown(keepTunnel = false): Promise<void> {
     // no bye: the phones keep their token and come back when Phone is on again (the sockets just close, 1001)
-    this.tunnel.stop()
+    if (keepTunnel) this.tunnel.leaveRunning()
+    else this.tunnel.stop()
     const s = this.server
     this.server = null
     this.api?.dispose()
@@ -172,8 +177,8 @@ export class RemoteService {
     this.d.log?.info('[remote] Phone off')
   }
 
-  /** Quit: the same as Turn off. */
+  /** Quit: like Turn off, except that RA8 keeps the tunnel, so a phone finds this Mac at the same address next launch. */
   stop(): Promise<void> {
-    return this.serial(() => this.shutdown())
+    return this.serial(() => this.shutdown(this.autoStartWanted()))
   }
 }
