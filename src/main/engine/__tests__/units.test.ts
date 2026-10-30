@@ -7,6 +7,7 @@ import { createClaudeParser, createCodexParser, parseVerdict } from '../parse'
 import { seedWorkflows } from '../seeds'
 import { parseRefs, render } from '../templates'
 import { validateWorkflow } from '../validate'
+import { concurrencyLimit, Semaphore } from '../util'
 import { profile } from './fakes'
 
 const deps = {
@@ -17,6 +18,28 @@ const deps = {
 const node = (x: Partial<WorkflowNode> & { id: string }): WorkflowNode =>
   ({ type: 'agent', label: x.id, after: [], cwd: null, timeoutMin: 30, profileId: 'p_claude', prompt: 'p', ...x }) as WorkflowNode
 const draft = (nodes: WorkflowNode[], inputs: WorkflowDraft['inputs'] = []): WorkflowDraft => ({ name: 'w', description: '', inputs, nodes })
+
+describe('PR-69: agents at once', () => {
+  it('no limit unless one is set: 40 take a slot at once', async () => {
+    expect(concurrencyLimit(0)).toBe(Infinity)
+    expect(concurrencyLimit(undefined)).toBe(Infinity)
+    const sem = new Semaphore(() => concurrencyLimit(0))
+    expect(await Promise.all(Array.from({ length: 40 }, () => sem.acquire()))).toHaveLength(40)
+  })
+  it('a limit the founder sets still holds', async () => {
+    expect(concurrencyLimit(8)).toBe(8)
+    expect(concurrencyLimit(99)).toBe(16)
+    const sem = new Semaphore(() => concurrencyLimit(1))
+    const first = await sem.acquire()
+    let second = false
+    void sem.acquire().then(() => { second = true })
+    await Promise.resolve()
+    expect(second).toBe(false)
+    first()
+    await new Promise((r) => setTimeout(r))
+    expect(second).toBe(true)
+  })
+})
 
 describe('validateWorkflow', () => {
   it('accepts the seeded workflows', () => {

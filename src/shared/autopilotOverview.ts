@@ -5,7 +5,7 @@
  * the monthly cap) and what it did lately. Pure: main gathers the rows (playbooks:overview), this words them, so the
  * rules mirror the dispatcher's (company/dispatcher.ts) in one place a test can read.
  */
-import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit, limitHeld, tasksAtOnceLine, type LimitWait } from './company'
 import { levelLabel, limitsLine, playbookDef, type PlaybookView } from './autopilotPlaybooks'
 
 export interface OverviewAgent {
@@ -29,6 +29,8 @@ export interface OverviewTask {
   plan?: boolean
   /** the founder paused this task (it waits for Start) */
   heldByYou?: boolean
+  /** waiting in To do for its restart at the usage limit's reset */
+  limitWait?: LimitWait | null
   /** a schedule's standing card */
   scheduleCard?: boolean
 }
@@ -83,7 +85,7 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
 /** Words for one company's Autopilot. Deterministic for the same rows. */
 export function autopilotOverview(i: OverviewInput): AutopilotOverview {
   const max = typeof i.maxInFlight === 'number' && i.maxInFlight >= 1 ? i.maxInFlight : DEFAULT_MAX_IN_FLIGHT
-  const limits = `Up to ${plural(max, 'task')} at once · ${i.monthlyCap ? `monthly cap $${i.monthlyCap}` : 'no monthly cap'}`
+  const limits = `${tasksAtOnceLine(max)} · ${i.monthlyCap ? `monthly cap $${i.monthlyCap}` : 'no monthly cap'}`
   const agentById = new Map(i.agents.map((a) => [a.id, a]))
   const taskById = new Map(i.tasks.map((t) => [t.id, t]))
   const label = (a: OverviewAgent): string => (a.department ? `${a.name} (${a.department})` : a.name)
@@ -91,9 +93,6 @@ export function autopilotOverview(i: OverviewInput): AutopilotOverview {
   const autoAgents = active.filter((a) => a.auto)
   const starters = i.switchOn && !i.paused ? autoAgents.map(label) : []
   const manual = active.filter((a) => !a.auto || !i.switchOn).map(label)
-  // an agent works on several tasks at once; only AGENT_MAX_PARALLEL in flight holds its next one
-  const busy = new Map<string, number>()
-  for (const t of i.tasks) if (t.status === 'in_progress' && t.agentId) busy.set(t.agentId, (busy.get(t.agentId) ?? 0) + 1)
   const inFlight = i.tasks.filter((t) => t.status === 'in_progress').length
 
   // what starts next: To do work of an agent, and work blocked on its dependencies
@@ -115,11 +114,11 @@ export function autopilotOverview(i: OverviewInput): AutopilotOverview {
       if (deps.length > 1) why += ` (and ${plural(deps.length - 1, 'other task')})`
     } else if (t.heldByYou) why = 'you paused it: it waits for your Start'
     else if (i.paused) why = `${i.companyName} is paused: nothing starts until you resume it`
+    else if (limitHeld(t)) why = 'waits for the usage limit to reset, then restarts by itself'
     else if (!a.auto && !t.scheduleCard) why = `${a.name} works only when you press Start`
     else if (!i.switchOn && !t.scheduleCard) why = 'Autopilot is off: it waits for your Start'
-    else if ((busy.get(a.id) ?? 0) >= AGENT_MAX_PARALLEL) why = `starts when ${a.name} finishes one of the ${plural(busy.get(a.id)!, 'task')} running`
     else if (firstOf.has(a.id)) why = `next in ${a.name}’s queue`
-    else if (inFlight >= max) why = `starts when one of the ${plural(inFlight, 'task')} running finishes (up to ${max} at once)`
+    else if (atInFlightLimit(inFlight, max)) why = `starts when one of the ${plural(inFlight, 'task')} running finishes (up to ${max} at once)`
     else why = 'starts within a minute'
     if (!deps.length) firstOf.add(a.id)
     next.push({ ref: t.identifier, title: t.title, who: a.name, why })

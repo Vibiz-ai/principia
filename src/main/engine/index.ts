@@ -24,7 +24,7 @@ import { principiaOps, principiaOpsReminder } from '../company/principiaOps'
 import { liveProcs } from './process'
 import { detectProviders, resolveBin, sameProviders } from './providers'
 import { createScheduler, describeWhen, previewWhen } from './scheduler'
-import { Semaphore } from './util'
+import { concurrencyLimit, Semaphore } from './util'
 import { validateWorkflow } from './validate'
 import { channelLabel, createSlackTriggers, type SlackTriggers } from './slackTriggers'
 
@@ -143,10 +143,7 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       }
     }
   })
-  const semaphore = new Semaphore(() => {
-    const c = Number(ctx.getSettings().concurrency)
-    return Number.isFinite(c) ? Math.min(16, Math.max(1, c)) : 4
-  })
+  const semaphore = new Semaphore(() => concurrencyLimit(ctx.getSettings().concurrency))
   const replySemaphore = new Semaphore(() => overrides.replySlots ?? REPLY_SLOTS)
 
   /** Cached detection, falling back to a sync PATH lookup before the first detect finished. */

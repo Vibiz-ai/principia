@@ -156,7 +156,7 @@ describe('the Autopilot state, one truth for every surface', () => {
     expect(autopilotState({ autopilot: true, maxInFlight: 4, monthlyCap: 200 })).toEqual({ mode: 'on', label: 'Autopilot on', maxInFlight: 4, monthlyCap: 200, switchOn: true, playbooks: 0, names: [], active: 0, waiting: 0, paused: 0 })
     expect(autopilotState({}).label).toBe('Autopilot off')
     expect(autopilotState({ autopilot: true, pausedAt: '2026-10-01' })).toMatchObject({ mode: 'held', label: 'Autopilot off while paused' })
-    expect(autopilotLimits(autopilotState({ autopilot: true }))).toBe('Up to 3 tasks at once · no monthly cap')
+    expect(autopilotLimits(autopilotState({ autopilot: true }))).toBe('No limit on tasks at once · no monthly cap')
     expect(autopilotLimits(autopilotState({ maxInFlight: 1, monthlyCap: 80 }))).toBe('Up to 1 task at once · monthly cap $80')
   })
   it('an autopilot that is on makes "is Autopilot on?" answer yes, and names it, even with the switch off', () => {

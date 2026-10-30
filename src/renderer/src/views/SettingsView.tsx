@@ -190,8 +190,8 @@ function TeamAutonomy({ company: c }: { company: CompanyPassport }): React.JSX.E
   const raw = useStore((s) => s.companyAgents)
   const paused = !!c.pausedAt
   const short = c.name.split(/\s+/)[0]
-  const [inFlight, setInFlight] = useState(c.maxInFlight ?? 3)
-  useEffect(() => setInFlight(c.maxInFlight ?? 3), [c.maxInFlight])
+  const [inFlight, setInFlight] = useState(c.maxInFlight ?? 0)
+  useEffect(() => setInFlight(c.maxInFlight ?? 0), [c.maxInFlight])
   return (
     <div className="s5">
       <h2 className="s5__title">Team &amp; autonomy</h2>
@@ -203,10 +203,10 @@ function TeamAutonomy({ company: c }: { company: CompanyPassport }): React.JSX.E
         <SRow label="Autopilot" desc={paused ? 'Off while paused.' : 'Agents pick up the tasks assigned to them on their own. Off: they wait for you to press Start.'}>
           <Switch checked={!paused && !!c.autopilot} disabled={paused} onChange={(v) => void setCompanyAutopilot(c.id, v)} label="Autopilot" />
         </SRow>
-        <SRow label="Tasks at once" desc={`How many of ${short}’s tasks agents work on at the same time.`}>
+        <SRow label="Tasks at once" desc={`0 means no limit, the default. Set a number only if you want ${short} to run fewer tasks at the same time.`}>
           <Stepper
             value={inFlight}
-            min={1}
+            min={0}
             max={20}
             onChange={(v) => {
               setInFlight(v)
@@ -310,8 +310,8 @@ function General(): React.JSX.Element {
       <SRow label="Keep Mac awake while agents run" desc="Prevents app suspension while a session or run is active.">
         <Switch checked={s.keepAwake} onChange={(v) => void updateSettings({ keepAwake: v })} label="Keep awake" />
       </SRow>
-      <SRow label="Max parallel agents" desc="Tasks and workflow steps, across all your companies; the rest wait for a free slot. Chat replies have their own slots, so they never wait behind this work.">
-        <Stepper value={s.concurrency} min={1} max={16} onChange={(v) => void updateSettings({ concurrency: v })} />
+      <SRow label="Max parallel agents" desc="0 means no limit, the default. Set a number only if your Mac slows down with many agents running. Chat replies have their own slots, so they never wait behind this work.">
+        <Stepper value={s.concurrency} min={0} max={16} onChange={(v) => void updateSettings({ concurrency: v })} />
       </SRow>
       <SRow label="Terminal font size" desc="⌘= / ⌘- in a session.">
         <Stepper value={s.terminalFontSize} min={9} max={24} onChange={(v) => void updateSettings({ terminalFontSize: v })} />

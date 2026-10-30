@@ -223,11 +223,9 @@ function queueKey(s: State, task: CompanyTask, runLabel: string): string {
   const company = s.companies.find((c) => c.id === task.companyId) ?? null
   const depsOpen = task.dependencyIds.map((d) => s.tasks.find((t) => t.id === d)).filter((t): t is CompanyTask => !!t && t.status !== 'done').map((t) => t.identifier)
   let inFlight = 0
-  let agentRunning = 0
   for (const t of s.tasks) {
     if (t.companyId !== task.companyId || t.status !== 'in_progress' || t.id === task.id) continue
     if (t.runId) inFlight++
-    if (task.agentId && t.agentId === task.agentId) agentRunning++
   }
   const startsAnyway = startsWithoutAutopilot({ source: task.source, status: task.status, pendingWake: task.pendingWake ?? null, plan: task.plan ?? null, ask: task.ask ?? null, handoffs: task.handoffs ?? 0 })
   const r = queuedReason({
@@ -236,7 +234,6 @@ function queueKey(s: State, task: CompanyTask, runLabel: string): string {
     company: company ? { name: company.name, autopilot: company.autopilot, pausedAt: company.pausedAt ?? null, maxInFlight: company.maxInFlight } : null,
     depsOpen,
     inFlight,
-    agentRunning,
     startsAnyway,
     runLabel
   })

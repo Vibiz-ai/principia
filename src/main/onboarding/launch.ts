@@ -120,7 +120,6 @@ export const ALL_DOMAINS = ['company', 'repos', 'departments', 'tasks', 'schedul
 const HARD_STEPS: readonly LaunchStepName[] = ['flags', 'company', 'departments', 'agents', 'tasks', 'finish']
 /** The same 8 cool token hues as defaultCompanyColor (db/companyMigration.ts); a new company takes the first unused one. */
 export const COMPANY_PALETTE = ['--accent', '--status-success', '--provider-codex', '--series-5', '--status-scheduled', '--series-2', '--status-running', '--status-idle'].map((t) => `var(${t})`)
-export const START_MAX_IN_FLIGHT = 2
 const DISCARDED_SUFFIX = ' (discarded)'
 const isSoft = (s: LaunchStepName): s is SoftLaunchStep => (SOFT_LAUNCH_STEPS as readonly string[]).includes(s)
 
@@ -1003,7 +1002,7 @@ export class LaunchService {
       if (!sch || (sch.companyId ?? PERSONAL_COMPANY_ID) !== companyId) continue
       schedules.push({ name: sch.name, when: sch.sentence })
     }
-    return { autopilot: board && canRun, noAgentCli: !canRun, maxInFlight: START_MAX_IN_FLIGHT, agents: board ? agents : [], schedules }
+    return { autopilot: board && canRun, noAgentCli: !canRun, agents: board ? agents : [], schedules }
   }
 
   async start(req: { journalId: string; autopilot: boolean; scheduleRefs: string[] }): Promise<BoardSettings | null> {
@@ -1027,7 +1026,7 @@ export class LaunchService {
           if (!a || a.companyId !== companyId || a.archivedAt || a.data.autonomy === 'auto') continue
           this.d.departments.saveAgent({ id: a.id, companyId, departmentId: a.departmentId, kind: a.kind, refId: a.refId, name: a.name, data: { autonomy: 'auto' } })
         }
-        if (canRun) this.d.company.setAutopilot(companyId, true, START_MAX_IN_FLIGHT)
+        if (canRun) this.d.company.setAutopilot(companyId, true)
       }
       // I'll review first holds Autopilot off (the founder's choice); with no agent CLI every run would fail and park
       // its task, so it waits off until one is installed

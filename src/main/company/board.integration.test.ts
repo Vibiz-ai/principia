@@ -27,7 +27,7 @@ import { boardActions } from '../handlers/board'
 import { Dispatcher, HookedCompanyStore, taskRunBridge } from './dispatcher'
 import { recurringBoards } from './recurring'
 import { TASK_CREATE_CAPS, TaskTools, type TaskCaller, type TaskTool } from './taskTools'
-import { AGENT_MAX_PARALLEL, laneOf, MAX_HANDOFFS, needsYouReason, type BoardTask, type CompanyAgent, type CompanyTaskInput, type Department } from '../../shared/company'
+import { laneOf, MAX_HANDOFFS, needsYouReason, type BoardTask, type CompanyAgent, type CompanyTaskInput, type Department } from '../../shared/company'
 import type { LiveOwner, SlackBridge, SlackTriggerState, StartRunOptions } from '../../shared/engine'
 import { newId } from '../../shared/ids'
 import type { SlackInboundMessage, SlackTrigger, SlackTriggerEvent } from '../../shared/slack'
@@ -491,7 +491,6 @@ describe('DEPARTMENTS.md D11: an overnight soak over 5 companies', () => {
         // a task in flight is held by a live run of the fake engine, never an orphan
         if (t.status === 'in_progress' && !w.live.some(l => l.run.id === t.runId)) violations.push(`${phase}: ${t.identifier} in flight without a live run`)
       }
-      for (const [agentId, n] of perAgent) if (n > AGENT_MAX_PARALLEL) violations.push(`${phase}: agent ${agentId} holds ${n} tasks (max ${AGENT_MAX_PARALLEL})`)
       const kids = new Map<string, number>()
       for (const t of all) if (t.parentId) kids.set(t.parentId, (kids.get(t.parentId) ?? 0) + 1)
       for (const [id, n] of kids) if (n > TASK_CREATE_CAPS.perTask) violations.push(`${phase}: ${id} has ${n} children`)

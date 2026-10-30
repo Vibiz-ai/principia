@@ -232,7 +232,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'tasks:stop': [{ id: Id }, CompanyTask]
   /** Five doors C9: "Pause this task". The run ends; the task goes back to To do with its work kept, held until Start. */
   'tasks:pause': [{ id: Id }, CompanyTask]
-  /** The company's Autopilot switch (default off); maxInFlight optional (default 3). */
+  /** The company's Autopilot switch (default off); maxInFlight optional (0 = no limit, the default). */
   'board:autopilot': [{ companyId: Id; on: boolean; maxInFlight?: number; confirmed?: boolean }, BoardSettings]
   /** AUTOPILOT.md §7: the To do tasks turning Autopilot on would start ("N tasks will start") */
   'board:autopilotPreview': [{ companyId: Id }, import('./company').AutopilotPreview]
@@ -247,7 +247,7 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'playbooks:setPaused': [{ companyId: Id; playbookId: string; paused: boolean }, import('./autopilotPlaybooks').PlaybookView]
   'playbooks:turnOff': [{ companyId: Id; playbookId: string }, void]
   // WORKTREE.md: a code task's own worktree, branch and PR
-  /** Start: a new worktree + branch and the agent on it (in_progress), or queued beyond maxInFlight. */
+  /** Start: a new worktree + branch and the agent on it (in_progress), or queued beyond a maxInFlight the company set. */
   'taskWork:start': [{ id: Id; profileId?: Id }, { task: CompanyTask; queued: boolean; message: string }]
   /** Merge…: a native confirm in main, then gh pr merge --squash. null = the founder said no. */
   'taskWork:merge': [{ id: Id }, { task: CompanyTask; message: string } | null]
@@ -939,8 +939,6 @@ export interface OnboardingStartPreview {
   /** Autopilot (Auto-start) goes on; false with departments off or no agent CLI installed */
   autopilot: boolean
   noAgentCli: boolean
-  /** tasks at once once it starts */
-  maxInFlight: number
   /** agents that will start work on their own ("Marcus (Marketing)") */
   agents: string[]
   /** schedules that will start running, with when */

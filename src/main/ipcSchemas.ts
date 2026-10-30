@@ -181,7 +181,7 @@ const settingsPatch = z
     notifyOnFailure: z.boolean(),
     notificationSound: z.boolean(),
     keepAwake: z.boolean(),
-    concurrency: z.number().int().min(1).max(16),
+    concurrency: z.number().int().min(0).max(16),
     defaultAdapter: adapter,
     lastRepoId: z.string().max(64).nullable(),
     schedulesPaused: z.boolean(),
@@ -501,7 +501,7 @@ const memoryMutation = z.union([
  * DEPARTMENTS.md §1.3 fields only main writes (run outcome, wake guard, routing, done note). The renderer changes them
  * through the dedicated task channels (assign, answer, approve, sendBack, unpark), never through create/update.
  */
-const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true, brief: true, proof: true, plan: true } as const
+const TASK_SYSTEM_FIELDS = { blockReason: true, ask: true, report: true, doneNote: true, routing: true, pendingWake: true, agentSessionId: true, autoWakes: true, handoffs: true, work: true, limitWait: true, brief: true, proof: true, plan: true } as const
 export const REQUEST_SCHEMAS = {
   'gateway:connect': z.object({ id: slug }),
   'gateway:disconnect': z.object({ id: slug }),
@@ -652,7 +652,7 @@ export const REQUEST_SCHEMAS = {
   'tasks:takeover': z.object({ id, ...ptySize }).strict(),
   'tasks:stop': z.object({ id }).strict(),
   'tasks:pause': z.object({ id }).strict(),
-  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(1).max(20).optional(), confirmed: z.boolean().optional() }).strict(),
+  'board:autopilot': z.object({ companyId: id, on: z.boolean(), maxInFlight: z.number().int().min(0).max(20).optional(), confirmed: z.boolean().optional() }).strict(),
   'board:autopilotPreview': z.object({ companyId: id }).strict(),
   'playbooks:list': z.object({ companyId: id }).strict(),
   'playbooks:summary': none,

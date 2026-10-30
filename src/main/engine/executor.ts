@@ -64,6 +64,7 @@ import { parseRefs, render, type RenderScope, type TriggerVars } from './templat
 import { TRIGGER_IN_COMMAND, hiveOutVar, slackCommandHint } from './validate'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, slackAccessOf, type NotifySlackTarget, type SlackAgentAccess } from '../../shared/slack'
 import { UNTRUSTED_SLACK_NOTE, triggerVars } from './slackTriggers'
+import { RETRY_AFTER_RESET_MS, RETRY_FALLBACK_MS, retryTime } from '../../shared/company'
 import { FEEDBACK_TAIL, LineBuffer, OUTPUT_CAP, Semaphore, cap, isDir, tail } from './util'
 
 /** A chat reply normally takes under a minute (99% under 4), and someone is waiting: past this it failed, not slow. */
@@ -107,17 +108,7 @@ export interface TaskRun extends RunTaskLink {
 /** Step error for the other steps of a run that a HIVE_STOP ended (AUTHORING.md §5). */
 export const HALT_SKIP_ERROR = 'Run ended early: nothing to do'
 
-/** Auto retry when the reset time is unknown (CONTRACT §13). */
-export const RETRY_FALLBACK_MS = 60 * 60_000
-/** Retry a little after the reset so the window has really reopened. */
-export const RETRY_AFTER_RESET_MS = 60_000
-
-/** When a "Retry at reset" should fire: reset + 1 min, never in the past; unknown reset = in 1 h. */
-export function retryTime(resetAt: string | null | undefined, now: Date): string {
-  const r = resetAt ? Date.parse(resetAt) : NaN
-  const at = Number.isFinite(r) ? Math.max(r + RETRY_AFTER_RESET_MS, now.getTime() + RETRY_AFTER_RESET_MS) : now.getTime() + RETRY_FALLBACK_MS
-  return new Date(at).toISOString()
-}
+export { RETRY_AFTER_RESET_MS, RETRY_FALLBACK_MS, retryTime }
 
 export const retryPrompt = (feedback: string, guard: string | null = null): string =>
   `A reviewer rejected your previous attempt:\n${feedback}\nFix it.${guard ? `\n\n${guard}` : ''}`

@@ -6,7 +6,7 @@
  *
  * Pure: shared by main (the stored state, the phone), the renderer and the phone web app.
  */
-import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT, agentFullLine } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit, limitHeld, type LimitWait } from './company'
 
 /** What the card says about its task. */
 export const TASK_CARD_STATES = ['queued', 'working', 'needs_you', 'in_review', 'done', 'failed'] as const
@@ -137,7 +137,7 @@ export function clockLabel(fromIso: string, toIso: string | null | undefined = n
 
 /** What a queued card needs to say why it waits: the gates the dispatcher checks (DEPARTMENTS.md §3). */
 export interface QueueInput {
-  task: { status: string; identifier?: string; blockReason?: string | null; agentId?: string | null; assigneeProfileId?: string | null; ask?: { answer?: string | null } | null }
+  task: { status: string; identifier?: string; blockReason?: string | null; agentId?: string | null; assigneeProfileId?: string | null; ask?: { answer?: string | null } | null; limitWait?: LimitWait | null }
   /** the seat on it (null: nobody, or its row is gone) */
   agent: { name: string; archivedAt?: string | null; pausedAt?: string | null; data?: { autonomy?: string; mode?: string } } | null
   company: { name: string; autopilot?: boolean; pausedAt?: string | null; maxInFlight?: number } | null
@@ -145,8 +145,6 @@ export interface QueueInput {
   depsOpen?: readonly string[]
   /** the company's tasks in flight right now (in progress with a run) */
   inFlight?: number
-  /** how many other tasks its agent is running right now (an agent works on up to AGENT_MAX_PARALLEL at once) */
-  agentRunning?: number
   /** work the founder already said go to starts with autopilot off too (startsWithoutAutopilot) */
   startsAnyway?: boolean
   /** "Run now" for a company with code, "Start" without */
@@ -161,6 +159,12 @@ export interface QueueReason {
 
 const listIds = (ids: readonly string[]): string => (ids.length <= 2 ? ids.join(' and ') : `${ids.slice(0, 2).join(', ')} and ${ids.length - 2} more`)
 
+/** "Waiting for the usage limit to reset · restarts at 15:01" */
+export function limitWaitLine(w: Pick<LimitWait, 'retryAt'>): string {
+  const at = new Date(w.retryAt)
+  return `Waiting for the usage limit to reset · restarts at ${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`
+}
+
 /** Why a queued task has not started, in words, and whether Run now can start it from the card (CHAT-UI.md §8). */
 export function queuedReason(i: QueueInput): QueueReason {
   const t = i.task
@@ -173,6 +177,7 @@ export function queuedReason(i: QueueInput): QueueReason {
   if (i.agent && (i.agent.archivedAt || i.agent.pausedAt)) return { text: `${i.agent.name} is ${i.agent.archivedAt ? 'archived' : 'paused'}`, canRun: false }
   if ((t.status === 'blocked' && t.blockReason === 'deps') || deps.length) return { text: deps.length ? `Waiting for ${listIds(deps)} to finish` : 'Waiting for its dependencies to finish', canRun: false }
   if (t.ask && !t.ask.answer) return { text: 'Waiting for your answer', canRun: false }
+  if (limitHeld(t)) return { text: limitWaitLine(t.limitWait!), canRun: true }
   if (t.status === 'backlog') return { text: `In the backlog: it starts when it moves to To do, or with ${run}`, canRun: true }
   if (t.status === 'triage') return { text: `In triage: it starts once it is routed, or with ${run}`, canRun: true }
   if (i.agent?.data?.mode === 'session') return { text: `${who} works in a session: it starts when you press ${run}`, canRun: true }
@@ -180,9 +185,7 @@ export function queuedReason(i: QueueInput): QueueReason {
   if (i.agent?.data?.autonomy && i.agent.data.autonomy !== 'auto' && !i.startsAnyway) return { text: `${who} starts only when you say so: press ${run}`, canRun: true }
   const max = typeof company?.maxInFlight === 'number' && company.maxInFlight >= 1 ? company.maxInFlight : DEFAULT_MAX_IN_FLIGHT
   const inFlight = i.inFlight ?? 0
-  if (inFlight >= max) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
-  const mine = i.agentRunning ?? 0
-  if (mine >= AGENT_MAX_PARALLEL) return { text: agentFullLine(who, mine, t.identifier ?? 'this task'), canRun: true }
+  if (atInFlightLimit(inFlight, max)) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
   return { text: 'Starting in a moment', canRun: true }
 }
 

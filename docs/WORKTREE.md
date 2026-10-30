@@ -29,7 +29,7 @@ task, with an agent on it. The founder's checkout is never touched. The task fol
 5. **Merging is the founder's.** Merge… asks with a native confirm in main, then `gh pr merge --squash` (never
    `--delete-branch`). The agent shims keep refusing `gh pr merge`. No auto-push beyond the guarded rules: an agent may
    push its own `hive/*` branch and open a PR; never the default branch, never force, never delete.
-6. **Several tasks at once**, capped by the company's maxInFlight (default 3). Start beyond the cap queues the task:
+6. **Several tasks at once**, with no limit unless the company sets a maxInFlight (default 0, no limit). Start beyond a set limit queues the task:
    "Queued: 3 already running". It starts when a running task finishes.
 7. **Agents work in parallel; two runs never share a checkout.** An agent takes several tasks at once (§3a). A task
    whose repository checkout another in-flight run already works in gets its own worktree by itself, on Run now, a
@@ -86,7 +86,7 @@ folders before the shims, so there `gh` is the real one; the push guard (pre-pus
 ## 3. Start
 
 1. Checks: a repository of the task's company, open, no binding, an agent or profile, the §1.4 start move allowed.
-2. Cap: tasks In Progress in the company (plus ones being started) against maxInFlight. At the cap: `work.queuedAt`, a
+2. Limit, if the company set one: tasks In Progress in the company (plus ones being started) against maxInFlight. At it: `work.queuedAt`, a
    `work` activity "Queued: N already running", nothing else.
 3. `WorktreeManager.ensureTask`: `git worktree prune`, then `git worktree add --no-track -b <branch> <path> <base sha>`
    (a branch left by an earlier Start is checked out again, never recreated). The hooks dir `<userData>/git-hooks/<task
@@ -108,9 +108,8 @@ by itself gets its worktree with that turn (`workdir`), never the founder's chec
 
 An agent is never "busy": a human Run now (or a chat's start) never waits for the agent's other work, nor for the
 company's maxInFlight; Start never waits for a busy agent (it still queues at maxInFlight, §0.6). Automatic starts (the dispatcher, a follow-up turn, a schedule fire, a
-handoff, an answer resuming, the plan pilot) still stop at the company's maxInFlight, and at `AGENT_MAX_PARALLEL` (3)
-tasks in flight per agent; the wait says so: "Julia is running 3 tasks; VO-15 starts when one finishes". The claim's
-compare-and-set counts the agent's other in-flight tasks against that cap, and the same task can still start only once
+handoff, an answer resuming, the plan pilot) stop only at a maxInFlight the company set; one agent takes any number of
+tasks. The same task can still start only once
 ("An agent already owns this task").
 
 Each task keeps its own provider conversation (`agentSessionId` per task), so parallel turns never share a session.

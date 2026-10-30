@@ -4,7 +4,7 @@
  * - Start (founder only): a task with a repository its company owns gets `<userData>/worktrees/task-<ID>` on
  *   `hive/<id>-<slug>` (WorktreeManager.ensureTask), its `work` binding, a `work` activity, and its agent's turn
  *   through CompanyStore.startTask → in_progress. Every later turn of that task runs in the same worktree with the push
- *   guard env (TaskRunBridge.workdir). Beyond the company's maxInFlight it is queued and starts when a seat frees up.
+ *   guard env (TaskRunBridge.workdir). Beyond a maxInFlight the company set it is queued and starts when a seat frees up.
  * - The PR (gh, read-only): looked up once the branch is pushed, then polled every 60 s while open and on window focus.
  *   Ready → in_review; changes requested (a review not handled yet) → the agent goes again with the reviewer's note;
  *   approved by a reviewer → done ("Approved #N", the worktree stays until it merges); merged (on GitHub, or Merge…
@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs'
 import { HiveError } from '../../shared/errors'
-import type { BoardTask, TaskStatus } from '../../shared/company'
+import { atInFlightLimit, type BoardTask, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions } from '../../shared/engine'
 import type { Run, RunTarget } from '../../shared/types'
 import { GH_TEXT, canStartWork, taskBranchName, nextMove, workBrief, workGone, workQueued, workStarted, type GhState, type TaskPr, type TaskWork } from '../../shared/taskWork'
@@ -102,7 +102,7 @@ export class TaskWorkService {
   }
 
   // ---------- Start ----------
-  /** The founder pressed Start. Queues beyond maxInFlight ("Queued: 3 already running"). */
+  /** The founder pressed Start. Queues beyond a maxInFlight the company set ("Queued: 3 already running"). */
   async startTask(taskId: string, profileId?: string): Promise<StartResult> {
     // one Start per task at a time (two windows, a double call): the second is refused before it touches anything
     if (this.starting.has(taskId) || this.ensuring.has(taskId)) throw new HiveError('conflict', 'This task is starting already')
@@ -122,7 +122,7 @@ export class TaskWorkService {
     if (!repo) throw new HiveError('not_found', 'Repository no longer exists')
     const running = this.running(t.companyId)
     const max = this.c.boardSettings(t.companyId).maxInFlight
-    if (running >= max) {
+    if (atInFlightLimit(running, max)) {
       const wt = this.wt()
       this.writeWork(t.id, { ...this.blank(t, wt.taskPath(t.identifier)), queuedAt: this.now().toISOString() })
       const message = `Queued: ${running} already running`
@@ -312,7 +312,7 @@ export class TaskWorkService {
       // claimed meanwhile (the dispatcher, a human Run now): its worktree came with the turn (workdir)
       if (t.status === 'in_progress') { this.writeWork(t.id, { queuedAt: null }); continue }
       if (t.status === 'done' || t.status === 'canceled') { this.writeWork(t.id, workStarted(t.work) ? { queuedAt: null } : null); continue }
-      if (this.running(t.companyId) >= this.c.boardSettings(t.companyId).maxInFlight) continue
+      if (atInFlightLimit(this.running(t.companyId), this.c.boardSettings(t.companyId).maxInFlight)) continue
       try {
         // a review that asked for changes while every seat was busy restarts as that review; a plain Start as the founder's
         const changes = t.status === 'in_review' && workStarted(t.work)
@@ -509,7 +509,7 @@ export class TaskWorkService {
       this.c.activity(taskId, 'work', `Changes requested on #${pr.number} by ${who}: ${note}`, 'system')
       const cur = this.c.task(taskId)
       this.c.patchInFlight(taskId, { pendingWake: { reasons: [...(cur.pendingWake?.reasons ?? []), `Changes requested on PR #${pr.number} by ${who}: ${note} Address the review in this worktree, push the branch, and say what changed.`].slice(-50), count: (cur.pendingWake?.count ?? 0) + 1 } })
-      if (this.running(t.companyId) >= this.c.boardSettings(t.companyId).maxInFlight) {
+      if (atInFlightLimit(this.running(t.companyId), this.c.boardSettings(t.companyId).maxInFlight)) {
         this.writeWork(taskId, { queuedAt: this.now().toISOString() })
         this.c.activity(taskId, 'work', `Queued: ${this.running(t.companyId)} already running`, 'system')
       } else {

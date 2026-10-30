@@ -20,7 +20,6 @@ export function taskStatusOf(c: CompanyStore, taskId: string, who: (agentId: str
       const company = c.passport(t.companyId)
       const s = c.boardSettings(t.companyId)
       const inFlight = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>?").get(t.companyId, t.id) as { n: number }).n
-      const agentRunning = t.agentId ? (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(t.agentId, t.id) as { n: number }).n : 0
       const depsOpen = t.dependencyIds.flatMap((id) => {
         try {
           const d = c.task(id)
@@ -35,7 +34,6 @@ export function taskStatusOf(c: CompanyStore, taskId: string, who: (agentId: str
         company: { name: company.name, autopilot: s.autopilot, pausedAt: c.isPaused(t.companyId) ? 'paused' : null, maxInFlight: s.maxInFlight },
         depsOpen,
         inFlight,
-        agentRunning,
         startsAnyway: startsWithoutAutopilot(t),
         runLabel: 'Start'
       }).text
