@@ -56,8 +56,13 @@ describe('What is Autopilot doing?', () => {
     // an agent works on several tasks at once: a busy one takes its next task beside the first
     expect(busy.next[0]!.why).toBe('starts within a minute')
     const run = (n: number) => ({ id: `r${n}`, identifier: `LL-${10 + n}`, title: 'R', status: 'in_progress' as const, agentId: 'm', dependencyIds: [], priority: 0 })
-    const full = autopilotOverview(base({ maxInFlight: 10, tasks: [run(1), run(2), run(3), { id: 'b', identifier: 'LL-8', title: 'B', status: 'todo', agentId: 'm', dependencyIds: [], priority: 0 }] }))
-    expect(full.next[0]!.why).toBe('starts when Marcus finishes one of the 3 tasks running')
+    const b = { id: 'b', identifier: 'LL-8', title: 'B', status: 'todo' as const, agentId: 'm', dependencyIds: [], priority: 0 }
+    // PR-69: no limit set: 30 running hold nothing
+    const open = autopilotOverview(base({ maxInFlight: undefined, tasks: [...Array.from({ length: 30 }, (_, n) => run(n)), b] }))
+    expect(open.next[0]!.why).toBe('starts within a minute')
+    expect(open.limits).toBe('No limit on tasks at once · monthly cap $200')
+    const full = autopilotOverview(base({ maxInFlight: 3, tasks: [run(1), run(2), run(3), b] }))
+    expect(full.next[0]!.why).toBe('starts when one of the 3 tasks running finishes (up to 3 at once)')
     const off = autopilotOverview(base({ switchOn: false }))
     expect(off.starters).toEqual([])
     expect(off.headline.startsWith('Agents wait for you to press Start')).toBe(true)

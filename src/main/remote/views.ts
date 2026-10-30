@@ -11,6 +11,7 @@ import type { Id, Repo, Session } from '../../shared/types'
 import { resolvePersonas } from '../../shared/personas'
 import type { PhoneAgent, PhoneAsk, PhoneChatRef, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneTaskColumn, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
 import { PHONE_TASKS_DONE, PHONE_TASKS_PLANNED } from '../../shared/remote'
+import { SLOT_WAIT_LINE } from '../../shared/taskCard'
 import { liveTruth, needsIn, workingIn, type LiveTruth } from '../../renderer/src/lib/liveTruth'
 import { reposOf, taskCounts, taskNeedsIn } from '../../renderer/src/lib/companyModel'
 import { suggestionCounts, type OrchSuggestion } from '../../shared/orchestrator'
@@ -44,6 +45,8 @@ export interface PhoneData {
   suggestions?: OrchSuggestion[]
   /** AUTOPILOT.md §7: the autopilots on per company (the Now header names them) */
   playbooks?: import('../../shared/autopilotPlaybooks').PlaybookSummary
+  /** run id → since when it waits for a free slot (Run.slotWaitSince, the desktop's slotWaits) */
+  slotWaits?: Readonly<Record<Id, string>>
 }
 
 const PROVIDER: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', shell: 'Terminal' }
@@ -129,13 +132,15 @@ export function phoneNow(d: PhoneData, companyId: Id, done: RunCard[] = [], runA
     const agent = (task?.agentId ? d.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined) ?? (i.runId ? seat(runAgents.get(i.runId)) : undefined)
     const session = i.chat && i.sessionId ? d.sessions.find((s) => s.id === i.sessionId) : undefined
     const w = who(agent)
+    const slotWait = i.runId ? (d.slotWaits?.[i.runId] ?? null) : null
     return {
       key: i.key,
       who: w ?? (session ? chatWho(session) : null),
       title: task ? task.title : session ? oneLine(session.title, 80) : runTitle(i.title),
-      activity: i.detail,
+      activity: slotWait ? SLOT_WAIT_LINE : i.detail,
       // a session works in turns: how long this turn has run, not how old the session is
-      startedAt: (i.sessionId ? turnSince.get(i.sessionId) : undefined) ?? i.startedAt ?? i.at,
+      startedAt: slotWait ?? (i.sessionId ? turnSince.get(i.sessionId) : undefined) ?? i.startedAt ?? i.at,
+      slotWaitSince: slotWait,
       open: chatRefOf(d, companyId, i.sessionId, agent)
     }
   })
@@ -333,6 +338,11 @@ const PLANNED = new Set(['triage', 'backlog', 'todo', 'blocked'])
 const NEED_LINE: Record<PhoneTaskNeed['kind'], string> = { review: 'Ready for your OK', question: 'A question for you', stuck: 'Stuck: look at it', idea: 'An idea' }
 const BLOCKED: Record<string, string> = { deps: 'Waits for another task', limit: 'Waits for a free slot', needs_input: 'Waits for an answer' }
 
+/** Since when this task's run waits for a free slot, or null. */
+function slotWaitOf(d: PhoneData, task: CompanyTask): string | null {
+  return task.status === 'in_progress' && task.runId ? (d.slotWaits?.[task.runId] ?? null) : null
+}
+
 /** What its agent does right now (the desk's live line), or null. */
 function liveLine(d: PhoneData, task: CompanyTask): string | null {
   const live = task.runId ? d.agents.find((x) => isLive(x) && x.parentId === null && (x.runId === task.runId || x.sessionId === task.runId)) : undefined
@@ -358,10 +368,11 @@ function taskRow(d: PhoneData, task: CompanyTask, column: PhoneTaskColumn, c: Bo
   const agent = task.agentId ? d.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined
   const need = c.needs.get(task.id)
   // redact before clipping: a secret cut at the limit would no longer match the vault's exact values
+  const slotWait = column === 'working' ? slotWaitOf(d, task) : null
   const live = column === 'working' ? liveLine(d, task) : null
   const line =
     column === 'working'
-      ? live && redact(live)
+      ? (slotWait ? SLOT_WAIT_LINE : live && redact(live))
       : column === 'needs'
         ? (need ? NEED_LINE[need.kind] : 'Ready for your OK')
         : column === 'planned' && task.status === 'blocked'
@@ -379,7 +390,8 @@ function taskRow(d: PhoneData, task: CompanyTask, column: PhoneTaskColumn, c: Bo
     agentId: agent?.id ?? null,
     line,
     priority: task.priority ?? 0,
-    at: task.updatedAt
+    at: task.updatedAt,
+    slotWaitSince: slotWait
   }
 }
 
@@ -439,7 +451,7 @@ export function agentStatus(d: PhoneData, a: CompanyAgent): string {
   if (working.length > 1) return `Working on ${working.length} tasks: ${working.slice(0, 2).map((t) => t.title).join(', ')}${working.length > 2 ? ` and ${working.length - 2} more` : ''}`
   if (cur) {
     const live = cur.runId ? d.agents.find((x) => isLive(x) && x.parentId === null && (x.runId === cur.runId || x.sessionId === cur.runId)) : undefined
-    const act = live ? plainActivity(live.activity, { code: reposOf(d.repos, a.companyId).length > 0 }) : null
+    const act = slotWaitOf(d, cur) ? SLOT_WAIT_LINE : live ? plainActivity(live.activity, { code: reposOf(d.repos, a.companyId).length > 0 }) : null
     return act ? `${cur.title} · ${act}` : `Working on ${cur.title}`
   }
   const review = d.tasks.find((t) => t.agentId === a.id && t.companyId === a.companyId && t.status === 'in_review')

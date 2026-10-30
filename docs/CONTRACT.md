@@ -354,7 +354,7 @@ Input and resize are `send` channels (§4.4). PTY lives in main; closing the win
 
 ### 4.3 Settings defaults
 `launchAtLogin:false, notifyOnSuccess:'scheduled', notifyOnFailure:true,
-notificationSound:true, keepAwake:true, concurrency:4, defaultAdapter:'claude', lastRepoId:null,
+notificationSound:true, keepAwake:true, concurrency:0, defaultAdapter:'claude', lastRepoId:null,
 schedulesPaused:false, onboardingDone:false, sidebarCollapsed:false, terminalFontSize:13`, plus
 `interactiveBypass:false, sessionMemory:'read-write'` (§12) and `autoRetryRateLimit:true, stallMinutes:10` (§13).
 Nothing else is a setting (SPEC A11). `launchAtLogin` is read back from `app.getLoginItemSettings().openAtLogin` on every `settings:get` (System
@@ -1551,8 +1551,8 @@ before.
   source) and `company_tasks_run(run_id)`.
 - `runs.trigger` keeps its CHECK: a task run is stored as `'manual'` + `trigger_ext = 'task'` and reads back as
   `trigger: 'task'` with `taskId` / `agentId`.
-- Autopilot and the in-flight cap live in the company row's JSON: `autopilot` (default false), `maxInFlight` (1-20,
-  default 3).
+- Autopilot and the in-flight cap live in the company row's JSON: `autopilot` (default false), `maxInFlight` (1-20, or
+  0 = no limit, the default). PR-69: limits saved before that are cleared once, guarded by `meta.agent_limits_removed`.
 - One-time backfill guarded by `meta.departments_migrated` (DEPARTMENTS.md §11): task mirrors from the JSON,
   `runs.task_id` from `company_tasks.run_id`, and a `blockReason` for blocked tasks. No departments or agents are
   created, and Autopilot is off everywhere.

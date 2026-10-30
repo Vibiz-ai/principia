@@ -773,13 +773,13 @@ d('launch: start', () => {
     // AUTOPILOT.md §7: before it is pressed, Start the first week says what it turns on, and turns nothing on itself
     const preview = w.svc.startPreview({ journalId: r.journalId, scheduleRefs: [pick.ref, 'not-a-ref'] })
     const autoCount = input.plan.agents.filter((a) => a.include && a.auto).length
-    expect(preview).toMatchObject({ autopilot: true, noAgentCli: false, maxInFlight: 2 })
+    expect(preview).toMatchObject({ autopilot: true, noAgentCli: false })
     expect(preview.agents).toHaveLength(autoCount)
     expect(preview.schedules).toEqual([{ name: w.store.getSchedule(pick.id)!.name, when: w.store.getSchedule(pick.id)!.sentence }])
     expect(w.store.listSchedules(companyId).some((s) => s.enabled)).toBe(false)
 
     const board = await w.svc.start({ journalId: r.journalId, autopilot: true, scheduleRefs: [pick.ref, 'not-a-ref'] })
-    expect(board).toEqual({ companyId, autopilot: true, maxInFlight: 2 })
+    expect(board).toEqual({ companyId, autopilot: true, maxInFlight: 0 })
     for (const s of w.store.listSchedules(companyId)) expect(s.enabled).toBe(s.id === pick.id)
     expect(w.store.getSchedule(other)!.enabled).toBe(false)
 

@@ -21,7 +21,7 @@ import { ReplyBox } from '../components/agents/ReplyBox'
 import { ApprovalCard } from '../components/author/ApprovalCard'
 import { useIsCode } from '../components/desk/Desk'
 import { AgentConversation, SessionConversation } from '../components/desk/AgentConversation'
-import { lastChat, rememberChat, useChatRows, useSessionAgent, type ChatRowModel } from '../components/chats/ChatList'
+import { lastChat, rememberChat, splitClosed, useChatRows, useSessionAgent, type ChatRowModel } from '../components/chats/ChatList'
 import { Button, EmptyState, Toolbar, useTick } from '../components/ui'
 import { useScope } from '../components/CompanyChip'
 import { isIdleWaiting, lastSaid } from '../lib/live'
@@ -49,7 +49,9 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
   // CHAT-UI.md §7: in a company, Chats with nothing picked is New conversation, not the newest row
   const pane = !!scope && (!chat || chat.startsWith('new'))
   const liveTask = taskOfChatKey(chat)
-  const cur = pane || liveTask ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && rows.find((r) => r.key === remembered)) || rows[0] || null
+  // PR-59: a closed chat opens when asked for by name, never as the default
+  const open = splitClosed(rows, useStore((s) => s.closedChats), chat).open
+  const cur = pane || liveTask ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && open.find((r) => r.key === remembered)) || open[0] || null
   const code = useIsCode(scope)
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   useEffect(() => {

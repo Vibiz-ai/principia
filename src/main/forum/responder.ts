@@ -12,16 +12,26 @@
  *    the agents in it ("Everyone on the team" is a conversation with the whole team);
  * 4. else a department channel: that department's first agent; #general: the company's first agent.
  * Here only humans wake agents. Agents wake agents through collab.ts (AGENT-COLLAB.md), which checks hops, cycles
- * and caps first and then calls `wakeForAgent`; both kinds share the queue and the per-seat hourly cap. Only active
- * seats backed by a profile (not a workflow, not shell) answer. Each seat answers at most `perHour` times an hour.
+ * and caps first and then calls `wakeForAgent`; both kinds share the queue. Only active seats backed by a profile (not
+ * a workflow, not shell) answer. A seat answers other agents at most `perHour` times an hour; a person always gets a
+ * reply. A person's message that cannot get one gets a line saying why (`onUnanswered`), never silence. What is owed to
+ * a person is also on disk (replyJournal.ts), so a quit or a crash loses neither: `recover` picks it up at the next boot.
+ * The queue drops nothing: a run takes up to `pending` messages of people, oldest first, or one agent's ask, and the rest
+ * wait for the next run. People and agents never share a run: each gets its own rules and its own thread.
  */
 import type { ForumChannel, ForumMember, ForumMessage } from '../../shared/forum'
 import { isConversationChannel } from '../../shared/forum'
 import type { ForumStore } from './store'
+import { UNPICKED, type OwedReply, type ReplyJournal } from './replyJournal'
 import { flat } from './format'
 import { TASK_STARTED_RULE } from '../company/principiaOps'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 
 export const RESPONDER_LIMITS = { agentsPerMessage: 3, conversationAgents: 8, perHour: 12, threadLines: 8, line: 400, pending: 5 } as const
+/** A message older than this gets a line at boot, not a late answer: a request from days ago may no longer stand. */
+const RECOVER_WITHIN_MS = 24 * 3600_000
+export const INTERRUPTED_REASON = 'Principia closed before the reply finished'
+const PICK_INTERRUPTED_REASON = 'it closed before anyone could reply'
 
 export interface ResponderSeat {
   id: string
@@ -39,15 +49,25 @@ export interface ResponderSeat {
 export interface ResponderDeps {
   store: () => ForumStore
   enabled: () => boolean
+  /** the app is quitting: a reply run that ends now starts nothing new, the journal carries the queue to the next boot */
+  quitting?: () => boolean
+  /** what is owed to people, on disk; absent = forgotten on quit (tests that do not need it) */
+  journal?: ReplyJournal
   seat(agentId: string): ResponderSeat | null
   departmentName(departmentId: string): string | null
   /** active seats of a company in display order (department ones for a department) */
   seats(companyId: string, departmentId: string | null): string[]
   /** starts the seat run; returns its id. Throws the refusal. */
   start(input: { companyId: string; agentId: string; profileId: string; repoId: string | null; prompt: string; reply: { memberId: string; channelId: string; messageId: string } }): string
+  /** a pick a quit cut short was Principia's own (conversationPilot.ts): true = it picks again */
+  repick?: (msg: ForumMessage) => boolean
+  /** the live wake of an agent's ask to this member, and who asked; null = it needs no answer any more */
+  askOf?: (msg: ForumMessage, memberId: string) => { wakeId: string; asker: AgentAsker } | null
   /** a queued agent wake got its run, or could not start (collab.ts bookkeeping) */
   onWakeStarted?: (wakeIds: string[], runId: string) => void
   onWakeFailed?: (wakeIds: string[], reason: string) => void
+  /** a person's message got no run: tell them why */
+  onUnanswered?: (messageId: string, memberId: string, reason: string) => void
   /** CHAT-UI.md §8: the open questions of tasks in a channel ("VO-15" and what it asks), for the reply run's rules */
   taskAsks?: (channelId: string) => { identifier: string; ref: string; prompt: string }[]
   /** CHAT-UI.md §8: one live line per task filed in a channel (taskStatus.ts), for status questions and go-aheads */
@@ -148,6 +168,8 @@ export function buildReplyPrompt(input: {
   conversation?: boolean
   /** the agent's display name for that title (persona name) */
   name?: string
+  /** a run answering this was cut off by a quit (ForumResponder.recover): it may have done part of the work */
+  resumed?: boolean
   /** CHAT-UI.md §8: questions of tasks in this conversation still waiting for the person */
   taskAsks?: { identifier: string; ref: string; prompt: string }[]
   /** CHAT-UI.md §8: the live state of the tasks filed in this conversation (taskStatusLine), newest first */
@@ -169,7 +191,9 @@ export function buildReplyPrompt(input: {
   const rules = [
     `You are @${input.me} in the company Forum, and a person just wrote to you in ${input.channel}. Answer now, as yourself in your role.`,
     `Reply with forum_reply {"to":"${input.replyTo}","text":"…"} (or \`forum reply ${input.replyTo} "…"\`): one short, useful message. A greeting gets a short greeting and what you can help with; a question gets the answer.`,
+    REPLY_STYLE,
     'Use forum_read or the company notes only when you need them. Do not start long work in this run.',
+    ...(input.resumed ? ['Principia closed while you were answering this. Part of it may already be done: check the thread and the Board before repeating anything.'] : []),
     `When the person asks for work (do something, write or make something, track it, put it on the board), put it on the Board yourself, now: forum_reply {"to":"${input.replyTo}","text":"I started {task}: <title>. I'll post the result here.","task":{"title":"…"}} files their message as a task for you ({task} becomes its identifier). Never ask them to press Make task or to file it themselves.`,
     `${TASK_STARTED_RULE} If a teammate already filed it for this message (the reply tells you, or the thread shows "<name> started <ID>"), do not file another: say who is on it.`,
     `Without the Forum tools, put the task in your run report's "followUps" (a principia-run-report block at the end) and Principia files it for you; say plainly "I'm starting a task for this. I'll post the result here." (its card names it).`,
@@ -217,7 +241,15 @@ function agentRules(me: string, channel: string, replyTo: string, a: AgentAsker)
   ].join('\n')
 }
 
-interface Pending { companyId: string; messageIds: string[]; wakeIds: string[]; asker: AgentAsker | null }
+interface Queued { messageId: string; wakeId: string | null; asker: AgentAsker | null }
+interface Pending { companyId: string; queue: Queued[] }
+
+/** The next run's messages, off the queue: one agent's ask (a run answers one thread), or the people's up to the next ask. */
+function nextBatch(queue: Queued[]): Queued[] {
+  if (queue[0]!.wakeId) return queue.splice(0, 1)
+  const ask = queue.findIndex((q) => q.wakeId)
+  return queue.splice(0, Math.min(ask < 0 ? queue.length : ask, RESPONDER_LIMITS.pending))
+}
 
 export class ForumResponder {
   /** agentId → the run answering now */
@@ -237,14 +269,20 @@ export class ForumResponder {
   onHumanPost(msg: ForumMessage): string[] {
     try {
       if (!this.d.enabled()) return []
+      if (this.d.quitting?.()) {
+        this.d.journal?.awaitPick(msg)
+        return []
+      }
       const store = this.d.store()
       const started: string[] = []
       const who = pickResponders(store, msg, this.d)
       if (!who.length) this.d.log?.info('forum responder: no agent for this message', { messageId: msg.id, channelId: msg.channelId })
       for (const m of who) {
-        const runId = this.wake(m, msg.companyId, [msg.id])
+        const runId = this.wakeOwed(m, msg.companyId, [msg.id])
         if (typeof runId === 'string') started.push(runId)
+        else this.tellRefused(msg.id, m.id, runId)
       }
+      this.d.journal?.picked(msg.id)
       return started
     } catch (e) {
       this.d.log?.warn('forum responder: pick failed', { messageId: msg.id, error: String(e) })
@@ -254,6 +292,7 @@ export class ForumResponder {
 
   /** runHooks: a reply run ended; the next queued messages of that agent get their turn. */
   onRunEnded(runId: string): void {
+    if (this.d.quitting?.()) return
     const agentId = this.runAgent.get(runId)
     if (!agentId) return
     this.runAgent.delete(runId)
@@ -263,14 +302,28 @@ export class ForumResponder {
     this.pending.delete(agentId)
     try {
       const m = this.d.store().memberForAgent(agentId)
-      const res = m ? this.wake(m, next.companyId, next.messageIds, { asker: next.asker, wakeIds: next.wakeIds }) : null
-      if (next.wakeIds.length) {
-        if (typeof res === 'string') this.d.onWakeStarted?.(next.wakeIds, res)
-        else this.d.onWakeFailed?.(next.wakeIds, 'the agent could not start its reply')
-      }
+      // a batch that cannot start is told so; the next one still gets its try
+      let started = false
+      while (!started && next.queue.length) started = this.startBatch(m, next.companyId, nextBatch(next.queue))
+      if (next.queue.length) this.pending.set(agentId, next)
     } catch (e) {
       this.d.log?.warn('forum responder: follow-up failed', { agentId, error: String(e) })
     }
+  }
+
+  private startBatch(m: ForumMember | null, companyId: string, batch: Queued[]): boolean {
+    const ids = batch.map((q) => q.messageId)
+    const wakeIds = batch.flatMap((q) => (q.wakeId ? [q.wakeId] : []))
+    const res = m ? this.wake(m, companyId, ids, { asker: batch[0]!.asker, wakeIds }) : null
+    this.noteOwed(m?.id ?? null, ids, res)
+    if (typeof res === 'string') {
+      if (wakeIds.length) this.d.onWakeStarted?.(wakeIds, res)
+      return true
+    }
+    if (res === QUEUED) return true
+    if (wakeIds.length) this.d.onWakeFailed?.(wakeIds, res?.error ?? 'the agent could not start its reply')
+    else if (m) this.tellRefused(ids[ids.length - 1]!, m.id, res)
+    return false
   }
 
   /**
@@ -282,12 +335,126 @@ export class ForumResponder {
       if (!this.d.enabled()) return null
       const m = this.d.store().member(memberId)
       if (!m || m.kind !== 'agent' || m.status !== 'active' || !m.agentId || m.companyId !== msg.companyId) return null
-      const r = this.wake(m, msg.companyId, [msg.id])
+      const r = this.wakeOwed(m, msg.companyId, [msg.id])
+      if (typeof r !== 'string') this.tellRefused(msg.id, m.id, r)
       return typeof r === 'string' ? r : null
     } catch (e) {
       this.d.log?.warn('forum responder: wake one failed', { memberId, messageId: msg.id, error: String(e) })
       return null
     }
+  }
+
+  /**
+   * Boot, once the engine failed the runs the quit left behind: each message still owed is answered or told why. An
+   * answer that got out stands; a reply is started again at most once, so a run that takes the app down cannot loop.
+   * Never throws.
+   */
+  recover(): void {
+    const journal = this.d.journal
+    if (!journal || !this.d.enabled()) return
+    try {
+      const all = journal.all()
+      const byMember = new Map<string, OwedReply[]>()
+      for (const r of all) if (r.memberId !== UNPICKED) byMember.set(r.memberId, [...(byMember.get(r.memberId) ?? []), r])
+      for (const [memberId, rows] of byMember) {
+        try {
+          this.recoverMember(journal, memberId, rows)
+        } catch (e) {
+          this.d.log?.warn('forum responder: recovery failed', { memberId, error: String(e) })
+          journal.drop(rows.map((r) => r.messageId), memberId)
+        }
+      }
+      for (const r of all.filter((x) => x.memberId === UNPICKED)) {
+        // already past the pick when the app went down: the rows above cover it
+        if (all.some((x) => x.messageId === r.messageId && x.memberId !== UNPICKED)) journal.picked(r.messageId)
+        else this.recoverPick(journal, r)
+      }
+    } catch (e) {
+      this.d.log?.warn('forum responder: recovery failed', { error: String(e) })
+    }
+  }
+
+  /** A person's message nobody was picked for: the pick runs again, once. */
+  private recoverPick(journal: ReplyJournal, r: OwedReply): void {
+    const msg = this.d.store().message(r.messageId)
+    if (msg.deletedAt) return journal.picked(r.messageId)
+    if (r.attempts > 0 || this.stale(r)) {
+      this.d.onUnanswered?.(r.messageId, UNPICKED, PICK_INTERRUPTED_REASON)
+      return journal.picked(r.messageId)
+    }
+    journal.retried([r.messageId], UNPICKED)
+    if (!this.d.repick?.(msg)) this.onHumanPost(msg)
+  }
+
+  private stale(r: OwedReply): boolean {
+    return this.now() - new Date(r.createdAt).getTime() > RECOVER_WITHIN_MS
+  }
+
+  /** An agent's ask a quit cut off: asked again once, else its asker stops waiting (ForumService.wakeFailed). */
+  private recoverAsk(journal: ReplyJournal, member: ForumMember | null, r: OwedReply, msg: ForumMessage): void {
+    const ask = this.d.askOf?.(msg, r.memberId)
+    if (!ask) return journal.drop([r.messageId], r.memberId)
+    if (!member?.agentId || r.attempts > 0 || this.stale(r)) {
+      this.d.onWakeFailed?.([ask.wakeId], INTERRUPTED_REASON)
+      return journal.drop([r.messageId], r.memberId)
+    }
+    journal.retried([r.messageId], r.memberId)
+    const res = this.wake(member, r.companyId, [r.messageId], { asker: ask.asker, wakeIds: [ask.wakeId] })
+    this.noteOwed(r.memberId, [r.messageId], res)
+    if (typeof res === 'string') this.d.onWakeStarted?.([ask.wakeId], res)
+    else if (res !== QUEUED) this.d.onWakeFailed?.([ask.wakeId], res?.error ?? INTERRUPTED_REASON)
+  }
+
+  private recoverMember(journal: ReplyJournal, memberId: string, owed: OwedReply[]): void {
+    const store = this.d.store()
+    const fromAgent = (r: OwedReply) => store.member(store.message(r.messageId).authorId)?.kind === 'agent'
+    for (const r of owed.filter(fromAgent)) this.recoverAsk(journal, store.member(memberId), r, store.message(r.messageId))
+    const rows = owed.filter((r) => !fromAgent(r))
+    // a run answers its last message; a reply there covers every message that run took
+    const runs = new Map<string, string>()
+    for (const r of rows) if (r.runId) runs.set(r.runId, r.messageId)
+    const replied = new Set([...runs].filter(([, last]) => journal.replied(last, memberId)).map(([runId]) => runId))
+    const left = rows.filter((r) => !r.runId || !replied.has(r.runId))
+    const answered = rows.filter((r) => !left.includes(r)).map((r) => r.messageId)
+    if (answered.length) journal.drop(answered, memberId)
+    if (!left.length) return
+    const ids = left.map((r) => r.messageId)
+    const last = ids[ids.length - 1]!
+    const member = store.member(memberId)
+    if (!member?.agentId) return journal.drop(ids, memberId)
+    if (left.every((r) => this.stale(r)) || left.some((r) => r.attempts > 0)) {
+      this.d.onUnanswered?.(last, memberId, INTERRUPTED_REASON)
+      return journal.drop(ids, memberId)
+    }
+    journal.retried(ids, memberId)
+    const first = ids.slice(0, RESPONDER_LIMITS.pending)
+    const r = this.wake(member, left[0]!.companyId, first, { resumed: left.some((x) => x.runId) })
+    if (typeof r === 'string' || r === QUEUED) {
+      this.noteOwed(memberId, first, r)
+      if (ids.length > first.length) this.wake(member, left[0]!.companyId, ids.slice(first.length))
+    } else {
+      this.tellRefused(last, memberId, r)
+      this.noteOwed(memberId, ids, r)
+    }
+    this.d.log?.info('forum responder: recovered a reply', { memberId, messages: ids.length, started: typeof r === 'string' })
+  }
+
+  /** `wake` for a person's message: owed on disk first, so a quit from here on loses nothing. */
+  private wakeOwed(member: ForumMember, companyId: string, messageIds: string[]): ReturnType<ForumResponder['wake']> {
+    this.d.journal?.add(messageIds, member.id, companyId, new Date(this.now()).toISOString())
+    const r = this.wake(member, companyId, messageIds)
+    this.noteOwed(member.id, messageIds, r)
+    return r
+  }
+
+  private noteOwed(memberId: string | null, messageIds: string[], r: ReturnType<ForumResponder['wake']>): void {
+    if (!this.d.journal || !memberId || r === QUEUED) return
+    if (typeof r === 'string') this.d.journal.started(messageIds, memberId, r)
+    else this.d.journal.drop(messageIds, memberId)
+  }
+
+  private tellRefused(messageId: string, memberId: string, r: symbol | { error: string } | null): void {
+    if (r && typeof r === 'object') this.d.onUnanswered?.(messageId, memberId, r.error)
   }
 
   private safeAsks(channelId: string): { identifier: string; ref: string; prompt: string }[] {
@@ -314,7 +481,9 @@ export class ForumResponder {
   wakeForAgent(member: ForumMember, companyId: string, messageId: string, asker: AgentAsker, wakeId: string): { runId: string | null; queued: boolean; error?: string } {
     try {
       if (!this.d.enabled()) return { runId: null, queued: false, error: 'the Forum is off' }
+      this.d.journal?.add([messageId], member.id, companyId, new Date(this.now()).toISOString())
       const r = this.wake(member, companyId, [messageId], { asker, wakeIds: [wakeId] })
+      this.noteOwed(member.id, [messageId], r)
       if (r === QUEUED) return { runId: null, queued: true }
       if (typeof r === 'string') return { runId: r, queued: false }
       return { runId: null, queued: false, error: r?.error ?? `@${member.handle} cannot answer now` }
@@ -323,13 +492,13 @@ export class ForumResponder {
     }
   }
 
-  private wake(member: ForumMember, companyId: string, messageIds: string[], opts: { asker?: AgentAsker | null; wakeIds?: string[] } = {}): string | typeof QUEUED | { error: string } | null {
+  private wake(member: ForumMember, companyId: string, messageIds: string[], opts: { asker?: AgentAsker | null; wakeIds?: string[]; resumed?: boolean } = {}): string | typeof QUEUED | { error: string } | null {
     const agentId = member.agentId!
     if (this.running.has(agentId)) {
-      const p = this.pending.get(agentId) ?? { companyId, messageIds: [], wakeIds: [], asker: null }
-      p.messageIds = [...new Set([...p.messageIds, ...messageIds])].slice(-RESPONDER_LIMITS.pending)
-      p.wakeIds = [...new Set([...p.wakeIds, ...(opts.wakeIds ?? [])])]
-      if (opts.asker) p.asker = opts.asker
+      const p = this.pending.get(agentId) ?? { companyId, queue: [] }
+      messageIds.forEach((messageId, i) => {
+        if (!p.queue.some((q) => q.messageId === messageId)) p.queue.push({ messageId, wakeId: opts.wakeIds?.[i] ?? null, asker: opts.asker ?? null })
+      })
       this.pending.set(agentId, p)
       return QUEUED
     }
@@ -340,7 +509,8 @@ export class ForumResponder {
     }
     const t = this.now()
     const recent = (this.starts.get(agentId) ?? []).filter((x) => t - x < HOUR)
-    if (recent.length >= RESPONDER_LIMITS.perHour) {
+    // the cap stops agents waking each other in a loop; a person is never that loop
+    if (opts.asker && recent.length >= RESPONDER_LIMITS.perHour) {
       this.d.log?.warn('forum responder: hourly cap', { agentId, cap: RESPONDER_LIMITS.perHour })
       return { error: `@${member.handle} already answered ${RESPONDER_LIMITS.perHour} messages in the last hour` }
     }
@@ -366,6 +536,7 @@ export class ForumResponder {
       asker: opts.asker ?? null,
       conversation,
       name: member.name,
+      resumed: opts.resumed,
       taskAsks: opts.asker ? [] : this.safeAsks(last.channelId),
       tasks: opts.asker || !conversation ? [] : this.safeStates(last.channelId)
     })

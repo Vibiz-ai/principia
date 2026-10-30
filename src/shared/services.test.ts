@@ -94,6 +94,7 @@ describe('service registry (data)', () => {
       geo: ['OPENAI_API_KEY?', 'PERPLEXITY_API_KEY?'],
       plausible: ['PLAUSIBLE_API_KEY'],
       posthog: ['POSTHOG_PERSONAL_API_KEY'],
+      activation: ['POSTHOG_PERSONAL_API_KEY'],
       stripe: ['STRIPE_RESTRICTED_KEY'],
       github: ['GITHUB_TOKEN?']
     })

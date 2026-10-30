@@ -209,6 +209,11 @@ export class RemoteAuth {
     return typeof header === 'string' && eq(header, this.csrfFor(deviceId))
   }
 
+  /** RA8: sha256hex(token) of each paired phone, for its sealed address */
+  hashes(): string[] {
+    this.sweepExpired()
+    return this.devs.map((d) => d.hash)
+  }
   get count(): number {
     return this.devs.length
   }

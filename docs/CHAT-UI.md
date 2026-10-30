@@ -341,6 +341,10 @@ a short title (3-6 words: "Unscheduled posts on Acme workspace", "Onboarding flo
 - Rename: click the title in the conversation, or right-click a row in Chats › Rename… (F2). A person's rename sets
   `titleBy: 'you'` in the channel's data, and ForumStore.autoTitle checks it inside its own write, so a rename made
   while the model was thinking still wins and the generator never touches it again.
+- Close: right-click a row in Chats › Close. It only leaves the list, per viewer (`lib/closedChats.ts`): nothing stops
+  or is deleted, and the row comes back by itself on newer activity or when it sorts higher (it needs you, went live,
+  has news). Search and Live only still reach it; "N closed" at the bottom of the list shows them, with right-click ›
+  Reopen. Closing the open chat lands on New task (the first open chat in All companies), so nothing gets read for you.
 - The title shows in the Chats list, Recent conversations and the conversation header (channel topic). Older
   conversations (no `titleBy`) are named once per app run when their company's conversations load (at most twelve,
   newest first); one with a second "set the topic" line was renamed by hand and keeps its title.
@@ -469,7 +473,7 @@ turn · 3m" and nothing else. Now (`components/conversations/TaskCard.tsx`, `lib
 - **Queued says why** (`queuedReason`, the dispatcher's gates in order): nobody assigned / waiting to be routed, the
   company or seat paused, dependencies not done ("Waiting for VO-3 to finish"), an open question, backlog / triage,
   a session seat, Autopilot off ("Autopilot is off in Vibiz: it waits for you to press Run now"), a manual seat, the
-  company at maxInFlight, the agent already running AGENT_MAX_PARALLEL tasks ("Julia is running 3 tasks; VO-15 starts when one finishes"), else "Starting in a moment". When it can start, **Run now**
+  company at a maxInFlight it set, else "Starting in a moment". When it can start, **Run now**
   (Start without code) sits on the card and calls `tasks:start`, the Board drawer's Run now; a refusal is shown inline
   on the card (`task-run-error`), not as a toast.
 - **Needs you** after a run stopped (blocked, needs input) shows the report it stopped with as an outcome line.
@@ -569,7 +573,7 @@ task. It should come back and reply to the parent so the parent tells what it ne
   The answer reaches the task through the same path as the drawer (`tasks:answer`: back to To do with "Answer: …";
   while its run still runs, it is held and applied when it parks), and **the answer is the founder's go-ahead**:
   `Dispatcher.goAhead` resumes the same agent at once, with autopilot off or a manual seat, past the company's in-flight
-  limit, never on a paused or archived company or seat, a session seat, or past AGENT_MAX_PARALLEL (it then keeps a
+  limit, never on a paused or archived company or seat, or a session seat (it then keeps a
   "Go ahead: …" wake, `startsWithoutAutopilot`, and the pump starts it when the reason clears). The drawer and the
   phone's `tasks:answer` do the same. The parent says "Got it, back on VO-15." only when the run really started (or was
   running); otherwise the true state ("Got it. Julia is running 3 tasks; VO-15 starts when one finishes.",
@@ -710,6 +714,15 @@ back on VO-15") the live card scrolls away to the top and the work is "hidden". 
   `conversations/taskCard.render.test.ts` (the dock's cards, the compact working and needs-you cards, the history's
   reference and the full card once done, the options as buttons without the "Options:" line, `startsGroup`, the strip's
   link to the dock), `cloud/phone/phone.test.ts` (pinned cards, references, "+N more").
+
+### 8.5.1 Waiting for a free slot (2026-10-30)
+
+A run takes one of the shared slots (Settings.concurrency) per step. With all of them taken it is `running` with no
+step, so `Run.slotWaitSince` marks it: set while no step of the run holds a slot and one is waiting for it, cleared when
+the step gets its slot (or the run ends). Every surface says so instead of "Working": the board card, the task's
+details, its card and dock row, the strip, the task chat, the run page and the status line agents read. The clock
+counts the wait. The phone gets the same words from the Mac: `line` and `activity` say so, and `slotWaitSince` on its
+board rows, task details and Now rows lets the app quiet the working tile and count the wait.
 
 ### 8.6 Tasks are the conversation's subagents (2026-10-28)
 

@@ -11,7 +11,7 @@
 import type { ChatOp, ChatSnapshot } from '../../shared/chat'
 import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
-import { checkMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
+import { checkMac, findMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
 import { ChatLoad, ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
@@ -229,19 +229,24 @@ async function moveTo(mac: string): Promise<void> {
       }
       return
     }
-    paired = { ...paired, mac }
-    saveMac(store, paired)
-    live?.close()
-    live = null
-    st.drafts['pair:paste'] = ''
-    history.replaceState(null, '', remembered() ?? '#/')
-    st.route = parseRoute(location.hash)
-    await start()
-    if (st.phase === 'in') say('Connected to your Mac at its new address')
+    await settleAt(mac)
   } finally {
     st.busy.delete('move')
     render()
   }
+}
+/** The Mac at `mac` has proved itself: keep the address and reconnect. */
+async function settleAt(mac: string): Promise<void> {
+  if (!paired) return
+  paired = { ...paired, mac }
+  saveMac(store, paired)
+  live?.close()
+  live = null
+  st.drafts['pair:paste'] = ''
+  history.replaceState(null, '', remembered() ?? '#/')
+  st.route = parseRoute(location.hash)
+  await start()
+  if (st.phase === 'in') say('Connected to your Mac at its new address')
 }
 const cid = (): Record<string, string> => ({ companyId: companyId() ?? '' })
 async function loadNow(): Promise<void> {
@@ -1027,6 +1032,26 @@ window.addEventListener('hashchange', () => {
   if (HOSTED && parseMoveHash(location.hash)) return void start()
   void onRoute()
 })
+// RA8: the Mac keeps its address across a restart, so it comes back here by itself (the iPhone app waits the same 20 s)
+// (or, after a reboot, at the new address it left sealed on this site)
+async function macBack(): Promise<void> {
+  const waiting = (): boolean => st.phase === 'out' && st.outReason === 'gone'
+  const p = paired
+  if (!HOSTED || !p || !(waiting() || (st.phase === 'in' && !st.online)) || st.busy.has('move') || st.busy.has('find') || document.visibilityState !== 'visible') return
+  st.busy.add('find')
+  try {
+    if ((await checkMac((...a) => fetch(...a), p.mac, p)) === 'ok') {
+      if (waiting()) void start()
+      return
+    }
+    const mac = await findMac((...a) => fetch(...a), location.origin, p)
+    if (mac && paired?.token === p.token && !st.busy.has('move')) await settleAt(mac)
+  } finally {
+    st.busy.delete('find')
+  }
+}
+setInterval(() => void macBack(), 20_000)
+document.addEventListener('visibilitychange', () => void macBack())
 // ticking times ("4m") stay true without a refetch
 setInterval(() => st.phase === 'in' && render({ live: true }), 30_000)
 void start()

@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentEvent } from '@shared/live'
 import type { TaskActivity, TaskDetail } from '@shared/company'
 import type { Id } from '@shared/types'
-import { TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
+import { SLOT_WAIT_LABEL, SLOT_WAIT_LINE, SLOT_WAIT_WHY, TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
 import { Button, EmptyState, Toolbar } from '../ui'
 import { Icon } from '../Icon'
 import { BrowserToggle } from '../browser/BrowserToggle'
@@ -45,6 +45,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const seat = useStore((s) => (task?.agentId ? s.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined))
   const runId = task?.runId ?? null
   const root = useStore((s) => (runId ? rootOfRun(Object.values(s.agents), runId) : null))
+  const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
   const code = useIsCode(task?.companyId)
   const display = useAgentDisplay()(seat)
@@ -120,11 +121,12 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const state = taskCardState({ status: task.status, blockReason: task.blockReason ?? null, ask: task.ask ?? null, runId: task.runId }, { openAsk: !!ask })
   const rootLive = !!root && (root.status === 'working' || root.status === 'starting' || root.status === 'needs_you')
   const isWorking = state === 'working'
+  const slotWait = isWorking ? slotWaitSince : null
   // what it does this moment: the running call in its own words ("Run the scheduler tests"), else the live line
   const runningCall = [...events].reverse().find((e) => e.kind === 'tool' && e.state === 'running')
-  const now = isWorking ? (rootLive ? (runningCall ? toolWords(runningCall, code) : (plainActivity(root!.activity, { code }) ?? 'Working…')) : 'Starting…') : null
+  const now = slotWait ? SLOT_WAIT_LINE : isWorking ? (rootLive ? (runningCall ? toolWords(runningCall, code) : (plainActivity(root!.activity, { code }) ?? 'Working…')) : 'Starting…') : null
   const result = taskCardResult({ report: task.report ?? null, doneNote: task.doneNote ?? null })
-  const since = root?.startedAt ?? task.updatedAt
+  const since = slotWait ?? root?.startedAt ?? task.updatedAt
   const question = state === 'needs_you' && task.ask && !task.ask.answer ? task.ask : null
   const face = seat ? <AgentBust agent={seat} size={26} /> : <AgentGlyph visual="running" />
   return (
@@ -148,7 +150,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
         sub={
           <span className="convo-title__sub task-live__state">
             <span className={`cx-strip__mark is-${state}`} aria-hidden />
-            <span className={isWorking ? 'shimmer-text' : ''}>{TASK_CARD_LABEL[state]}</span>
+            <span className={isWorking && !slotWait ? 'shimmer-text' : ''} title={slotWait ? SLOT_WAIT_WHY : undefined}>{slotWait ? SLOT_WAIT_LABEL : TASK_CARD_LABEL[state]}</span>
             {isWorking && (
               <>
                 <span className="cx-task__sep">·</span>
@@ -207,10 +209,10 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
         {now && (
           <div className="cx-pending" data-chatux="task-live-activity" aria-live="polite">
             <span className="task-live__dot" aria-hidden />
-            <span className="shimmer-text">{now}</span>
+            <span className={slotWait ? '' : 'shimmer-text'} title={slotWait ? SLOT_WAIT_WHY : undefined}>{now}</span>
           </div>
         )}
-        {!rootId && isWorking && <div className="task-live__empty text-tertiary">{who} is starting on it…</div>}
+        {!rootId && isWorking && !slotWait && <div className="task-live__empty text-tertiary">{who} is starting on it…</div>}
         {rootId && runId && (
           <div className="task-chat__log">
             <button type="button" className="link-btn" data-chatux="task-chat-fulllog" onClick={() => setLogOpen(!logOpen)} aria-expanded={logOpen}>

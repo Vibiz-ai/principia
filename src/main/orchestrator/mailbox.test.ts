@@ -53,6 +53,79 @@ describe('mailbox: questions from run reports', () => {
     expect((w.db.prepare('SELECT status, delivery FROM orch_mailbox').get())).toEqual({ status: 'answered', delivery: 'seat' })
   })
 
+  it.each([
+    ['failed', { status: 'failed' as const, output: '' }, 'the run failed'],
+    ['canceled', { status: 'canceled' as const, output: '' }, 'its run was canceled'],
+    ['empty', { output: '' }, 'it ended without an answer']
+  ])('a %s reply run: the blocking asker wakes with why, and a late real answer still counts', async (_name, res, why) => {
+    const { w, co, dev, mkt } = setup()
+    const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', 'auto', (t) => {
+      if (t.kind === 'reply') return res
+      return { output: report({ outcome: 'review', summary: 'Answered late', answers: [{ ref: w.posts(co.id).find((m) => m.kind === 'ask')!.ref, text: 'Warm and plain.' }] }) }
+    })
+    const prompts: string[] = []
+    const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'auto', (t) => {
+      prompts.push(t.prompt)
+      if (prompts.length === 1) return { output: report({ outcome: 'blocked', summary: 'Waiting on the tone', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which tone?', why: '', blocking: true }] }) }
+      return { output: report({ outcome: 'review', summary: `Turn ${prompts.length}` }) }
+    })
+    const task = w.task({ companyId: co.id, title: 'Launch banner', departmentId: dev.id, agentId: fixer.id })
+    await w.runNow(task.id)
+    await w.drain()
+    // the asker did not wait forever: its next turn says who could not answer, and why
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('could not answer')
+    expect(prompts[1]).toContain(why)
+    expect(w.db.prepare('SELECT status, refusal FROM forum_agent_wakes').get()).toEqual({ status: 'refused', refusal: 'start_failed' })
+    expect(w.posts(co.id).find((m) => m.kind === 'ask')!.ask).toMatchObject({ status: 'answered', noAnswer: true })
+    // the teammate's real answer comes later, from a task's run report: it replaces the "could not answer"
+    const late = w.task({ companyId: co.id, title: 'Tone guide', departmentId: mkt.id, agentId: writer.id })
+    await w.runNow(late.id)
+    await w.drain()
+    const lateRun = w.turns.find((t) => t.taskId === late.id)!.run.id
+    expect(w.orch(lateRun)!.actions.find((a) => a.kind === 'answer')).toMatchObject({ status: 'done' })
+    const ask = w.posts(co.id).find((m) => m.kind === 'ask')!
+    expect(ask.ask).toMatchObject({ status: 'answered', answer: 'Warm and plain.' })
+    expect(ask.ask?.noAnswer).toBeFalsy()
+    expect(w.db.prepare('SELECT status FROM forum_agent_wakes').get()).toEqual({ status: 'answered' })
+    expect(w.db.prepare('SELECT answer FROM orch_mailbox').get()).toEqual({ answer: 'Warm and plain.' })
+    expect(prompts.join('\n')).toContain('Warm and plain.')
+  })
+
+  it('a report that answers from the reply run itself is the answer, with no "could not answer" line', async () => {
+    const { w, co, dev, mkt } = setup()
+    const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', 'auto', () => ({ output: report({ outcome: 'answered', summary: 'Answered', answers: [{ ref: w.posts(co.id).find((m) => m.kind === 'ask')!.ref, text: 'Warm and plain.' }] }).replace(/^Done\.\n\n/, '') }))
+    const prompts: string[] = []
+    const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'auto', (t) => {
+      prompts.push(t.prompt)
+      if (prompts.length === 1) return { output: report({ outcome: 'blocked', summary: 'Waiting on the tone', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which tone?', why: '', blocking: true }] }) }
+      return { output: report({ outcome: 'review', summary: 'Done' }) }
+    })
+    const task = w.task({ companyId: co.id, title: 'Launch banner', departmentId: dev.id, agentId: fixer.id })
+    await w.runNow(task.id)
+    await w.drain()
+    const ask = w.posts(co.id).find((m) => m.kind === 'ask')!
+    expect(ask.ask).toMatchObject({ status: 'answered', answer: 'Warm and plain.' })
+    expect(prompts[1]).toContain('Warm and plain.')
+    expect(prompts[1]).not.toContain('could not answer')
+    expect(w.forum.store.thread(ask.id).replies.filter((m) => m.kind === 'system')).toEqual([])
+  })
+
+  it('a late answer to a question that did not block its task reaches the next inbox, without a wake', async () => {
+    const { w, co, dev, mkt } = setup()
+    const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', 'auto', () => ({ output: '' }))
+    const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'manual', () => ({ output: report({ outcome: 'review', summary: 'Done', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which tone?', why: '', blocking: false }] }) }))
+    const task = w.task({ companyId: co.id, title: 'Launch banner', departmentId: dev.id, agentId: fixer.id })
+    await w.runNow(task.id)
+    await w.drain()
+    const card = w.posts(co.id).find((m) => m.kind === 'ask')!
+    expect(card.ask?.noAnswer).toBe(true)
+    expect(w.mailbox.inbox(fixer.id, 'r_seen', false).map((i) => i.kind)).toEqual(['answer'])
+    w.forum.answer(card.id, w.forum.store.memberForAgent(writer.id)!.id, 'Warm and plain.', card.id)
+    expect(w.c.task(task.id).pendingWake).toBeFalsy()
+    expect(w.mailbox.inbox(fixer.id, 'r_next', false).map((i) => i.text).join()).toContain('Warm and plain.')
+  })
+
   it('a teammate busy on a task gets the question in that task, answers in its report, and the asker wakes', async () => {
     const { w, co, dev, mkt } = setup()
     let wTurns = 0

@@ -113,6 +113,8 @@ export async function hogql(ctx: ProviderCtx, query: string): Promise<unknown[][
 
 const NO_SQL = 'PostHog’s sign-in here doesn’t offer SQL queries. Add a personal API key for this dashboard instead.'
 const UNREADABLE = 'PostHog answered through the sign-in in a form Principia can’t read. Add a personal API key for this dashboard instead.'
+const BUSY = 'PostHog is busy right now. Try again in a minute.'
+const BUSY_RETRY_MS = 1500
 const toolCache = new WeakMap<McpReader, Promise<string[]>>()
 
 /**
@@ -132,44 +134,88 @@ export async function signInSql(mcp: McpReader, query: string): Promise<unknown[
     toolCache.delete(mcp)
     throw new DashboardFetchError('invalid_key', 'PostHog’s sign-in isn’t working. Sign in to PostHog again in Settings › Connections.')
   }
-  let res: unknown
-  try {
-    if (names.includes('execute-sql')) res = await mcp.call('execute-sql', { query })
-    else if (names.includes('exec')) res = await mcp.call('exec', { command: `call --json execute-sql ${JSON.stringify({ query })}`, context: 'Reading product analytics numbers for a dashboard.', llm_model: 'unknown' })
-    else throw new DashboardFetchError('unavailable', NO_SQL)
-  } catch (e) {
-    if (e instanceof DashboardFetchError) throw e
-    throw new DashboardFetchError('unavailable', 'PostHog didn’t answer through the sign-in. Try again later.')
+  const ask = async (): Promise<unknown> => {
+    try {
+      if (names.includes('execute-sql')) return await mcp.call('execute-sql', { query })
+      if (names.includes('exec')) return await mcp.call('exec', { command: `call --json execute-sql ${JSON.stringify({ query })}`, context: 'Reading product analytics numbers for a dashboard.', llm_model: 'unknown' })
+    } catch {
+      throw new DashboardFetchError('unavailable', 'PostHog didn’t answer through the sign-in. Try again later.')
+    }
+    throw new DashboardFetchError('unavailable', NO_SQL)
+  }
+  // a dashboard sends its queries together, and the server asks to retry a busy one once
+  let res = await ask()
+  if (isBusy(res)) {
+    await new Promise((resolve) => setTimeout(resolve, BUSY_RETRY_MS))
+    res = await ask()
   }
   return mcpRows(res)
 }
 
-/** Rows from an MCP tool result: structured content or JSON text with `results` (arrays, or objects in column order). */
+const isBusy = (res: unknown): boolean => {
+  const r = (res ?? {}) as { isError?: boolean; content?: { text?: string }[] }
+  return !!r.isError && (r.content ?? []).some((c) => /MaxToolTransientError/.test(c?.text ?? ''))
+}
+
+/**
+ * Rows from an MCP tool result: structured content, JSON text with `results` (arrays, objects in column order, or the
+ * table text below), or that table text alone.
+ */
 export function mcpRows(res: unknown): unknown[][] {
   const r = (res ?? {}) as { isError?: boolean; structuredContent?: unknown; content?: { type?: string; text?: string }[] }
+  if (isBusy(res)) throw new DashboardFetchError('unavailable', BUSY)
   if (r.isError) throw new DashboardFetchError('forbidden', 'PostHog turned down the query through the sign-in. Check that the sign-in picked this project and may read its data.')
   const candidates: unknown[] = [r.structuredContent]
+  const plain: string[] = []
   for (const c of r.content ?? []) {
     if (c?.type !== 'text' || typeof c.text !== 'string') continue
     const t = c.text.trim()
-    const start = t.search(/[[{]/)
-    if (start < 0) continue
     try {
+      const start = t.search(/[[{]/)
+      if (start < 0) throw new Error('not JSON')
       candidates.push(JSON.parse(t.slice(start)))
     } catch {
-      /* not JSON */
+      plain.push(t)
     }
   }
   for (const c of candidates) {
     const rows = findResults(c, 0)
     if (rows) return rows
   }
+  for (const t of plain) {
+    // only what starts with a line of column names: anything else is a sentence, not an empty table
+    const rows = t.split('\n', 1)[0]!.split('|').every((c) => /^\S+$/.test(c)) ? tableRows(t) : null
+    if (rows) return rows
+  }
   throw new DashboardFetchError('unavailable', UNREADABLE)
+}
+
+/**
+ * The table text PostHog's `execute-sql` answers with: a `|`-separated header line, then a line per row. Values are not
+ * escaped, so a `|` or a line break inside one looks like a separator. Every cell is text and nulls are `(null)`; `num`
+ * reads the numbers. A row with too many cells gives the extra back to its first column, the one text column in every
+ * dashboard query. Null when a row stays short.
+ */
+function tableRows(text: string): unknown[][] | null {
+  const [header, ...lines] = text.split('\n')
+  const width = header!.split('|').length
+  const rows: unknown[][] = []
+  let row = ''
+  for (const line of lines) {
+    row = row ? `${row}\n${line}` : line
+    const cells = row.split('|')
+    if (cells.length < width) continue
+    const extra = cells.length - width
+    rows.push([cells.slice(0, extra + 1).join('|'), ...cells.slice(extra + 1)].map((c) => (c === '(null)' ? null : c)))
+    row = ''
+  }
+  return row ? null : rows
 }
 
 function findResults(v: unknown, depth: number): unknown[][] | null {
   if (!v || typeof v !== 'object' || depth > 3) return null
   const o = v as Record<string, unknown>
+  if (typeof o.results === 'string') return tableRows(o.results)
   const list = Array.isArray(v) ? v : Array.isArray(o.results) ? o.results : null
   if (list) {
     if (list.every((x) => Array.isArray(x))) return list as unknown[][]

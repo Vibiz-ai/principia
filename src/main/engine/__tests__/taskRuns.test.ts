@@ -107,6 +107,16 @@ describe('engine: board task runs', () => {
     expect(seen.limits).toEqual([{ taskId: 'task_1', minutes: 1 }])
     expect(JSON.stringify(ctx.events)).toContain(TASK_WRAP_UP_TEXT.slice(0, 40))
   })
+  it('the time cap counts from the slot: a task that only waited for one is not stopped', async () => {
+    const { ctx, seen } = setup({ runMinutes: 1 })
+    ctx.settings.concurrency = 1
+    const engine = await engineFor(ctx, [], (r) => ({ output: 'ok', delayMs: r.prompt.includes('first') ? 700 : 0 }), { taskMinuteMs: 400 })
+    const first = engine.runs.start({ ...prompt(), prompt: 'first' }, { trigger: 'manual' })
+    const task = engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' })
+    expect((await waitRun(ctx, task.id)).status).toBe('passed')
+    expect((await waitRun(ctx, first.id)).status).toBe('passed')
+    expect(seen.limits).toEqual([])
+  })
   it('an explicit runMinutes wins over the seat; runs without a task have no cap', async () => {
     const { ctx, seen } = setup({ runMinutes: 1 })
     const engine = await engineFor(ctx, [], () => ({ output: 'ok', delayMs: 900 }), { taskMinuteMs: 300 })

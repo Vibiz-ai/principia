@@ -265,7 +265,7 @@ describe('"N tasks will start" before Autopilot goes on', () => {
     task('Old leftover two')
     task('Later', { status: 'backlog' })
     const pre = a.autopilotPreview({ companyId: co.id })
-    expect(pre).toMatchObject({ count: 2, maxInFlight: 3 })
+    expect(pre).toMatchObject({ count: 2, maxInFlight: 0 })
     expect(pre.tasks.map((t) => t.title)).toEqual(['Old leftover one', 'Old leftover two'])
     expect(() => a.autopilot({ companyId: co.id, on: true })).toThrow(/2 tasks will start/)
     expect(c.boardSettings(co.id).autopilot).toBe(false)
@@ -284,10 +284,10 @@ describe('"N tasks will start" before Autopilot goes on', () => {
 })
 
 describe('Autopilot on by default for new companies', () => {
-  it('a company just created gets Autopilot on with the usual limits; existing ones, Personal and one with work keep theirs', () => {
+  it('a company just created gets Autopilot on with no limit on tasks at once; existing ones, Personal and one with work keep theirs', () => {
     const fresh = newCompanyAutopilotOn(c, c.create({ name: 'New Bakery' }))
     expect(fresh.autopilot).toBe(true)
-    expect(c.boardSettings(fresh.id)).toEqual({ companyId: fresh.id, autopilot: true, maxInFlight: 3 })
+    expect(c.boardSettings(fresh.id)).toEqual({ companyId: fresh.id, autopilot: true, maxInFlight: 0 })
     // an existing company is never touched (only the create paths call this)
     const old = c.create({ name: 'Old Shop' })
     expect(c.boardSettings(old.id).autopilot).toBe(false)

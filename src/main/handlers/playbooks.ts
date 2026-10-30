@@ -69,7 +69,7 @@ export function playbookOverview(h: Hive, companyId: string): AutopilotOverview 
       const last = h.safe(() => h.db.prepare('SELECT kind, actor FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(t.id) as { kind: string; actor: string | null } | undefined, undefined)
       if (last?.kind === 'paused' && last.actor === 'human') held.add(t.id)
     }
-    return { id: t.id, identifier: t.identifier, title: t.title, status: t.status, blockReason: t.blockReason ?? null, agentId: t.agentId ?? null, dependencyIds: t.dependencyIds, priority: t.priority, plan: !!t.plan, heldByYou: held.has(t.id), scheduleCard: t.source === 'schedule' }
+    return { id: t.id, identifier: t.identifier, title: t.title, status: t.status, blockReason: t.blockReason ?? null, agentId: t.agentId ?? null, dependencyIds: t.dependencyIds, priority: t.priority, plan: !!t.plan, heldByYou: held.has(t.id), limitWait: t.limitWait ?? null, scheduleCard: t.source === 'schedule' }
   })
   const pb = h.playbooks
   const byAgent = new Map(raw.map((a) => [a.id, nameOf(a)]))

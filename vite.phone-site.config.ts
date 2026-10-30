@@ -4,7 +4,8 @@
  * origin, the socket's first message. The site holds no data.
  *
  * Build: `npm run build:phone-site` -> dist-phone-site/ (with vercel.json copied in from phone-site/vercel.json).
- * Deploy: `npx vercel deploy dist-phone-site --prod` (static files only: no build or install on Vercel).
+ * Deploy: `npx vercel deploy dist-phone-site --prod` (no build or install on Vercel: static files and one function with
+ * no dependencies, phone-site/api/where.mjs, which needs a Redis store, REMOTE.md RA8).
  * PHONE_SITE_CLOUD_ORIGIN=https://cloud.example.com adds a Principia Cloud origin to the CSP's connect-src.
  * Local stand-in for Vercel: `npm run preview:phone-site` (127.0.0.1, the same headers, plus loopback in connect-src so
  * it can reach a Phone server on this Mac without a tunnel).
@@ -15,6 +16,7 @@ import { defineConfig, type Plugin } from 'vite'
 
 const OUT = resolve(__dirname, process.env.PHONE_SITE_OUT_DIR ?? 'dist-phone-site')
 const VERCEL = resolve(__dirname, 'phone-site/vercel.json')
+const LOOKUP = resolve(__dirname, 'phone-site/api/where.mjs')
 
 interface VercelJson {
   headers: { source: string; headers: { key: string; value: string }[] }[]
@@ -46,6 +48,8 @@ const vercelJson = (): Plugin => ({
   apply: 'build',
   closeBundle() {
     fs.writeFileSync(resolve(OUT, 'vercel.json'), `${JSON.stringify(siteVercelJson(), null, 2)}\n`)
+    fs.mkdirSync(resolve(OUT, 'api'), { recursive: true })
+    fs.copyFileSync(LOOKUP, resolve(OUT, 'api/where.mjs'))
   }
 })
 

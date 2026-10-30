@@ -8,7 +8,7 @@ import { createEngineStore, runTaskLink } from '../db/engineStore'
 import { LiveStore } from '../db/liveStore'
 import { Dispatcher, HookedCompanyStore, pauseAllAgents, taskRunBridge, type DispatcherSessions } from './dispatcher'
 import type { StartRunOptions } from '../../shared/engine'
-import { AGENT_MAX_PARALLEL, type CompanyTaskInput } from '../../shared/company'
+import type { CompanyTaskInput } from '../../shared/company'
 import type { Run, RunTarget, Session } from '../../shared/types'
 
 let db: DB; let store: Store; let c: HookedCompanyStore; let dir: string; let d: Dispatcher
@@ -167,19 +167,24 @@ describe('DEPARTMENTS.md §3 dispatcher: assignment is the wake', () => {
     // the human click reset the wake guard of the task it started
     expect(c.task(t2.id).autoWakes).toEqual({ windowStart: null, n: 0 })
   })
-  it('automatic starts stop at AGENT_MAX_PARALLEL tasks per agent; the next one starts when one finishes', async () => {
-    const { co, agent, task } = board({ autopilot: false })
-    const ts = [1, 2, 3, 4].map(n => task({ title: `Task ${n}` }))
-    c.setAutopilot(co.id, true, 10)
-    for (let i = 0; i < 5; i++) await d.pump(co.id)
-    expect(started).toHaveLength(AGENT_MAX_PARALLEL)
-    const waiting = ts.find(t => c.task(t.id).status === 'todo')!
-    // a system start of the waiting one is refused with the plain line; a human one is not
-    expect(() => c.startTask(waiting.id, undefined, () => { throw new Error('no run') }, { actor: 'system' })).toThrow(`${agent.name} is running ${AGENT_MAX_PARALLEL} tasks; ${waiting.identifier} starts when one finishes`)
-    end(started[0].run.id, 'passed')
-    await settle()
-    expect(c.task(waiting.id).status).toBe('in_progress')
-    expect((db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress'").get(agent.id) as { n: number }).n).toBe(AGENT_MAX_PARALLEL)
+  it('PR-69: with no limit set, one agent takes every task it has, past the old caps of 3', async () => {
+    const { co, task } = board({ autopilot: false })
+    const ts = [1, 2, 3, 4, 5, 6].map(n => task({ title: `Task ${n}` }))
+    c.setAutopilot(co.id, true)
+    expect(c.boardSettings(co.id).maxInFlight).toBe(0)
+    for (let i = 0; i < ts.length; i++) await d.pump(co.id)
+    expect(started).toHaveLength(ts.length)
+    expect(ts.every(t => c.task(t.id).status === 'in_progress')).toBe(true)
+  })
+  it('PR-69: a limit the founder sets still holds; 0 takes it off again', async () => {
+    const { co, task } = board({ autopilot: false })
+    const ts = [1, 2, 3].map(n => task({ title: `Task ${n}` }))
+    c.setAutopilot(co.id, true, 1)
+    for (let i = 0; i < 3; i++) await d.pump(co.id)
+    expect(started).toHaveLength(1)
+    c.setAutopilot(co.id, true, 0)
+    for (let i = 0; i < 3; i++) await d.pump(co.id)
+    expect(started).toHaveLength(ts.length)
   })
 })
 
@@ -323,6 +328,130 @@ describe('DEPARTMENTS.md §3.5-3.6: coalesced wakes, follow-ups, guards', () => 
     const prompt = runsOf(second.id)[0].target.kind === 'prompt' ? (runsOf(second.id)[0].target as { prompt: string }).prompt : ''
     expect(prompt).toContain('Unblocked: every dependency is done.')
     expect(kinds(second.id)).toEqual(expect.arrayContaining(['healed', 'woke', 'started']))
+  })
+  describe('a run stopped by the usage limit (LIVE.md §16.1)', () => {
+    const RESET = '2026-10-20T12:00:00.000Z'
+    /** The engine's end of a rate-limited run. */
+    function limited(runId: string, resetAt: string | null = RESET) {
+      db.prepare("UPDATE runs SET status='failed', reason='usage limit' WHERE id=?").run(runId)
+      const run = started.find(s => s.run.id === runId)!.run
+      d.onRunUpdated({ ...run, status: 'failed', reason: 'usage limit', stopReason: 'rate_limited', resetAt })
+    }
+    const lastPrompt = () => { const t = started.at(-1)!.target; return t.kind === 'prompt' ? t.prompt : '' }
+    // CompanyStore reads the real clock
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: clock }) })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('waits in To do, not Needs you, and restarts once at the reset with its conversation', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      d.sessionCaptured({ runId: started[0].run.id, agentSessionId: 'conv-1' })
+      limited(started[0].run.id)
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'todo', blockReason: null, agentSessionId: 'conv-1', limitWait: { resetAt: RESET, retryAt: '2026-10-20T12:01:00.000Z', restarted: false } })
+      expect(c.detail(t.id).activity.at(-1)).toMatchObject({ kind: 'paused', by: 'system', message: expect.stringContaining('usage limit') })
+
+      await d.tick()
+      expect(started).toHaveLength(1)
+      clock = new Date('2026-10-20T12:01:00.000Z')
+      await d.tick()
+      expect(started).toHaveLength(2)
+      expect(started[1].opts.resumeSessionId).toBe('conv-1')
+      expect(lastPrompt()).toContain('stopped at the usage limit')
+      expect(c.task(t.id)).toMatchObject({ status: 'in_progress', limitWait: { restarted: true } })
+    })
+    it('a second limit after the restart parks it in Needs you, with the reason', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      limited(started[0].run.id)
+      await settle()
+      clock = new Date('2026-10-20T12:01:00.000Z')
+      await d.tick()
+      limited(started[1].run.id, '2026-10-20T17:00:00.000Z')
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'run_failed', limitWait: null })
+      expect(c.detail(t.id).activity.at(-1)?.message).toContain('again after its one automatic restart')
+      clock = new Date('2026-10-20T18:00:00.000Z')
+      await d.tick()
+      expect(started).toHaveLength(2)
+    })
+    it('a restart that finishes clears the wait, so a later limit gets its own restart', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      limited(started[0].run.id)
+      await settle()
+      clock = new Date('2026-10-20T12:01:00.000Z')
+      await d.tick()
+      report(t.id)
+      end(started[1].run.id, 'passed')
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'in_review', limitWait: null })
+    })
+    it('with autopilot off the founder\'s Start carries over to the restart', async () => {
+      const { task } = board({ autopilot: false, autonomy: 'manual' })
+      const t = task()
+      d.runNow(t.id)
+      limited(started[0].run.id)
+      await settle()
+      clock = new Date('2026-10-20T12:01:00.000Z')
+      await d.tick()
+      expect(started).toHaveLength(2)
+      expect(c.task(t.id).status).toBe('in_progress')
+    })
+    it('Pause all agents before the reset stops an autopilot task from restarting', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      limited(started[0].run.id)
+      await settle()
+      d.pauseAll()
+      clock = new Date('2026-10-20T12:01:00.000Z')
+      await d.tick()
+      expect(started).toHaveLength(1)
+      expect(c.task(t.id).status).toBe('todo')
+    })
+    it('a person can start it before the reset, and that start keeps a restart of its own', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      limited(started[0].run.id)
+      await settle()
+      d.runNow(t.id)
+      expect(c.task(t.id)).toMatchObject({ status: 'in_progress', limitWait: null })
+      limited(started[1].run.id)
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'todo', limitWait: { restarted: false } })
+    })
+    it('with Settings.autoRetryRateLimit off it stops in Needs you, as before', async () => {
+      store.updateSettings({ autoRetryRateLimit: false })
+      const { task } = board()
+      const t = task()
+      await settle()
+      limited(started[0].run.id)
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'run_failed', limitWait: null })
+    })
+    it('any other failure still parks and drops the conversation', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      d.sessionCaptured({ runId: started[0].run.id, agentSessionId: 'conv-1' })
+      end(started[0].run.id, 'failed', 'boom')
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'run_failed', agentSessionId: null })
+    })
+    it('a report the agent got out before the limit wins', async () => {
+      const { task } = board()
+      const t = task()
+      await settle()
+      report(t.id)
+      limited(started[0].run.id)
+      await settle()
+      expect(c.task(t.id)).toMatchObject({ status: 'in_review', limitWait: null })
+    })
   })
   it('a restart never reruns interrupted tasks', async () => {
     const { task } = board()

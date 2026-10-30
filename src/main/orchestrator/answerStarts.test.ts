@@ -81,7 +81,7 @@ function setup(opts: { reply?: (turn: Turn, w: OrchWorld, n: number) => Promise<
   return { w, co, owner, julia, jm, conv, say, inConv, fromJulia, stuck, calls, setKind, prompts, replyTurns: () => w.turns.filter((t) => t.kind === 'reply').length }
 }
 
-/** Fills the agent's AGENT_MAX_PARALLEL slots with other in-flight tasks. */
+/** Gives the agent three other tasks in flight. */
 function fill(w: OrchWorld, companyId: string, agentId: string): string[] {
   return [1, 2, 3].map((i) => {
     const t = w.task({ companyId, agentId, title: `Other ${i}` })
@@ -124,19 +124,13 @@ describe('a task the founder asked for starts on their word', () => {
     expect(fromJulia().filter((m) => m.text === `Got your answer. Back on ${t.identifier}.`)).toHaveLength(1)
   })
 
-  it('cannot start (the agent is full, or paused): the true state, never "back on"; it starts once a slot frees', async () => {
+  it('PR-69: a busy agent never holds an answer: it resumes beside the other work', async () => {
     const { w, co, julia, say, stuck, fromJulia } = setup()
     const t = await stuck()
-    const others = fill(w, co.id, julia.id)
+    fill(w, co.id, julia.id)
     await say('the main app')
-    expect(w.c.task(t.id).status).toBe('todo')
-    const acks = fromJulia().filter((m) => m.text.startsWith('Got it'))
-    expect(acks.map((m) => m.text)).toEqual([`Got it. Product Lead is running 3 tasks; ${t.identifier} starts when one finishes.`])
-    expect(fromJulia().some((m) => /back on/i.test(m.text))).toBe(false)
-    // a slot frees: the pump starts it (autopilot still off: the answer was the go-ahead)
-    w.db.prepare("UPDATE company_tasks SET status='done', data=json_set(data,'$.status','done') WHERE id=?").run(others[0])
-    await w.d.pump(co.id)
     expect(w.c.task(t.id).status).toBe('in_progress')
+    expect(fromJulia().filter((m) => m.text === `Got it, back on ${t.identifier}.`)).toHaveLength(1)
   })
 
   it('the company’s in-flight limit does not hold an answered task (the founder said go); the seat’s cap does', async () => {
@@ -260,11 +254,12 @@ describe('the agent starts a filed task when the founder says go', () => {
     const req = w.forum.store.post(owner.id, { channelId: conv.id, text: 'Pricing page for the new plan' })
     const t = w.forum.toTask(req.id, owner.id, julia.id)
     id = t.identifier
-    fill(w, co.id, julia.id)
+    const dep = w.task({ companyId: co.id, agentId: julia.id, title: 'First this' })
+    w.c.updateTask(t.id, { dependencyIds: [dep.id] })
     await say('go ahead')
     await w.drain()
     expect(said.result).toContain('did not start')
-    expect(fromJulia().map((m) => m.text)).toContain(`Product Lead is running 3 tasks; ${t.identifier} starts when one finishes.`)
+    expect(fromJulia().map((m) => m.text)).toContain(`${t.identifier} starts as soon as its dependencies are done.`)
     expect(fromJulia().some((m) => m.text.startsWith('Starting'))).toBe(false)
   })
 

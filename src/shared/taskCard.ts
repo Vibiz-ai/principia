@@ -6,7 +6,7 @@
  *
  * Pure: shared by main (the stored state, the phone), the renderer and the phone web app.
  */
-import { AGENT_MAX_PARALLEL, DEFAULT_MAX_IN_FLIGHT, agentFullLine } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, atInFlightLimit, limitHeld, type LimitWait } from './company'
 
 /** What the card says about its task. */
 export const TASK_CARD_STATES = ['queued', 'working', 'needs_you', 'in_review', 'done', 'failed'] as const
@@ -58,6 +58,11 @@ export interface CardTask {
   ask?: { answer?: string | null } | null
   runId?: string | null
 }
+
+/** A working task whose run has no free slot yet (Run.slotWaitSince): the words every surface uses. */
+export const SLOT_WAIT_LABEL = 'Waiting for a slot'
+export const SLOT_WAIT_LINE = 'Waiting for a free slot'
+export const SLOT_WAIT_WHY = 'Every shared slot is in use, so this waits and starts by itself when one frees up.'
 
 /** Blocked because the run went wrong (not because it waits on a person or on other tasks). */
 const RUN_WENT_WRONG = new Set(['run_failed', 'interrupted', 'no_report', 'limit'])
@@ -132,7 +137,7 @@ export function clockLabel(fromIso: string, toIso: string | null | undefined = n
 
 /** What a queued card needs to say why it waits: the gates the dispatcher checks (DEPARTMENTS.md §3). */
 export interface QueueInput {
-  task: { status: string; identifier?: string; blockReason?: string | null; agentId?: string | null; assigneeProfileId?: string | null; ask?: { answer?: string | null } | null }
+  task: { status: string; identifier?: string; blockReason?: string | null; agentId?: string | null; assigneeProfileId?: string | null; ask?: { answer?: string | null } | null; limitWait?: LimitWait | null }
   /** the seat on it (null: nobody, or its row is gone) */
   agent: { name: string; archivedAt?: string | null; pausedAt?: string | null; data?: { autonomy?: string; mode?: string } } | null
   company: { name: string; autopilot?: boolean; pausedAt?: string | null; maxInFlight?: number } | null
@@ -140,8 +145,6 @@ export interface QueueInput {
   depsOpen?: readonly string[]
   /** the company's tasks in flight right now (in progress with a run) */
   inFlight?: number
-  /** how many other tasks its agent is running right now (an agent works on up to AGENT_MAX_PARALLEL at once) */
-  agentRunning?: number
   /** work the founder already said go to starts with autopilot off too (startsWithoutAutopilot) */
   startsAnyway?: boolean
   /** "Run now" for a company with code, "Start" without */
@@ -156,6 +159,12 @@ export interface QueueReason {
 
 const listIds = (ids: readonly string[]): string => (ids.length <= 2 ? ids.join(' and ') : `${ids.slice(0, 2).join(', ')} and ${ids.length - 2} more`)
 
+/** "Waiting for the usage limit to reset · restarts at 15:01" */
+export function limitWaitLine(w: Pick<LimitWait, 'retryAt'>): string {
+  const at = new Date(w.retryAt)
+  return `Waiting for the usage limit to reset · restarts at ${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`
+}
+
 /** Why a queued task has not started, in words, and whether Run now can start it from the card (CHAT-UI.md §8). */
 export function queuedReason(i: QueueInput): QueueReason {
   const t = i.task
@@ -168,6 +177,7 @@ export function queuedReason(i: QueueInput): QueueReason {
   if (i.agent && (i.agent.archivedAt || i.agent.pausedAt)) return { text: `${i.agent.name} is ${i.agent.archivedAt ? 'archived' : 'paused'}`, canRun: false }
   if ((t.status === 'blocked' && t.blockReason === 'deps') || deps.length) return { text: deps.length ? `Waiting for ${listIds(deps)} to finish` : 'Waiting for its dependencies to finish', canRun: false }
   if (t.ask && !t.ask.answer) return { text: 'Waiting for your answer', canRun: false }
+  if (limitHeld(t)) return { text: limitWaitLine(t.limitWait!), canRun: true }
   if (t.status === 'backlog') return { text: `In the backlog: it starts when it moves to To do, or with ${run}`, canRun: true }
   if (t.status === 'triage') return { text: `In triage: it starts once it is routed, or with ${run}`, canRun: true }
   if (i.agent?.data?.mode === 'session') return { text: `${who} works in a session: it starts when you press ${run}`, canRun: true }
@@ -175,9 +185,7 @@ export function queuedReason(i: QueueInput): QueueReason {
   if (i.agent?.data?.autonomy && i.agent.data.autonomy !== 'auto' && !i.startsAnyway) return { text: `${who} starts only when you say so: press ${run}`, canRun: true }
   const max = typeof company?.maxInFlight === 'number' && company.maxInFlight >= 1 ? company.maxInFlight : DEFAULT_MAX_IN_FLIGHT
   const inFlight = i.inFlight ?? 0
-  if (inFlight >= max) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
-  const mine = i.agentRunning ?? 0
-  if (mine >= AGENT_MAX_PARALLEL) return { text: agentFullLine(who, mine, t.identifier ?? 'this task'), canRun: true }
+  if (atInFlightLimit(inFlight, max)) return { text: `${inFlight} tasks are already running${company ? ` in ${company.name}` : ''} (at most ${max} at once)`, canRun: true }
   return { text: 'Starting in a moment', canRun: true }
 }
 
@@ -191,6 +199,8 @@ export interface StripTask {
   startedAt: string
   /** when its run started working (the run's root agent): a working task's clock counts from here */
   since?: string | null
+  /** since when its run has been waiting for a free slot */
+  slotWait?: string | null
 }
 export interface WorkingStrip {
   /** the collapsed line: "Julia is working on VO-9 · 2m", "2 tasks running · 1 needs you" */
@@ -211,23 +221,26 @@ export function workingStrip(cards: readonly StripTask[], now: number = Date.now
   if (tasks.length === 1) {
     const t = focus
     // the same clock as the card: a working task counts from its run's start, a queued one from when it was filed
-    const age = elapsedLabel(t.state === 'working' && t.since ? t.since : t.startedAt, null, now)
+    const age = elapsedLabel(t.state === 'working' ? (t.slotWait ?? t.since ?? t.startedAt) : t.startedAt, null, now)
     const who = t.who ?? 'Nobody yet'
     const line =
       t.state === 'needs_you'
         ? `${t.identifier} needs you${t.who ? ` · ${t.who} is waiting` : ''}`
         : t.state === 'working'
-          ? `${who} is working on ${t.identifier}`
+          ? t.slotWait
+            ? `${t.identifier} is waiting for a free slot`
+            : `${who} is working on ${t.identifier}`
           : `${t.identifier} is queued${t.who ? ` for ${t.who}` : ''}`
     return { line: age ? `${line} · ${age}` : line, tasks, focus }
   }
   const needs = tasks.filter((t) => t.state === 'needs_you').length
   const queued = tasks.filter((t) => t.state === 'queued').length
   const needLine = needs ? ` · ${needs} need${needs === 1 ? 's' : ''} you` : ''
-  // "running" only when nothing waits for its turn: a queued task is not running yet
-  if (!queued) return { line: `${tasks.length} tasks running${needLine}`, tasks, focus }
-  const working = tasks.length - queued - needs
-  return { line: `${tasks.length} tasks${working ? ` · ${working} working` : ''} · ${queued} queued${needLine}`, tasks, focus }
+  const slots = tasks.filter((t) => t.state === 'working' && t.slotWait).length
+  // "running" only when nothing waits for its turn: a queued task, or one waiting for a slot, is not running yet
+  if (!queued && !slots) return { line: `${tasks.length} tasks running${needLine}`, tasks, focus }
+  const working = tasks.length - queued - needs - slots
+  return { line: `${tasks.length} tasks${working ? ` · ${working} working` : ''}${slots ? ` · ${slots} waiting for a slot` : ''}${queued ? ` · ${queued} queued` : ''}${needLine}`, tasks, focus }
 }
 
 /** The card's text line (what an older client, a search hit or a notification shows). */
@@ -343,6 +356,8 @@ export interface TaskStatusInput {
   latest?: { at: string; text: string } | null
   /** why a queued task has not started (queuedReason) */
   waiting?: string | null
+  /** since when its run has been waiting for a free slot */
+  slotWait?: string | null
 }
 
 const cut = (s: string, n: number): string => {
@@ -356,7 +371,8 @@ export function taskStatusLine(t: TaskStatusInput, now: number = Date.now()): st
   const head = `${t.identifier}${t.title ? ` “${cut(t.title, 80)}”` : ''}`
   const ago = (iso: string) => elapsedLabel(iso, null, now)
   let body: string
-  if (state === 'working') body = `working now${t.who ? ` (${t.who})` : ''}${t.since ? `, for ${ago(t.since)}` : ''}`
+  if (state === 'working' && t.slotWait) body = `not started yet: every slot is in use, it starts by itself when one frees up (waiting ${ago(t.slotWait)})`
+  else if (state === 'working') body = `working now${t.who ? ` (${t.who})` : ''}${t.since ? `, for ${ago(t.since)}` : ''}`
   else if (state === 'needs_you') body = t.ask?.prompt && !t.ask.answer ? `waiting for the person's answer: “${cut(t.ask.prompt, 200)}”` : `blocked (${t.blockReason ?? 'needs the person'})`
   else if (state === 'queued') body = `not started yet: ${t.waiting ? cut(t.waiting, 160) : 'waiting for its turn'}`
   else if (state === 'in_review') body = 'finished, waiting for the person to review it'

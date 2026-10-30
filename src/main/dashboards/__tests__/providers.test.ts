@@ -1,11 +1,13 @@
 import { createPublicKey, createVerify, generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import type { DashboardConfig } from '../../../shared/dashboards'
 import { DashboardFetchError, codeForStatus, getJson, providerMessage, scrub, type HttpFn, type HttpReq } from '../http'
 import { fixtureGeoEngines, fixtureHttp, SAMPLE_CONFIG } from '../fixtures'
 import { gscProvider, gscTotals, homeUrl, parseServiceAccount, serviceAccountJwt } from '../providers/gsc'
 import { aggregateGeo, appendTrend, firstMention, geoProvider, hostOf, scoreAnswer, GEO_TREND_MAX } from '../providers/geo'
 import { ciSuccess, ghStatus, githubProvider, median, mergeHours, repoOf, weeklyMerged } from '../providers/github'
 import { hostOf as analyticsHost, plausibleProvider, posthogProvider } from '../providers/analytics'
+import { activationProvider, activationSetup, activationSql, customersSql } from '../providers/activation'
 import type { ProviderCtx } from '../providers/types'
 
 const NOW = new Date('2026-10-23T12:00:00Z')
@@ -239,5 +241,118 @@ describe('web analytics', () => {
     expect(snap.kpis.users).toEqual({ value: 9120, previous: 8030 })
     expect(snap.kpis.viewsPerUser.value).toBeCloseTo(52310 / 9120)
     expect(snap.tables.referrers[0].referrer).toBe('Direct')
+  })
+})
+
+describe('activation and churn', () => {
+  const config = { projectId: '12345', signupEvent: 'signed_up', steps: ['created', 'shipped'], excludeEmails: ['@acme.example'], excludeSubscriptionTypes: ['add_on'] }
+  const keys = { POSTHOG_PERSONAL_API_KEY: 'phx_real' }
+  const sent = (req: HttpReq): string => (JSON.parse(req.body!) as { query: { query: string } }).query.query
+  // day, new users, reached created, reached shipped
+  const days = [
+    ['2026-09-10', 40, 20, 4], // the previous period's activation cohort
+    ['2026-09-20', 60, 30, 3],
+    ['2026-10-01', 100, 50, 10],
+    ['2026-10-14', 100, 40, 30],
+    ['2026-10-20', 50, 5, 0] // too recent to judge activation
+  ]
+  const customers = [640, 630, 60, 50, 40, 30, 900, 800, '2026-10-20,2026-10-21,2026-10-13', '2026-10-22']
+  const posthog = (stripe: (req: HttpReq) => { status: number; body: unknown } = () => ({ status: 200, body: { results: [customers] } })): HttpFn => async (req) => {
+    if (sent(req).includes('stripe.subscription')) return { ...stripe(req), retryAfter: null }
+    return { status: 200, body: { results: days }, retryAfter: null }
+  }
+
+  it('reads activation only from signups old enough to have had the full 7 days', async () => {
+    const snap = await activationProvider.fetch(ctx({ http: posthog(), keys, config }))
+    // Sep 19 to Oct 16 count: 7 days before today's 28-day window. Oct 20 is too young.
+    expect(snap.kpis.activation.value).toBeCloseTo(43 / 260)
+    expect(snap.kpis.activation.previous).toBeCloseTo(4 / 40)
+    expect(snap.kpis.newUsers).toEqual({ value: 250, previous: 100 })
+    expect(snap.tables.steps).toEqual([
+      { step: 'New users', people: 260, share: 1 },
+      { step: 'created', people: 120, share: 120 / 260 },
+      { step: 'shipped', people: 43, share: 43 / 260 }
+    ])
+  })
+
+  it('leaves the activation of weeks still in their window blank, and keeps both chart lines the same length', async () => {
+    const snap = await activationProvider.fetch(ctx({ http: posthog(), keys, config }))
+    const newest = snap.tables.weeks[0]
+    expect(newest).toMatchObject({ week: 'Oct 19', users: 50, activated: null, rate: null, newPaying: 2, churned: 1 })
+    expect(snap.tables.weeks).toHaveLength(8)
+    const [users, activated] = snap.series.signups
+    expect(activated.points.map((p) => p.t)).toEqual(users.points.map((p) => p.t))
+    expect(users.points.at(-1)?.t).toBe('2026-10-05')
+  })
+
+  it('shows customers and churn from the Stripe totals, churn rate over those paying in the period', async () => {
+    const snap = await activationProvider.fetch(ctx({ http: posthog(), keys, config }))
+    expect(snap.kpis.paying).toEqual({ value: 640, previous: 630 })
+    expect(snap.kpis.newPaying).toEqual({ value: 60, previous: 50 })
+    expect(snap.kpis.churned).toEqual({ value: 40, previous: 30 })
+    expect(snap.kpis.churnRate.value).toBeCloseTo(40 / 900)
+    expect(snap.kpis.churnRate.previous).toBeCloseTo(30 / 800)
+    expect(snap.series.customers.map((s) => s.points.at(-1)?.v)).toEqual([2, 1])
+    expect(snap.warnings).toBeUndefined()
+  })
+
+  it('with no Stripe source keeps the activation half and says what is missing', async () => {
+    const snap = await activationProvider.fetch(ctx({ http: posthog(() => ({ status: 400, body: { detail: 'Unknown table' } })), keys, config }))
+    expect(snap.kpis.newUsers.value).toBe(250)
+    expect(snap.kpis.churned.value).toBeNull()
+    expect(snap.series.customers).toEqual([])
+    expect(snap.tables.weeks[0]).toMatchObject({ newPaying: null, churned: null })
+    expect(snap.warnings?.[0]).toContain('Stripe source')
+  })
+
+  it('does not hide a failed key behind the missing-Stripe note', async () => {
+    const err = await activationProvider.fetch(ctx({ http: posthog(() => ({ status: 401, body: null })), keys, config })).catch((e) => e)
+    expect(err.code).toBe('invalid_key')
+  })
+
+  it('uses the signups view instead of the event when one is set, and applies the exclusions', async () => {
+    const seen: string[] = []
+    const http: HttpFn = async (req) => {
+      seen.push(sent(req))
+      return posthog()(req)
+    }
+    await activationProvider.fetch(ctx({ http, keys, config: { ...config, signupView: 'real_signups' } }))
+    const [signups, stripe] = [seen.find((q) => q.includes('reached_0'))!, seen.find((q) => q.includes('stripe.subscription'))!]
+    expect(signups).toContain('FROM real_signups')
+    expect(signups).not.toContain("event = 'signed_up'")
+    expect(stripe).toContain("position(lower(coalesce(email, '')), '@acme.example') > 0")
+    expect(stripe).toContain("NOT IN ('add_on')")
+    const byEvent = activationSql(activationSetup(ctx({ config })))
+    expect(byEvent).toContain("event = 'signed_up'")
+    expect(byEvent).toContain('person.properties.email')
+  })
+
+  it('counts a customer once and a trial that never paid not at all', () => {
+    const q = customersSql(activationSetup(ctx({ config })))
+    expect(q).toContain('amount_paid > 0')
+    expect(q).toContain('INNER JOIN paid')
+    expect(q).toContain('GROUP BY sub.cid')
+  })
+
+  it('refuses anything that could change the query, before any call', async () => {
+    const refused: DashboardConfig[] = [{ signupEvent: "x' OR 1=1 --" }, { steps: ["a'); DROP"] }, { signupView: 'x; SELECT 1' }, { excludeEmails: ["a'b"] }, { excludeSubscriptionTypes: ["a'"] }]
+    for (const bad of refused) {
+      const err = await activationProvider.validate(ctx({ http: status(500), keys, config: { ...config, ...bad } })).catch((e) => e)
+      expect(err.code).toBe('config')
+    }
+  })
+
+  it('asks for the signup event and a step, and says so when there are no signups', async () => {
+    expect((await activationProvider.validate(ctx({ keys, config: { projectId: '12345', steps: ['a'] } })).catch((e) => e)).code).toBe('config')
+    expect((await activationProvider.validate(ctx({ keys, config: { projectId: '12345', signupEvent: 'a' } })).catch((e) => e)).code).toBe('config')
+    const empty: HttpFn = async () => ({ status: 200, body: { results: [] }, retryAfter: null })
+    expect((await activationProvider.fetch(ctx({ http: empty, keys, config })).catch((e) => e)).code).toBe('no_data')
+  })
+
+  it('draws from the sample project in the marketplace preview', async () => {
+    const snap = await activationProvider.fetch(ctx({ keys: { POSTHOG_PERSONAL_API_KEY: 'phx_sample' }, config: SAMPLE_CONFIG.activation }))
+    expect(snap.kpis.activation.value).toBeGreaterThan(0)
+    expect(snap.kpis.churnRate.value).toBeGreaterThan(0)
+    expect(snap.tables.weeks).toHaveLength(8)
   })
 })

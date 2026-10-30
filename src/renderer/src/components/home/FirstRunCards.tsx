@@ -164,7 +164,7 @@ export function FirstWeekCard({ companyId }: { companyId: Id }): React.JSX.Eleme
               ? preview.noAgentCli
                 ? ': stays off until an agent CLI is installed. The first tasks below still start.'
                 : ': stays off (departments are off). The first tasks below still start.'
-              : `. ${AUTOPILOT_SENTENCE} Up to ${preview?.maxInFlight ?? 2} tasks at once.`}
+              : `. ${AUTOPILOT_SENTENCE}`}
           </li>
           {preview?.autopilot !== false && (
             <li>

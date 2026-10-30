@@ -5,7 +5,9 @@ import type { ModelCall, ModelCallRequest } from '../company/router'
 import { ForumService } from './service'
 import type { ForumDirectory } from './store'
 import { ConversationPilot, PICKING_LINE, choosePick, cleanTitle, modelHandoff, parsePick, pickSystem, titleInput, type PilotSeat } from './conversationPilot'
-import { buildReplyPrompt } from './responder'
+import { ForumResponder, buildReplyPrompt } from './responder'
+import { UNPICKED } from './replyJournal'
+import { REPLY_STYLE } from '../../shared/replyStyle'
 
 const CO = 'co_acme'
 let db: Database.Database
@@ -203,6 +205,81 @@ describe('who answers: Principia picks (CHAT-UI.md §7.2)', () => {
     expect(svc.store.channel(ch.id, owner.id).picking).toBeUndefined()
   })
 
+  describe('a quit while Principia picks', () => {
+    const hanging = (() => new Promise<string>(() => undefined)) as unknown as ModelCall
+    const REQ = { companyId: CO, text: 'schedule the launch posts', title: 'Launch posts', name: 'chat-posts-ab12', purpose: 'x', pick: { agentIds: ['agt_marcus'], handoff: 'x' } }
+    /** The app over the same db: the pick call hangs (a quit) or answers. */
+    function boot(model: ModelCall | null) {
+      const a = setup(model)
+      const pilot = new ConversationPilot({
+        store: () => a.svc.store,
+        call: () => model,
+        seats: () => SEATS.filter((s) => deps.agents.some((x) => x.id === s.agentId)),
+        departments: () => DEPS,
+        journal: a.svc.owed,
+        onUnanswered: (messageId, reason) => a.svc.noteUnanswered(messageId, UNPICKED, reason),
+        humanPosted: (m) => {
+          a.svc.owed.picked(m.id)
+          a.posted.push(m)
+        }
+      } as ConstructorParameters<typeof ConversationPilot>[0])
+      const responder = new ForumResponder({
+        store: () => a.svc.store,
+        enabled: () => true,
+        journal: a.svc.owed,
+        seat: () => null,
+        departmentName: () => null,
+        seats: () => [],
+        start: () => 'r_x',
+        repick: (m) => pilot.repick(m),
+        onUnanswered: (messageId, memberId, reason) => a.svc.noteUnanswered(messageId, memberId, reason)
+      })
+      return { ...a, pilot, responder }
+    }
+    const lines = (a: ReturnType<typeof boot>, id: string) => a.svc.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+
+    it('the next boot picks again and the message gets its answer', async () => {
+      const held = boot(hanging)
+      const r = held.pilot.start(REQ)
+      expect(held.posted).toEqual([])
+      const after = boot(null)
+      after.responder.recover()
+      await flush()
+      await flush()
+      expect(after.posted.map((m) => m.id)).toEqual([r.message.id])
+      expect(after.svc.store.channel(r.channel.id, after.owner.id).picking).toBeUndefined()
+      expect(after.svc.owed.all()).toEqual([])
+    })
+
+    it('a pick cut short twice, or a day old, gets a line instead', async () => {
+      const held = boot(hanging)
+      const r = held.pilot.start(REQ)
+      db.prepare('UPDATE forum_owed_replies SET attempts=1').run()
+      const after = boot(null)
+      after.responder.recover()
+      await flush()
+      expect(after.posted).toEqual([])
+      expect(lines(after, r.message.id)).toEqual([expect.stringMatching(/^Principia could not answer this: /)])
+      expect(after.svc.owed.all()).toEqual([])
+    })
+
+    it('nobody can answer: the person gets a line, not silence', async () => {
+      const a = boot(null)
+      deps.agents.length = 0
+      const r = a.pilot.start(REQ)
+      await r.routing
+      expect(a.posted).toEqual([])
+      expect(lines(a, r.message.id)).toEqual([expect.stringMatching(/^Principia could not answer this: /)])
+      expect(a.svc.owed.all()).toEqual([])
+    })
+
+    it('a pick that ends in a hire card owes nothing: the person decides on the card', async () => {
+      const a = boot(fakeModel({ pick: '{"agents":["s2"],"fit":"none","need":"ads","propose":{"role":"Ads buyer","department":"marketing","instructions":"x","capabilities":"y"}}' }))
+      await a.pilot.start(REQ).routing
+      expect(a.svc.owed.all()).toEqual([])
+    })
+  })
+
   it('the prompt carries roles, departments, capabilities and instructions as short keys', () => {
     const sys = pickSystem(SEATS, DEPS)
     expect(sys).toMatch(/- s1: Julia, Repo auditor; department Development \(Code, bugs and releases\); does: Checks the repo/)
@@ -328,6 +405,12 @@ describe('propose a new specialist → create (CHAT-UI.md §7.2)', () => {
     const hire = svc.store.memberForAgent('agt_adsbuyer')!
     expect(svc.store.channel(r.channel.id, owner.id).memberIds).toEqual(expect.arrayContaining([marcus.id, hire.id]))
     expect(woken.map((w) => [w.memberId, w.message.id])).toEqual([[hire.id, r.message.id]])
+  })
+
+  it('a reply to a person follows the reply style; an answer to another agent does not', () => {
+    const base = { seat: { name: 'Content writer', instructions: '' }, department: 'Marketing', me: 'marcus', channel: '“Ads”', messages: [{ ref: 'm1', author: 'founder', text: 'ads?' }], thread: [], replyTo: 'm1' }
+    expect(buildReplyPrompt(base)).toContain(REPLY_STYLE)
+    expect(buildReplyPrompt({ ...base, asker: { handle: 'ovid', label: null, why: '', depth: 1, maxHops: 3 } })).not.toContain(REPLY_STYLE)
   })
 
   it('the conversation reply prompt tells agents how to propose (and only in a conversation)', () => {

@@ -47,6 +47,19 @@ describe('AskForm', () => {
 })
 
 describe('TaskCard', () => {
+  it('says a running card waits for a free slot, until its step starts', async () => {
+    const { TaskCard } = await import('./TaskCard')
+    const { setState } = await import('../../state/store')
+    const running = task('4', { status: 'in_progress', runId: 'run1' })
+    setState({ slotWaits: { run1: '2026-10-30T10:00:00.000Z' } })
+    const waiting = renderToStaticMarkup(createElement(TaskCard, { task: running, onOpen: () => {} }))
+    expect(waiting).toContain('Waiting for a slot')
+    expect(waiting).not.toContain('task-live-dot')
+    setState({ slotWaits: {} })
+    const started = renderToStaticMarkup(createElement(TaskCard, { task: running, onOpen: () => {} }))
+    expect(started).not.toContain('Waiting for a slot')
+    expect(started).toContain('task-live-dot')
+  })
   it('shows the lock for a dependency block, the reason chip in Needs you, and never drags a running card', async () => {
     const { TaskCard } = await import('./TaskCard')
     const locked = renderToStaticMarkup(createElement(TaskCard, { task: task('3', { status: 'blocked', blockReason: 'deps' }), onOpen: () => {} }))

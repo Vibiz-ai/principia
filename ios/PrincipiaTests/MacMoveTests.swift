@@ -178,4 +178,49 @@ final class MacMoveTests: XCTestCase {
         XCTAssertEqual(me.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)")
         app.forget()
     }
+
+    // ---------- RA8: the sealed address lookup. The same vector as src/main/remote/rendezvous.test.ts ----------
+
+    let rdvToken = "tok_abcdefghijklmnopqrstuvwxyz012345"
+    let rdvId = "29e949a88ac29c7e29795378a94854da4b72edc65fe989048330004d5fa42256"
+    let rdvSealed = "BwcHBwcHBwcHBwcH1osaN6ItgLji_Gv3wbChRgWLqROeqSIYt7E_JPQnc9MV51B-PePFbZcT5E-3Ai5A-uJpfdIS9D1WTpZR0nk"
+
+    func testSealedRecordMatchesTheMacs() {
+        let hash = MacMove.sha256Hex(rdvToken)
+        XCTAssertEqual(MacFinder.recordId(hash: hash), rdvId)
+        XCTAssertEqual(MacFinder.open(sealed: rdvSealed, hash: hash), mac)
+        XCTAssertNil(MacFinder.open(sealed: rdvSealed, hash: MacMove.sha256Hex("another token")))
+        XCTAssertNil(MacFinder.open(sealed: "nonsense", hash: hash))
+    }
+
+    private func rdvPaired() -> PairedMac {
+        PairedMac(mac: "https://old-words-here.trycloudflare.com", site: site, token: rdvToken, deviceId: "dev_1", deviceName: "iPhone", pairedAt: Date())
+    }
+
+    func testFindGoesOnlyToAMacThatProvesItself() async {
+        var asked: [String] = []
+        let good = FakeTransport { r in
+            asked.append(r.url?.absoluteString ?? "")
+            XCTAssertNil(r.value(forHTTPHeaderField: "Authorization"))
+            if r.url?.path == "/api/where" { return (200, #"{"sealed":"\#(self.rdvSealed)"}"#) }
+            let nonce = (try? JSONSerialization.jsonObject(with: r.httpBody ?? Data()) as? [String: String])?["nonce"] ?? ""
+            return (200, #"{"proof":"\#(MacMove.helloProof(token: self.rdvToken, origin: self.mac, nonce: nonce))"}"#)
+        }
+        let found = await MacFinder.find(transport: good, paired: rdvPaired())
+        XCTAssertEqual(found, mac)
+        XCTAssertEqual(asked, ["\(site)/api/where?id=\(rdvId)", "\(mac)/api/hello"])
+
+        let liar = FakeTransport { r in
+            r.url?.path == "/api/where" ? (200, #"{"sealed":"\#(self.rdvSealed)"}"#) : (200, #"{"proof":"00"}"#)
+        }
+        let refused = await MacFinder.find(transport: liar, paired: rdvPaired())
+        XCTAssertNil(refused)
+    }
+
+    func testFindKeepsWaitingWithNoRecord() async {
+        for transport in [FakeTransport { _ in (404, "{}") }, FakeTransport { _ in (429, "{}") }, FakeTransport { _ in throw URLError(.notConnectedToInternet) }, FakeTransport { _ in (200, #"{"sealed":"nonsense"}"#) }] {
+            let found = await MacFinder.find(transport: transport, paired: rdvPaired())
+            XCTAssertNil(found)
+        }
+    }
 }

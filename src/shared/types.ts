@@ -339,6 +339,8 @@ export interface Run extends CompanyStamped {
   createdAt: ISODate
   startedAt: ISODate | null
   endedAt: ISODate | null
+  /** Since when the run has nothing to do but wait for a free slot (Settings.concurrency). null = it is not waiting. */
+  slotWaitSince?: ISODate | null
   artifactsDir: string // <userData>/artifacts/<runId>/
   artifactCount: number
   /** 'rate_limited' when the run failed because a step hit a usage / rate limit. */
@@ -553,7 +555,7 @@ export interface Settings {
   notifyOnFailure: boolean // default true
   notificationSound: boolean // default true; Settings › Notifications › "Sounds" (SOUNDS.md), every sound off when false
   keepAwake: boolean // default true
-  concurrency: number // default 4, 1..16 (engine node cap)
+  concurrency: number // default 0 = no limit, else 1..16 (engine node cap)
   defaultAdapter: AdapterId // provider switcher, default 'claude'
   lastRepoId: Id | null
   schedulesPaused: boolean // default false

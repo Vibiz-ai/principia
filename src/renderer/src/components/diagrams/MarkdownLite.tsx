@@ -6,6 +6,7 @@ import { renderMarkdown, type Block, type Inline } from '../../lib/markdown'
 import { isDeepLinkUrl } from '@shared/deepLink'
 import { DeepLinkButton } from '../DeepLinkButton'
 import { followLink } from '../../lib/inAppLink'
+import { isNextStepLabel } from '@shared/replyStyle'
 
 export function MarkdownLite({ text }: { text: string }): React.JSX.Element {
   return (
@@ -27,7 +28,7 @@ function BlockLite({ b }: { b: Block }): React.JSX.Element {
       )
     case 'para':
       return (
-        <p>
+        <p className={isNextStep(b.c) ? 'dgm-md__next' : undefined}>
           <Inlines c={b.c} />
         </p>
       )
@@ -89,6 +90,12 @@ function BlockLite({ b }: { b: Block }): React.JSX.Element {
         </table>
       )
   }
+}
+
+/** "**Next step:** …": what the founder has to do, drawn apart from the rest of the reply (shared/replyStyle.ts). */
+function isNextStep(c: Inline[]): boolean {
+  const lead = c[0]
+  return lead?.t === 'strong' && lead.c.length === 1 && lead.c[0]!.t === 'text' && isNextStepLabel(lead.c[0]!.v)
 }
 
 /** A principia:// link an agent handed out: plain words when the agent wrote the bare URL, else its own label. */

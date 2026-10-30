@@ -18,8 +18,6 @@
 
 /* ---- assistant text ---- */
 .chat-text { overflow-wrap: anywhere; }
-.chat-text .dgm-md p { margin: 0 0 8px; }
-.chat-text .dgm-md p:last-child { margin-bottom: 0; }
 .chat-text .dgm-md pre { background: var(--term-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; overflow-x: auto; font-size: 12px; }
 .chat-text .dgm-md code { font-family: var(--font-mono); font-size: 12px; }
 .chat-text .dgm-md :not(pre) > code { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 0 4px; }

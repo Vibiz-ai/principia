@@ -68,6 +68,8 @@ describe('authoring persistence', () => {
     es.insertRun(run, null)
     expect(db.prepare('SELECT trigger FROM runs').get()).toEqual({ trigger: 'manual' })
     expect(es.getRun(run.id)).toMatchObject({ trigger: 'agent', startedBy: { ownerKey: 'claude:c1' } })
+    expect(es.updateRun(run.id, { slotWaitSince: ts }).slotWaitSince).toBe(ts)
+    expect(es.updateRun(run.id, { slotWaitSince: null }).slotWaitSince).toBeNull()
     const step = {
       id: 'st_0000000001', runId: run.id, seq: 1, nodeId: 'wait_codex', nodeType: 'wait', attempt: 1, round: null, profileId: null,
       participantLabel: null, adapter: 'shell', cwd: '/tmp', prompt: 'gh pr view', output: null, verdict: null, exitCode: null, pid: null,

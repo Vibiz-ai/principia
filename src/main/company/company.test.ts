@@ -542,7 +542,7 @@ describe('DEPARTMENTS.md board: task model, state machine, heal and park',()=>{
   })
   it('autopilot and maxInFlight live on the company row, default off, and survive a profile save',()=>{
     const {acme}=board()
-    expect(c.boardSettings(acme.id)).toEqual({companyId:acme.id,autopilot:false,maxInFlight:3})
+    expect(c.boardSettings(acme.id)).toEqual({companyId:acme.id,autopilot:false,maxInFlight:0})
     expect(c.setAutopilot(acme.id,true,5)).toEqual({companyId:acme.id,autopilot:true,maxInFlight:5})
     c.savePassport({...blank,name:'Acme'},acme.id);c.update(acme.id,{name:'Acme Corp'})
     expect(c.boardSettings(acme.id)).toEqual({companyId:acme.id,autopilot:true,maxInFlight:5})
@@ -605,6 +605,6 @@ describe('DEPARTMENTS.md board handlers',()=>{
     expect(a.unpark({id:t.id}).status).toBe('todo')
     await expect(a.openSession({id:t.id,cols:80,rows:24})).rejects.toThrow('not available')
     await expect(a.takeover({id:t.id,cols:80,rows:24})).rejects.toThrow('not available')
-    expect(a.autopilot({companyId:acme.id,on:true})).toEqual({companyId:acme.id,autopilot:true,maxInFlight:3})
+    expect(a.autopilot({companyId:acme.id,on:true})).toEqual({companyId:acme.id,autopilot:true,maxInFlight:0})
   })
 })

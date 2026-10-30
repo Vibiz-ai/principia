@@ -108,6 +108,15 @@ describe('run end outcome (§1.4, §4.5)', () => {
     expect(runEndState(report('blocked'), passed, false)).toMatchObject({ to: { status: 'blocked', blockReason: 'deps' }, kind: 'parked' })
     expect(runEndState({ ...report('blocked'), ask: { prompt: 'q' } }, passed, false).to.blockReason).toBe('needs_input')
   })
+  it('a usage limit waits in To do once, then parks; a report or a stop by main still wins (LIVE.md §16.1)', () => {
+    expect(runEndState({}, failed, true, null, 'wait')).toMatchObject({ to: { status: 'todo' }, kind: 'paused', by: 'system', limitWait: true })
+    expect(runEndState({}, failed, true, null, 'again')).toMatchObject({ to: { status: 'blocked', blockReason: 'run_failed' }, message: expect.stringContaining('one automatic restart') })
+    expect(runEndState(report('review'), failed, true, null, 'wait').to.status).toBe('in_review')
+    expect(runEndState({ ask: { prompt: 'q' } }, failed, true, null, 'wait').to.blockReason).toBe('needs_input')
+    expect(runEndState({}, failed, true, 'limit', 'wait').to.blockReason).toBe('limit')
+    expect(runEndState({}, failed, true, 'paused', 'wait').limitWait).toBeUndefined()
+    assertTransition({ status: 'in_progress' }, runEndState({}, failed, true, null, 'wait').to, 'system')
+  })
   it('every outcome is a legal §1.4 move from in_progress', () => {
     for (const end of [runEndState({ ask: { prompt: 'q' } }, passed, true), runEndState(report('blocked'), passed, true), runEndState({}, passed, true), runEndState({}, failed, true),
       runEndState({}, canceled, true), runEndState({}, canceled, true, 'limit'), runEndState(report('review'), passed, false)]) ok(S('in_progress'), end.to, 'system')

@@ -4,6 +4,7 @@
  * SHA-256, so revoking it there (or Sign out all phones) makes this copy worthless at once. Turning Phone off keeps it.
  */
 import { helloMessage, parsePairHash, siteOrigin, type PhoneHelloResponse } from '../../shared/remote'
+import { openAddress, RDV_ROUTE, RDV_SEALED_RE, rdvIds } from '../../shared/rendezvous'
 
 export interface PairedMac {
   /** the Mac's origin, e.g. https://quiet-tree-42.trycloudflare.com */
@@ -130,4 +131,22 @@ export async function checkMac(f: typeof fetch, mac: string, p: Pick<PairedMac, 
   if (res.status === 404) return 'unknown'
   if (!res.ok || typeof body.proof !== 'string') return 'wrong'
   return body.proof === (await helloProofFor(p.token, origin, nonce)) ? 'ok' : 'wrong'
+}
+/**
+ * RA8: the Mac's new address, from the sealed record it left on this site, and only if the Mac there passes checkMac.
+ * Anything else (no record, a record that does not open, a Mac that does not answer yet) is null: the phone just keeps
+ * waiting, and the token has gone nowhere.
+ */
+export async function findMac(f: typeof fetch, site: string, p: Pick<PairedMac, 'mac' | 'token' | 'device'>): Promise<string | null> {
+  try {
+    const hash = await sha256Hex(p.token)
+    const res = await f(`${site}${RDV_ROUTE}?id=${(await rdvIds(hash)).id}`, { credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' })
+    if (!res.ok) return null
+    const sealed = ((await res.json()) as { sealed?: unknown }).sealed
+    if (typeof sealed !== 'string' || !RDV_SEALED_RE.test(sealed)) return null
+    const mac = siteOrigin(await openAddress(hash, sealed))
+    return mac && mac !== p.mac && (await checkMac(f, mac, p)) === 'ok' ? mac : null
+  } catch {
+    return null
+  }
 }

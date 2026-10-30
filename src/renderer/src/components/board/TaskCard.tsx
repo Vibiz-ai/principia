@@ -1,4 +1,5 @@
-import type { CompanyAgent, CompanyTask, Department, NeedsYouReason } from '@shared/company'
+import { limitHeld, type CompanyAgent, type CompanyTask, type Department, type NeedsYouReason } from '@shared/company'
+import { limitWaitLine } from '@shared/taskCard'
 import { useIsCode } from '../desk/Desk'
 import { Icon } from '../Icon'
 import { TaskPriority } from '../TaskBits'
@@ -7,6 +8,7 @@ import { REASON_LABEL, TASK_DRAG_TYPE } from '../../lib/board'
 import { AgentBust, agentLabel, useAgentName } from '../../shell/DepartmentGroup'
 import { BranchGlyph, WorkCardBadge } from './TaskWork'
 import { cardWorkLine, shortBranch } from '../../lib/boardFlow'
+import { SLOT_WAIT_LABEL, SLOT_WAIT_WHY } from '@shared/taskCard'
 import { workStarted } from '@shared/taskWork'
 import { LinearChip } from './LinearSheet'
 import { linearWorkLabel, startedInLinear } from '../../lib/linear'
@@ -29,7 +31,9 @@ export function TaskCard({ task, department, agent, reason, chips = false, selec
   const code = useIsCode(task.companyId)
   // pm-review: an assigned task in To do with Autopilot off never starts by itself; the card says so
   const company = useStore((s) => s.companies.find((c) => c.id === task.companyId))
-  const waits = task.status === 'todo' && !!task.agentId && !!company && !company.autopilot && !company.pausedAt && !agent?.pausedAt
+  const slotWait = useStore((s) => (task.status === 'in_progress' && task.runId ? !!s.slotWaits[task.runId] : false))
+  const limited = limitHeld(task)
+  const waits = !limited && task.status === 'todo' && !!task.agentId && !!company && !company.autopilot && !company.pausedAt && !agent?.pausedAt
   return <button
     type="button"
     className={`board-card ${selected ? 'is-selected' : ''} ${reason ? 'is-needs' : ''}`}
@@ -49,10 +53,11 @@ export function TaskCard({ task, department, agent, reason, chips = false, selec
       <span className={`board-card__agent ${agent?.pausedAt ? 'is-paused' : ''}`} title={agent ? `${agentLabel(who)}${agent.pausedAt ? ' (paused)' : ''}` : 'Unassigned'}>{agent ? <AgentBust agent={agent} color={department?.color ?? null} size={18} /> : <span className="task-unassigned">○</span>}</span>
     </span>
     <span className="board-card__title">{task.title}</span>
-    {(reason || department || task.status === 'in_progress' || waits) && <span className="board-card__meta">
+    {(reason || department || task.status === 'in_progress' || waits || limited) && <span className="board-card__meta">
       {department && <span className="board-card__dep">{department.name}</span>}
+      {limited && <span className="board-muted" title="It stopped at the plan's usage limit and restarts by itself once. Your work so far is saved.">{limitWaitLine(task.limitWait!)}</span>}
       {waits && <span className="board-muted" title={`Autopilot is off in ${company!.name}: open the task and press ${code ? 'Run now' : 'Start'}, or turn Autopilot on in Automations`}>Waits for {code ? 'Run now' : 'Start'}</span>}
-      {task.status === 'in_progress' && !reason && (elsewhere ? <span className="board-muted">{linearWorkLabel(linear)}</span> : <span className="board-card__working"><span className="task-live-dot" /> working</span>)}
+      {task.status === 'in_progress' && !reason && (elsewhere ? <span className="board-muted">{linearWorkLabel(linear)}</span> : slotWait ? <span className="board-muted" data-chatux="board-slot-wait" title={SLOT_WAIT_WHY}>{SLOT_WAIT_LABEL}</span> : <span className="board-card__working"><span className="task-live-dot" /> working</span>)}
       {reason && <span className={`board-reason board-reason--${reason}`}>{REASON_LABEL[reason]}{noReport && reason === 'review' ? ' · no report' : ''}</span>}
     </span>}
     {/* design §4.5: a code task's card shows its branch and where its pull request is */}

@@ -261,10 +261,10 @@ export function AutopilotSwitch({ company }: { company: CompanyPassport }): Reac
   // the company row catches up (data:changed company); drop the optimistic value once it does
   useEffect(() => setView((v) => ({ ...v, pending: null })), [company.autopilot])
   // AUTOPILOT.md §7: on goes through "N tasks will start"; a no keeps the switch where main has it
-  const toggle = useMemo(() => autopilotToggle(async (q) => (await requestAutopilot(q)) ?? { companyId: q.companyId, autopilot: !q.on, maxInFlight: company.maxInFlight ?? 3 }, company.id, setView), [company.id, company.maxInFlight])
+  const toggle = useMemo(() => autopilotToggle(async (q) => (await requestAutopilot(q)) ?? { companyId: q.companyId, autopilot: !q.on, maxInFlight: company.maxInFlight ?? 0 }, company.id, setView), [company.id, company.maxInFlight])
   const flip = (next: boolean): void => {
     void toggle.flip(next).then(
-      (s) => { if (!s) return; toast(s.autopilot ? `Auto-start on for ${company.name}: agents set to work on their own start assigned work, up to ${s.maxInFlight} at once` : `Auto-start off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
+      (s) => { if (!s) return; toast(s.autopilot ? `Auto-start on for ${company.name}: agents set to work on their own start assigned work${s.maxInFlight >= 1 ? `, up to ${s.maxInFlight} at once` : ''}` : `Auto-start off for ${company.name}`); void refreshCompanies().catch(() => undefined) },
       (e: unknown) => toast(errorMessage(e), 'error')
     )
   }

@@ -229,13 +229,13 @@ describe('a pasted pairing link', () => {
 describe('the site (vercel.json)', () => {
   const v = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../phone-site/vercel.json'), 'utf8')) as { rewrites: { source: string; destination: string }[]; headers: { source: string; headers: { key: string; value: string }[] }[] }
   const all = Object.fromEntries(v.headers.find((r) => r.source === '/(.*)')!.headers.map((h) => [h.key.toLowerCase(), h.value]))
-  it('has a strict CSP: scripts and styles from itself, connections only to quick tunnels, no framing', () => {
+  it('has a strict CSP: scripts and styles from itself, connections only to itself (the address lookup) and quick tunnels, no framing', () => {
     const csp = all['content-security-policy']!
     const d = Object.fromEntries(csp.split(';').map((x) => x.trim().split(/\s+/)).map(([k, ...r]) => [k, r]))
     expect(d['default-src']).toEqual(["'none'"])
     expect(d['script-src']).toEqual(["'self'"])
     expect(d['style-src']).toEqual(["'self'"])
-    expect(d['connect-src']).toEqual(['https://*.trycloudflare.com', 'wss://*.trycloudflare.com'])
+    expect(d['connect-src']).toEqual(["'self'", 'https://*.trycloudflare.com', 'wss://*.trycloudflare.com'])
     expect(d['frame-ancestors']).toEqual(["'none'"])
     expect(d['base-uri']).toEqual(["'none'"])
     // the app never writes HTML: any sink that would is refused outright

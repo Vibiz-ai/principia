@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { openDatabase, type DB } from '../db'
@@ -15,6 +16,7 @@ import { RemoteAuth } from './auth'
 import { SqliteDeviceStore } from './devices'
 import { RemoteServer, type RemoteApi } from './server'
 import { RemoteService } from './service'
+import type { KeptTunnel, TunnelKeep } from './tunnel'
 import type { PhoneHost } from './api'
 import { checkMac, helloProofFor, sha256Hex } from '../../cloud/phone/mac'
 
@@ -284,5 +286,57 @@ describe('resume and the new address (RA2, RA8)', () => {
     expect(macFromTyped('http://quiet-tree.example.com', SITE)).toBeNull()
     expect(macFromTyped('hello', SITE)).toBeNull()
     expect(macFromTyped('a/b/c', SITE)).toBeNull()
+  })
+})
+
+describe('the same address after a Quit (RA8)', () => {
+  const host: PhoneHost = { invoke: (async () => []) as unknown as PhoneHost['invoke'], onEvent: () => () => undefined }
+  const URL_KEPT = 'https://quiet-tree-forty-two.trycloudflare.com'
+  const procs = { isOurs: () => true, running: () => true, kill: () => undefined, reapAfter: () => null, endReaper: () => undefined }
+  const memoryKeep = (): TunnelKeep => {
+    let k: KeptTunnel | null = null
+    return { load: () => k, save: (v) => (k = v), logPath: path.join(os.tmpdir(), `pr71-${process.pid}-${Date.now()}.log`) }
+  }
+
+  it('the server listens on the port the tunnel still points at, and the tunnel host is allowed', async () => {
+    const keep = memoryKeep()
+    const first = new RemoteService({ host, bundleDir: null, emit: () => undefined, tunnel: { bin: () => null, keep, procs }, autoStart: () => true })
+    const on = await first.setEnabled(true)
+    const port = Number(new URL(on.localUrl!).port)
+    keep.save({ pid: 42, port, url: URL_KEPT })
+    await first.setTunnel(true)
+    await first.stop()
+    expect(keep.load()?.port).toBe(port)
+
+    const second = new RemoteService({ host, bundleDir: null, emit: () => undefined, tunnel: { bin: () => null, keep, procs }, autoStart: () => true })
+    await second.autoStartIfWanted()
+    const st = second.state()
+    expect(st.localUrl).toBe(`http://127.0.0.1:${port}`)
+    expect(st.tunnel).toEqual({ state: 'on', url: URL_KEPT, message: null })
+    await second.setEnabled(false)
+    expect(keep.load()).toBeNull()
+  })
+
+  it('a Quit with Phone not coming back at launch ends the tunnel', async () => {
+    const keep = memoryKeep()
+    const svc = new RemoteService({ host, bundleDir: null, emit: () => undefined, tunnel: { bin: () => null, keep, procs }, autoStart: () => false })
+    const on = await svc.setEnabled(true)
+    keep.save({ pid: 42, port: Number(new URL(on.localUrl!).port), url: URL_KEPT })
+    await svc.stop()
+    expect(keep.load()).toBeNull()
+  })
+
+  it('a taken port falls back to a random one', async () => {
+    const taken = net.createServer()
+    await new Promise<void>((r) => taken.listen(0, '127.0.0.1', r))
+    const port = (taken.address() as net.AddressInfo).port
+    const keep = memoryKeep()
+    keep.save({ pid: 42, port, url: URL_KEPT })
+    const svc = new RemoteService({ host, bundleDir: null, emit: () => undefined, tunnel: { bin: () => null, keep, procs }, autoStart: () => true })
+    const on = await svc.setEnabled(true)
+    expect(on.enabled).toBe(true)
+    expect(Number(new URL(on.localUrl!).port)).not.toBe(port)
+    await svc.stop()
+    await new Promise((r) => taken.close(r))
   })
 })

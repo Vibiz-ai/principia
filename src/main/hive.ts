@@ -545,6 +545,9 @@ export class Hive {
     const run = this.store.getRun(runId)
     if (!run) throw new HiveError('not_found', 'Run not found')
     if (!this.engine.runs.retryAt) throw new HiveError('internal', 'Retry at reset is not available yet')
+    // a board task restarts by itself (LIVE.md §16.1): a run retry would work on it beside that restart
+    const waiting = when === 'reset' ? this.safe(() => this.company.limitWaitOfRun(runId), null) : null
+    if (waiting) throw new HiveError('bad_request', `${waiting.identifier} already restarts by itself at the reset.`)
     const at = when === 'cancel' ? null : retryTime(run.resetAt ?? null, new Date())
     return this.engine.runs.retryAt(runId, at)
   }
@@ -862,9 +865,10 @@ export class Hive {
       const sound = this.chime({ kind: 'problem', key: `limit:run:${run.id}`, visible: this.runVisible(run.id) })
       if (s.notifyOnFailure) {
         const reset = run.resetAt ? `Resets ${clockLabel(run.resetAt)}` : 'Reset time unknown'
+        const waiting = this.safe(() => this.company.limitWaitOfRun(run.id), null)
         notify({
           title: `${run.title} hit the usage limit`,
-          body: run.retryAt ? `${reset} · retry scheduled ${clockLabel(run.retryAt)}` : `${reset}. Retry at reset from Hive.`,
+          body: run.retryAt ? `${reset} · retry scheduled ${clockLabel(run.retryAt)}` : waiting ? `${reset} · ${waiting.identifier} restarts by itself ${clockLabel(waiting.limitWait!.retryAt)}` : `${reset}. Retry at reset from Hive.`,
           sound,
           onClick: () => this.windows.command({ kind: 'openRun', runId: run.id })
         })

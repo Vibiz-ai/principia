@@ -6,7 +6,7 @@
  * - the autopilots that are on (playbooks: Ads watch, Site watch…), each with its own schedule and level.
  * "Autopilot on" means either is on; the chip and the lines say which ("Autopilot on · Ads watch"). Pure.
  */
-import { DEFAULT_MAX_IN_FLIGHT, type CompanyPassport } from './company'
+import { DEFAULT_MAX_IN_FLIGHT, tasksAtOnceLine, type CompanyPassport } from './company'
 
 export type AutopilotMode = 'on' | 'off' | 'held'
 export interface AutopilotState {
@@ -90,7 +90,7 @@ export const AUTOPILOT_SENTENCE = 'Autopilot lets work run without you pressing 
 
 /** "Up to 3 tasks at once · monthly cap $200" (or "· no monthly cap"). */
 export function autopilotLimits(s: Pick<AutopilotState, 'maxInFlight' | 'monthlyCap'>): string {
-  return `Up to ${s.maxInFlight} task${s.maxInFlight === 1 ? '' : 's'} at once · ${s.monthlyCap ? `monthly cap $${s.monthlyCap}` : 'no monthly cap'}`
+  return `${tasksAtOnceLine(s.maxInFlight)} · ${s.monthlyCap ? `monthly cap $${s.monthlyCap}` : 'no monthly cap'}`
 }
 
 /** "N tasks will start" before Autopilot goes on (old leftover work never starts silently). */

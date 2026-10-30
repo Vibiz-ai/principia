@@ -13,14 +13,13 @@ export function taskStatusOf(c: CompanyStore, taskId: string, who: (agentId: str
     const t = c.task(taskId)
     const db = c.store.db
     const agent = t.agentId ? c.departments.getAgent(t.agentId) : null
-    const run = t.status === 'in_progress' && t.runId ? (db.prepare('SELECT started_at, created_at FROM runs WHERE id=?').get(t.runId) as { started_at: string | null; created_at: string } | undefined) : undefined
+    const run = t.status === 'in_progress' && t.runId ? (db.prepare('SELECT started_at, created_at, slot_wait_since FROM runs WHERE id=?').get(t.runId) as { started_at: string | null; created_at: string; slot_wait_since: string | null } | undefined) : undefined
     const last = db.prepare('SELECT message, created_at FROM company_task_activity WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(t.id) as { message: string; created_at: string } | undefined
     let waiting: string | null = null
     if (['todo', 'triage', 'backlog', 'blocked'].includes(t.status)) {
       const company = c.passport(t.companyId)
       const s = c.boardSettings(t.companyId)
       const inFlight = (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE company_id=? AND status='in_progress' AND run_id IS NOT NULL AND id<>?").get(t.companyId, t.id) as { n: number }).n
-      const agentRunning = t.agentId ? (db.prepare("SELECT COUNT(*) AS n FROM company_tasks WHERE agent_id=? AND status='in_progress' AND id<>?").get(t.agentId, t.id) as { n: number }).n : 0
       const depsOpen = t.dependencyIds.flatMap((id) => {
         try {
           const d = c.task(id)
@@ -35,7 +34,6 @@ export function taskStatusOf(c: CompanyStore, taskId: string, who: (agentId: str
         company: { name: company.name, autopilot: s.autopilot, pausedAt: c.isPaused(t.companyId) ? 'paused' : null, maxInFlight: s.maxInFlight },
         depsOpen,
         inFlight,
-        agentRunning,
         startsAnyway: startsWithoutAutopilot(t),
         runLabel: 'Start'
       }).text
@@ -49,7 +47,8 @@ export function taskStatusOf(c: CompanyStore, taskId: string, who: (agentId: str
       who: t.agentId ? (who(t.agentId) ?? agent?.name ?? null) : null,
       since: run ? (run.started_at ?? run.created_at) : t.updatedAt,
       latest: last ? { at: last.created_at, text: last.message } : null,
-      waiting
+      waiting,
+      slotWait: run?.slot_wait_since ?? null
     }
   } catch {
     return null

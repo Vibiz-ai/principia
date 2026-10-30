@@ -64,13 +64,23 @@ import { parseRefs, render, type RenderScope, type TriggerVars } from './templat
 import { TRIGGER_IN_COMMAND, hiveOutVar, slackCommandHint } from './validate'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, slackAccessOf, type NotifySlackTarget, type SlackAgentAccess } from '../../shared/slack'
 import { UNTRUSTED_SLACK_NOTE, triggerVars } from './slackTriggers'
+import { RETRY_AFTER_RESET_MS, RETRY_FALLBACK_MS, retryTime } from '../../shared/company'
 import { FEEDBACK_TAIL, LineBuffer, OUTPUT_CAP, Semaphore, cap, isDir, tail } from './util'
+
+/** A chat reply normally takes under a minute (99% under 4), and someone is waiting: past this it failed, not slow. */
+export const REPLY_TIMEOUT_MIN = 15
+/** How long a chat reply's process may stay up after its result, with no new output, before it is ended. */
+export const REPLY_END_GRACE_MS = 60_000
 
 export interface ExecDeps {
   ctx: EngineContext
   adapters: Record<AdapterId, Adapter>
   provider(id: AdapterId): ProviderInfo
   semaphore: Semaphore
+  /** Chat replies run here, so long work holding every slot of `semaphore` never keeps a person waiting. */
+  replySemaphore: Semaphore
+  /** Tests: how long a reply may linger after its result. */
+  replyEndGraceMs?: number
   now(): Date
   /** Ask expiry (default 60 min; tests shorten it). */
   askTimeoutMs?: number
@@ -98,17 +108,7 @@ export interface TaskRun extends RunTaskLink {
 /** Step error for the other steps of a run that a HIVE_STOP ended (AUTHORING.md §5). */
 export const HALT_SKIP_ERROR = 'Run ended early: nothing to do'
 
-/** Auto retry when the reset time is unknown (CONTRACT §13). */
-export const RETRY_FALLBACK_MS = 60 * 60_000
-/** Retry a little after the reset so the window has really reopened. */
-export const RETRY_AFTER_RESET_MS = 60_000
-
-/** When a "Retry at reset" should fire: reset + 1 min, never in the past; unknown reset = in 1 h. */
-export function retryTime(resetAt: string | null | undefined, now: Date): string {
-  const r = resetAt ? Date.parse(resetAt) : NaN
-  const at = Number.isFinite(r) ? Math.max(r + RETRY_AFTER_RESET_MS, now.getTime() + RETRY_AFTER_RESET_MS) : now.getTime() + RETRY_FALLBACK_MS
-  return new Date(at).toISOString()
-}
+export { RETRY_AFTER_RESET_MS, RETRY_FALLBACK_MS, retryTime }
 
 export const retryPrompt = (feedback: string, guard: string | null = null): string =>
   `A reviewer rejected your previous attempt:\n${feedback}\nFix it.${guard ? `\n\n${guard}` : ''}`
@@ -243,7 +243,9 @@ export class Execution {
     private workflow: WorkflowDraft | null,
     private task: TaskRun | null = null,
     /** FORUM.md §3: a seat run without a board task (a Forum reply): the step still gets that seat's Forum access */
-    private seatAgentId: string | null = null
+    private seatAgentId: string | null = null,
+    /** StartRunOptions.reply: a person is waiting on this run */
+    private reply = false
   ) {
     this.done = new Promise((r) => (this.resolveDone = r))
     const t = run.target
@@ -421,6 +423,48 @@ export class Execution {
     this.ctx.emit({ type: 'run.updated', run: this.run })
   }
 
+  private slotWaiters = 0
+  private slotHolders = 0
+  private capStarted = false
+  /** A step takes its slot here, so a run with nothing to do but wait for one says so (Run.slotWaitSince). */
+  private async takeSlot(): Promise<() => void> {
+    let waited = false
+    const release = await (this.reply ? this.d.replySemaphore : this.d.semaphore).acquire(() => {
+      waited = true
+      this.slotWaiters++
+      this.syncSlotWait()
+    })
+    if (waited) this.slotWaiters--
+    this.slotHolders++
+    // the time limit is for the work: a task must not use it up before it has a slot
+    if (!this.capStarted && (this.run.status === 'queued' || this.run.status === 'running')) {
+      this.capStarted = true
+      this.startTaskCap()
+    }
+    this.syncSlotWait()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      release()
+      this.slotHolders--
+      this.syncSlotWait()
+    }
+  }
+  private slotSync: NodeJS.Immediate | null = null
+  /**
+   * Parallel steps: one of them holding a slot is work going on, so the run only waits when none does. Read a tick
+   * later: a slot handed from one step to the next, in the same run, is no wait.
+   */
+  private syncSlotWait(): void {
+    this.slotSync ??= setImmediate(() => {
+      this.slotSync = null
+      if (this.run.status !== 'queued' && this.run.status !== 'running') return
+      const waiting = this.slotWaiters > 0 && this.slotHolders === 0
+      if (waiting !== !!this.run.slotWaitSince) this.updateRun({ slotWaitSince: waiting ? this.iso() : null })
+    })
+  }
+
   /** Entry point; never throws. */
   async execute(): Promise<void> {
     if (this.stopped) return this.close('canceled', this.stopReason ?? 'Canceled')
@@ -428,7 +472,6 @@ export class Execution {
       const missing = this.missingAdapter()
       if (missing) return this.close('failed', missing)
       this.updateRun({ status: 'running', startedAt: this.iso() })
-      this.startTaskCap()
       await this.loadSlackImages()
       if (this.run.target.kind === 'prompt') await this.executePrompt()
       else await this.executeWorkflow()
@@ -481,7 +524,7 @@ export class Execution {
     // CONTRACT §13: one write carries the stop reason (and an automatic retry), so main notifies once
     const limited = status === 'failed' && this.limit ? this.limit : null
     const extra: Partial<Run> = limited ? { stopReason: 'rate_limited', resetAt: limited.resetAt, ...this.autoRetry(limited.resetAt) } : {}
-    this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), ...extra, ...more })
+    this.updateRun({ status, reason: reason ? this.redact(cap(reason, 4000)) : null, endedAt: this.iso(), slotWaitSince: null, ...extra, ...more })
     for (const t of this.capTimers) clearTimeout(t)
     this.capTimers = []
     this.cleanupRunDir()
@@ -812,7 +855,7 @@ export class Execution {
       agentSessionId: null,
       verdict: null
     }
-    const release = await this.d.semaphore.acquire()
+    const release = await this.takeSlot()
     let mem: OpenMemory | null = null
     let live: StepLive | null = null
     let liveStatus: 'done' | 'failed' | 'canceled' = 'failed'
@@ -1100,6 +1143,19 @@ export class Execution {
       }
 
       let handle: ProcHandle
+      // A reply is over at its result. A background job it left (a dev server) would hold the process for the whole
+      // timeout and lose the answer; other steps may still be waiting on their background work, so they keep waiting.
+      let replyEnd: NodeJS.Timeout | null = null
+      let replyEnded = false
+      const noteReplyEnd = (): void => {
+        if (!this.reply || !parser.result()) return
+        if (replyEnd) clearTimeout(replyEnd)
+        replyEnd = setTimeout(() => {
+          replyEnded = true
+          void handle.kill()
+        }, this.d.replyEndGraceMs ?? REPLY_END_GRACE_MS)
+        replyEnd.unref?.()
+      }
       try {
         handle = startProcess({
           file: info.binPath,
@@ -1115,6 +1171,7 @@ export class Execution {
             if (raw.length < MAX_RAW) raw += c
             combined = tail(combined + c, FEEDBACK_TAIL * 4)
             outBuf.push(c).forEach(onOutLine)
+            noteReplyEnd()
           },
           onStderr: (c) => {
             this.d.stall?.touch(stepId)
@@ -1144,6 +1201,7 @@ export class Execution {
       if (this.stopped) void handle.kill()
 
       const r = await handle.done
+      if (replyEnd) clearTimeout(replyEnd)
       set.delete(handle)
       const restOut = outBuf.flush()
       if (restOut) onOutLine(restOut)
@@ -1160,7 +1218,7 @@ export class Execution {
         agentSessionId,
         verdict: null as 'PASS' | 'FAIL' | null
       }
-      if (r.killed && !r.timedOut) {
+      if (r.killed && !r.timedOut && !replyEnded) {
         liveStatus = 'canceled'
         return end({ ...base, status: 'canceled', error: 'Canceled' })
       }
@@ -1169,6 +1227,7 @@ export class Execution {
       const result = parser.result()
       // CONTRACT §12.4: a denied tool is just a denied tool (the old "set bypass" failure is gone); end = process exit
       if (r.spawnError) error = `Could not start ${info.label}: ${r.spawnError}`
+      else if (replyEnded) error = result?.isError ? result.text || `Agent error (${result.subtype ?? 'unknown'})` : null
       else if (r.timedOut) error = `Timed out after ${s.timeoutMin} min`
       else if (r.exitCode !== 0) {
         const why = result?.isError && result.text ? result.text : tail(combined.trim(), 2000)
@@ -1451,7 +1510,7 @@ export class Execution {
       // DEPARTMENTS.md §4.2: a resumed Claude task turn continues its conversation (the prompt is only wake + rules)
       resumeId: profile.adapter === 'claude' ? (this.task?.resumeSessionId ?? null) : null,
       sourceStepIds: [],
-      timeoutMin: 60,
+      timeoutMin: this.reply ? REPLY_TIMEOUT_MIN : 60,
       // LIVE.md §7 / F4: prompt runs default to read-write like new steps (writes stay within the repo; no repo =
       // read-only global, see MemoryService.grant). An explicit 'off' is kept.
       memory: isMemoryMode(t.memory) ? t.memory : 'read-write',
@@ -2020,7 +2079,7 @@ export class Execution {
         let out = ''
         let errText = ''
         let r: ProcResult
-        const release = await this.d.semaphore.acquire()
+        const release = await this.takeSlot()
         try {
           if (this.stopped) {
             res = { status: 'canceled', error: 'Canceled', activity: null }

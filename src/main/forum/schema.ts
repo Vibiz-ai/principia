@@ -118,6 +118,16 @@ CREATE INDEX IF NOT EXISTS forum_agent_wakes_company ON forum_agent_wakes(compan
 CREATE INDEX IF NOT EXISTS forum_agent_wakes_thread ON forum_agent_wakes(thread_seq);
 CREATE INDEX IF NOT EXISTS forum_agent_wakes_to_run ON forum_agent_wakes(to_run) WHERE to_run IS NOT NULL;
 CREATE INDEX IF NOT EXISTS forum_agent_wakes_from_run ON forum_agent_wakes(from_run) WHERE from_run IS NOT NULL;
+CREATE TABLE IF NOT EXISTS forum_owed_replies (
+  message_id TEXT NOT NULL,
+  member_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  run_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS forum_owed_replies_run ON forum_owed_replies(run_id) WHERE run_id IS NOT NULL;
 `
 
 export function ensureForumSchema(db: Database.Database): void {

@@ -19,6 +19,7 @@ const CO2 = 'co_other'
 let db: Database.Database
 let clock: Date
 let settings: Partial<AgentCollabSettings>
+let quitting: boolean
 let board: TeamTask[]
 const departments = [
   { id: 'dep_mkt', key: 'marketing', name: 'Marketing', archivedAt: null },
@@ -47,18 +48,21 @@ beforeEach(() => {
     CREATE TABLE agents (id TEXT PRIMARY KEY, parent_id TEXT, run_id TEXT, provider TEXT NOT NULL, model TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, model_usage_json TEXT, started_at TEXT NOT NULL, company_id TEXT);
     CREATE TABLE company_tasks (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, company_id TEXT NOT NULL, data TEXT NOT NULL);`)
   clock = new Date('2026-10-21T10:00:00.000Z')
+  n = 0
   settings = {}
+  quitting = false
   board = []
   for (const a of agents) a.archivedAt = null
 })
 afterEach(() => db.close())
 
+/** run ids go on across restarts (a second setup over the same db) */
+let n = 0
 interface Start { agentId: string; prompt: string; runId: string; reply: { messageId: string } }
 
 /** The service with a responder that "starts" runs by inserting a run row (agent_id set, like wire.ts). */
 function setup() {
   const starts: Start[] = []
-  let n = 0
   const s = new ForumService({
     db,
     directory,
@@ -66,6 +70,7 @@ function setup() {
     emit: () => undefined,
     now: () => clock,
     collabSettings: () => settings,
+    quitting: () => quitting,
     board: () => board,
     company: {
       saveDepartment: () => ({ id: 'x', key: 'x', name: 'x' }),
@@ -103,8 +108,11 @@ function setup() {
       starts.push({ agentId: input.agentId, prompt: input.prompt, runId, reply: input.reply })
       return runId
     },
+    journal: s.owed,
+    askOf: (message, memberId) => s.askOf(message, memberId),
     onWakeStarted: (ids, runId) => s.collab.noteStarted(ids, runId),
-    onWakeFailed: (ids, reason) => s.collab.noteFailed(ids, reason),
+    onWakeFailed: (ids, reason) => s.wakeFailed(ids, reason),
+    onUnanswered: (messageId, memberId, reason) => s.noteUnanswered(messageId, memberId, reason),
     now: () => clock
   })
   s.onHumanPost = (m) => void responder.onHumanPost(m)
@@ -473,5 +481,235 @@ describe('protocol, pricing, settings', () => {
 
   it('scrubs secret shapes', () => {
     expect(scrubSecrets('key sk-ant-api03-abcdefghijklmnop and ghp_abcdefghijklmnopqrstuvwxyz123 and password=hunter2hunter2')).toBe('key [redacted] and [redacted] and [redacted]')
+  })
+})
+
+describe('an agent is never left waiting by a quit (AGENT-COLLAB.md)', () => {
+  const ask = async (a: ReturnType<typeof setup>) => {
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask_agent', { to: '@livia', question: 'Is the pricing page live?', wait_s: 0 })
+    return a.s.store.openAsks(CO)[0]!
+  }
+
+  it('a quit cuts off the reply: the next boot asks again, and the ask keeps its asker and hop', async () => {
+    const before = setup()
+    const card = await ask(before)
+    const after = setup()
+    after.responder.recover()
+    expect(after.starts.map((x) => x.reply.messageId)).toEqual([card.id])
+    expect(after.starts[0]!.prompt).toMatch(/^Agent ask in #development/)
+    expect(after.starts[0]!.prompt).toContain('hop 1 of 3')
+    expect(after.wakes()[0]!.status).toBe('started')
+    await after.s.api.call(after.caller('agt_livia', after.starts[0]!.runId), 'forum_reply', { to: card.ref, text: 'Yes, it is live.' })
+    expect(after.s.store.message(card.id).ask).toMatchObject({ status: 'answered', answer: 'Yes, it is live.' })
+  })
+
+  it('a second quit: the ask closes with why, so the asker stops waiting and its open-ask slot frees up', async () => {
+    const first = setup()
+    const card = await ask(first)
+    setup().responder.recover()
+    const third = setup()
+    third.responder.recover()
+    expect(third.starts).toEqual([])
+    expect(third.s.store.message(card.id).ask).toMatchObject({ status: 'answered', answer: expect.stringContaining('could not answer') })
+    expect(third.s.store.openAsks(CO)).toEqual([])
+    expect(third.wakes()[0]).toMatchObject({ status: 'refused', refusal: 'start_failed' })
+    expect(third.s.owed.all()).toEqual([])
+  })
+
+  it('an ask older than a day is not answered late: it closes with why', async () => {
+    const first = setup()
+    const card = await ask(first)
+    clock = new Date(clock.getTime() + 25 * 3600_000)
+    const after = setup()
+    after.responder.recover()
+    expect(after.starts).toEqual([])
+    expect(after.s.store.message(card.id).ask?.status).toBe('answered')
+  })
+
+  it('an ask answered before the quit is not asked again', async () => {
+    const first = setup()
+    const card = await ask(first)
+    await first.s.api.call(first.caller('agt_livia', 'r_wake1'), 'forum_reply', { to: card.ref, text: 'Yes.' })
+    const after = setup()
+    after.responder.recover()
+    expect(after.starts).toEqual([])
+    expect(after.s.owed.all()).toEqual([])
+  })
+
+  it('an ask still queued behind a reply comes back too', async () => {
+    const before = setup()
+    const owner = before.s.store.owner(CO)
+    const room = before.s.store.channelByName(CO, 'development')!
+    before.responder.onHumanPost(before.s.store.post(owner.id, { channelId: room.id, text: 'hello', threadId: null }))
+    const card = await ask(before)
+    expect(before.wakes()[0]!.status).toBe('queued')
+    const after = setup()
+    after.responder.recover()
+    expect(after.starts).toHaveLength(1)
+    after.responder.onRunEnded(after.starts[0]!.runId)
+    expect(after.starts.map((x) => x.reply.messageId)).toContain(card.id)
+  })
+
+  it('an ask to two agents stays open while the other can still answer', async () => {
+    const a = setup()
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask', { to: ['@livia', '@cato'], question: 'Anyone there?' })
+    const card = a.s.store.openAsks(CO)[0]!
+    const ids = (db.prepare('SELECT id FROM forum_agent_wakes ORDER BY rowid').all() as { id: string }[]).map((r) => r.id)
+    expect(ids).toHaveLength(2)
+    a.s.wakeFailed(ids.slice(0, 1), 'it could not start')
+    expect(a.s.store.message(card.id).ask?.status).toBe('open')
+    a.s.wakeFailed(ids.slice(1), 'it could not start')
+    expect(a.s.store.message(card.id).ask?.status).toBe('answered')
+  })
+})
+
+describe('a reply run to an agent that ends without an answer', () => {
+  const asked = async () => {
+    const a = setup()
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask_agent', { to: '@livia', question: 'Is staging up?', wait_s: 0 })
+    const card = a.s.store.openAsks(CO)[0]!
+    return { ...a, card, runId: a.starts[0]!.runId }
+  }
+
+  it.each([
+    ['failed', 'Timed out after 15 min', 'Timed out after 15 min'],
+    ['canceled', 'Canceled', 'its run was canceled'],
+    ['passed', null, 'it ended without an answer']
+  ])('%s: the ask closes with why, and the wake stops waiting', async (status, reason, why) => {
+    const a = await asked()
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status, output: '', companyId: CO })
+    a.s.settleReply(a.runId, status, reason)
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ status: 'answered', noAnswer: true, answer: expect.stringContaining(why) })
+    expect(a.wakes()[0]).toMatchObject({ status: 'refused', refusal: 'start_failed' })
+    // run hooks fire more than once for one run
+    a.s.settleReply(a.runId, status, reason)
+    expect(a.s.store.message(a.card.id).ask?.answer).toContain(why)
+  })
+
+  it('a woken agent that only posted elsewhere did not answer: its asker stops waiting too', async () => {
+    const a = await asked()
+    const output = 'Looked.\n```forum\n{"op":"post","channel":"#general","text":"Looking at staging."}\n```'
+    expect(await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output, companyId: CO })).toBe(1)
+    a.s.settleReply(a.runId, 'passed', null)
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ status: 'answered', noAnswer: true })
+  })
+
+  it('the final answer of a reply run is never deferred: the run report path cannot lose it to the close', async () => {
+    const a = await asked()
+    a.s.deferAutoPost = () => true
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output: 'Staging is up.', companyId: CO })
+    a.s.settleReply(a.runId, 'passed', null)
+    const ask = a.s.store.message(a.card.id).ask
+    expect(ask).toMatchObject({ status: 'answered', answer: 'Staging is up.' })
+    expect(ask?.noAnswer).toBeFalsy()
+    expect(a.wakes()[0]!.status).toBe('answered')
+  })
+
+  it('a quit keeps it open: the next boot asks again', async () => {
+    quitting = true
+    const a = await asked()
+    a.s.settleReply(a.runId, 'canceled', 'Canceled')
+    expect(a.s.store.message(a.card.id).ask?.status).toBe('open')
+    expect(a.wakes()[0]!.status).toBe('started')
+  })
+
+  it('a late reply replaces the close, once; an answer after that is refused as before', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'failed', 'Timed out')
+    const out = await a.s.api.call(a.caller('agt_livia', 'r_later'), 'forum_reply', { to: a.card.ref, text: 'Staging is up after all.' })
+    expect(out).toMatch(/answered the ask/)
+    const ask = a.s.store.message(a.card.id).ask
+    expect(ask).toMatchObject({ status: 'answered', answer: 'Staging is up after all.', answeredBy: a.member('agt_livia').id })
+    expect(ask?.noAnswer).toBeFalsy()
+    expect(a.wakes()[0]!.status).toBe('answered')
+    expect(() => a.s.answer(a.card.id, a.member('agt_livia').id, 'Again.')).toThrow(/already answered/)
+  })
+
+  it('a person can still answer it, and the wake of the run that ended stays as it was', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'failed', 'Timed out')
+    const owner = a.s.store.owner(CO)
+    a.s.answer(a.card.id, owner.id, 'Yes, I checked.')
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ answer: 'Yes, I checked.', answeredBy: owner.id })
+    expect(a.wakes()[0]!.status).toBe('refused')
+  })
+
+  it('a late harvest of the same run still answers', async () => {
+    const a = await asked()
+    a.s.settleReply(a.runId, 'passed', null)
+    await a.s.harvest({ runId: a.runId, stepId: 'st_x', adapter: 'claude', status: 'passed', output: 'Staging is up.', companyId: CO })
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ answer: 'Staging is up.' })
+  })
+
+  it('a question by @mention reaches the asker with why, then with the late reply', async () => {
+    const a = setup()
+    const room = a.s.store.channelByName(CO, 'development')!
+    const replied: string[] = []
+    a.s.collab.onReplied = (e) => void replied.push(e.text)
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_post', { channel: `#${room.name}`, text: '@livia is staging up?' })
+    const runId = a.starts[0]!.runId
+    a.s.settleReply(runId, 'failed', 'Timed out')
+    expect(replied).toEqual([expect.stringContaining('could not answer')])
+    await a.s.api.call(a.caller('agt_livia', 'r_later'), 'forum_reply', { to: a.s.store.message(a.starts[0]!.reply.messageId).ref, text: 'Yes, it is up.' })
+    expect(replied[1]).toBe('Yes, it is up.')
+    expect(a.wakes()[0]!.status).toBe('answered')
+  })
+
+  it('a wake refused at the start is not revived by a later reply in the thread', async () => {
+    const a = await asked()
+    db.prepare("UPDATE forum_agent_wakes SET status='refused', refusal='start_failed', to_run=NULL").run()
+    a.s.collab.noteReplied(a.member('agt_livia').id, a.card.seq, 'hello')
+    expect(a.wakes()[0]!.status).toBe('refused')
+  })
+})
+
+describe('a queue that mixes people and agents', () => {
+  const busy = async () => {
+    const a = setup()
+    const owner = a.s.store.owner(CO)
+    const room = a.s.store.channelByName(CO, 'development')!
+    const say = (text: string) => a.s.store.post(owner.id, { channelId: room.id, text, threadId: null })
+    a.responder.onHumanPost(say('first'))
+    const person = say('second')
+    a.responder.onHumanPost(person)
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask_agent', { to: '@livia', question: 'Is the pricing page live?', wait_s: 0 })
+    const card = a.s.store.openAsks(CO)[0]!
+    return { ...a, person, card, room }
+  }
+
+  it('a person and an agent each get their own run, with their own rules and thread', async () => {
+    const a = await busy()
+    a.responder.onRunEnded('r_wake1')
+    expect(a.starts).toHaveLength(2)
+    expect(a.starts[1]!.prompt).toMatch(/^Forum reply in #development/)
+    expect(a.starts[1]!.reply.messageId).toBe(a.person.id)
+    a.responder.onRunEnded('r_wake2')
+    expect(a.starts).toHaveLength(3)
+    expect(a.starts[2]!.prompt).toMatch(/^Agent ask in #development/)
+    expect(a.starts[2]!.reply.messageId).toBe(a.card.id)
+  })
+
+  it('two asks queued: each gets its own run, so neither is left without an answer', async () => {
+    const a = setup()
+    const owner = a.s.store.owner(CO)
+    const room = a.s.store.channelByName(CO, 'development')!
+    a.responder.onHumanPost(a.s.store.post(owner.id, { channelId: room.id, text: 'first', threadId: null }))
+    await a.s.api.call(a.caller('agt_marcus'), 'forum_ask_agent', { to: '@livia', question: 'One?', wait_s: 0 })
+    await a.s.api.call(a.caller('agt_marcus', 'r_task2'), 'forum_ask_agent', { to: '@livia', question: 'Two?', wait_s: 0 })
+    a.responder.onRunEnded('r_wake1')
+    a.responder.onRunEnded('r_wake2')
+    expect(a.starts.slice(1).map((x) => x.prompt.includes('One?') ? 'one' : 'two')).toEqual(['one', 'two'])
+    expect(a.starts[1]!.prompt).not.toContain('Two?')
+  })
+
+  it('it cannot start: the person gets a line and the agent stops waiting', async () => {
+    const a = await busy()
+    agents.find((x) => x.id === 'agt_livia')!.archivedAt = '2026-10-21T10:00:00.000Z'
+    a.responder.onRunEnded('r_wake1')
+    expect(a.starts).toHaveLength(1)
+    const lines = a.s.store.thread(a.person.id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    expect(lines).toEqual([expect.stringContaining('could not answer this')])
+    expect(a.s.store.message(a.card.id).ask).toMatchObject({ status: 'answered', answer: expect.stringContaining('could not answer') })
+    expect(a.wakes().find((w) => w.via === 'ask')).toMatchObject({ status: 'refused', refusal: 'start_failed' })
   })
 })

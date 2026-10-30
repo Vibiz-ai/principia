@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FORUM_LIMITS, messageRef, type ForumEvent } from '../../shared/forum'
 import { ForumStore, newInviteCode, normalizeInviteCode, type ForumDirectory } from './store'
 import * as policy from './policy'
@@ -750,7 +750,7 @@ describe('agents answer people and post their work (§6.4)', () => {
     expect(starts[1].reply.messageId).toBe(third.id)
   })
 
-  it('caps reply runs per agent per hour and skips inactive seats', () => {
+  it('a person is never capped: every message past the hourly cap still gets a reply run', () => {
     const { s, owner, post } = setup()
     const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
     const r = responder(s, starts)
@@ -758,10 +758,334 @@ describe('agents answer people and post their work (§6.4)', () => {
       r.onHumanPost(post(owner.id, 'marketing', `msg ${i}`))
       r.onRunEnded(`r_reply${starts.length}`)
     }
-    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour)
-    clock = new Date(clock.getTime() + 3601_000)
-    r.onHumanPost(post(owner.id, 'marketing', 'next hour'))
-    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour + 1)
+    expect(starts).toHaveLength(RESPONDER_LIMITS.perHour + 2)
+  })
+
+  it('a message nobody can answer gets a line saying why, in its thread', () => {
+    const { s, owner, post, marcus } = setup()
+    const told: [string, string, string][] = []
+    const off = responder(s, [], { seat: () => null, onUnanswered: (...a) => told.push(a) })
+    const msg = post(owner.id, 'marketing', 'hi')
+    expect(off.onHumanPost(msg)).toEqual([])
+    expect(told).toHaveLength(1)
+    s.noteUnanswered(told[0]![0], told[0]![1], told[0]![2])
+    const line = s.store.thread(msg.id).replies.find((m) => m.kind === 'system')
+    expect(line?.text).toMatch(new RegExp(`^${marcus.name} could not answer this: .*Send it again to retry\\.$`))
+  })
+
+  it('a queued message whose run cannot start is told too', () => {
+    const { s, owner, post } = setup()
+    const starts: { agentId: string; prompt: string; reply: { messageId: string } }[] = []
+    const told: string[] = []
+    let up = true
+    const r = responder(s, starts, {
+      onUnanswered: (id) => told.push(id),
+      start: (input) => {
+        if (!up) throw new Error('no profile')
+        starts.push(input)
+        return `r_reply${starts.length}`
+      }
+    })
+    r.onHumanPost(post(owner.id, 'marketing', 'first'))
+    const queued = post(owner.id, 'marketing', 'second')
+    r.onHumanPost(queued)
+    up = false
+    r.onRunEnded('r_reply1')
+    expect(told).toEqual([queued.id])
+  })
+
+  it('a reply run that failed, or ended with nothing, says so once; an answered or canceled one stays quiet', async () => {
+    const { s, owner, post, marcus } = setup()
+    db.exec('CREATE TABLE runs (id TEXT PRIMARY KEY, agent_id TEXT, task_id TEXT, company_id TEXT)')
+    const reply = (id: string, text: string) => {
+      db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(id, 'agt_marcus', null, CO)
+      const msg = post(owner.id, 'marketing', text)
+      s.noteReplyRun(id, { memberId: marcus.id, channelId: msg.channelId, messageId: msg.id })
+      return msg
+    }
+    const lines = (id: string) => s.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    const failed = reply('r_f', 'a')
+    await s.harvest({ runId: 'r_f', stepId: 'st_f', adapter: 'claude', status: 'failed', output: '', companyId: CO })
+    s.settleReply('r_f', 'failed', 'Timed out after 15 min')
+    s.settleReply('r_f', 'failed', 'Timed out after 15 min')
+    expect(lines(failed.id)).toEqual([`${marcus.name} could not answer this: Timed out after 15 min. Send it again to retry.`])
+    const empty = reply('r_e', 'b')
+    await s.harvest({ runId: 'r_e', stepId: 'st_e', adapter: 'claude', status: 'passed', output: '', companyId: CO })
+    s.settleReply('r_e', 'passed', null)
+    expect(lines(empty.id)).toHaveLength(1)
+    const good = reply('r_g', 'c')
+    await s.harvest({ runId: 'r_g', stepId: 'st_g', adapter: 'claude', status: 'passed', output: 'Done.', companyId: CO })
+    s.settleReply('r_g', 'passed', null)
+    expect(lines(good.id)).toEqual([])
+    const stopped = reply('r_c', 'd')
+    s.settleReply('r_c', 'canceled', 'Canceled')
+    expect(lines(stopped.id)).toEqual([])
+  })
+
+  it('a reply run with no slot after a moment shows as queued, until it starts or ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { s, owner, post, marcus } = setup()
+      const msg = post(owner.id, 'marketing', 'hi')
+      s.noteReplyRun('r_q', { memberId: marcus.id, channelId: msg.channelId, messageId: msg.id })
+      expect(s.presenceOf(CO)).toEqual([])
+      vi.advanceTimersByTime(3000)
+      expect(s.presenceOf(CO)).toMatchObject([{ memberId: marcus.id, state: 'queued', channelId: msg.channelId }])
+      s.settleReply('r_q', 'canceled', 'Canceled')
+      expect(s.presenceOf(CO)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  describe('a quit or a crash does not lose a person\'s message', () => {
+    type Start = { agentId: string; prompt: string; reply: { memberId: string; channelId: string; messageId: string } }
+    /** The app: a new service and responder over the same db, wired like wire.ts. `start` numbers runs across restarts. */
+    let runs = 0
+    const runsSoFar = () => runs
+    function app(over: Partial<ResponderDeps> = {}, quitting: { now: boolean } = { now: false }, extra: Partial<ForumServiceDeps> = {}) {
+      const s = service({ quitting: () => quitting.now, ...extra })
+      s.store.sync(CO)
+      const starts: Start[] = []
+      const r = responder(s, starts, {
+        journal: s.owed,
+        quitting: () => quitting.now,
+        onUnanswered: (messageId, memberId, reason) => s.noteUnanswered(messageId, memberId, reason),
+        start: (input) => {
+          const id = `r_run${++runs}`
+          starts.push(input)
+          s.noteReplyRun(id, input.reply)
+          return id
+        },
+        ...over
+      })
+      s.onHumanPost = (m) => void r.onHumanPost(m)
+      return { s, r, starts, quitting }
+    }
+    const say = (s: ForumService, text: string, threadId?: string) => s.store.post(s.store.owner(CO).id, { channelId: s.store.channelByName(CO, 'marketing')!.id, text, threadId: threadId ?? null })
+    const lines = (s: ForumService, id: string) => s.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    const interrupted = (s: ForumService) => `${s.store.memberForAgent('agt_marcus')!.name} could not answer this: Principia closed before the reply finished. Send it again to retry.`
+    /** What the run hook does when a run ends (wire.ts). */
+    const ended = (a: ReturnType<typeof app>, runId: string, status: string, reason: string | null) => {
+      a.r.onRunEnded(runId)
+      a.s.settleReply(runId, status, reason)
+    }
+
+    it('a crash mid-reply: the message is answered again after the restart, told so, and only once', () => {
+      const before = app()
+      const msg = say(before.s, 'hello?')
+      expect(before.r.onHumanPost(msg)).toHaveLength(1)
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+      expect(after.starts[0]!.prompt).toContain('Principia closed while you were answering this')
+      // a second crash while answering: no third try, the person reads why
+      const third = app()
+      third.r.recover()
+      expect(third.starts).toEqual([])
+      expect(lines(third.s, msg.id)).toEqual([interrupted(third.s)])
+      expect(third.s.owed.all()).toEqual([])
+    })
+
+    it('a clean quit: canceled runs start nothing new, and the running and queued messages both come back', () => {
+      const before = app()
+      const first = say(before.s, 'first')
+      const second = say(before.s, 'second')
+      const [runId] = before.r.onHumanPost(first)
+      before.r.onHumanPost(second)
+      before.quitting.now = true
+      ended(before, runId!, 'canceled', 'Hive quit during run')
+      expect(before.starts).toHaveLength(1)
+      expect(lines(before.s, first.id)).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toHaveLength(1)
+      expect(after.starts[0]!.reply.messageId).toBe(second.id)
+      expect(after.starts[0]!.prompt).toContain('first')
+      expect(after.starts[0]!.prompt).toContain('second')
+    })
+
+    it('a message that was only queued never ran: its restart says nothing about a cut-off reply', () => {
+      const before = app()
+      const first = say(before.s, 'opening ask')
+      const second = say(before.s, 'second')
+      const [runId] = before.r.onHumanPost(first)
+      before.r.onHumanPost(second)
+      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: first.channelId, threadId: first.id, text: 'Answer to the opening ask.' })
+      before.quitting.now = true
+      ended(before, runId!, 'passed', null)
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([second.id])
+      expect(after.starts[0]!.prompt).not.toContain('Principia closed while')
+      expect(after.starts[0]!.prompt).not.toContain('opening ask')
+    })
+
+    it('an answer that got out before the crash stands: no second reply and no line', () => {
+      const before = app()
+      const msg = say(before.s, 'hello?')
+      before.r.onHumanPost(msg)
+      before.s.store.post(before.s.store.memberForAgent('agt_marcus')!.id, { channelId: msg.channelId, threadId: msg.id, text: 'Hi!' })
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toEqual([])
+      expect(lines(after.s, msg.id)).toEqual([])
+      expect(after.s.owed.all()).toEqual([])
+    })
+
+    /** A conversation with one open task question: a person's next message there waits for the classifier. */
+    function asked(s: ForumService) {
+      const owner = s.store.owner(CO)
+      const marcus = s.store.memberForAgent('agt_marcus')!
+      const conv = s.store.createChannel(owner.id, { name: 'chat-ask-ab12', kind: 'private', purpose: 'x', memberIds: [marcus.id] })
+      tasks.set('t_1', { id: 't_1', identifier: 'AC-1', title: 'x', status: 'blocked', ask: { prompt: 'Which one?' } } as never)
+      s.store.post(marcus.id, { channelId: conv.id, text: 'Which one?', kind: 'ask', ask: { status: 'open', to: [owner.id], taskId: 't_1', runId: null } })
+      return s.store.post(owner.id, { channelId: conv.id, text: 'the blue one, I think', threadId: null })
+    }
+    const stuck = () => (() => new Promise<string>(() => undefined)) as never
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+
+    it('a quit while the classifier reads a message: the next boot answers it', async () => {
+      const before = app({}, { now: false }, { replyKind: stuck })
+      const msg = asked(before.s)
+      void before.s.routeHumanPost(msg, before.s.store.owner(CO).id)
+      await tick()
+      expect(before.starts).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+      expect(after.starts[0]!.prompt).not.toContain('Principia closed while')
+    })
+
+    it('a second quit before anyone is picked gets a line', async () => {
+      const held = app({}, { now: false }, { replyKind: stuck })
+      const msg = asked(held.s)
+      void held.s.routeHumanPost(msg, held.s.store.owner(CO).id)
+      await tick()
+      db.prepare('UPDATE forum_owed_replies SET attempts=1').run()
+      const last = app()
+      last.r.recover()
+      expect(last.starts).toEqual([])
+      expect(lines(last.s, msg.id)).toEqual(['Principia could not answer this: it closed before anyone could reply. Send it again to retry.'])
+      expect(last.s.owed.all()).toEqual([])
+    })
+
+    it('a message the classifier says answers the question owes nothing', async () => {
+      const a = app({}, { now: false }, { replyKind: () => (async () => '{"kind":"answer"}') as never })
+      const msg = asked(a.s)
+      expect(await a.s.routeHumanPost(msg, a.s.store.owner(CO).id)).toBe('answered')
+      expect(a.s.owed.all()).toEqual([])
+    })
+
+    it('a message that arrives during a quit starts nothing and is answered at the next boot', () => {
+      const before = app()
+      before.quitting.now = true
+      const msg = say(before.s, 'one last thing')
+      expect(before.r.onHumanPost(msg)).toEqual([])
+      expect(before.starts).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+    })
+
+    it('a long queue loses nothing: oldest first, a few at a time, each message in a reply', () => {
+      const a = app()
+      const first = say(a.s, 'first')
+      const [runId] = a.r.onHumanPost(first)
+      const queued = Array.from({ length: RESPONDER_LIMITS.pending + 2 }, (_, i) => say(a.s, `queued ${i}`))
+      for (const m of queued) a.r.onHumanPost(m)
+      expect(a.s.owed.all()).toHaveLength(queued.length + 1)
+      ended(a, runId!, 'canceled', 'Canceled')
+      expect(a.starts).toHaveLength(2)
+      expect(a.starts[1]!.prompt).toContain('queued 0')
+      expect(a.starts[1]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
+      expect(a.starts[1]!.prompt).not.toContain(`queued ${RESPONDER_LIMITS.pending}`)
+      ended(a, 'r_run' + runsSoFar(), 'canceled', 'Canceled')
+      expect(a.starts).toHaveLength(3)
+      expect(a.starts[2]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending}`)
+      expect(a.starts[2]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending + 1}`)
+      ended(a, 'r_run' + runsSoFar(), 'canceled', 'Canceled')
+      expect(a.s.owed.all()).toEqual([])
+    })
+
+    it('more owed than one run takes: the boot answers them all, in turn', () => {
+      const before = app()
+      const first = say(before.s, 'first')
+      before.r.onHumanPost(first)
+      const queued = Array.from({ length: RESPONDER_LIMITS.pending }, (_, i) => say(before.s, `queued ${i}`))
+      for (const m of queued) before.r.onHumanPost(m)
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toHaveLength(1)
+      expect(after.starts[0]!.prompt).toContain('first')
+      expect(after.starts[0]!.prompt).not.toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
+      ended(after, 'r_run' + runsSoFar(), 'passed', null)
+      expect(after.starts).toHaveLength(2)
+      expect(after.starts[1]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
+    })
+
+    it('settled replies leave nothing owed: answered, failed with its line, canceled by the person', () => {
+      const a = app()
+      for (const [status, reason] of [['passed', null], ['failed', 'Timed out'], ['canceled', 'Canceled']] as const) {
+        const msg = say(a.s, status)
+        const [runId] = a.r.onHumanPost(msg)
+        expect(a.s.owed.all()).toHaveLength(1)
+        if (status === 'passed') a.s.store.post(a.s.store.memberForAgent('agt_marcus')!.id, { channelId: msg.channelId, threadId: msg.id, text: 'Hi!' })
+        ended(a, runId!, status, reason)
+      }
+      expect(a.s.owed.all()).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toEqual([])
+    })
+
+    it('old messages and seats that cannot answer get a line, never a late answer or silence', () => {
+      const before = app()
+      const old = say(before.s, 'from days ago')
+      before.r.onHumanPost(old)
+      clock = new Date(clock.getTime() + 25 * 3600_000)
+      const later = app()
+      later.r.recover()
+      expect(later.starts).toEqual([])
+      expect(lines(later.s, old.id)).toEqual([interrupted(later.s)])
+
+      const paused = say(later.s, 'hi')
+      later.r.onHumanPost(paused)
+      const off = app({ seat: () => null })
+      off.r.recover()
+      expect(off.starts).toEqual([])
+      expect(lines(off.s, paused.id)[0]).toContain('cannot answer')
+      expect(off.s.owed.all()).toEqual([])
+    })
+
+    it('a reply that cannot start gets a line, the next agent still recovers, and a message gone since is dropped', () => {
+      const a = app()
+      const owner = a.s.store.owner(CO)
+      const gone = say(a.s, 'never mind')
+      a.r.onHumanPost(gone)
+      db.prepare('DELETE FROM forum_messages WHERE id=?').run(gone.id)
+      const conv = a.s.store.createChannel(owner.id, { name: 'chat-both-ab12', kind: 'private', purpose: 'x', memberIds: [a.s.store.memberForAgent('agt_marcus')!.id, a.s.store.memberForAgent('agt_livia')!.id] })
+      const both = a.s.store.post(owner.id, { channelId: conv.id, text: 'both of you', threadId: null })
+      a.r.onHumanPost(both)
+      expect(a.s.owed.all()).toHaveLength(2)
+      const started: string[] = []
+      const after = app({
+        start: (input) => {
+          if (input.agentId === 'agt_marcus') throw new Error('no slot')
+          started.push(input.agentId)
+          return 'r_ok'
+        }
+      })
+      after.r.recover()
+      expect(started).toEqual(['agt_livia'])
+      expect(lines(after.s, both.id)).toEqual([expect.stringContaining('could not start @')])
+      // Livia's reply is running; nothing else is left
+      expect(after.s.owed.all().map((r) => [r.memberId, r.runId])).toEqual([[after.s.store.memberForAgent('agt_livia')!.id, 'r_ok']])
+    })
+  })
+
+  it('skips inactive seats', () => {
+    const { s, owner, post } = setup()
     const off = responder(s, [], { seat: () => null })
     expect(off.onHumanPost(post(owner.id, 'development', 'hi'))).toEqual([])
   })

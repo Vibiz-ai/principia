@@ -4,6 +4,15 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.stubGlobal('window', { hive: { on: () => () => {} }, addEventListener: () => {}, removeEventListener: () => {} })
 
+describe('replies', () => {
+  it('a **Next step:** line is drawn apart; other bold leads and mid-sentence mentions are not', async () => {
+    const { MarkdownLite } = await import('./MarkdownLite')
+    const html = renderToStaticMarkup(createElement(MarkdownLite, { text: 'Done.\n\n**Note:** nothing else changed.\n\nThe **next step:** is mine.\n\n**Next step:** merge PR #110.' }))
+    expect(html.match(/dgm-md__next/g)).toHaveLength(1)
+    expect(html).toContain('<p class="dgm-md__next"><strong><span>Next step:</span></strong><span> merge PR #110.</span></p>')
+  })
+})
+
 describe('principia:// links in agent text', () => {
   it('a bare link becomes an in-app button in plain words; https stays a web link', async () => {
     const { MarkdownLite } = await import('./MarkdownLite')

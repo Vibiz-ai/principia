@@ -24,12 +24,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
 import { agentActive, startsWithoutAutopilot, type CompanyTask } from '@shared/company'
-import { clockLabel, queuedReason, workingStrip, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
+import { SLOT_WAIT_LINE, SLOT_WAIT_WHY, clockLabel, queuedReason, workingStrip, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
 import { Button, IconButton, Segmented } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
 import { AgentTimeline } from '../agents/AgentTimeline'
 import { StepLog } from '../StepLog'
-import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from '../../lib/taskCardView'
+import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, stripWord, tailLines, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
 import { eventGlyph } from '../../lib/live'
@@ -223,11 +223,9 @@ function queueKey(s: State, task: CompanyTask, runLabel: string): string {
   const company = s.companies.find((c) => c.id === task.companyId) ?? null
   const depsOpen = task.dependencyIds.map((d) => s.tasks.find((t) => t.id === d)).filter((t): t is CompanyTask => !!t && t.status !== 'done').map((t) => t.identifier)
   let inFlight = 0
-  let agentRunning = 0
   for (const t of s.tasks) {
     if (t.companyId !== task.companyId || t.status !== 'in_progress' || t.id === task.id) continue
     if (t.runId) inFlight++
-    if (task.agentId && t.agentId === task.agentId) agentRunning++
   }
   const startsAnyway = startsWithoutAutopilot({ source: task.source, status: task.status, pendingWake: task.pendingWake ?? null, plan: task.plan ?? null, ask: task.ask ?? null, handoffs: task.handoffs ?? 0 })
   const r = queuedReason({
@@ -236,7 +234,6 @@ function queueKey(s: State, task: CompanyTask, runLabel: string): string {
     company: company ? { name: company.name, autopilot: company.autopilot, pausedAt: company.pausedAt ?? null, maxInFlight: company.maxInFlight } : null,
     depsOpen,
     inFlight,
-    agentRunning,
     startsAnyway,
     runLabel
   })
@@ -258,6 +255,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
   const root = useStore((s) => (runId ? rootOfRun(Object.values(s.agents), runId) : null))
+  const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
   const co = companyId ?? task?.companyId ?? null
   const code = useStore((s) => (co ? reposOf(s.repos, co).length > 0 : true))
@@ -279,7 +277,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   // a start that went through clears the error it showed before
   useEffect(() => setRunError(null), [task?.status, task?.runId])
   if (!card) return null
-  const v = taskCardView(card, task, { root, ask, code, now })
+  const v = taskCardView(card, task, { root, ask, code, now, slotWaitSince })
   const who = display?.name ?? seat?.name ?? 'Nobody yet'
   const [queueText, queueRun] = queue ? queue.split('\u0000') : ['Waiting for its turn', '0']
   const canRun = v.state === 'queued' && queueRun === '1' && !!task
@@ -330,7 +328,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           <span className="flex1" />
           <span className={`cx-task__state is-${v.state}`} data-chatux="task-state">
             <span className="cx-task__mark" aria-hidden />
-            <span className={v.state === 'working' ? 'shimmer-text' : ''}>{v.label}</span>
+            <span className={v.state === 'working' && !v.slotWait ? 'shimmer-text' : ''}>{v.label}</span>
           </span>
           <span className="cx-task__sep">·</span>
           {v.state === 'working' ? (
@@ -342,7 +340,11 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           )}
         </div>
         <div className="cx-task__dockrow">
-          {v.state === 'working' ? (
+          {v.slotWait ? (
+            <span className="cx-task__activity cx-task__why cx-task__dockline" data-chatux="task-slot-wait" title={SLOT_WAIT_WHY}>
+              {SLOT_WAIT_LINE}
+            </span>
+          ) : v.state === 'working' ? (
             !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)
           ) : v.state === 'needs_you' ? (
             <span className="cx-task__activity cx-task__dockline" data-chatux="task-needs" title={v.needs?.prompt}>
@@ -408,7 +410,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
         <span className="flex1" />
         <span className={`cx-task__state is-${v.state}`} data-chatux="task-state">
           <span className="cx-task__mark" aria-hidden />
-          <span className={v.state === 'working' ? 'shimmer-text' : ''}>{v.label}</span>
+          <span className={v.state === 'working' && !v.slotWait ? 'shimmer-text' : ''}>{v.label}</span>
         </span>
       </div>
       <div className="cx-task__line">
@@ -416,9 +418,15 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
         <span className="cx-task__sep">·</span>
         {v.state === 'working' ? (
           <>
-            <span className="cx-task__activity shimmer-text" data-chatux="task-activity">
-              {logAgent ? 'Working' : 'Starting'}
-            </span>
+            {v.slotWait ? (
+              <span className="cx-task__activity cx-task__why" data-chatux="task-slot-wait" title={SLOT_WAIT_WHY}>
+                {SLOT_WAIT_LINE}
+              </span>
+            ) : (
+              <span className="cx-task__activity shimmer-text" data-chatux="task-activity">
+                {logAgent ? 'Working' : 'Starting'}
+              </span>
+            )}
             <span className="cx-task__sep">·</span>
             <WorkClock since={v.since} />
           </>
@@ -449,7 +457,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           {v.result}
         </div>
       )}
-      {v.state === 'working' && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)}
+      {v.state === 'working' && !v.slotWait && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)}
       {logOpen && logAgent && v.runId && <TaskLog agentId={logAgent.id} runId={v.runId} stepId={logAgent.stepId} live={rootLive} />}
       {runError && (
         <div className="cx-task__error" role="alert" data-chatux="task-run-error">
@@ -561,7 +569,7 @@ export function WorkingStrip({ msgs, cards, dock = false }: { msgs?: readonly Fo
                 <span className="cx-strip__id">{t.identifier}</span>
               )}
               <span className="cx-strip__who">{t.who ?? 'Nobody yet'}</span>
-              <span className="cx-strip__who">· {t.state === 'working' ? 'working' : t.state === 'needs_you' ? 'needs you' : 'queued'}</span>
+              <span className="cx-strip__who">· {stripWord(t.state, !!t.slotWait)}</span>
               <span className="flex1" />
               {askOf(t) && (
                 <button type="button" className="link-btn" data-chatux="working-strip-question" onClick={() => void jumpToMessage(askOf(t)!)}>
@@ -596,23 +604,28 @@ export function useStripItems(list: readonly ForumTaskCard[]): StripTask[] {
     return ids
   }, [list, tasks])
   const starts = useStore((s) => runStartsKey(Object.values(s.agents), runIds))
+  const slotWaits = useStore((s) => s.slotWaits)
   const items = useMemo(() => {
     const who = (agentId: string | null): string | null => {
       const seat = agentId ? seats.find((a) => a.id === agentId) : undefined
       return seat ? (agentDisplay(seat)?.name ?? seat.name) : null
     }
     const since = parseRunStarts(starts)
-    return stripTasks(list, tasks, who, openAskRuns(asks), (r) => since.get(r) ?? null)
-  }, [list, tasks, seats, agentDisplay, asks, starts])
+    return stripTasks(list, tasks, who, openAskRuns(asks), (r) => since.get(r) ?? null, (r) => slotWaits[r] ?? null)
+  }, [list, tasks, seats, agentDisplay, asks, starts, slotWaits])
   return items
 }
 
 /** The history's card while its task is docked: one line that points at the dock ("VO-15 · working · see below"). */
 export function TaskCardRef({ card, state }: { card: ForumTaskCard; state: TaskCardState }): React.JSX.Element {
+  const slotWait = useStore((s) => {
+    const runId = s.tasks.find((t) => t.id === card.taskId)?.runId ?? card.runId
+    return runId ? !!s.slotWaits[runId] : false
+  })
   return (
     <button type="button" className={`cx-taskref is-${state}`} data-chatux="task-card-ref" data-state={state} data-task={card.identifier} title={`${card.title} · show it above the reply box`} onClick={() => void jumpToDockedTask(card.identifier)}>
       <span className={`cx-strip__mark is-${state}`} aria-hidden />
-      <span className="cx-taskref__line">{dockRefLine(card.identifier, state)}</span>
+      <span className="cx-taskref__line">{dockRefLine(card.identifier, state, slotWait)}</span>
       <span className="cx-taskref__title">{card.title}</span>
     </button>
   )

@@ -60,14 +60,23 @@ export class LineBuffer {
   }
 }
 
-/** Counting semaphore with a dynamic limit (settings.concurrency can change at runtime). */
+/** settings.concurrency as a limit: 1..16 if the founder set one, else (0, the default) no limit. */
+export const concurrencyLimit = (setting: unknown): number => {
+  const c = Number(setting)
+  return Number.isFinite(c) && c >= 1 ? Math.min(16, c) : Infinity
+}
+
+/** Counting semaphore with a dynamic limit (settings.concurrency can change at runtime; Infinity = no limit). */
 export class Semaphore {
   private active = 0
   private waiters: (() => void)[] = []
   constructor(private limit: () => number) {}
-  async acquire(): Promise<() => void> {
-    if (this.active >= Math.max(1, this.limit())) await new Promise<void>((r) => this.waiters.push(r))
-    else this.active++
+  /** `onWait` is called, synchronously, only when every slot is taken and the caller has to wait. */
+  async acquire(onWait?: () => void): Promise<() => void> {
+    if (this.active >= Math.max(1, this.limit())) {
+      onWait?.()
+      await new Promise<void>((r) => this.waiters.push(r))
+    } else this.active++
     let released = false
     return () => {
       if (released) return

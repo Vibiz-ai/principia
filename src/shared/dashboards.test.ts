@@ -73,7 +73,7 @@ describe('dashboardDepartmentKey', () => {
 
 describe('searchDashboards', () => {
   it('matches every word and filters by department and category', () => {
-    expect(searchDashboards('churn').map((d) => d.id)).toEqual(['stripe'])
+    expect(searchDashboards('churn').map((d) => d.id)).toEqual(['activation', 'stripe'])
     expect(searchDashboards('search console').map((d) => d.id)).toEqual(['gsc'])
     expect(searchDashboards('', { department: 'marketing', category: 'Web analytics' }).map((d) => d.id)).toEqual(['plausible', 'posthog'])
     expect(searchDashboards('', { department: 'all', category: 'all' })).toHaveLength(DASHBOARD_CATALOG.length)

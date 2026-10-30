@@ -160,3 +160,48 @@ enum MacMove {
         return constantTimeEqual(proof.lowercased(), helloProof(token: token, origin: origin, nonce: nonce)) ? .ok : .wrong
     }
 }
+
+/// The sealed address lookup (docs/REMOTE.md RA8). Mirrors `src/shared/rendezvous.ts`: the Mac leaves its new address on
+/// the phone site, sealed so that only this phone can read it. The site is never trusted: the address goes through
+/// `MacMove.check` like any other, and the token only follows if the Mac there proves itself.
+enum MacFinder {
+    static let route = "/api/where"
+    private static let writeLabel = "principia-rdv-write-v1"
+    private static let keyLabel = "principia-rdv-key-v1"
+
+    private static func hmac(_ hash: String, _ label: String) -> HashedAuthenticationCode<SHA256> {
+        HMAC<SHA256>.authenticationCode(for: Data(label.utf8), using: SymmetricKey(data: Data(hash.utf8)))
+    }
+
+    /// Where this phone's record lives: sha256hex(hex HMAC(sha256hex(token), the write label)).
+    static func recordId(hash: String) -> String {
+        let write = hmac(hash, writeLabel).map { String(format: "%02x", $0) }.joined()
+        return MacMove.sha256Hex(write)
+    }
+
+    /// base64url(iv + ciphertext + tag), AES-256-GCM under HMAC(sha256hex(token), the key label). nil: not this phone's.
+    static func open(sealed: String, hash: String) -> String? {
+        var b = sealed.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        b += String(repeating: "=", count: (4 - b.count % 4) % 4)
+        guard let data = Data(base64Encoded: b),
+              let box = try? AES.GCM.SealedBox(combined: data),
+              let plain = try? AES.GCM.open(box, using: SymmetricKey(data: Data(hmac(hash, keyLabel)))) else { return nil }
+        return String(data: plain, encoding: .utf8)
+    }
+
+    /// The new address this Mac left for the phone, only once the Mac there has passed the hello check. Anything else is
+    /// nil, and the phone just keeps waiting.
+    static func find(transport: HTTPTransport, paired p: PairedMac) async -> String? {
+        let hash = MacMove.sha256Hex(p.token)
+        guard let url = URL(string: "\(p.site)\(route)?id=\(recordId(hash: hash))") else { return nil }
+        var r = URLRequest(url: url)
+        r.cachePolicy = .reloadIgnoringLocalCacheData
+        r.httpShouldHandleCookies = false
+        r.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let (data, res) = try? await transport.send(r), res.statusCode == 200,
+              let sealed = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["sealed"] as? String,
+              let mac = PairLink.siteOrigin(open(sealed: sealed, hash: hash)), mac != p.mac,
+              await MacMove.check(transport: transport, mac: mac, site: p.site, deviceId: p.deviceId, token: p.token) == .ok else { return nil }
+        return mac
+    }
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { chatTaskCard, chatTaskCards, clockLabel, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskStatusLine, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
 import { buildBlocks } from './chatView'
 
@@ -87,12 +87,10 @@ describe('queuedReason: why a queued card waits, and whether Run now can start i
     expect(queuedReason({ ...base, agent: { ...agent, data: { autonomy: 'auto', mode: 'session' } } }).text).toBe('Julia works in a session: it starts when you press Run now')
     expect(queuedReason({ ...base, task: { ...task, status: 'backlog' } })).toEqual({ text: 'In the backlog: it starts when it moves to To do, or with Run now', canRun: true })
   })
-  it('the company is at its limit, or the agent already runs as many as it takes at once; else it starts in a moment', () => {
+  it('the company is at a limit it set; else it starts in a moment', () => {
     expect(queuedReason({ ...base, inFlight: 3 })).toEqual({ text: '3 tasks are already running in Vibiz (at most 3 at once)', canRun: true })
-    expect(queuedReason({ ...base, company: { ...company, maxInFlight: undefined }, inFlight: 3 }).text).toContain('at most 3')
-    // an agent works on several tasks at once: one or two others running do not hold it
-    expect(queuedReason({ ...base, inFlight: 2, agentRunning: 2 })).toEqual({ text: 'Starting in a moment', canRun: true })
-    expect(queuedReason({ ...base, task: { ...task, identifier: 'VO-15' }, company: { ...company, maxInFlight: 6 }, inFlight: 3, agentRunning: 3 })).toEqual({ text: 'Julia is running 3 tasks; VO-15 starts when one finishes', canRun: true })
+    // PR-69: no limit set, nothing holds it, however much runs
+    expect(queuedReason({ ...base, company: { ...company, maxInFlight: undefined }, inFlight: 30 })).toEqual({ text: 'Starting in a moment', canRun: true })
     expect(queuedReason(base)).toEqual({ text: 'Starting in a moment', canRun: true })
   })
 })
@@ -124,6 +122,25 @@ describe('workingStrip: "Working on it" under the header', () => {
     expect(workingStrip([task({ since: '2026-10-27T10:01:00.000Z' })], now)!.line).toBe('Julia is working on VO-9 · 1m')
     // a queued task keeps the time since it was filed
     expect(workingStrip([task({ state: 'queued', since: '2026-10-27T10:01:00.000Z' })], now)!.line).toBe('VO-9 is queued for Julia · 2m')
+  })
+})
+
+describe('a task waiting for a free slot', () => {
+  const T = '2026-10-30T10:00:00.000Z'
+  const now = Date.parse('2026-10-30T10:36:00.000Z')
+  const wait = (over: Partial<StripTask> = {}): StripTask => ({ taskId: 'a', identifier: 'VO-1', who: 'Julia', state: 'working', startedAt: T, slotWait: T, ...over })
+
+  it('the strip says so, with the wait on its clock', () => {
+    expect(workingStrip([wait()], now)!.line).toBe('VO-1 is waiting for a free slot · 36m')
+  })
+  it('the strip does not count it as running', () => {
+    expect(workingStrip([wait(), wait({ taskId: 'b', identifier: 'VO-2', slotWait: null })], now)!.line).toBe('2 tasks · 1 working · 1 waiting for a slot')
+  })
+  it('an agent asked about it gets the same answer', () => {
+    const line = taskStatusLine({ identifier: 'VO-1', status: 'in_progress', who: 'Julia', since: T, slotWait: T }, now)
+    expect(line).toContain('not started yet')
+    expect(line).toContain('36m')
+    expect(line).not.toContain('working now')
   })
 })
 
@@ -221,5 +238,29 @@ describe('saysGoAhead (PR-55)', () => {
   })
   it('never reads a no, a wait or something else as one', () => {
     for (const t of ['no', 'not yet, wait for Monday', "don't hire anyone", 'hold on', 'what is the status?', 'use the PostHog events instead', '', 'I know']) expect(saysGoAhead(t), t).toBe(false)
+  })
+})
+
+describe('a task waiting for the usage limit to reset', () => {
+  const company = { name: 'Acme', autopilot: true, maxInFlight: 3 }
+  const agent = { name: 'Julia', data: { autonomy: 'auto' } }
+  const retryAt = new Date(2026, 9, 20, 15, 1).toISOString()
+  const task = { status: 'todo', agentId: 'a1', limitWait: { resetAt: null, retryAt, restarted: false } }
+  const now = new Date(2026, 9, 20, 14, 0).getTime()
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  it('says so and the time it restarts, and Run now can still start it', () => {
+    vi.setSystemTime(now)
+    expect(queuedReason({ task, agent, company })).toEqual({ text: 'Waiting for the usage limit to reset · restarts at 15:01', canRun: true })
+  })
+  it('a paused company says that first; past the restart time the usual reason shows', () => {
+    vi.setSystemTime(now)
+    expect(queuedReason({ task, agent, company: { ...company, pausedAt: 'x' } }).text).toContain('paused')
+    vi.setSystemTime(new Date(2026, 9, 20, 15, 2))
+    expect(queuedReason({ task, agent, company }).text).toBe('Starting in a moment')
+  })
+  it('reads as queued on the card', () => {
+    expect(taskCardState(task)).toBe('queued')
   })
 })

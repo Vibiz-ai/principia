@@ -31,6 +31,7 @@ import { loadDrafts, openApproval, wireAuthorEvents } from './authoring'
 import { loadSlack, wireSlackEvents } from './slack'
 import { wireUpdateEvents } from './updates'
 import { departmentNotePath } from '../lib/departments'
+import { withClosed, withoutClosed, type ClosedChats, type ClosedMark } from '../lib/closedChats'
 import {
   clearStoredDraft,
   createDraftSaver,
@@ -169,6 +170,8 @@ export interface State {
   seenIdle: Record<Id, true>
   /** CHAT-UI.md §8.6: when each task's chat was last open (task id → ISO), so a result you have not read is marked */
   taskSeen: Record<Id, string>
+  /** PR-59: chats closed from the Chats sidebar (row key → how it looked then), per viewer */
+  closedChats: ClosedChats
   /** Last "jump to this agent" request (hub row, ⌘J, notification): views expand / scroll to it. */
   agentFocus: { agentId: Id; askId: Id | null; nonce: number } | null
   /** AUTHORING.md §2: agent-authored drafts by id (pending ones, plus any decided while Principia was open). */
@@ -198,6 +201,8 @@ export interface State {
   tasks: CompanyTask[]
   /** ORCHESTRATOR.md §3: open suggestions per company (they count in every Needs you badge) */
   suggestionCounts: Record<Id, number>
+  /** Run id → since when it waits for a free slot (Run.slotWaitSince); see slotWaitsWith. */
+  slotWaits: Record<Id, string>
   /** AUTOPILOT.md §7: the autopilots (playbooks) on per company; the header chip, Home, the rail and All companies read it */
   playbooksOn: import('@shared/autopilotPlaybooks').PlaybookSummary
   /** DEPARTMENTS.md: every company's departments (archived included), loaded with the companies. Empty while the flag is off. */
@@ -258,6 +263,7 @@ const initial: State = {
   liveAvailable: null,
   seenIdle: {},
   taskSeen: loadJson<Record<Id, string>>('principia.taskSeen', {}),
+  closedChats: loadJson<ClosedChats>('principia.closedChats', {}),
   agentFocus: null,
   drafts: {},
   authorAvailable: null,
@@ -272,6 +278,7 @@ const initial: State = {
   logoPickerFor: null,
   tasks: [],
   suggestionCounts: {},
+  slotWaits: {},
   playbooksOn: {},
   departments: [],
   companyAgents: [],
@@ -306,6 +313,19 @@ export function markTaskSeen(taskId: Id, at: string = new Date().toISOString()):
   for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete all[k]
   setState({ taskSeen: all })
   saveJson(TASK_SEEN_KEY, all)
+}
+
+const CLOSED_CHATS_KEY = 'principia.closedChats'
+/** PR-59: a chat leaves the Chats sidebar until something new happens in it (lib/closedChats.ts). */
+export function closeChat(key: string, mark: ClosedMark): void {
+  const closedChats = withClosed(state.closedChats, key, mark)
+  setState({ closedChats })
+  saveJson(CLOSED_CHATS_KEY, closedChats)
+}
+export function reopenChat(key: string): void {
+  const closedChats = withoutClosed(state.closedChats, key)
+  setState({ closedChats })
+  saveJson(CLOSED_CHATS_KEY, closedChats)
 }
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -1367,7 +1387,7 @@ export async function setCompanyPaused(companyId: Id, paused: boolean, opts: { u
 async function confirmResumeStarts(companyId: Id): Promise<boolean> {
   const pre = await hive.board.autopilotPreview({ companyId }).catch(() => null)
   if (!pre || pre.count <= 0) return true
-  const room = Math.max(1, pre.maxInFlight - pre.inFlight)
+  const room = pre.maxInFlight >= 1 ? Math.max(1, pre.maxInFlight - pre.inFlight) : pre.count
   const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
   const ok = await confirmNative({
     message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,
@@ -1400,7 +1420,8 @@ export async function requestAutopilot(q: { companyId: Id; on: boolean; maxInFli
   if (!q.on) return hive.board.autopilot(q)
   const pre = await hive.board.autopilotPreview({ companyId: q.companyId }).catch(() => null)
   if (pre && pre.count > 0) {
-    const room = Math.max(1, (q.maxInFlight ?? pre.maxInFlight) - pre.inFlight)
+    const max = q.maxInFlight ?? pre.maxInFlight
+    const room = max >= 1 ? Math.max(1, max - pre.inFlight) : pre.count
     const list = pre.tasks.slice(0, 5).map((t) => `• ${t.identifier} ${t.title}`)
     const ok = await confirmNative({
       message: `${pre.count} task${pre.count === 1 ? '' : 's'} will start`,
