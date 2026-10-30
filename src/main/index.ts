@@ -594,14 +594,15 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       log.error('dispatcher start failed', { e: String(e) })
     }
-    // after engine.init (it failed the runs the quit left) and with the company store up: every owed reply gets its turn
-    h.safe(() => h.forum?.recoverReplies?.(), undefined)
     // ORCHESTRATOR.md: after the Forum, authoring and the dispatcher (its run hook is the last one); failure = off
     try {
       h.orchestrator = startOrchestrator(h)
     } catch (e) {
       log.error('orchestrator unavailable', { e: String(e) })
     }
+    // after engine.init (it failed the runs the quit left) and the orchestrator (an ask closed here resumes its task):
+    // every owed reply gets its turn
+    h.safe(() => h.forum?.recoverReplies?.(), undefined)
     h.safe(() => h.taskWork?.start(), undefined)
 
     // artifacts indexer

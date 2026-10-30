@@ -20,6 +20,7 @@ import { FORUM_SERVER_NAME, FORUM_TOOLS, FORUM_WRITES, parseForumBlocks, type Fo
 import { flat, formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
+import type { AgentAsker } from './responder'
 import { TeamTools, type TeamTask } from './teamTools'
 import { isFinishedCard, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
 import type { ConversationPilot } from './conversationPilot'
@@ -331,12 +332,41 @@ export class ForumService implements ForumBridge {
     try {
       const msg = this.store.message(messageId)
       const root = msg.threadId ? this.store.message(msg.threadId) : msg
-      const name = this.store.member(memberId)?.name ?? 'The agent'
+      const name = this.store.member(memberId)?.name ?? 'Principia'
       this.store.systemPost(msg.channelId, `${name} could not answer this: ${clip(flat(reason), 160)}. Send it again to retry.`, root.seq, { origin: 'principia:reply', opKey: `unanswered:${memberId}:${key}` })
     } catch (e) {
       this.d.log?.warn('forum: could not post the unanswered line', { messageId, error: String(e) })
     }
   }
+  /** responder.ts recover: the wake behind an agent's ask to `memberId`, while it still needs an answer. */
+  askOf(msg: ForumMessage, memberId: string): { wakeId: string; asker: AgentAsker } | null {
+    const w = this.collab.liveWakes(msg.seq, memberId)[0]
+    const from = w ? this.store.member(w.from_member) : null
+    if (!w || !from) return null
+    return { wakeId: w.id, asker: { handle: from.handle, label: from.agentId ? (this.d.company?.seatLabel(from.agentId) ?? null) : null, depth: w.depth, maxHops: collabSettings(this.d.collabSettings?.()).maxHops, why: w.why } }
+  }
+
+  /**
+   * An agent's ask will get no reply run: the agent that asked must not wait forever. An ask card closes with why (once
+   * no other agent it went to can still answer), which wakes a waiting tool or task like any answer; a question asked
+   * by @mention reaches the asking task the same way. Never throws.
+   */
+  wakeFailed(wakeIds: string[], reason: string): void {
+    for (const id of wakeIds) {
+      try {
+        const w = this.collab.wake(id)
+        if (!w || (w.status !== 'queued' && w.status !== 'started')) continue
+        this.collab.noteFailed([id], reason)
+        const msg = this.store.message(w.message_seq)
+        const text = `@${this.store.member(w.to_member)?.handle ?? 'a teammate'} could not answer: ${clip(flat(reason), 160)}`
+        if (msg.ask?.status !== 'open') this.collab.onReplied?.({ rows: [w], text })
+        else if (!this.collab.liveWakes(msg.seq).length) this.answer(msg.id, w.to_member, text, msg.id)
+      } catch (e) {
+        this.d.log?.warn('forum: could not tell the asker', { wakeId: id, error: String(e) })
+      }
+    }
+  }
+
   /** A human posted through the app (forum:post): wakes the agents it is for (responder.ts). Never throws. */
   humanPosted(m: ForumMessage): void {
     try {
@@ -632,10 +662,14 @@ export class ForumService implements ForumBridge {
             return null
           }
         })()
+        if (call && t?.ask) this.owed.awaitPick(msg)
         const kind = call && t?.ask ? await classifyReply(call, { question: t.ask.prompt, options: q.ask!.options ?? t.ask.options ?? null, reply: msg.text }, { redact: this.d.redact }) : null
         // still the one open question and still unanswered once the model is back
         const now = this.messageOrNull(q.id)
-        if (kind === 'answer' && now?.ask?.status === 'open' && this.answerQuietly(now, byId, msg)) return 'answered'
+        if (kind === 'answer' && now?.ask?.status === 'open' && this.answerQuietly(now, byId, msg)) {
+          this.owed.picked(msg.id)
+          return 'answered'
+        }
       }
     } catch (e) {
       this.d.log?.warn('forum: task reply routing failed', { messageId: msg.id, error: String(e) })

@@ -2,8 +2,9 @@
  * The answers agents owe people, on disk (FORUM.md §6.4). The responder's queue and the service's reply runs live in
  * memory, so a quit or a crash would forget a person's message: no answer and no line saying why. A row is written
  * before the run starts and removed once the person has an answer, a line saying why not, or canceled the run; the
- * rows still here at boot are the ones the quit interrupted (ForumResponder.recover). Agent asks have their own table
- * (forum_agent_wakes); only people's messages are here.
+ * rows still here at boot are the ones the quit interrupted (ForumResponder.recover). An agent's ask a reply run takes
+ * is here too (its asker, hop and state stay in forum_agent_wakes), so a quit never leaves that agent waiting. Before
+ * anyone is picked, a message that waits on a model (the classifier, Principia picks) is owed by UNPICKED.
  */
 import type Database from 'better-sqlite3'
 
@@ -18,6 +19,9 @@ export interface OwedReply {
   createdAt: string
 }
 
+/** The `member_id` of a message whose agent is not picked yet: a person has no answer coming until the pick is done. */
+export const UNPICKED = '*'
+
 const marks = (ids: readonly string[]) => ids.map(() => '?').join(',')
 
 export class ReplyJournal {
@@ -28,6 +32,15 @@ export class ReplyJournal {
     this.db.transaction(() => {
       for (const id of messageIds) ins.run(id, memberId, companyId, at)
     })()
+  }
+
+  /** The next step waits on a model: from here until `picked`, a quit must not lose the message. */
+  awaitPick(m: { id: string; companyId: string; createdAt: string }): void {
+    this.add([m.id], UNPICKED, m.companyId, m.createdAt)
+  }
+
+  picked(messageId: string): void {
+    this.drop([messageId], UNPICKED)
   }
 
   started(messageIds: readonly string[], memberId: string, runId: string): void {

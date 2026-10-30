@@ -23,6 +23,7 @@ import { HiveError } from '../../shared/errors'
 import { redactCredentials } from '../memory/screen'
 import type { ModelCall } from '../company/router'
 import type { ForumStore } from './store'
+import type { ReplyJournal } from './replyJournal'
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 const one = (s: string): string => s.replace(/\s+/g, ' ').trim()
@@ -253,6 +254,10 @@ export interface PilotDeps {
   defaultAdapter?: () => ForumAgentAdapter | null
   /** wakes the agents a person's message is for (ForumService.humanPosted → responder) */
   humanPosted: (m: ForumMessage) => void
+  /** what is owed to people, on disk: a quit during the pick loses no message (responder.ts recover) */
+  journal?: ReplyJournal
+  /** nobody will answer: tell the person why (ForumService.noteUnanswered) */
+  onUnanswered?: (messageId: string, reason: string) => void
   redact?: (s: string) => string
   titleTimeoutMs?: number
   pickTimeoutMs?: number
@@ -299,10 +304,24 @@ export class ConversationPilot {
       data: { titleBy: 'first', ...(picking ? { picking: true } : {}) }
     })
     const message = store.post(owner.id, { channelId: ch.id, text: req.text })
-    if (!picking) this.d.humanPosted(message)
+    if (picking) this.d.journal?.awaitPick(message)
+    else this.d.humanPosted(message)
     void this.title(ch.id)
     const routing = picking ? this.route(ch.id, message.id, req.pick!) : null
     return { channel: store.channel(ch.id, owner.id), message, routing }
+  }
+
+  /** Boot: a pick a quit cut short runs again (the model, else the first seat). False = this message was not in a pick. */
+  repick(msg: ForumMessage): boolean {
+    const ch = this.d.store().channel(msg.channelId)
+    if (!isConversationChannel(ch) || !ch.picking) return false
+    void this.route(ch.id, msg.id, { agentIds: [], handoff: '' })
+    return true
+  }
+
+  private noAnswer(messageId: string, reason: string): void {
+    this.d.onUnanswered?.(messageId, reason)
+    this.d.journal?.picked(messageId)
   }
 
   /** Principia picks who answers `messageId` (§7.2). Never throws: a failure falls back to the deterministic route. */
@@ -350,6 +369,8 @@ export class ConversationPilot {
         store.post(owner.id, { channelId, text: proposalText(plan.need, plan.draft.role, dep?.name ?? null), kind: 'proposal', proposal, origin: 'principia:route' })
         store.updateChannel(owner.id, channelId, { purpose: `Principia read the request: no one on the team handles ${plan.need || 'this'} yet.` })
         store.setConversationMeta(channelId, { picking: false })
+        // the person answers on the card; approving it wakes the agent on this message
+        this.d.journal?.picked(msg.id)
         return plan
       }
       const memberIds = plan.agentIds.map((id) => store.memberForAgent(id)?.id).filter((x): x is string => !!x)
@@ -360,11 +381,13 @@ export class ConversationPilot {
       store.updateChannel(owner.id, channelId, { purpose })
       store.setConversationMeta(channelId, { picking: false })
       if (memberIds.length) this.d.humanPosted(store.message(messageId))
+      else this.noAnswer(messageId, 'nobody on the team can answer yet')
       return plan
     } catch (e) {
       this.d.log?.warn('conversation pilot: route failed', { channelId, error: String(e).slice(0, 200) })
       try {
         store.setConversationMeta(channelId, { picking: false })
+        this.noAnswer(messageId, 'Principia could not pick who answers')
       } catch {
         /* the conversation is gone */
       }

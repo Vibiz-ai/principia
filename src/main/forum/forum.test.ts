@@ -842,8 +842,9 @@ describe('agents answer people and post their work (§6.4)', () => {
     type Start = { agentId: string; prompt: string; reply: { memberId: string; channelId: string; messageId: string } }
     /** The app: a new service and responder over the same db, wired like wire.ts. `start` numbers runs across restarts. */
     let runs = 0
-    function app(over: Partial<ResponderDeps> = {}, quitting: { now: boolean } = { now: false }) {
-      const s = service({ quitting: () => quitting.now })
+    const runsSoFar = () => runs
+    function app(over: Partial<ResponderDeps> = {}, quitting: { now: boolean } = { now: false }, extra: Partial<ForumServiceDeps> = {}) {
+      const s = service({ quitting: () => quitting.now, ...extra })
       s.store.sync(CO)
       const starts: Start[] = []
       const r = responder(s, starts, {
@@ -858,6 +859,7 @@ describe('agents answer people and post their work (§6.4)', () => {
         },
         ...over
       })
+      s.onHumanPost = (m) => void r.onHumanPost(m)
       return { s, r, starts, quitting }
     }
     const say = (s: ForumService, text: string, threadId?: string) => s.store.post(s.store.owner(CO).id, { channelId: s.store.channelByName(CO, 'marketing')!.id, text, threadId: threadId ?? null })
@@ -929,6 +931,97 @@ describe('agents answer people and post their work (§6.4)', () => {
       expect(after.starts).toEqual([])
       expect(lines(after.s, msg.id)).toEqual([])
       expect(after.s.owed.all()).toEqual([])
+    })
+
+    /** A conversation with one open task question: a person's next message there waits for the classifier. */
+    function asked(s: ForumService) {
+      const owner = s.store.owner(CO)
+      const marcus = s.store.memberForAgent('agt_marcus')!
+      const conv = s.store.createChannel(owner.id, { name: 'chat-ask-ab12', kind: 'private', purpose: 'x', memberIds: [marcus.id] })
+      tasks.set('t_1', { id: 't_1', identifier: 'AC-1', title: 'x', status: 'blocked', ask: { prompt: 'Which one?' } } as never)
+      s.store.post(marcus.id, { channelId: conv.id, text: 'Which one?', kind: 'ask', ask: { status: 'open', to: [owner.id], taskId: 't_1', runId: null } })
+      return s.store.post(owner.id, { channelId: conv.id, text: 'the blue one, I think', threadId: null })
+    }
+    const stuck = () => (() => new Promise<string>(() => undefined)) as never
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+
+    it('a quit while the classifier reads a message: the next boot answers it', async () => {
+      const before = app({}, { now: false }, { replyKind: stuck })
+      const msg = asked(before.s)
+      void before.s.routeHumanPost(msg, before.s.store.owner(CO).id)
+      await tick()
+      expect(before.starts).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+      expect(after.starts[0]!.prompt).not.toContain('Principia closed while')
+    })
+
+    it('a second quit before anyone is picked gets a line', async () => {
+      const held = app({}, { now: false }, { replyKind: stuck })
+      const msg = asked(held.s)
+      void held.s.routeHumanPost(msg, held.s.store.owner(CO).id)
+      await tick()
+      db.prepare('UPDATE forum_owed_replies SET attempts=1').run()
+      const last = app()
+      last.r.recover()
+      expect(last.starts).toEqual([])
+      expect(lines(last.s, msg.id)).toEqual(['Principia could not answer this: it closed before anyone could reply. Send it again to retry.'])
+      expect(last.s.owed.all()).toEqual([])
+    })
+
+    it('a message the classifier says answers the question owes nothing', async () => {
+      const a = app({}, { now: false }, { replyKind: () => (async () => '{"kind":"answer"}') as never })
+      const msg = asked(a.s)
+      expect(await a.s.routeHumanPost(msg, a.s.store.owner(CO).id)).toBe('answered')
+      expect(a.s.owed.all()).toEqual([])
+    })
+
+    it('a message that arrives during a quit starts nothing and is answered at the next boot', () => {
+      const before = app()
+      before.quitting.now = true
+      const msg = say(before.s, 'one last thing')
+      expect(before.r.onHumanPost(msg)).toEqual([])
+      expect(before.starts).toEqual([])
+      const after = app()
+      after.r.recover()
+      expect(after.starts.map((x) => x.reply.messageId)).toEqual([msg.id])
+    })
+
+    it('a long queue loses nothing: oldest first, a few at a time, each message in a reply', () => {
+      const a = app()
+      const first = say(a.s, 'first')
+      const [runId] = a.r.onHumanPost(first)
+      const queued = Array.from({ length: RESPONDER_LIMITS.pending + 2 }, (_, i) => say(a.s, `queued ${i}`))
+      for (const m of queued) a.r.onHumanPost(m)
+      expect(a.s.owed.all()).toHaveLength(queued.length + 1)
+      ended(a, runId!, 'canceled', 'Canceled')
+      expect(a.starts).toHaveLength(2)
+      expect(a.starts[1]!.prompt).toContain('queued 0')
+      expect(a.starts[1]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
+      expect(a.starts[1]!.prompt).not.toContain(`queued ${RESPONDER_LIMITS.pending}`)
+      ended(a, 'r_run' + runsSoFar(), 'canceled', 'Canceled')
+      expect(a.starts).toHaveLength(3)
+      expect(a.starts[2]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending}`)
+      expect(a.starts[2]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending + 1}`)
+      ended(a, 'r_run' + runsSoFar(), 'canceled', 'Canceled')
+      expect(a.s.owed.all()).toEqual([])
+    })
+
+    it('more owed than one run takes: the boot answers them all, in turn', () => {
+      const before = app()
+      const first = say(before.s, 'first')
+      before.r.onHumanPost(first)
+      const queued = Array.from({ length: RESPONDER_LIMITS.pending }, (_, i) => say(before.s, `queued ${i}`))
+      for (const m of queued) before.r.onHumanPost(m)
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toHaveLength(1)
+      expect(after.starts[0]!.prompt).toContain('first')
+      expect(after.starts[0]!.prompt).not.toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
+      ended(after, 'r_run' + runsSoFar(), 'passed', null)
+      expect(after.starts).toHaveLength(2)
+      expect(after.starts[1]!.prompt).toContain(`queued ${RESPONDER_LIMITS.pending - 1}`)
     })
 
     it('settled replies leave nothing owed: answered, failed with its line, canceled by the person', () => {

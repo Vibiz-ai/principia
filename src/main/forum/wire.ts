@@ -15,6 +15,7 @@ import { boardActions } from '../handlers/board'
 import { createTaskGuarded, departmentActions } from '../handlers/company'
 import { ForumService, type ForumTaskView } from './service'
 import { ForumResponder } from './responder'
+import { UNPICKED } from './replyJournal'
 import { ConversationPilot } from './conversationPilot'
 import { routeModelCall } from '../company/routeCall'
 import { conversationTaskLines } from './taskStatus'
@@ -245,7 +246,9 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
       return run.id
     },
     onWakeStarted: (wakeIds, runId) => service.collab.noteStarted(wakeIds, runId),
-    onWakeFailed: (wakeIds, reason) => service.collab.noteFailed(wakeIds, reason),
+    onWakeFailed: (wakeIds, reason) => service.wakeFailed(wakeIds, reason),
+    askOf: (m, memberId) => service.askOf(m, memberId),
+    repick: (m) => service.pilot?.repick(m) ?? false,
     onUnanswered: (messageId, memberId, reason) => service.noteUnanswered(messageId, memberId, reason),
     taskStates: (channelId) =>
       conversationTaskLines(
@@ -296,6 +299,8 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
       return (FORUM_AGENT_ADAPTERS as readonly string[]).includes(a) ? (a as ForumAgentAdapter) : null
     },
     humanPosted: (m) => service.humanPosted(m),
+    journal: service.owed,
+    onUnanswered: (messageId, reason) => service.noteUnanswered(messageId, UNPICKED, reason),
     redact: (s) => h.vault.redact(s),
     log
   })

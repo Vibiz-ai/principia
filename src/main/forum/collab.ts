@@ -261,8 +261,16 @@ export class AgentCollab {
     for (const id of wakeIds) st.run(runId, id)
   }
   noteFailed(wakeIds: string[], reason: string): void {
-    const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='refused', refusal='start_failed', note=? WHERE id=? AND status='queued'")
+    const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='refused', refusal='start_failed', note=? WHERE id=? AND status IN ('queued','started')")
     for (const id of wakeIds) st.run(clip(reason, 200), id)
+  }
+  wake(id: string): WakeRow | null {
+    return (this.d.db.prepare('SELECT * FROM forum_agent_wakes WHERE id=?').get(id) as WakeRow | undefined) ?? null
+  }
+  /** Wakes of this message still on their way; `memberId` narrows them to one target. */
+  liveWakes(messageSeq: number, memberId?: string): WakeRow[] {
+    const rows = this.d.db.prepare("SELECT * FROM forum_agent_wakes WHERE message_seq=? AND status IN ('queued','started')").all(messageSeq) as WakeRow[]
+    return memberId ? rows.filter((r) => r.to_member === memberId) : rows
   }
 
   /** The target wrote in the thread (reply, answered ask): its wakes there are answered. */

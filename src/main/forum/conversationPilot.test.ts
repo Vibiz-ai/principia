@@ -5,7 +5,8 @@ import type { ModelCall, ModelCallRequest } from '../company/router'
 import { ForumService } from './service'
 import type { ForumDirectory } from './store'
 import { ConversationPilot, PICKING_LINE, choosePick, cleanTitle, modelHandoff, parsePick, pickSystem, titleInput, type PilotSeat } from './conversationPilot'
-import { buildReplyPrompt } from './responder'
+import { ForumResponder, buildReplyPrompt } from './responder'
+import { UNPICKED } from './replyJournal'
 
 const CO = 'co_acme'
 let db: Database.Database
@@ -201,6 +202,81 @@ describe('who answers: Principia picks (CHAT-UI.md §7.2)', () => {
     fresh.backfill(CO)
     expect(svc.store.channel(ch.id, owner.id)).toMatchObject({ purpose: expect.stringMatching(/interrupted/) })
     expect(svc.store.channel(ch.id, owner.id).picking).toBeUndefined()
+  })
+
+  describe('a quit while Principia picks', () => {
+    const hanging = (() => new Promise<string>(() => undefined)) as unknown as ModelCall
+    const REQ = { companyId: CO, text: 'schedule the launch posts', title: 'Launch posts', name: 'chat-posts-ab12', purpose: 'x', pick: { agentIds: ['agt_marcus'], handoff: 'x' } }
+    /** The app over the same db: the pick call hangs (a quit) or answers. */
+    function boot(model: ModelCall | null) {
+      const a = setup(model)
+      const pilot = new ConversationPilot({
+        store: () => a.svc.store,
+        call: () => model,
+        seats: () => SEATS.filter((s) => deps.agents.some((x) => x.id === s.agentId)),
+        departments: () => DEPS,
+        journal: a.svc.owed,
+        onUnanswered: (messageId, reason) => a.svc.noteUnanswered(messageId, UNPICKED, reason),
+        humanPosted: (m) => {
+          a.svc.owed.picked(m.id)
+          a.posted.push(m)
+        }
+      } as ConstructorParameters<typeof ConversationPilot>[0])
+      const responder = new ForumResponder({
+        store: () => a.svc.store,
+        enabled: () => true,
+        journal: a.svc.owed,
+        seat: () => null,
+        departmentName: () => null,
+        seats: () => [],
+        start: () => 'r_x',
+        repick: (m) => pilot.repick(m),
+        onUnanswered: (messageId, memberId, reason) => a.svc.noteUnanswered(messageId, memberId, reason)
+      })
+      return { ...a, pilot, responder }
+    }
+    const lines = (a: ReturnType<typeof boot>, id: string) => a.svc.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+
+    it('the next boot picks again and the message gets its answer', async () => {
+      const held = boot(hanging)
+      const r = held.pilot.start(REQ)
+      expect(held.posted).toEqual([])
+      const after = boot(null)
+      after.responder.recover()
+      await flush()
+      await flush()
+      expect(after.posted.map((m) => m.id)).toEqual([r.message.id])
+      expect(after.svc.store.channel(r.channel.id, after.owner.id).picking).toBeUndefined()
+      expect(after.svc.owed.all()).toEqual([])
+    })
+
+    it('a pick cut short twice, or a day old, gets a line instead', async () => {
+      const held = boot(hanging)
+      const r = held.pilot.start(REQ)
+      db.prepare('UPDATE forum_owed_replies SET attempts=1').run()
+      const after = boot(null)
+      after.responder.recover()
+      await flush()
+      expect(after.posted).toEqual([])
+      expect(lines(after, r.message.id)).toEqual([expect.stringMatching(/^Principia could not answer this: /)])
+      expect(after.svc.owed.all()).toEqual([])
+    })
+
+    it('nobody can answer: the person gets a line, not silence', async () => {
+      const a = boot(null)
+      deps.agents.length = 0
+      const r = a.pilot.start(REQ)
+      await r.routing
+      expect(a.posted).toEqual([])
+      expect(lines(a, r.message.id)).toEqual([expect.stringMatching(/^Principia could not answer this: /)])
+      expect(a.svc.owed.all()).toEqual([])
+    })
+
+    it('a pick that ends in a hire card owes nothing: the person decides on the card', async () => {
+      const a = boot(fakeModel({ pick: '{"agents":["s2"],"fit":"none","need":"ads","propose":{"role":"Ads buyer","department":"marketing","instructions":"x","capabilities":"y"}}' }))
+      await a.pilot.start(REQ).routing
+      expect(a.svc.owed.all()).toEqual([])
+    })
   })
 
   it('the prompt carries roles, departments, capabilities and instructions as short keys', () => {

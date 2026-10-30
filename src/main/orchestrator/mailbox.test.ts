@@ -53,6 +53,28 @@ describe('mailbox: questions from run reports', () => {
     expect((w.db.prepare('SELECT status, delivery FROM orch_mailbox').get())).toEqual({ status: 'answered', delivery: 'seat' })
   })
 
+  it('a teammate who will never answer: the blocking asker wakes with why', async () => {
+    const { w, co, dev, mkt } = setup()
+    const writer = w.seat(co.id, mkt, 'Copywriter', 'codex', 'auto', () => ({ output: '' }))
+    let turn = 0
+    const fixer = w.seat(co.id, dev, 'Bug fixer', 'codex', 'auto', (t) => {
+      turn++
+      if (turn === 1) return { output: report({ outcome: 'blocked', summary: 'Waiting on the tone', questions: [{ to: `@${w.handle(writer.id)}`, question: 'Which tone?', why: '', blocking: true }] }) }
+      expect(t.prompt).toContain('could not answer')
+      return { output: report({ outcome: 'review', summary: 'Went with the usual tone' }) }
+    })
+    const task = w.task({ companyId: co.id, title: 'Launch banner', departmentId: dev.id, agentId: fixer.id })
+    await w.runNow(task.id)
+    await w.drain()
+    expect(turn).toBe(1)
+    const wake = w.db.prepare('SELECT id, status FROM forum_agent_wakes').get() as { id: string; status: string }
+    expect(wake.status).toBe('started')
+    w.forum.wakeFailed([wake.id], 'Principia closed before the reply finished')
+    await w.drain()
+    expect(turn).toBe(2)
+    expect(w.c.task(task.id).status).toBe('in_review')
+  })
+
   it('a teammate busy on a task gets the question in that task, answers in its report, and the asker wakes', async () => {
     const { w, co, dev, mkt } = setup()
     let wTurns = 0
