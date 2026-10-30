@@ -9,21 +9,39 @@ final class ChatLoaderTests: XCTestCase {
     private func snap(_ items: String = "[]", seq: Int) -> ChatReplica {
         ChatReplica(try! JSONDecoder().decode(ChatSnapshot.self, from: Data(#"{"sessionId":"se_1","mode":"chat","available":true,"turn":"working","activity":null,"turnStartedAt":null,"items":\#(items),"queue":[],"meta":{},"seq":\#(seq),"note":null}"#.utf8)))
     }
-    /// a gate a fake fetch waits on
+    /// a gate a fake fetch waits on. On the main actor like the rest of the test: a plain async method would run off
+    /// it, and a go() landing between wait()'s check and its continuation would leave the fetch stuck for good.
+    @MainActor
     final class Gate {
         private var c: CheckedContinuation<Void, Never>?
         private var open = false
+        var waiting: Bool { c != nil }
         func wait() async { if open { return }; await withCheckedContinuation { c = $0 } }
         func go() { open = true; c?.resume(); c = nil }
     }
-    func settle() async { for _ in 0..<30 { await Task.yield() } }
+
+    struct TimedOut: Error {}
+
+    /// Waits for what the last step set off, as LiveSocketTests does: no fixed number of yields is sure to be enough.
+    /// A timeout ends the test, so a fetch that never starts fails it, not the run.
+    func until(_ what: @autoclosure () -> String, file: StaticString = #filePath, line: UInt = #line, _ done: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        while !done() {
+            if Date() > deadline {
+                XCTFail("timed out waiting for: \(what())", file: file, line: line)
+                throw TimedOut()
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
 
     func testOpsWhileLoadingGoOnTopOfTheSnapshot() async throws {
         let load = ChatLoader()
         let gate = Gate()
         var shown: ChatReplica?
         let t = Task { try await load.run("se_1", fetch: { await gate.wait(); return .chat(self.snap(#"[{"id":"t1","parent":null,"kind":"text","md":"draws its shapes","streaming":true}]"#, seq: 762)) }, put: { shown = $0 }) }
-        await settle()
+        // the fetch, not `loading`: the load starts by clearing what is held, a moment after `loading` turns on
+        try await until("the fetch to go out") { gate.waiting }
         XCTAssertTrue(load.hold("se_1", seq: 762, ops: json(#"[{"op":"append","id":"t1","field":"md","text":" twice"}]"#).array!))
         XCTAssertTrue(load.hold("se_1", seq: 763, ops: json(#"[{"op":"append","id":"t1","field":"md","text":" from science"}]"#).array!))
         XCTAssertTrue(load.hold("se_1", seq: 764, ops: json(#"[{"op":"patch","id":"t1","set":{"streaming":false}},{"op":"state","turn":"idle"}]"#).array!))
@@ -48,7 +66,7 @@ final class ChatLoaderTests: XCTestCase {
                 return .chat(self.snap(seq: 764))
             }, put: { _ in })
         }
-        await settle()
+        try await until("the fetch to go out") { gate.waiting }
         XCTAssertTrue(load.acked("se_1", seq: 764))
         gate.go()
         try await t.value
@@ -62,6 +80,7 @@ final class ChatLoaderTests: XCTestCase {
         var inFlight = 0
         var most = 0
         var seqs: [Int] = []
+        var asked = 0
         let f: () async throws -> ChatLoader.Fetched = {
             inFlight += 1
             most = max(most, inFlight)
@@ -70,13 +89,15 @@ final class ChatLoaderTests: XCTestCase {
             inFlight -= 1
             return .chat(self.snap(seq: 10 + fetches))
         }
-        let a = Task { try await load.run("se_1", fetch: f, put: { seqs.append($0.seq) }) }
-        await settle()
-        let b = Task { try await load.run("se_1", fetch: f, put: { seqs.append($0.seq) }) }
-        let c = Task { try await load.run("se_1", fetch: f, put: { seqs.append($0.seq) }) }
-        await settle()
+        // run() is on the main actor too, so a counted ask has reached its first wait before anything else runs
+        let ask = { Task { asked += 1; try await load.run("se_1", fetch: f, put: { seqs.append($0.seq) }) } }
+        let a = ask()
+        try await until("the first fetch to go out") { gates[0].waiting }
+        let b = ask()
+        let c = ask()
+        try await until("all three asks, got \(asked)") { asked == 3 }
         gates[0].go()
-        await settle()
+        try await until("the second fetch to go out") { gates[1].waiting }
         gates[1].go()
         try await a.value; try await b.value; try await c.value
         XCTAssertEqual(fetches, 2)
