@@ -105,6 +105,13 @@ export async function lookupPr(gh: GhRunner, q: { cwd: string; url: string | nul
   return pr ? { kind: 'pr', pr } : { kind: 'error', message: 'gh returned an unreadable pull request' }
 }
 
+/** The GitHub pull request links in a task's report (summary and evidence), deduped, at most five. */
+export function prUrlsIn(texts: readonly string[]): string[] {
+  const out: string[] = []
+  for (const t of texts) for (const m of String(t ?? '').matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g)) if (!out.includes(m[0])) out.push(m[0])
+  return out.slice(0, 5)
+}
+
 export async function latestChanges(gh: GhRunner, cwd: string, url: string): Promise<{ at: string; author: string; body: string } | null> {
   const r = await gh(['pr', 'view', url, '--json', 'reviews'], { cwd })
   return r.code === 0 ? parseChangesReview(r.stdout) : null

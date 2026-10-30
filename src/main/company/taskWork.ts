@@ -25,9 +25,11 @@ import type { WorktreeManager } from '../worktrees'
 import type { CompanyStore } from './index'
 import { assertTransition, transitionError } from './taskState'
 import { taskWorkSchema } from './taskWorkSchema'
-import { ghAuth, latestChanges, lookupPr, mergePr, type GhRunner } from './taskWorkGh'
+import { ghAuth, latestChanges, lookupPr, mergePr, prUrlsIn, type GhRunner } from './taskWorkGh'
 
 export const WORK_POLL_MS = 60_000
+/** how often one In Review task's linked pull requests are asked about again */
+export const REVIEW_SWEEP_MS = 10 * 60_000
 const AUTH_TTL_MS = 60_000
 const FOCUS_MIN_MS = 10_000
 const BACKOFF_MAX_MS = 15 * 60_000
@@ -63,6 +65,8 @@ export class TaskWorkService {
   private disposed = false
   /** per task: the local branch its next worktree starts from (PLANS.md §2.6, a dependency milestone's branch) */
   private readonly startPoints = new Map<string, string>()
+  /** per In Review task: when its linked pull requests were last asked about (sweepReviewed) */
+  private readonly reviewSeen = new Map<string, number>()
 
   constructor(private readonly d: TaskWorkDeps) {}
   /**
@@ -363,11 +367,54 @@ export class TaskWorkService {
           await this.checkTask(t.id).catch((e) => this.d.log?.warn('task work: check failed', { taskId: t.id, error: String(e) }))
         }
         await this.drain()
+        await this.sweepReviewed().catch((e) => this.d.log?.warn('task work: review sweep failed', { error: String(e) }))
       } finally {
         this.polling = null
       }
     })()
     return this.polling
+  }
+
+  /**
+   * A task In Review that an agent shipped from the founder's checkout (no worktree binding, so checkTask never follows
+   * it) but whose report links its pull requests: once none of them is open and at least one merged on GitHub, it is
+   * done ("Merged #N"), like a task with its own worktree. Asked at most every REVIEW_SWEEP_MS per task.
+   */
+  private async sweepReviewed(): Promise<void> {
+    const now = Date.now()
+    for (const t of this.c.listTasks()) {
+      if (this.disposed) return
+      if (t.status !== 'in_review' || t.work || !t.report) continue
+      const urls = prUrlsIn([t.report.summary, ...(t.report.evidence ?? [])])
+      if (!urls.length) continue
+      const seen = this.reviewSeen.get(t.id)
+      if (seen !== undefined && now - seen < REVIEW_SWEEP_MS) continue
+      this.reviewSeen.set(t.id, now)
+      const cwd = this.companyCwd(t.companyId)
+      if (!cwd || (await this.ghState(cwd)) !== 'ok') continue
+      const prs: TaskPr[] = []
+      for (const url of urls) {
+        const found = await lookupPr(this.d.gh, { cwd, url, branch: url }, this.now())
+        if (found.kind !== 'pr') break
+        prs.push(found.pr)
+      }
+      if (prs.length !== urls.length || prs.some((p) => p.state === 'OPEN')) continue
+      const merged = prs.filter((p) => p.state === 'MERGED')
+      if (!merged.length) continue
+      this.complete(t, `Merged ${merged.map((p) => `#${p.number}`).join(', ')}`)
+      if (this.c.task(t.id).status === 'done') this.reviewSeen.delete(t.id)
+      this.changed(t.companyId)
+    }
+  }
+  /** A folder gh can run in for this company: its first repository still on disk. */
+  private companyCwd(companyId: string): string | null {
+    try {
+      for (const id of this.c.passport(companyId).repoIds) {
+        const p = this.c.store.getRepo(id)?.path
+        if (p && fs.existsSync(p)) return p
+      }
+    } catch { /* the company is gone */ }
+    return null
   }
 
   /** Gone check, local merge, PR lookup and the move it implies, for one task. */

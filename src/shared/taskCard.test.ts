@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatTaskCard, chatTaskCards, clockLabel, matchesOption, notAnAnswer, taskAskAck, taskStatusLine, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
+import { chatTaskCard, chatTaskCards, clockLabel, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskStatusLine, taskAskKey, taskAskSay, waitsForAnswer, elapsedLabel, queuedReason, isFinishedCard, isOpenCard, sameRequest, taskCardResult, taskCardState, taskResultLine, TASK_CARD_LABEL, workingStrip, type StripTask } from './taskCard'
 import { buildBlocks } from './chatView'
 
 describe('taskCardState (CHAT-UI.md §8)', () => {
@@ -212,5 +212,14 @@ describe("a task's question, said by its agent (CHAT-UI.md §8)", () => {
     expect(taskStatusLine({ identifier: 'VO-16', status: 'todo', waiting: 'Autopilot is off in Vibiz: it waits for you to press Start' }, now)).toBe('VO-16: not started yet: Autopilot is off in Vibiz: it waits for you to press Start')
     expect(taskStatusLine({ identifier: 'VO-16', status: 'blocked', blockReason: 'needs_input', ask: { prompt: 'Which app?' } }, now)).toBe("VO-16: waiting for the person's answer: “Which app?”")
     expect(taskStatusLine({ identifier: 'VO-16', status: 'in_review' }, now)).toBe('VO-16: finished, waiting for the person to review it')
+  })
+})
+
+describe('saysGoAhead (PR-55)', () => {
+  it('reads a plain yes, however it is typed', () => {
+    for (const t of ['sounds good go ahead and use they keys we already have bro', 'do it, just hire it', 'ok', 'yes please', 'Approved', 'ship it', "let's do it"]) expect(saysGoAhead(t), t).toBe(true)
+  })
+  it('never reads a no, a wait or something else as one', () => {
+    for (const t of ['no', 'not yet, wait for Monday', "don't hire anyone", 'hold on', 'what is the status?', 'use the PostHog events instead', '', 'I know']) expect(saysGoAhead(t), t).toBe(false)
   })
 })

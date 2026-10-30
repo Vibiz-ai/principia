@@ -20,7 +20,7 @@ import { formatBrief } from './format'
 import { stepSummary } from './summary'
 import { AgentCollab, type CollabWakeRequest, type CollabWakeResult } from './collab'
 import { TeamTools, type TeamTask } from './teamTools'
-import { isFinishedCard, matchesOption, notAnAnswer, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
+import { isFinishedCard, matchesOption, notAnAnswer, saysGoAhead, taskAskAck, taskAskKey, taskAskSay, taskCardLine, taskCardResult, taskCardState, taskResultLine, waitsForAnswer, type ForumTaskCard } from '../../shared/taskCard'
 import type { ConversationPilot } from './conversationPilot'
 import type { ModelCall } from '../company/router'
 import { classifyReply } from './replyKind'
@@ -35,7 +35,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 export interface ForumTaskView {
   id: string; companyId: string; identifier: string; status: string; blockReason: string | null; runId: string | null; ask: { prompt: string; options?: string[]; answer?: string } | null; report: unknown
   /** CHAT-UI.md §8 (the task card): optional, older callers leave them out */
-  title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string
+  title?: string; agentId?: string | null; doneNote?: string | null; prUrl?: string | null; updatedAt?: string; createdAt?: string
 }
 
 /** Dispatcher.goAhead's result: whether the task's run started, and the true state in one line. */
@@ -442,6 +442,9 @@ export class ForumService implements ForumBridge {
     for (const w of [...(this.waiters.get(msg.id) ?? [])]) w.resolve(updated)
     // the board: a parked task wakes with the answer; a running one gets it when it parks (unless a tool was waiting)
     if (ask.taskId && this.d.tasks && !hadWaiter) {
+      // PR-55: the founder's go-ahead on a task also approves the hires its agent proposed for it, so the resumed run
+      // finds the new teammate instead of asking for the same approval again
+      if (by.kind === 'human' && saysGoAhead(text)) this.approveHiresFor(ask.taskId, by)
       const { r, go } = this.applyTaskAnswer(ask.taskId, next.answer!)
       if (r === 'running') updated = this.store.patchPayload(msg.id, { ask: { ...next, pendingTaskAnswer: true } })
       this.lastGo = r === 'skip' ? null : r === 'running' ? this.heldGo(ask.taskId) : go
@@ -450,6 +453,31 @@ export class ForumService implements ForumBridge {
       if (r !== 'skip' && opts.ack !== false && by.kind === 'human' && isCardAsk(msg)) this.ackTaskAnswer(msg, false, this.lastGo)
     }
     return updated
+  }
+  /**
+   * The open hire proposals (kind agent) the task's agent made since the task was created, last 7 days, approved by the
+   * owner or an admin who said go ahead. A department proposal still needs its card. Never throws.
+   */
+  private approveHiresFor(taskId: string, by: ForumMember): void {
+    if (!(by.role === 'owner' || by.role === 'admin')) return
+    try {
+      const t = this.d.tasks?.get(taskId)
+      const author = t?.agentId ? this.store.memberForAgent(t.agentId) : null
+      if (!t || !author) return
+      const since = new Date(Math.max(this.now().getTime() - 7 * 86_400_000, Date.parse(t.createdAt ?? '') || 0)).toISOString()
+      const rows = this.d.db
+        .prepare("SELECT id FROM forum_messages WHERE company_id=? AND author_id=? AND kind='proposal' AND deleted_at IS NULL AND created_at>=? AND json_extract(data,'$.proposal.kind')='agent' AND json_extract(data,'$.proposal.status')='open' ORDER BY seq")
+        .all(t.companyId, author.id, since) as { id: string }[]
+      for (const r of rows) {
+        try {
+          this.decide({ messageId: r.id, decision: 'approve', note: `${by.name} said go ahead on ${t.identifier}` }, by.id)
+        } catch (e) {
+          this.d.log?.warn('forum: go-ahead hire failed', { messageId: r.id, error: String(e) })
+        }
+      }
+    } catch (e) {
+      this.d.log?.warn('forum: go-ahead hires failed', { taskId, error: String(e) })
+    }
   }
   /** what the last answer() did to its task (answerTaskFromReply reads it right after) */
   private lastGo: TaskGo | null = null

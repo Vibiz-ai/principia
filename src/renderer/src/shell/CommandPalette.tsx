@@ -505,7 +505,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
             title={`Starts a conversation (↓ to here, then ↵; or click)`}
           >
             <Icon name="chat" size={14} />
-            <span className="palette__label">New conversation: {q.trim()}</span>
+            <span className="palette__label">New task: {q.trim()}</span>
             <span className="palette__hint">{routeLine(q, askTarget).replace(/^→ /, '')}</span>
           </button>
         )}

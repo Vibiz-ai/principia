@@ -151,8 +151,8 @@ const HEAD: Record<OpsKind, string> = {
 }
 const TAIL = [
   'Metrics questions: use the "Department dashboards" numbers above with their date; never invent numbers.',
-  'To point the founder at a page, write its principia:// link (principia://board?task=NC-12, principia://settings/keys); it opens there in Principia.',
-  'Ask the founder first before anything that costs money, publishes or sends outside the company, deletes data, or creates a company or department.'
+  'To point the founder at a page, write its principia:// link (principia://board?task=NC-12); it opens there.',
+  'Ask the founder first before anything that costs money, publishes or sends outside the company, deletes data, or creates a company or department. A "go ahead" means act; never ask twice.'
 ]
 const VOICE = 'Write tasks in your own words, never the message pasted in, and name each task you open or move by its identifier. The founder\'s explicit wishes override these defaults.'
 

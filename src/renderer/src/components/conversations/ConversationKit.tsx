@@ -16,7 +16,7 @@
  * - CHAT-UI.md §8.5: while a task filed here is queued, working or needs you, its live card is docked right above the
  *   reply box (TaskDock) and its card in the history is a one-line reference; the message list scrolls above the dock.
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
 import type { TaskCardState } from '@shared/taskCard'
@@ -53,6 +53,23 @@ export async function addDroppedFiles(files: FileList | File[], current: () => s
   })
   if (mentions.length) set(withMentions(current(), mentions))
   if (skipped.length) toast(`Couldn't attach ${skipped.join(', ')}: drop a file from Finder, or a PNG, JPEG, GIF or WebP image.`, 'error')
+}
+
+/** PR-55: the box grows with what you type, up to a third of the window (then it scrolls), so a long message stays readable. */
+export function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: string): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    const fit = composerHeight(el.scrollHeight, window.innerHeight)
+    el.style.height = `${fit.height}px`
+    el.style.overflowY = fit.scrolls ? 'auto' : 'hidden'
+  }, [ref, value])
+}
+/** The box's height for its content: all of it up to a third of the window (at least 160px), then it scrolls. */
+export function composerHeight(content: number, windowHeight: number): { height: number; scrolls: boolean } {
+  const max = Math.max(160, Math.round(windowHeight / 3))
+  return { height: Math.min(content, max), scrolls: content > max }
 }
 
 /** What a drop does, over the box (or the New conversation page) while files are dragged over it. */
@@ -123,6 +140,7 @@ export function TeamComposer({
   const [menu, setMenu] = useState(false)
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  useAutoGrow(ref, text)
   useEffect(() => {
     if (autoFocus) ref.current?.focus()
   }, [autoFocus])
@@ -497,6 +515,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   // the list follows new messages while you are at its end (also when the dock above the composer grows or shrinks)
   const atEnd = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
+  useAutoGrow(input, text)
   const me = state?.me ?? null
   const agentMembers = (channel?.memberIds ?? []).filter((id) => display(id)?.kind === 'agent')
   // working IN this conversation (a run answering here), never because the same agent works somewhere else
@@ -699,7 +718,7 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
           ref={input}
           className="cx-composer__input"
           data-chatux="thread-input"
-          rows={1}
+          rows={2}
           value={text}
           disabled={busy}
           maxLength={8000}

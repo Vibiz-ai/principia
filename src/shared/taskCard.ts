@@ -314,6 +314,14 @@ export function matchesOption(text: string, options?: readonly string[] | null):
   return !!t && !!options?.some((o) => o.trim().toLowerCase() === t)
 }
 
+/** A plain yes from the person ("go ahead", "do it", "sounds good", "just hire it"), with no "no", "wait" or "don't" in it. */
+const GO = /\b(go ahead|go for it|do it|just do|yes|yeah|yep|yup|sure|ok(ay)?|sounds good|approved?|ship it|hire (it|them|him|her)|just hire|let'?s do it|proceed|green light|lgtm)\b/i
+const HOLD = /\b(no|nope|not yet|don'?t|do not|wait|hold (on|off)|stop|cancel|never ?mind|later)\b/i
+export function saysGoAhead(text: string): boolean {
+  const t = text.trim()
+  return !!t && GO.test(t) && !HOLD.test(t)
+}
+
 /** Surely not an answer: it starts something new, or asks how the work is going. Anything else may be one. */
 export function notAnAnswer(text: string): boolean {
   const t = text.trim()
