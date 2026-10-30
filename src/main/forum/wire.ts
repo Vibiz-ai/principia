@@ -320,10 +320,10 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
   h.runHooks.push((run) => {
     if (!TERMINAL.has(run.status)) return
     responder.onRunEnded(run.id)
-    // after the step-end harvest, which applies the run's last writes
-    setTimeout(() => service.settleReply(run.id, run.status, run.reason), 2500).unref?.()
-    // after the step-end harvest (it reads the reply target first)
-    setTimeout(() => service.forgetRun(run.id), 60_000).unref?.()
+    // after the step-end harvest, which applies the run's last writes and reads the reply target first
+    setTimeout(() => {
+      void service.settleAfterHarvest(run.id, run.status, run.reason).then(() => setTimeout(() => service.forgetRun(run.id), 60_000).unref?.())
+    }, 2500).unref?.()
   })
   void service.start().then((url) => url && log.info('forum endpoint ready', { url }))
   return service

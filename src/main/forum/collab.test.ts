@@ -260,6 +260,16 @@ describe('loop safety (guards)', () => {
     expect(usage).toMatchObject({ wakesToday: 5, refusedToday: 3, capPerDay: 5 })
   })
 
+  it('a run that ended unanswered still counts toward the caps, and is not a refusal', async () => {
+    const { s, caller, starts, wakes } = setup()
+    settings = { perAgentPerHour: 1, waitDefaultS: 0 }
+    await s.api.call(caller('agt_marcus', 'r_task1'), 'forum_ask_agent', { to: '@livia', question: 'status?' })
+    s.settleReply(starts[0]!.runId, 'failed', 'Timed out')
+    expect(wakes()[0]).toMatchObject({ status: 'refused', refusal: 'start_failed' })
+    expect(await refusal(s.api.call(caller('agt_sergio', 'r_task2'), 'forum_ask_agent', { to: '@livia', question: 'and now?' }))).toMatch(/@livia was asked by agents 1 times in the last hour/)
+    expect(s.collab.usage(CO)).toMatchObject({ wakesToday: 1, refusedToday: 1 })
+  })
+
   it('per-thread cap counts mentions in one thread', async () => {
     const { s, caller, member, responder, starts } = setup()
     settings = { perThread: 2 }
@@ -499,6 +509,9 @@ describe('an agent is never left waiting by a quit (AGENT-COLLAB.md)', () => {
     expect(after.starts[0]!.prompt).toMatch(/^Agent ask in #development/)
     expect(after.starts[0]!.prompt).toContain('hop 1 of 3')
     expect(after.wakes()[0]!.status).toBe('started')
+    // the new run takes over the wake: its own asks stay in the chain, and its end still reaches the asker
+    expect(after.s.collab.wakesOfRun(after.starts[0]!.runId)).toHaveLength(1)
+    expect(after.s.collab.provenance({ runId: after.starts[0]!.runId, memberId: after.member('agt_livia').id })).toMatchObject({ depth: 2 })
     await after.s.api.call(after.caller('agt_livia', after.starts[0]!.runId), 'forum_reply', { to: card.ref, text: 'Yes, it is live.' })
     expect(after.s.store.message(card.id).ask).toMatchObject({ status: 'answered', answer: 'Yes, it is live.' })
   })

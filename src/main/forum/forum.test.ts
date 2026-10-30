@@ -804,6 +804,18 @@ describe('agents answer people and post their work (§6.4)', () => {
       return msg
     }
     const lines = (id: string) => s.store.thread(id).replies.filter((m) => m.kind === 'system').map((m) => m.text)
+    // a fenced forum_ask_agent keeps its harvest open for minutes: the run's outcome is only known when that ends
+    const waiting = reply('r_w', 'held')
+    let release: (v: unknown) => void = () => undefined
+    const call = vi.spyOn(s.api, 'call').mockImplementation(() => new Promise((res) => (release = res)) as never)
+    const harvested = s.harvest({ runId: 'r_w', stepId: 'st_w', adapter: 'claude', status: 'passed', output: '```forum\n{"ops":[{"op":"post","channel":"#marketing","text":"on it"}]}\n```\n', companyId: CO })
+    const settled = s.settleAfterHarvest('r_w', 'passed', null)
+    await new Promise((res) => setTimeout(res, 0))
+    expect(call).toHaveBeenCalledOnce()
+    release({})
+    await Promise.all([harvested, settled])
+    expect(lines(waiting.id)).toEqual([])
+    call.mockRestore()
     const failed = reply('r_f', 'a')
     await s.harvest({ runId: 'r_f', stepId: 'st_f', adapter: 'claude', status: 'failed', output: '', companyId: CO })
     s.settleReply('r_f', 'failed', 'Timed out after 15 min')
@@ -885,6 +897,37 @@ describe('agents answer people and post their work (§6.4)', () => {
       expect(third.starts).toEqual([])
       expect(lines(third.s, msg.id)).toEqual([interrupted(third.s)])
       expect(third.s.owed.all()).toEqual([])
+    })
+
+    it('a message that used its one retry never takes a newer one down with it', () => {
+      const before = app()
+      const msg = say(before.s, 'hello?')
+      before.r.onHumanPost(msg)
+      const after = app()
+      after.r.recover()
+      const fresh = say(after.s, 'and this?')
+      after.r.onHumanPost(fresh)
+      const third = app()
+      third.r.recover()
+      expect(third.starts.map((x) => x.reply.messageId)).toEqual([fresh.id])
+      expect(lines(third.s, msg.id)).toEqual([interrupted(third.s)])
+      expect(third.s.owed.all().map((r) => r.messageId)).toEqual([fresh.id])
+    })
+
+    it('a full queue keeps the interrupted message: it is in the recovered run, and the rest wait their turn', () => {
+      const before = app()
+      const first = say(before.s, 'interrupted one')
+      before.r.onHumanPost(first)
+      const queued = Array.from({ length: RESPONDER_LIMITS.pending }, (_, i) => say(before.s, `queued ${i}`))
+      for (const m of queued) before.r.onHumanPost(m)
+      const after = app()
+      after.r.recover()
+      expect(after.starts).toHaveLength(1)
+      expect(after.starts[0]!.prompt).toContain('interrupted one')
+      expect(after.s.owed.all()).toHaveLength(queued.length + 1)
+      ended(after, `r_run${runsSoFar()}`, 'passed', null)
+      expect(after.starts).toHaveLength(2)
+      expect(after.starts[1]!.prompt).toContain(`queued ${queued.length - 1}`)
     })
 
     it('a clean quit: canceled runs start nothing new, and the running and queued messages both come back', () => {

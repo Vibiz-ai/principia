@@ -418,20 +418,25 @@ export class ForumResponder {
     const answered = rows.filter((r) => !left.includes(r)).map((r) => r.messageId)
     if (answered.length) journal.drop(answered, memberId)
     if (!left.length) return
-    const ids = left.map((r) => r.messageId)
-    const last = ids[ids.length - 1]!
     const member = store.member(memberId)
-    if (!member?.agentId) return journal.drop(ids, memberId)
-    if (left.every((r) => this.stale(r)) || left.some((r) => r.attempts > 0)) {
-      this.d.onUnanswered?.(last, memberId, INTERRUPTED_REASON)
-      return journal.drop(ids, memberId)
+    if (!member?.agentId) return journal.drop(left.map((r) => r.messageId), memberId)
+    // the one retry is per message: one that used it never takes down a newer one that has yet to get its first answer
+    const unseen = left.filter((r) => r.attempts === 0)
+    const retry = unseen.every((r) => this.stale(r)) ? [] : unseen
+    const spent = left.filter((r) => !retry.includes(r)).map((r) => r.messageId)
+    if (spent.length) {
+      this.d.onUnanswered?.(spent[spent.length - 1]!, memberId, INTERRUPTED_REASON)
+      journal.drop(spent, memberId)
     }
+    if (!retry.length) return
+    const ids = retry.map((r) => r.messageId)
+    const last = ids[ids.length - 1]!
     journal.retried(ids, memberId)
     const first = ids.slice(0, RESPONDER_LIMITS.pending)
-    const r = this.wake(member, left[0]!.companyId, first, { resumed: left.some((x) => x.runId) })
+    const r = this.wake(member, retry[0]!.companyId, first, { resumed: retry.some((x) => x.runId) })
     if (typeof r === 'string' || r === QUEUED) {
       this.noteOwed(memberId, first, r)
-      if (ids.length > first.length) this.wake(member, left[0]!.companyId, ids.slice(first.length))
+      if (ids.length > first.length) this.wake(member, retry[0]!.companyId, ids.slice(first.length))
     } else {
       this.tellRefused(last, memberId, r)
       this.noteOwed(memberId, ids, r)
