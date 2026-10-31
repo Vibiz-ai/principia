@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.4.3](https://github.com/Vibiz-ai/principia/compare/v0.4.2...v0.4.3) (2026-10-31)
+
+
+### Features
+
+* agents run with no limit unless you set one (PR-69) ([6a138e2](https://github.com/Vibiz-ai/principia/commit/6a138e2ca212e8c9e8d345a1979cba29e1b3271c))
+* **agents:** remove the time limit on agent runs (PR-80) ([6dc2251](https://github.com/Vibiz-ai/principia/commit/6dc2251e45a1d0b7449e1b6084fb497d64047a0b))
+* **agents:** remove the time limit on agent runs (PR-80) ([ac0c525](https://github.com/Vibiz-ai/principia/commit/ac0c525bc13fad4e4a3031dad25af14fe74b534e))
+* **board:** restart tasks stopped by a usage limit when it resets (PR-70) ([8900dfd](https://github.com/Vibiz-ai/principia/commit/8900dfd7c2fd233273673fd80d6c817348223d10))
+* **board:** say when a task or run waits for a free slot (PR-64) ([1b46614](https://github.com/Vibiz-ai/principia/commit/1b4661466a2a5585ed34860da98cc95e6cd3eee0))
+* **chat:** replies that read easily: answer first, clear spacing, next step stands out (PR-60) ([35022b2](https://github.com/Vibiz-ai/principia/commit/35022b2910d376afa8564185f64340cb7d928bd9))
+* **chat:** slash commands and /usage in every chat, on the phone too ([197b9b0](https://github.com/Vibiz-ai/principia/commit/197b9b05b0d95926e5b4cda6db1f0e797a023bad))
+* **chat:** slash commands and /usage in every chat, on the phone too (PR-81) ([b437a7b](https://github.com/Vibiz-ai/principia/commit/b437a7bae207e8d2069c3466365bf14df378c54b))
+* **chats:** right-click a chat in the sidebar to close it (PR-59) ([da7bbf5](https://github.com/Vibiz-ai/principia/commit/da7bbf54efb1f08626549e7d69fca24e069a435a))
+* combine open PRs for the next release (PR-75) ([4295974](https://github.com/Vibiz-ai/principia/commit/42959744a4772bd013d6870862cdf665205bded1))
+* **dashboards:** activation & churn in one place, read from PostHog (PR-61) ([e16047d](https://github.com/Vibiz-ai/principia/commit/e16047de67e423f2617532a7df62a1a9b32c9f01))
+* **phone:** say when a task waits for a free slot on the iPhone app (PR-67) ([0b1ac6f](https://github.com/Vibiz-ai/principia/commit/0b1ac6f725ff0f81b32473b476ba694afd18a786))
+* **phone:** the phone finds the Mac by itself after a reboot (PR-73) ([b517f9a](https://github.com/Vibiz-ai/principia/commit/b517f9a9a390880e3e9e42fda2139ea2a6d40a0a))
+
+
+### Bug Fixes
+
+* a quit or crash no longer loses a person's chat message (PR-65) ([dca23b9](https://github.com/Vibiz-ai/principia/commit/dca23b983e819a727b64b35e879d451bad3998a7))
+* an asker stops waiting when a question delivered into a task gets no answer (PR-74) ([55a5ff7](https://github.com/Vibiz-ai/principia/commit/55a5ff7972fa03e4eb9ef91f974707c107fae7a0))
+* an asker stops waiting when a question delivered into a task gets no answer (PR-74) ([41062d5](https://github.com/Vibiz-ai/principia/commit/41062d5e917067a8d26661425da0e5a5102f4eab))
+* an asking agent stops waiting when the reply run ends with no answer (PR-72) ([1728461](https://github.com/Vibiz-ai/principia/commit/172846183f899e2e4b4ba9c6b48eb2cba940b278))
+* **board:** a usage-limit restart keeps the consent of its start ([7545bf5](https://github.com/Vibiz-ai/principia/commit/7545bf5cf0e51db043559a4a0b9a3511d38954be))
+* chat replies never wait behind long work or go quiet (PR-62) ([bab157e](https://github.com/Vibiz-ai/principia/commit/bab157e7aec271815c109be3a5a07936e89db9d3))
+* **chats:** a closed chat comes back when a turn finishes or needs you ([20d52a7](https://github.com/Vibiz-ai/principia/commit/20d52a7bf39e26218d351aaf3b836d3f6a95c98e))
+* close the remaining ways a chat message goes unanswered (PR-68) ([85d7725](https://github.com/Vibiz-ai/principia/commit/85d77256d51753c55ee322a10e0872de0730db2b))
+* **dashboards:** read activation after signup, honor Leave out on saved views, keep page names intact ([5f5b92b](https://github.com/Vibiz-ai/principia/commit/5f5b92b01ddd0241c3ed023c63118d506c537095))
+* **dashboards:** read PostHog's live answers through a sign-in (PR-63) ([ba42d37](https://github.com/Vibiz-ai/principia/commit/ba42d37f95863691650d288afa9f7dc081127fa2))
+* **forum:** settle replies after their harvest, keep the retry per message, count spent wakes ([62fd2c6](https://github.com/Vibiz-ai/principia/commit/62fd2c6fa8ee1b7336d51c7311f44c23a1774c3a))
+* **phone:** a caller over its limit no longer uses up the global address quota ([236d463](https://github.com/Vibiz-ai/principia/commit/236d4631e0b61f875ad29de56f5cdc99a7147dfb))
+* **phone:** end a kept tunnel after any exit, and only the process that was kept ([a41f59b](https://github.com/Vibiz-ai/principia/commit/a41f59b74608c939314c5e7f2c4efb9614107818))
+* **phone:** keep the Mac's address across restarts so phones stay connected (PR-71) ([aaadb9e](https://github.com/Vibiz-ai/principia/commit/aaadb9e6ebcded48ca9997331a5836d0270a9df7))
+* resolve the Codex review findings on the open PRs (PR-79) ([33999b7](https://github.com/Vibiz-ai/principia/commit/33999b7edede4772d5c40ca67e9eec1e8e653643))
+
 ## [0.4.2](https://github.com/Vibiz-ai/principia/compare/v0.4.1...v0.4.2) (2026-10-30)
 
 
