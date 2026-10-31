@@ -22,6 +22,26 @@ final class ChatReplicaTests: XCTestCase {
         XCTAssertFalse(r.busy)
     }
 
+    func testSlashCommandsFollowTheMac() {
+        var r = ChatReplica(try! JSONDecoder().decode(ChatSnapshot.self, from: Data(#"{"sessionId":"se_1","mode":"chat","turn":"idle","items":[],"queue":[],"meta":{"commands":[{"name":"usage","description":"Plan limits","argumentHint":null}]},"seq":1}"#.utf8)))
+        XCTAssertEqual(r.commands, [ChatCommand(name: "usage", description: "Plan limits")])
+        // a meta op about something else leaves them alone; one that names them replaces them
+        XCTAssertEqual(r.apply(seq: 2, ops: json(#"[{"op":"meta","meta":{"contextPct":12}}]"#).array!), .ok)
+        XCTAssertEqual(r.commands.count, 1)
+        XCTAssertEqual(r.apply(seq: 3, ops: json(#"[{"op":"meta","meta":{"commands":[{"name":"usage"},{"name":"compact"}]}}]"#).array!), .ok)
+        XCTAssertEqual(r.commands.map(\.name), ["usage", "compact"])
+    }
+
+    func testSlashMenuMatches() {
+        let all = ["extra-usage", "usage-credits", "usage", "__internal"].map { ChatCommand(name: $0, description: "") }
+        XCTAssertEqual(ChatCommand.matches(all, "usa").map(\.name), ["usage", "usage-credits", "extra-usage"])
+        XCTAssertEqual(ChatCommand.matches(all, "").count, 3)
+        XCTAssertEqual(ChatCommand.query("/us"), "us")
+        XCTAssertEqual(ChatCommand.query("/"), "")
+        XCTAssertNil(ChatCommand.query("/usage now"))
+        XCTAssertNil(ChatCommand.query("hi /usage"))
+    }
+
     func testReplayDividersAreDropped() {
         let items = json(#"[{"id":"n1","parent":null,"kind":"notice","tone":"info","text":"From the terminal","action":null},{"id":"n2","parent":null,"kind":"notice","tone":"info","text":"Conversation compacted","action":null}]"#).array!
         XCTAssertEqual(ChatLines.build(items), [.notice(id: "n2", tone: "info", text: "Conversation compacted")])

@@ -196,6 +196,8 @@ struct ChatSnapshot: Codable, Sendable {
     var turnStartedAt: Double?
     var items: [JSONValue]
     var queue: [ChatQueued]
+    /// the Mac's ChatMeta (the phone reads `commands`)
+    var meta: JSONValue?
     var seq: Int
     var note: String?
 }

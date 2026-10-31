@@ -175,10 +175,16 @@ struct ConversationView: View {
                             photos.restore(im)
                         }
                     }
-                }, photos: takesPhotos ? photos : nil)
+                }, photos: takesPhotos ? photos : nil, commands: commands)
             }
         }
         .task(id: ref) { await app.load(ref) }
+    }
+
+    /// a live chat only: a terminal takes plain words from the phone
+    private var commands: [ChatCommand] {
+        guard ref.kind == .session, app.session?.ref.id == ref.id, app.session?.terminal == nil else { return [] }
+        return app.replica?.commands ?? []
     }
 
     private var title: String {
@@ -231,7 +237,7 @@ struct ConversationView: View {
         if let s = app.session, let t = s.terminal, t.canType != nil, let c = t.composer(name: s.who?.name ?? "Claude") { return c.placeholder }
         if app.session?.terminal != nil { return "Message \(app.session?.who?.name ?? "Claude")" }
         if let r = app.replica, r.busy { return "Queue a message" }
-        return "Message"
+        return commands.isEmpty ? "Message" : "Message, / for commands"
     }
 }
 
@@ -673,6 +679,13 @@ struct Composer: View {
     var accessory: AnyView? = nil
     /// the message's photos (nil: this one takes words only)
     var photos: PhotoDraft? = nil
+    /// what `/` lists (empty: no menu, as in a terminal or the team room)
+    var commands: [ChatCommand] = []
+
+    private var slashHits: [ChatCommand] {
+        guard let q = ChatCommand.query(text) else { return [] }
+        return ChatCommand.matches(commands, q)
+    }
 
     private var empty: Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (photos?.items.isEmpty ?? true)
@@ -681,6 +694,7 @@ struct Composer: View {
     var body: some View {
         VStack(spacing: 8) {
             if let accessory { accessory }
+            if !slashHits.isEmpty { SlashMenu(commands: slashHits) { text = "/\($0.name) " } }
             if let note = note ?? photos?.note {
                 Text(note).font(.footnote).foregroundStyle(Theme.soft)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
@@ -715,6 +729,41 @@ struct Composer: View {
             LinearGradient(colors: [Theme.page.opacity(0), Theme.page.opacity(0.92)], startPoint: .top, endPoint: .init(x: 0.5, y: 0.3))
                 .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
+        }
+    }
+}
+
+/// `/` in a chat: what its CLI offers. A pick fills the field; Send runs it.
+struct SlashMenu: View {
+    let commands: [ChatCommand]
+    var onPick: (ChatCommand) -> Void
+
+    var body: some View {
+        // a few matches take only their own height; a long list scrolls
+        Group {
+            if commands.count <= 4 { rows } else { ScrollView { rows }.frame(height: 240) }
+        }
+        .background(Theme.page.opacity(0.92), in: .rect(cornerRadius: 18))
+        .glassEffect(.regular.tint(Theme.page.opacity(0.6)), in: .rect(cornerRadius: 18))
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(commands) { c in
+                Button { onPick(c) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("/\(c.name)").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        if !c.description.isEmpty {
+                            Text(c.description).font(.footnote).foregroundStyle(Theme.muted).lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("slash-\(c.name)")
+            }
         }
     }
 }

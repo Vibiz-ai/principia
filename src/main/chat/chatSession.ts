@@ -611,7 +611,8 @@ export class ChatSession implements PtyLike {
     if (!t && !images.length) return
     // the composer under an open card: the words answer it ("Answer above, or tell Claude something else")
     const open = this.openRequests()
-    if (t && !images.length && open.length && this.proc?.alive) {
+    const command = /^\/([\w:.-]+)(?:\s|$)/.exec(t)?.[1]
+    if (t && !images.length && open.length && this.proc?.alive && !this.meta.commands.some((c) => c.name === command)) {
       const it = this.openItem(open[open.length - 1]!)
       if (it?.kind === 'permission') return void this.answer(it.requestId, { kind: 'deny', message: t })
       if (it?.kind === 'question') return void this.answer(it.requestId, { kind: 'answer', answers: { [it.questions[0]?.question ?? 'answer']: t } })

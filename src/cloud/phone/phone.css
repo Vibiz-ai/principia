@@ -257,6 +257,10 @@ h3.md-h { font: 500 18px/1.25 var(--font-display); letter-spacing: .01em; }
 .dock__btns .btn { border-radius: 23px; }
 .mentions { display: flex; gap: 6px; overflow-x: auto; }
 .mentions:not(:empty) { padding-bottom: 8px; }
+.mentions--slash { flex-direction: column; gap: 0; overflow: hidden auto; max-height: 40vh; }
+.slash { display: flex; flex-direction: column; gap: 2px; flex: none; width: 100%; padding: 8px 6px; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.slash b { font-weight: 600; }
+.slash span { font-size: 13px; opacity: .65; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .chip { flex: none; min-height: 38px; padding: 0 13px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line-strong); background: var(--panel); font-size: 14px; }
 #tabs .tabs { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); }
 .tab { position: relative; height: var(--tabs-h); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: var(--faint); text-align: center; transition: color .2s; }

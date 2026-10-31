@@ -276,6 +276,21 @@ export interface ChatEventMap {
 }
 export const CHAT_EVENTS = ['chat:ops'] as const satisfies readonly (keyof ChatEventMap)[]
 
+/** The commands whose name holds what was typed after `/`, best first. Internal ones (`__name`) never show. */
+export function slashMatches<T extends { name: string }>(commands: readonly T[], query: string, max = 40): T[] {
+  const q = query.toLowerCase()
+  const rank = (n: string): number => (n.toLowerCase().startsWith(q) ? 0 : 1)
+  return commands
+    .filter((c) => !c.name.startsWith('__') && c.name.toLowerCase().includes(q))
+    .sort((a, b) => rank(a.name) - rank(b.name) || a.name.length - b.name.length)
+    .slice(0, max)
+}
+
+/** What was typed after `/` while the draft is only a command name so far (caret at its end); null otherwise. */
+export function slashQuery(draft: string): string | null {
+  return /^\/([\w:.-]*)$/.exec(draft)?.[1] ?? null
+}
+
 /** Commands that exist only in the interactive TUI: picking one hands the chat to the terminal. */
 export const TERMINAL_ONLY_COMMANDS: { name: string; description: string }[] = [
   { name: 'config', description: 'Open the settings panel' },

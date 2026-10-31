@@ -11,6 +11,8 @@ struct ChatReplica: Sendable {
     private(set) var turn: String
     private(set) var activity: String?
     private(set) var queue: [ChatQueued]
+    /// what the CLI behind this chat offers under `/`
+    private(set) var commands: [ChatCommand]
     let sessionId: String
 
     init(_ s: ChatSnapshot) {
@@ -20,6 +22,7 @@ struct ChatReplica: Sendable {
         turn = s.turn
         activity = s.activity
         queue = s.queue
+        commands = ChatCommand.list(s.meta?["commands"])
         reindex()
     }
 
@@ -65,6 +68,9 @@ struct ChatReplica: Sendable {
             if let a = op["activity"] { activity = a.string }
         case "queue":
             if let q = op["queue"], let d = try? JSONEncoder().encode(q), let v = try? JSONDecoder().decode([ChatQueued].self, from: d) { queue = v }
+        case "meta":
+            // a meta op carries only what changed
+            if let c = op["meta"]?["commands"] { commands = ChatCommand.list(c) }
         default:
             break
         }
@@ -299,5 +305,39 @@ enum ChatLines {
     static func commandOf(_ input: JSONValue) -> String? {
         guard let c = input["command"]?.string ?? input["file_path"]?.string ?? input["url"]?.string else { return nil }
         return clip(c, 300)
+    }
+}
+
+/// One line of the slash menu (the desktop's slashMatches, shared/chat.ts).
+struct ChatCommand: Equatable, Sendable, Identifiable {
+    let name: String
+    let description: String
+    var id: String { name }
+
+    static func list(_ v: JSONValue?) -> [ChatCommand] {
+        (v?.array ?? []).compactMap { c in
+            guard let n = c["name"]?.string, !n.isEmpty else { return nil }
+            return ChatCommand(name: n, description: c["description"]?.string ?? "")
+        }
+    }
+
+    /// What was typed after `/` while the draft is only a command name so far; nil otherwise.
+    static func query(_ draft: String) -> String? {
+        guard draft.hasPrefix("/") else { return nil }
+        let q = draft.dropFirst()
+        let ok = q.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || "_:.-".unicodeScalars.contains($0) }
+        return ok ? String(q) : nil
+    }
+
+    /// The commands whose name holds the query, best first. Internal ones (`__name`) never show.
+    static func matches(_ all: [ChatCommand], _ query: String, max: Int = 40) -> [ChatCommand] {
+        let q = query.lowercased()
+        let hits = all.filter { !$0.name.hasPrefix("__") && (q.isEmpty || $0.name.lowercased().contains(q)) }
+        let rank = { (c: ChatCommand) in c.name.lowercased().hasPrefix(q) ? 0 : 1 }
+        return Array(hits.enumerated().sorted {
+            let a = (rank($0.element), $0.element.name.count, $0.offset)
+            let b = (rank($1.element), $1.element.name.count, $1.offset)
+            return a < b
+        }.map(\.element).prefix(max))
     }
 }

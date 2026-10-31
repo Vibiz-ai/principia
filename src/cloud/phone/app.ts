@@ -8,7 +8,7 @@
  * (`#mac=…&code=…`), the token is kept in this site's localStorage and sent as a bearer, and the socket's first message
  * carries it. The site itself holds no data: everything comes from the Mac, which is the authority.
  */
-import type { ChatOp, ChatSnapshot } from '../../shared/chat'
+import { slashMatches, slashQuery, type ChatOp, type ChatSnapshot } from '../../shared/chat'
 import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
 import { checkMac, findMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
@@ -795,6 +795,8 @@ interface DockSpec {
   stop: boolean
   label: string
   mentions: boolean
+  /** a live chat: `/` lists what its CLI offers */
+  slash?: boolean
   /** it cannot take a message now: Send is off (the placeholder says why) */
   held?: boolean
 }
@@ -810,7 +812,7 @@ function dockSpec(): DockSpec | null {
       const c = terminalComposer(t, s.who?.name ?? 'Claude')
       return c && { key: `session:${s.ref.id}`, placeholder: c.placeholder, stop: false, label: 'Send', mentions: false, held: c.held }
     }
-    if (st.replica) return { key: `session:${s.ref.id}`, placeholder: `Message ${s.who?.name ?? 'Claude'}`, stop: st.replica.busy, label: st.replica.busy ? 'Queue' : 'Send', mentions: false }
+    if (st.replica) return { key: `session:${s.ref.id}`, placeholder: `Message ${s.who?.name ?? 'Claude'}${st.replica.snap.meta.commands.length ? ', / for commands' : ''}`, stop: st.replica.busy, label: st.replica.busy ? 'Queue' : 'Send', mentions: false, slash: true }
     return t?.canReply ? { key: `reply:${s.ref.id}`, placeholder: 'Reply', stop: false, label: 'Send', mentions: false } : null
   }
   if (r.open?.kind === 'agent') return st.agent ? { key: `agent:${st.agent.ref.id}`, placeholder: `Message ${st.agent.who.name}`, stop: false, label: 'Send', mentions: false } : null
@@ -856,6 +858,7 @@ function dock(spec: DockSpec | null): void {
     st.drafts[`dock:${spec.key}`] = ta.value
     grow()
     if (spec.mentions) mentionStrip(ta, strip)
+    if (spec.slash) slashList(ta, strip)
   })
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)) {
@@ -908,6 +911,31 @@ function mentionStrip(ta: HTMLTextAreaElement, strip: HTMLElement): void {
         const out = insertMention(ta.value, at!.start, caret, m.handle)
         ta.value = out.text
         ta.setSelectionRange(out.caret, out.caret)
+        ta.dispatchEvent(new Event('input'))
+        ta.focus()
+      })
+      return b
+    })
+  )
+}
+/** `/` in a chat: what its CLI offers, name and words, right above the field. A pick fills the field; Send runs it. */
+function slashList(ta: HTMLTextAreaElement, strip: HTMLElement): void {
+  const q = slashQuery(ta.value)
+  const list = q === null ? [] : slashMatches(st.replica?.snap.meta.commands ?? [], q)
+  strip.classList.toggle('mentions--slash', list.length > 0)
+  strip.replaceChildren(
+    ...list.map((c) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'slash'
+      const name = document.createElement('b')
+      name.textContent = `/${c.name}`
+      const what = document.createElement('span')
+      what.textContent = c.description
+      b.append(name, what)
+      b.addEventListener('pointerdown', (e) => e.preventDefault())
+      b.addEventListener('click', () => {
+        ta.value = `/${c.name} `
         ta.dispatchEvent(new Event('input'))
         ta.focus()
       })

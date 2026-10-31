@@ -14,7 +14,7 @@
 import type { Id } from '../../shared/types'
 import type { ChatDecision, ChatImage, ChatItem, ChatMeta, ChatMode, ChatOp, ChatQueued, ChatSnapshot, ChatTurn } from '../../shared/chat'
 import { CODEX_MODES, EMPTY_CHAT_META } from '../../shared/chat'
-import { CodexReducer } from '../../shared/codexReduce'
+import { CODEX_USAGE_COMMAND, CodexReducer, codexSkills, codexUsageMd, isCodexUsage } from '../../shared/codexReduce'
 import { ChatModel } from '../../shared/chatReduce'
 import { permissionTitle, toolLine } from '../../shared/toolVerbs'
 import { HiveError } from '../../shared/errors'
@@ -150,6 +150,10 @@ export class CodexChatSession implements PtyLike {
   private chosenModel: string | null = null
   /** JSON-RPC id of each open approval, by the card's requestId */
   private rpcIds = new Map<string, number | string>()
+  /** the skill's SKILL.md, by name: `/name …` attaches it to the turn */
+  private skills = new Map<string, string>()
+  /** /usage arrived before the server was ready */
+  private usageWaiting = false
   private readonly spec: CodexServerSpec
   readonly bypass: boolean
 
@@ -159,7 +163,7 @@ export class CodexChatSession implements PtyLike {
     this.threadId = d.resumeId
     this.promptPending = this.spec.prompt
     this.chosenModel = this.spec.model
-    this.meta = { ...EMPTY_CHAT_META, harness: 'codex', modes: CODEX_MODES, bypass: this.bypass, permissionMode: this.bypass ? 'bypassPermissions' : 'acceptEdits', model: this.spec.model ?? 'default' }
+    this.meta = { ...EMPTY_CHAT_META, harness: 'codex', modes: CODEX_MODES, bypass: this.bypass, permissionMode: this.bypass ? 'bypassPermissions' : 'acceptEdits', model: this.spec.model ?? 'default', commands: [CODEX_USAGE_COMMAND] }
     this.reducer = new CodexReducer({ now: () => this.now(), who: () => this.who() })
     this.startProc()
   }
@@ -380,13 +384,44 @@ export class CodexChatSession implements PtyLike {
     this.crashes = 0
     this.setMeta({ model: typeof r.model === 'string' ? (this.chosenModel ?? r.model) : this.meta.model, cliVersion: typeof thread.cliVersion === 'string' ? thread.cliVersion : this.meta.cliVersion })
     void this.loadModels(proc)
+    void this.loadSkills(proc)
     this.setTurn('idle', null)
+    if (this.usageWaiting) void this.showUsage()
     if (this.promptPending) {
       const p = this.promptPending
       this.promptPending = null
       this.startTurn(p, [])
     } else this.flushQueue()
     if (this.turn === 'idle') this.armIdle()
+  }
+
+  /** What Codex offers in the chat's folder: its skills are the slash menu here, after /usage. */
+  private async loadSkills(proc: RpcProc): Promise<void> {
+    try {
+      const skills = codexSkills(await proc.request('skills/list', { cwds: [this.d.cwd] }))
+      if (this.proc !== proc) return
+      this.skills = new Map(skills.map((s) => [s.name, s.path]))
+      this.setMeta({ commands: [CODEX_USAGE_COMMAND, ...skills.map((s) => ({ name: s.name, description: s.description, argumentHint: null }))] })
+    } catch {
+      /* a Codex without skills: /usage alone */
+    }
+  }
+
+  /** /usage: read from Codex on the spot, whatever the turn is doing. It costs no tokens and never queues. */
+  private async showUsage(): Promise<void> {
+    const p = this.proc
+    if (!p?.alive || !this.ready) {
+      this.usageWaiting = true
+      if (!this.proc) this.startProc()
+      return
+    }
+    this.usageWaiting = false
+    try {
+      const r = await p.request('account/rateLimits/read', undefined, 20_000)
+      this.emit(this.reducer.localReply(codexUsageMd(r, this.meta.contextPct)))
+    } catch (e) {
+      this.emit(this.reducer.notice(`Codex did not say what is left: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`, 'error'))
+    }
   }
 
   private async loadModels(proc: RpcProc): Promise<void> {
@@ -593,7 +628,9 @@ export class CodexChatSession implements PtyLike {
 
   // ---------- user actions ----------
   private input(text: string, images: ChatImage[]): unknown[] {
-    return [...images.map((im) => ({ type: 'image', url: `data:${im.mediaType};base64,${im.data}` })), { type: 'text', text, text_elements: [] }]
+    // `/skill-name …`: the words stay as typed (so Codex's echo matches this message) and the skill comes with them
+    const skill = this.skills.get(/^\/([\w:.-]+)/.exec(text)?.[1] ?? '')
+    return [...images.map((im) => ({ type: 'image', url: `data:${im.mediaType};base64,${im.data}` })), { type: 'text', text, text_elements: [] }, ...(skill ? [{ type: 'skill', name: text.slice(1).split(/\s/)[0], path: skill }] : [])]
   }
 
   private startTurn(text: string, images: ChatImage[]): void {
@@ -636,6 +673,11 @@ export class CodexChatSession implements PtyLike {
     if (this.ended) throw new HiveError('conflict', 'This chat has ended. Restart it to continue.')
     const t = text.trim()
     if (!t && !images.length) return
+    if (!images.length && isCodexUsage(t)) {
+      this.emit(this.reducer.localCommand(t))
+      void this.showUsage()
+      return
+    }
     // the composer under an open card: the words answer it ("tell Codex what to do instead")
     const open = this.openRequests()
     if (t && !images.length && open.length && this.proc?.alive) return void this.answer(open[open.length - 1]!, { kind: 'deny', message: t })
