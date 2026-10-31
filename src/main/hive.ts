@@ -256,6 +256,7 @@ export class Hive {
       // §2 step 4: triage suggestions through the installed Claude CLI (off without one)
       modelCall: () => this.safe(() => routeModelCall({ providers: () => this.engine.providers.cached() }), null),
       redact: (t) => this.vault.redact(t),
+      settleUnblocked: (id) => this.taskWork?.settleUnblocked(id) ?? Promise.resolve(),
       log
     })
     this.dispatcher = d

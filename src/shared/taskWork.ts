@@ -19,6 +19,8 @@ export interface TaskPr {
   checkedAt: string
   /** the branch it merges into (gh's baseRefName); absent on rows read before it was asked for */
   base?: string | null
+  /** the branch it merges from (gh's headRefName); absent on rows read before it was asked for */
+  head?: string | null
 }
 
 /** What the GitHub CLI said on the last check: null = not checked yet. */

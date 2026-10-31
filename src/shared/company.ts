@@ -403,6 +403,8 @@ export function startsWithoutAutopilot(t: Pick<BoardTask, 'source' | 'status' | 
 }
 /** The wake a founder's go-ahead leaves on a task (Dispatcher.goAhead): "Go ahead: …". */
 export const GO_AHEAD = 'Go ahead: '
+/** The wake of a task whose dependencies all finished (CompanyStore.heal); TaskWorkService.settleUnblocked reads it. */
+export const UNBLOCKED_WAKE = 'Unblocked: every dependency is done.'
 
 export const agentActive = (a: Pick<CompanyAgent, 'archivedAt' | 'pausedAt'>): boolean => !a.archivedAt && !a.pausedAt
 
