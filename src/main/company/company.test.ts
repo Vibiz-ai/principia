@@ -397,8 +397,6 @@ describe('DEPARTMENTS.md board: task model, state machine, heal and park',()=>{
     expect(c.task(t.id)).toMatchObject({status:'blocked',blockReason:'run_failed'});expect(c.detail(t.id).activity.at(-1)?.message).toContain('exit 1')
     ;({run:r}=start(t.id));end(r,'canceled')
     expect(c.task(t.id)).toMatchObject({status:'blocked',blockReason:'no_report'})
-    ;({run:r}=start(t.id));c.expectStop(t.id,'limit');end(r,'canceled','time limit')
-    expect(c.task(t.id)).toMatchObject({status:'blocked',blockReason:'limit'})
     start(t.id);c.reconcile()
     expect(c.task(t.id)).toMatchObject({status:'blocked',blockReason:'interrupted',runId:null});expect(kinds(t.id).at(-1)).toBe('interrupted')
     // the dispatcher never restarts a parked task; only a human does

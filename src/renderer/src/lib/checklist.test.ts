@@ -7,7 +7,7 @@ const dep = (id: string, key: string, name: string, p: Partial<Department> = {})
   ({ id, companyId: 'co_a', key, name, color: null, icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: {} as Department['data'], ...p }) as Department
 const agent = (id: string, departmentId: string | null, p: Partial<CompanyAgent> = {}): CompanyAgent =>
   ({ id, companyId: 'co_a', departmentId, kind: 'profile', refId: 'prof_1', name: id, archivedAt: null, pausedAt: null, createdAt: '', updatedAt: '',
-    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
+    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
 
 const fresh = (p: Partial<ChecklistInput> = {}): ChecklistInput => ({
   company: { id: 'co_a', name: 'Sunday Bakery', mission: '' },

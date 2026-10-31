@@ -248,14 +248,10 @@ export interface TaskToolset {
 export interface TaskRunBridge {
   /** The task's company: a task run inherits it first (COMPANY.md §3 stamping order). null = unknown task. */
   companyOf(taskId: Id): Id | null
-  /** The seat's limits.runMinutes, when StartRunOptions.runMinutes is absent. null = no cap. */
-  runMinutes?(agentId: Id): number | null
   /** §6: the hivetask toolset for one step of a task run (claude only for now); null = none. */
   toolset?(req: { runId: Id; taskId: Id; agentId: Id | null; stepId: Id; adapter: AdapterId; companyId: Id | null }): TaskToolset | null
   /** §4.3: the provider conversation id of a task run's step, as soon as it is known (task.agentSessionId). */
   sessionCaptured?(e: { runId: Id; taskId: Id; adapter: AdapterId; agentSessionId: string }): void
-  /** §3.6: the run hit limits.runMinutes and is about to be canceled; the task then parks with blocked(limit). */
-  timeLimit?(e: { runId: Id; taskId: Id; minutes: number }): void
   /**
    * §7: the Passport block of a task run's spawn, with the task's department slot (redacted). When present it replaces
    * EngineContext.passportContext for task runs; null = nothing to say.
@@ -268,11 +264,6 @@ export interface TaskRunBridge {
    */
   workdir?(e: { taskId: Id; runId: Id }): Promise<{ cwd: string; env: Record<string, string> } | null>
 }
-/** §3.6: the in-band warning, about 2 minutes before a task run's time cap. */
-export const TASK_WRAP_UP_MS = 2 * 60_000
-export const TASK_WRAP_UP_TEXT =
-  'Principia: about 2 minutes are left before this task run is stopped. Wrap up now: save your work and call task_report (or task_ask if you need the human).'
-
 /** ORCHESTRATOR.md §1.1: one step asking for its Principia context. */
 export interface OrchestratorStepRequest {
   runId: Id
@@ -561,8 +552,6 @@ export interface StartRunOptions {
   resumeSessionId?: string | null
   /** Prompt runs: the title to show instead of one cut from the prompt (a board task turn: its key and title). */
   title?: string | null
-  /** §3.6 task runs: the time cap in minutes (warned ~2 min before, then canceled). Absent = the seat's limits.runMinutes. */
-  runMinutes?: number | null
 }
 
 export interface Engine {

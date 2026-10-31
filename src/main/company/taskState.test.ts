@@ -99,7 +99,7 @@ describe('run end outcome (§1.4, §4.5)', () => {
     expect(runEndState({}, passed, true).message).toContain('no report')
     expect(runEndState({}, failed, true)).toMatchObject({ to: { status: 'blocked', blockReason: 'run_failed' } })
     expect(runEndState({}, canceled, true)).toMatchObject({ to: { status: 'blocked', blockReason: 'no_report' } })
-    expect(runEndState({}, canceled, true, 'limit')).toMatchObject({ to: { status: 'blocked', blockReason: 'limit' } })
+    expect(runEndState({}, canceled, true, 'interrupted')).toMatchObject({ to: { status: 'blocked', blockReason: 'interrupted' } })
     // an answered ask from an earlier turn is not a new ask; a dependency created during the run blocks on deps
     expect(runEndState({ ask: { prompt: 'x', answer: 'y' } }, passed, true).to.status).toBe('in_review')
     expect(runEndState(report('review'), passed, false)).toMatchObject({ to: { status: 'blocked', blockReason: 'deps' } })
@@ -113,13 +113,13 @@ describe('run end outcome (§1.4, §4.5)', () => {
     expect(runEndState({}, failed, true, null, 'again')).toMatchObject({ to: { status: 'blocked', blockReason: 'run_failed' }, message: expect.stringContaining('one automatic restart') })
     expect(runEndState(report('review'), failed, true, null, 'wait').to.status).toBe('in_review')
     expect(runEndState({ ask: { prompt: 'q' } }, failed, true, null, 'wait').to.blockReason).toBe('needs_input')
-    expect(runEndState({}, failed, true, 'limit', 'wait').to.blockReason).toBe('limit')
+    expect(runEndState({}, failed, true, 'interrupted', 'wait').to.blockReason).toBe('interrupted')
     expect(runEndState({}, failed, true, 'paused', 'wait').limitWait).toBeUndefined()
     assertTransition({ status: 'in_progress' }, runEndState({}, failed, true, null, 'wait').to, 'system')
   })
   it('every outcome is a legal §1.4 move from in_progress', () => {
     for (const end of [runEndState({ ask: { prompt: 'q' } }, passed, true), runEndState(report('blocked'), passed, true), runEndState({}, passed, true), runEndState({}, failed, true),
-      runEndState({}, canceled, true), runEndState({}, canceled, true, 'limit'), runEndState(report('review'), passed, false)]) ok(S('in_progress'), end.to, 'system')
+      runEndState({}, canceled, true), runEndState({}, canceled, true, 'interrupted'), runEndState(report('review'), passed, false)]) ok(S('in_progress'), end.to, 'system')
   })
 })
 

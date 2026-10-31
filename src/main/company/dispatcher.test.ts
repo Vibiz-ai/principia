@@ -70,7 +70,7 @@ describe('DEPARTMENTS.md §3 dispatcher: assignment is the wake', () => {
     // the only agent in Marketing is routed by rule on create and woken at once
     expect(c.task(t.id)).toMatchObject({ status: 'in_progress', agentId: agent.id, departmentId: dep.id })
     expect(started).toHaveLength(1)
-    expect(started[0].opts).toMatchObject({ trigger: 'task', taskId: t.id, agentId: agent.id, companyId: co.id, runMinutes: 30 })
+    expect(started[0].opts).toMatchObject({ trigger: 'task', taskId: t.id, agentId: agent.id, companyId: co.id })
     expect(db.prepare('SELECT task_id AS taskId, agent_id AS agentId FROM runs WHERE id=?').get(started[0].run.id)).toEqual({ taskId: t.id, agentId: agent.id })
     expect(kinds(t.id)).toEqual(expect.arrayContaining(['created', 'assigned', 'routed', 'woke', 'started']))
     for (let i = 0; i < 3; i++) await d.tick()
@@ -623,15 +623,14 @@ describe('autopilot safety audit', () => {
     await settle()
     expect(started).toHaveLength(1)
     expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'agent' })
-    // the time cap: timeLimit marks the stop, then the engine cancels the run
+    // a canceled run: whatever it reported, nothing follows up
     const other = seat('Editor')
-    const u = task({ title: 'Capped', agentId: other.id })
+    const u = task({ title: 'Canceled', agentId: other.id })
     await settle()
     const run = runsOf(u.id)[0].run
     c.activity(u.id, 'comment', 'Ping', 'system')
     report(u.id)
-    taskRunBridge({ company: () => c, dispatcher: () => d, toolset: () => null }).timeLimit!({ runId: run.id, taskId: u.id, minutes: 30 })
-    end(run.id, 'canceled', 'Time limit reached (30 min)')
+    end(run.id, 'canceled', 'Canceled')
     for (let i = 0; i < 3; i++) await d.tick()
     expect(runsOf(u.id)).toHaveLength(1)
   })
@@ -792,21 +791,17 @@ describe('DEPARTMENTS.md §1.2, §5: runs.task_id / agent_id and asks.task_id', 
     expect(db.prepare('SELECT task_id AS taskId FROM asks WHERE id=?').get('ask_1')).toEqual({ taskId: t.id })
     expect((ask as { taskId?: string }).taskId).toBe(t.id)
   })
-  it('the task run bridge resolves the company, the seat time cap and parks a capped run with limit', () => {
+  it('the task run bridge resolves the company, the toolset and the session', () => {
     const { co, agent, task } = board({ autopilot: false })
     const t = task()
     const bridge = taskRunBridge({ company: () => c, dispatcher: () => null, toolset: () => req => ({ env: { HIVE_TASK_ID: req.taskId }, toolNames: ['task_report'] }), passport: (companyId, departmentId) => `${companyId}/${departmentId}` })
     expect(bridge.companyOf(t.id)).toBe(co.id)
     expect(bridge.passportContext!({ taskId: t.id, companyId: co.id })).toBe(`${co.id}/${t.departmentId}`)
     expect(bridge.companyOf('task_missing')).toBeNull()
-    expect(bridge.runMinutes!(agent.id)).toBe(30)
     expect(bridge.toolset!({ runId: 'r', taskId: t.id, agentId: agent.id, stepId: 's', adapter: 'claude', companyId: co.id })).toEqual({ env: { HIVE_TASK_ID: t.id }, toolNames: ['task_report'] })
     d.runNow(t.id)
     bridge.sessionCaptured!({ runId: started[0].run.id, taskId: t.id, adapter: 'claude', agentSessionId: 'conv-x' })
     expect(c.task(t.id).agentSessionId).toBe('conv-x')
-    bridge.timeLimit!({ runId: started[0].run.id, taskId: t.id, minutes: 30 })
-    end(started[0].run.id, 'canceled', 'Time limit reached (30 min)')
-    expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'limit' })
   })
 })
 

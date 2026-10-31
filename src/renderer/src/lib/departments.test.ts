@@ -13,7 +13,7 @@ let n = 0
 const task = (p: Partial<CompanyTask>): CompanyTask =>
   ({ id: `t_${++n}`, identifier: `PRN-${n}`, title: 'x', description: '', companyId: 'co_a', repoId: null, status: 'todo', priority: 3, source: 'manual', sourceUrl: null, externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], runId: null, createdAt: `2026-10-${String(10 + (n % 10)).padStart(2, '0')}`, updatedAt: '', departmentId: null, agentId: null, blockReason: null, ...p }) as CompanyTask
 const agent = (p: Partial<CompanyAgent>): CompanyAgent =>
-  ({ id: 'agt_1', companyId: 'co_a', departmentId: 'dep_m', kind: 'profile', refId: 'p_1', name: 'Copywriter', archivedAt: null, pausedAt: null, createdAt: '', updatedAt: '', data: { instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
+  ({ id: 'agt_1', companyId: 'co_a', departmentId: 'dep_m', kind: 'profile', refId: 'p_1', name: 'Copywriter', archivedAt: null, pausedAt: null, createdAt: '', updatedAt: '', data: { instructions: '', capabilities: '', autonomy: 'manual', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
 const dep = (p: Partial<Department>): Department =>
   ({ id: 'dep_m', companyId: 'co_a', key: 'marketing', name: 'Marketing', color: null, icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: { charter: { does: '', doesNot: '' }, sourceDefaults: [], slackChannels: [], passportNote: null, contextFallback: '' }, ...p }) as Department
 const ask = (p: Partial<Ask>): Ask => ({ id: 'ask_1', status: 'open', runId: 'run_1', ...p }) as Ask

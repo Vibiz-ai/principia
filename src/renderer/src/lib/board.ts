@@ -29,7 +29,7 @@ export const BLOCK_REASON_TEXT: Record<BlockReason, string> = {
   run_failed: 'The work stopped with an error. Check what happened, then Try again.',
   interrupted: 'The app quit while the task was running. It is never restarted by itself.',
   no_report: 'The work stopped before the agent reported back. Check what it did, then Try again.',
-  limit: 'It reached its time limit. Try again to let it continue.',
+  limit: 'It was parked at a limit. Review it, then Try again to let it continue.',
   agent: 'The agent is stuck. Read what it said, then Try again or give it to someone else.',
   handoff_cap: 'The task was passed around too many times. Pick an agent, then Try again.',
   manual: 'Set aside by hand. Try again when it should go back to the queue.'

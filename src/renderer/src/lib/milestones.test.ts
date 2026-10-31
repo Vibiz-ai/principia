@@ -10,7 +10,7 @@ const task = (id: string, p: Partial<CompanyTask> = {}): CompanyTask =>
     externalId: null, assigneeProfileId: null, parentId: null, dependencyIds: [], runId: null, agentId: null, createdAt: daysAgo(1), updatedAt: daysAgo(1), ...p }) as CompanyTask
 const agent = (id: string, p: Partial<CompanyAgent> = {}): CompanyAgent =>
   ({ id, companyId: 'co_a', departmentId: null, kind: 'profile', refId: 'p1', name: 'Developer', archivedAt: null, pausedAt: null, createdAt: daysAgo(10), updatedAt: daysAgo(10),
-    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { runMinutes: 30, autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
+    data: { instructions: '', capabilities: '', autonomy: 'auto', mode: 'headless', defaultRepoId: null, limits: { autoWakesPerHour: 4 } }, ...p }) as CompanyAgent
 const dept = (id: string, key: string): Department => ({ id, companyId: 'co_a', key, name: key, color: null, icon: null, sortOrder: 0, archivedAt: null, createdAt: '', updatedAt: '', data: {} }) as unknown as Department
 
 const state = (p: Partial<MilestoneState> = {}): MilestoneState => ({

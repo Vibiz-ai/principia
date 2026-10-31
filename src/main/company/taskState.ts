@@ -167,8 +167,8 @@ export function assertReassignable(old: EditSubject, next: { departmentId?: stri
  * 'again': that restart stopped at the limit too, so it parks like any failed run.
  */
 export type LimitEnd = 'wait' | 'again'
-/** Why main canceled a run: a time or wake cap, a restart, its company's pause, or "Pause this task" (task_paused). */
-export type StopReason = 'limit' | 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused'
+/** Why main canceled a run: a restart, its company's pause, or "Pause this task" (task_paused). */
+export type StopReason = 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused'
 
 export interface RunEnd {
   to: TaskState
@@ -216,7 +216,7 @@ export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 
   // five doors C9 "Pause this task": the founder paused this one task. Back to To do, held there until Start (never a failure)
   if (stopReason === 'task_paused') return { to: { status: 'todo' }, kind: 'paused', by: 'human', message: 'Paused by you. The work so far is saved; Start picks it up again.' }
   const why = run.reason ? `: ${clip(run.reason, 200)}` : ''
-  if (stopReason) return { to: { status: 'blocked', blockReason: stopReason as 'limit' | 'interrupted' | 'handoff_cap' }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
+  if (stopReason) return { to: { status: 'blocked', blockReason: stopReason as 'interrupted' | 'handoff_cap' }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
   if (run.status === 'failed' && limit === 'wait') return { to: { status: 'todo' }, kind: 'paused', by: 'system', message: 'Stopped at the usage limit. The work so far is saved; it restarts by itself once the limit resets.', limitWait: true }
   if (run.status === 'failed') return { to: { status: 'blocked', blockReason: 'run_failed' }, kind: 'run_finished', by: 'system', message: `Run failed${why}${limit === 'again' ? '. It stopped at the usage limit again after its one automatic restart.' : ''}` }
   return { to: { status: 'blocked', blockReason: 'no_report' }, kind: 'run_finished', by: 'system', message: `Run canceled${why} before the agent reported. Review and Unpark or retry.` }

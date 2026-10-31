@@ -1,27 +1,31 @@
-/** DEPARTMENTS.md §3.6, §4.3, §6: task runs in the engine (company from the task, task link, resume, time cap, toolset). */
+/** DEPARTMENTS.md §3.6, §4.3, §6: task runs in the engine (company from the task, task link, resume, toolset). */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { TASK_WRAP_UP_TEXT, type CompanyBridge, type MemoryGrant, type RunTaskLink, type TaskRunBridge } from '../../../shared/engine'
+import { describe, expect, it, vi } from 'vitest'
+import type { CompanyBridge, MemoryGrant, RunTaskLink, TaskRunBridge } from '../../../shared/engine'
 import type { Run, WorkflowDraft } from '../../../shared/types'
 import { createEngineWith } from '../index'
-import { fakeAdapter, fakeCtx, fakeProviders, profile, waitRun, type FakeCall, type FakeCtx } from './fakes'
+import { addWorkflow, fakeAdapter, fakeCtx, fakeProviders, profile, waitRun, type FakeCall, type FakeCtx } from './fakes'
 import { fakeBridge } from './liveFakes'
 
-interface Seen { links: (RunTaskLink | null | undefined)[]; sessions: string[]; limits: { taskId: string; minutes: number }[] }
-function setup(o: { taskCompany?: string | null; runMinutes?: number | null; toolset?: TaskRunBridge['toolset'] } = {}) {
+const processTimeouts = vi.hoisted(() => [] as number[])
+vi.mock('../process', async importActual => {
+  const actual = await importActual<typeof import('../process')>()
+  return { ...actual, startProcess: (o: Parameters<typeof actual.startProcess>[0]) => { processTimeouts.push(o.timeoutMs); return actual.startProcess(o) } }
+})
+
+interface Seen { links: (RunTaskLink | null | undefined)[]; sessions: string[] }
+function setup(o: { taskCompany?: string | null; toolset?: TaskRunBridge['toolset'] } = {}) {
   const ctx = fakeCtx()
   ctx.profiles.set('p_claude', profile('p_claude', 'claude'))
   ctx.profiles.set('p_codex', profile('p_codex', 'codex'))
-  const seen: Seen = { links: [], sessions: [], limits: [] }
+  const seen: Seen = { links: [], sessions: [] }
   const insert = ctx.store.insertRun.bind(ctx.store)
   ctx.store.insertRun = (run: Run, snap: WorkflowDraft | null, link?: RunTaskLink | null) => { seen.links.push(link); insert(run, snap) }
   const tasks: TaskRunBridge = {
     companyOf: id => (id === 'task_1' ? (o.taskCompany === undefined ? 'co_acme' : o.taskCompany) : null),
-    runMinutes: () => o.runMinutes ?? null,
     toolset: o.toolset,
     sessionCaptured: e => void seen.sessions.push(`${e.taskId}:${e.agentSessionId}`),
-    timeLimit: e => void seen.limits.push({ taskId: e.taskId, minutes: e.minutes }),
     passportContext: e => `<passport company="${e.companyId}" department="Marketing" task="${e.taskId}">`
   }
   const company: CompanyBridge = {
@@ -36,8 +40,8 @@ function setup(o: { taskCompany?: string | null; runMinutes?: number | null; too
   ctx.passportContext = (_cwd, companyId) => `<passport company="${companyId}">`
   return { ctx, seen }
 }
-async function engineFor(ctx: FakeCtx, calls: FakeCall[], reply: Parameters<typeof fakeAdapter>[2], o: { taskMinuteMs?: number } = {}) {
-  const engine = createEngineWith(ctx, { adapters: { claude: fakeAdapter('claude', calls, reply), codex: fakeAdapter('codex', calls, reply) }, detect: fakeProviders(), taskMinuteMs: o.taskMinuteMs })
+async function engineFor(ctx: FakeCtx, calls: FakeCall[], reply: Parameters<typeof fakeAdapter>[2]) {
+  const engine = createEngineWith(ctx, { adapters: { claude: fakeAdapter('claude', calls, reply), codex: fakeAdapter('codex', calls, reply) }, detect: fakeProviders() })
   await engine.init()
   return engine
 }
@@ -95,36 +99,16 @@ describe('engine: board task runs', () => {
     expect(calls[2].resumeId).toBeNull()
     expect(seen.sessions).toHaveLength(2)
   })
-  it('the time cap warns in-band, then cancels the run and tells main to park the task with limit', async () => {
-    const { ctx, seen } = setup({ runMinutes: 1 })
-    const calls: FakeCall[] = []
-    // one "minute" = 600 ms: the warning comes at the half (the 2-minute lead is longer than half the cap)
-    const engine = await engineFor(ctx, calls, () => ({ output: 'still going', delayMs: 10_000 }), { taskMinuteMs: 600 })
-    const run = engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' })
-    const ended = await waitRun(ctx, run.id)
-    expect(ended.status).toBe('canceled')
-    expect(ended.reason).toBe('Time limit reached (1 min)')
-    expect(seen.limits).toEqual([{ taskId: 'task_1', minutes: 1 }])
-    expect(JSON.stringify(ctx.events)).toContain(TASK_WRAP_UP_TEXT.slice(0, 40))
-  })
-  it('the time cap counts from the slot: a task that only waited for one is not stopped', async () => {
-    const { ctx, seen } = setup({ runMinutes: 1 })
-    ctx.settings.concurrency = 1
-    const engine = await engineFor(ctx, [], (r) => ({ output: 'ok', delayMs: r.prompt.includes('first') ? 700 : 0 }), { taskMinuteMs: 400 })
-    const first = engine.runs.start({ ...prompt(), prompt: 'first' }, { trigger: 'manual' })
-    const task = engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' })
-    expect((await waitRun(ctx, task.id)).status).toBe('passed')
-    expect((await waitRun(ctx, first.id)).status).toBe('passed')
-    expect(seen.limits).toEqual([])
-  })
-  it('an explicit runMinutes wins over the seat; runs without a task have no cap', async () => {
-    const { ctx, seen } = setup({ runMinutes: 1 })
-    const engine = await engineFor(ctx, [], () => ({ output: 'ok', delayMs: 900 }), { taskMinuteMs: 300 })
-    const run = engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1', runMinutes: 10 })
-    expect((await waitRun(ctx, run.id)).status).toBe('passed')
-    const plain = engine.runs.start(prompt(), { trigger: 'manual' })
-    expect((await waitRun(ctx, plain.id)).status).toBe('passed')
-    expect(seen.limits).toEqual([])
+  it('a task run has no time limit, and neither has any other run of its own; chat replies and workflow steps keep theirs', async () => {
+    const { ctx } = setup()
+    const engine = await engineFor(ctx, [], () => ({ output: 'ok' }))
+    processTimeouts.length = 0
+    await waitRun(ctx, engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' }).id)
+    await waitRun(ctx, engine.runs.start(prompt(), { trigger: 'manual' }).id)
+    await waitRun(ctx, engine.runs.start(prompt(), { trigger: 'manual', reply: true }).id)
+    const wf = addWorkflow(ctx, { name: 'Draft', description: '', inputs: [], nodes: [{ id: 'draft', type: 'agent', label: 'Draft', after: [], cwd: null, timeoutMin: 45, profileId: 'p_claude', prompt: 'Draft it' }] })
+    await waitRun(ctx, engine.runs.start({ kind: 'workflow', workflowId: wf.id, inputs: {} }, { trigger: 'manual' }).id)
+    expect(processTimeouts).toEqual([0, 0, 15 * 60_000, 45 * 60_000])
   })
   it('the task toolset rides on the step hivemem server (env + allowed tools), task runs only', async () => {
     const { ctx } = setup({ toolset: req => ({ env: { HIVE_TASK_ID: req.taskId, HIVE_TASK_RUN: req.runId }, toolNames: ['task_get', 'task_report'] }) })

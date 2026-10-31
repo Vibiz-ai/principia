@@ -602,7 +602,7 @@ export class PlanPilot {
     // the run's cwd and push guard come from TaskWorkService.workdir (the milestone task's worktree), like any task turn
     c.startTask(t.id, undefined, (target: RunTarget, companyId: string, link: TaskRunLink): Run => this.d.startRun(
       target,
-      { trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null, runMinutes: agent.data.limits?.runMinutes ?? null }
+      { trigger: 'task', companyId, taskId: link.taskId, agentId: link.agentId, resumeSessionId: link.resumeSessionId, title: link.title ?? null }
     ), { actor: 'human', plan: true })
     this.changed(p.companyId)
   }

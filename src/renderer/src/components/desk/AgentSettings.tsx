@@ -208,17 +208,16 @@ function SeatSettings({ agent, department = null }: { agent: CompanyAgent; depar
   const [capabilities, setCapabilities] = useState(agent.data.capabilities)
   const [autonomy, setAutonomy] = useState<AgentAutonomy>(agent.data.autonomy)
   const [mode, setMode] = useState<AgentMode>(agent.data.mode)
-  const [runMinutes, setRunMinutes] = useState(agent.data.limits.runMinutes)
   const [wakes, setWakes] = useState(agent.data.limits.autoWakesPerHour)
   const [busy, setBusy] = useState(false)
   const personas = usePersonasOn()
   const d = agent.data
-  const dirty = name.trim() !== agent.name || instructions !== d.instructions || capabilities !== d.capabilities || autonomy !== d.autonomy || mode !== d.mode || runMinutes !== d.limits.runMinutes || wakes !== d.limits.autoWakesPerHour
+  const dirty = name.trim() !== agent.name || instructions !== d.instructions || capabilities !== d.capabilities || autonomy !== d.autonomy || mode !== d.mode || wakes !== d.limits.autoWakesPerHour
   const valid = !!name.trim() && instructions.length <= AGENT_LIMITS.instructions && capabilities.length <= AGENT_LIMITS.capabilities
   const save = async (): Promise<void> => {
     setBusy(true)
     try {
-      await hive.companyAgents.save({ id: agent.id, companyId: agent.companyId, departmentId: agent.departmentId, kind: agent.kind, refId: agent.refId, name: name.trim(), data: { instructions, capabilities, autonomy, mode, limits: { runMinutes, autoWakesPerHour: wakes } } })
+      await hive.companyAgents.save({ id: agent.id, companyId: agent.companyId, departmentId: agent.departmentId, kind: agent.kind, refId: agent.refId, name: name.trim(), data: { instructions, capabilities, autonomy, mode, limits: { autoWakesPerHour: wakes } } })
       await refreshDepartments()
       toast(`${name.trim()} saved`)
     } catch (e) {
@@ -272,8 +271,6 @@ function SeatSettings({ agent, department = null }: { agent: CompanyAgent; depar
         <div className="dep-field">
           <span>Limits</span>
           <span className="dep-limits">
-            <Stepper value={runMinutes} min={AGENT_LIMITS.runMinutes.min} max={AGENT_LIMITS.runMinutes.max} onChange={setRunMinutes} label="Minutes per run" />
-            <span>min per run</span>
             <Stepper value={wakes} min={AGENT_LIMITS.autoWakesPerHour.min} max={AGENT_LIMITS.autoWakesPerHour.max} onChange={setWakes} width={52} label="Automatic wakes per hour" />
             <span>auto wakes / hour</span>
           </span>

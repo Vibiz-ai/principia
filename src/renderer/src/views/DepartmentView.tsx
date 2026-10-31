@@ -509,7 +509,6 @@ function AddAgentSheet({ dep, onClose }: { dep: Department; onClose: () => void 
   const [instructions, setInstructions] = useState('')
   const [capabilities, setCapabilities] = useState('')
   const [autonomy, setAutonomy] = useState<AgentAutonomy>(AGENT_DATA_DEFAULTS.autonomy)
-  const [runMinutes, setRunMinutes] = useState(AGENT_DATA_DEFAULTS.limits.runMinutes)
   const [wakes, setWakes] = useState(AGENT_DATA_DEFAULTS.limits.autoWakesPerHour)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -521,7 +520,7 @@ function AddAgentSheet({ dep, onClose }: { dep: Department; onClose: () => void 
     setBusy(true)
     setError(null)
     try {
-      const a = await hive.companyAgents.save({ companyId: dep.companyId, departmentId: dep.id, kind, refId, name: name.trim(), data: { instructions, capabilities, autonomy, limits: { runMinutes, autoWakesPerHour: wakes } } })
+      const a = await hive.companyAgents.save({ companyId: dep.companyId, departmentId: dep.id, kind, refId, name: name.trim(), data: { instructions, capabilities, autonomy, limits: { autoWakesPerHour: wakes } } })
       await refreshDepartments()
       // VOICE.md §3.7: main assigned the persona (WP2); with personas off the role label is the name
       const who = agentNameNow(a)
@@ -617,8 +616,6 @@ function AddAgentSheet({ dep, onClose }: { dep: Department; onClose: () => void 
         <div className="dep-field">
           <span>Limits</span>
           <span className="dep-limits">
-            <Stepper value={runMinutes} min={AGENT_LIMITS.runMinutes.min} max={AGENT_LIMITS.runMinutes.max} onChange={setRunMinutes} label="Minutes per run" />
-            <span>min per run</span>
             <Stepper value={wakes} min={AGENT_LIMITS.autoWakesPerHour.min} max={AGENT_LIMITS.autoWakesPerHour.max} onChange={setWakes} width={52} label="Automatic wakes per hour" />
             <span>auto wakes / hour</span>
           </span>
