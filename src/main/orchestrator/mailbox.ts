@@ -5,8 +5,8 @@
  * 1. the existing collab guards decide first (hops, cycle, thread, target, asker, company per day), with the asking
  *    run as provenance;
  * 2. Principia posts the ask card in the Forum as the asker ("via Principia"), so the founder sees every message;
- * 3. delivery: a teammate with a task in flight gets the question in that task's pendingWake (its next turn's inbox);
- *    otherwise the responder starts a short reply run for it (responder.wakeForAgent, any adapter: its final answer is
+ * 3. delivery: a teammate with a task in flight gets the question in that task's pendingWake (its next turn's inbox;
+ *    with no next turn the asker stops waiting, ForumService.settleTaskRun); otherwise the responder starts a short reply run for it (responder.wakeForAgent, any adapter: its final answer is
  *    posted for it and answers the ask);
  * 4. when the ask is answered (a reply run, a forum_reply, an `answers` entry in a run report, a person), a blocking
  *    question wakes the asker's task with the answer.
@@ -151,8 +151,9 @@ export class Mailbox {
       const text = `@${target.handle} ${flat(req.question)}${req.why ? `\n(why: ${flat(req.why)})` : ''}`
       const msg = forum.postAsAgent({ companyId: req.companyId, agentId: req.fromAgentId, runId: req.fromRunId, text, channelId, ask: { status: 'open', to: [target.id], taskId: null, runId: req.fromRunId }, opKey: req.opKey })
       if (!msg) return { status: 'refused', detail: 'the ask could not be posted' }
-      // delivery: into the teammate's task in flight, else a short reply run on its own harness
-      const inflight = target.agentId ? (this.d.db.prepare("SELECT id, run_id FROM company_tasks WHERE agent_id=? AND status='in_progress' AND run_id IS NOT NULL ORDER BY seq LIMIT 1").get(target.agentId) as { id: string; run_id: string } | undefined) : undefined
+      // delivery: into the teammate's task in flight, else a short reply run on its own harness. A task held by a session
+      // or a chat has no run: nothing would end, and the question would wait with nobody to settle it
+      const inflight = target.agentId ? (this.d.db.prepare("SELECT id, run_id FROM company_tasks WHERE agent_id=? AND status='in_progress' AND run_id IN (SELECT id FROM runs) ORDER BY seq LIMIT 1").get(target.agentId) as { id: string; run_id: string } | undefined) : undefined
       const reason = `Question from @${asker.handle} (${msg.ref}): ${clip(flat(req.question), 600)}${req.why ? ` (why: ${clip(flat(req.why), 200)})` : ''}. Answer it in your run report's "answers" with ref "${msg.ref}", or reply in the Forum thread.`
       const res = forum.collab.request(caller, msg, [target], 'report', req.why || '', {
         deliver: inflight

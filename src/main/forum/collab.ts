@@ -262,6 +262,10 @@ export class AgentCollab {
     const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='started', to_run=? WHERE id=? AND status IN ('queued','started')")
     for (const id of wakeIds) st.run(runId, id)
   }
+  /** ForumService.settleTaskRun: the next turn of the task carries a question delivered into it. */
+  moveWake(id: string, runId: string): void {
+    this.d.db.prepare("UPDATE forum_agent_wakes SET to_run=? WHERE id=? AND status='started'").run(runId, id)
+  }
   noteFailed(wakeIds: string[], reason: string): void {
     const st = this.d.db.prepare("UPDATE forum_agent_wakes SET status='refused', refusal='start_failed', note=? WHERE id=? AND status IN ('queued','started')")
     for (const id of wakeIds) st.run(clip(reason, 200), id)

@@ -141,6 +141,9 @@ same shapes. A fact that held a secret is not kept, not even as a proposal.
 3. Delivery, on whatever harness the target uses: a target with a task in flight (the oldest one, when it works on
    several at once) gets the question in that task's `pendingWake` (`Dispatcher.addWake`; its next turn's inbox shows
    it); otherwise `responder.wakeForAgent` starts a short reply run, whose final answer is posted and answers the ask.
+   A task held by a session or a chat has no run to end, so it counts as no task in flight. When the task's run ends,
+   the wake follows the turn that carries the question. With no such turn the asker is told why
+   (`ForumService.settleTaskRun`, at boot `settleDelivered`), and a later turn's real answer still replaces that.
 4. When the ask is answered (`ForumService.onAskAnswered`: a reply run, `forum_reply`, an `answers` entry, a person),
    the row is answered and a **blocking** question wakes the asker's task with the answer (`Dispatcher.addWake`, which
    also gives a task parked in review or blocked-by-agent its follow-up turn, under the usual guard and gates). When

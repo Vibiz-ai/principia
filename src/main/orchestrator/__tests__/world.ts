@@ -66,6 +66,7 @@ export class OrchWorld {
   clock = new Date('2026-10-20T18:00:00.000Z')
   settings: Partial<OrchestratorSettings> = { mode: 'on', extractFallback: false }
   collab: Partial<AgentCollabSettings> = {}
+  quitting = false
   readonly d: Dispatcher
   readonly tools: TaskTools
   readonly broker: AuthorBroker
@@ -112,6 +113,7 @@ export class OrchWorld {
       enabled: () => true,
       emit: () => undefined,
       now: () => this.clock,
+      quitting: () => this.quitting,
       collabSettings: () => this.collab,
       directory: {
         departments: (companyId) => c().departments.list(companyId, { includeArchived: true }).map((d) => ({ id: d.id, key: d.key, name: d.name, archivedAt: d.archivedAt })),
