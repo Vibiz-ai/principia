@@ -9,6 +9,8 @@
  *   Ready → in_review; changes requested (a review not handled yet) → the agent goes again with the reviewer's note;
  *   approved by a reviewer → done ("Approved #N", the worktree stays until it merges); merged (on GitHub, or Merge…
  *   here) or a local merge into the base → done, doneNote "Merged #N". Errors back off.
+ * - A worktree an agent made by hand at the task's path is adopted on its real branch. A folder that cannot be adopted
+ *   parks a turn in Needs you with the reason, untouched (WorktreeManager.ensureTask).
  * - The worktree folder gone while the task is open → a banner: Cancel Task · Back to Backlog · Keep As Is.
  *
  * Every status move is a compare-and-set on the task's status with a `work` activity by 'system', checked by
@@ -21,7 +23,7 @@ import { atInFlightLimit, type BoardTask, type TaskStatus } from '../../shared/c
 import type { StartRunOptions } from '../../shared/engine'
 import type { Run, RunTarget } from '../../shared/types'
 import { GH_TEXT, canStartWork, taskBranchName, nextMove, workBrief, workGone, workQueued, workStarted, type GhState, type TaskPr, type TaskWork } from '../../shared/taskWork'
-import type { WorktreeManager } from '../worktrees'
+import { WorktreeInTheWay, type WorktreeManager } from '../worktrees'
 import type { CompanyStore } from './index'
 import { assertTransition, transitionError } from './taskState'
 import { taskWorkSchema } from './taskWorkSchema'
@@ -190,14 +192,16 @@ export class TaskWorkService {
     const wm = this.wt()
     // a new worktree means a new folder: the provider conversation (keyed by folder) starts fresh
     if (t.agentSessionId) this.c.patchInFlight(taskId, { agentSessionId: null })
+    // a folder already there is adopted, not made here: it can hold the agent's work, so no failed start cleans it up
+    const adopted = fs.existsSync(wm.taskPath(t.identifier))
     // a task that had a worktree before (Keep As Is, Remove Worktree…) checks its own branch out again
     const row = await wm.ensureTask({ taskId, identifier: t.identifier, title: t.title, repo: repo.path, branch: t.work?.startedAt ? t.work.branch : null, startPoint: this.startPoints.get(taskId) ?? null })
     if (row.status !== 'active') throw new HiveError('internal', `Could not create the worktree: ${row.error ?? 'unknown error'}`)
     const base = wm.taskBase(taskId)
     const at = this.now().toISOString()
     this.writeWork(taskId, { ...this.blank(t, row.path), ...(t.work && !t.work.removedAt ? t.work : {}), worktreePath: row.path, branch: row.branch, baseSha: base.baseSha, baseRef: base.baseRef, startedAt: at, worktreeId: row.id, queuedAt: null, goneAt: null, removedAt: null })
-    this.c.activity(taskId, 'work', `Worktree created on ${row.branch} (${base.baseRef ?? 'HEAD'} @ ${(base.baseSha ?? '').slice(0, 7)}). Your checkout is not touched.`, 'system')
-    return true
+    this.c.activity(taskId, 'work', `Worktree ${adopted ? 'already there, picked up' : 'created'} on ${row.branch} (${base.baseRef ?? 'HEAD'} @ ${(base.baseSha ?? '').slice(0, 7)}). Your checkout is not touched.`, 'system')
+    return !adopted
   }
 
   /** TaskRunBridge.workdir: every prompt turn of a Started task runs in its worktree. A queued task claimed by the
@@ -218,7 +222,12 @@ export class TaskWorkService {
     // queued (no worktree yet), or its worktree was removed (Keep As Is, Remove Worktree…): the turn gets the task's own
     // worktree again on its branch. A task that had a worktree never runs in the founder's checkout; when this fails,
     // so does the turn. Gone and not chosen yet: the missing folder fails the turn.
-    if (!w.startedAt || w.removedAt) await this.ensureWorktree(taskId)
+    if (!w.startedAt || w.removedAt) {
+      await this.ensureWorktree(taskId).catch((e: unknown) => {
+        if (e instanceof WorktreeInTheWay) this.c.expectStop(taskId, 'worktree_in_the_way')
+        throw e
+      })
+    }
     const cur = this.c.task(taskId).work!
     const env = this.wt().guardEnv(taskId)
     return { cwd: cur.worktreePath, env: { ...env, HIVE_TASK_ID: t.identifier } }

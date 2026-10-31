@@ -168,7 +168,7 @@ export function assertReassignable(old: EditSubject, next: { departmentId?: stri
  */
 export type LimitEnd = 'wait' | 'again'
 /** Why main canceled a run: a restart, its company's pause, or "Pause this task" (task_paused). */
-export type StopReason = 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused'
+export type StopReason = 'interrupted' | 'handoff_cap' | 'paused' | 'task_paused' | 'worktree_in_the_way'
 
 export interface RunEnd {
   to: TaskState
@@ -215,6 +215,8 @@ export function runEndState(t: RunEndTask, run: { status: 'passed' | 'failed' | 
   if (stopReason === 'paused') return { to: { status: 'todo' }, kind: 'paused', by: 'system', message: 'Paused with its company. The work so far is saved; it continues when you resume.' }
   // five doors C9 "Pause this task": the founder paused this one task. Back to To do, held there until Start (never a failure)
   if (stopReason === 'task_paused') return { to: { status: 'todo' }, kind: 'paused', by: 'human', message: 'Paused by you. The work so far is saved; Start picks it up again.' }
+  // PR-84: a folder at the task's worktree path could not be adopted. No run went wrong: a person has to move it
+  if (stopReason === 'worktree_in_the_way') return { to: { status: 'blocked', blockReason: 'agent' }, kind: 'parked', by: 'system', message: clip(run.reason || "The task's worktree folder is in the way.", 500) }
   const why = run.reason ? `: ${clip(run.reason, 200)}` : ''
   if (stopReason) return { to: { status: 'blocked', blockReason: stopReason as 'interrupted' | 'handoff_cap' }, kind: 'parked', by: 'system', message: `Run stopped (${stopReason})${why}` }
   if (run.status === 'failed' && limit === 'wait') return { to: { status: 'todo' }, kind: 'paused', by: 'system', message: 'Stopped at the usage limit. The work so far is saved; it restarts by itself once the limit resets.', limitWait: true }
