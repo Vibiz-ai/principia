@@ -329,6 +329,33 @@ describe('DEPARTMENTS.md §3.5-3.6: coalesced wakes, follow-ups, guards', () => 
     expect(prompt).toContain('Unblocked: every dependency is done.')
     expect(kinds(second.id)).toEqual(expect.arrayContaining(['healed', 'woke', 'started']))
   })
+  it('PR-82: settleUnblocked runs before the claim, so a task it closed never starts; a failure of it never stops the pump', async () => {
+    const { co, seat, task } = board({ maxInFlight: 5 })
+    const first = task({ status: 'in_review', agentId: seat('Lead').id })
+    const merged = task({ title: 'Merged already', agentId: seat('A').id, dependencyIds: [first.id] })
+    const waking = task({ title: 'Still to do', agentId: seat('B').id, dependencyIds: [first.id] })
+    await settle()
+    expect(c.task(merged.id)).toMatchObject({ status: 'blocked', blockReason: 'deps' })
+    d.dispose()
+    let fails = false
+    d = new Dispatcher({
+      company: c, startRun, cancelRun: async () => undefined, enabled: () => enabled, now: () => clock,
+      settleUnblocked: async (id) => {
+        if (fails) throw new Error('gh broke')
+        c.heal(id)
+        await flush()
+        c.cancel(merged.id)
+      }
+    })
+    c.approve(first.id, 'Approved the brief')
+    await d.pump(co.id)
+    expect(runsOf(merged.id)).toHaveLength(0)
+    expect(runsOf(waking.id)).toHaveLength(1)
+    fails = true
+    const third = task({ title: 'After a failure', agentId: seat('C').id })
+    await d.pump(co.id)
+    expect(runsOf(third.id)).toHaveLength(1)
+  })
   describe('a run stopped by the usage limit (LIVE.md §16.1)', () => {
     const RESET = '2026-10-20T12:00:00.000Z'
     /** The engine's end of a rate-limited run. */

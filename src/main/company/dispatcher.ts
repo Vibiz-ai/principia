@@ -68,6 +68,11 @@ export interface DispatcherDeps {
   modelCall?(): ModelCall | null
   /** h.vault.redact, for the task text the model sees */
   redact?(text: string): string
+  /**
+   * Awaited before each pump (TaskWorkService.settleUnblocked): the GitHub look the synchronous pump cannot do, so a
+   * parked task whose own PR merged goes Done instead of being claimed. A failure never stops the pump.
+   */
+  settleUnblocked?(companyId: string): Promise<void>
 }
 /**
  * Dispatcher.goAhead: 'started' (its run is starting), 'running' (it already was), 'queued' (it starts by itself once a
@@ -155,8 +160,11 @@ export class Dispatcher {
     const waiting = this.queued.get(companyId)
     if (waiting) return waiting
     const prev = this.chains.get(companyId) ?? Promise.resolve([])
-    const next: Promise<string[]> = prev.catch(() => []).then(() => {
+    const next: Promise<string[]> = prev.catch(() => []).then(async () => {
       this.queued.delete(companyId)
+      if (this.d.settleUnblocked && !this.disposed && this.d.enabled()) {
+        try { await this.d.settleUnblocked(companyId) } catch (err) { this.warn('settling unblocked tasks failed', { companyId, error: String(err) }) }
+      }
       try { return this.pumpNow(companyId) } catch (err) { this.warn('pump failed', { companyId, error: String(err) }); return [] }
     })
     this.queued.set(companyId, next)
