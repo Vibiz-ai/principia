@@ -232,3 +232,34 @@ describe('subagent hand-back (AGENT CHAT)', () => {
     expect(handBack('plain text')).toBe('plain text')
   })
 })
+
+describe('slash commands the CLI answers itself', () => {
+  // recorded from claude 2.1.316: the reply to /usage is a <synthetic> message, no model call
+  const line = (text: string): Record<string, unknown> => ({ type: 'assistant', parent_tool_use_id: null, message: { id: 'syn-1', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text }] } })
+  const usage = 'You are currently using your subscription\n\nCurrent week (all models): 48% used\nCurrent week (Fable): 0% used'
+  const texts = (r: ChatReducer): string[] => r.model.items.flatMap((i) => (i.kind === 'text' ? [i.md] : []))
+
+  it('shows the reply, with its lines as they came', () => {
+    const r = new ChatReducer({ now: () => 1 })
+    r.userSent('/usage')
+    r.line(line(usage))
+    expect(texts(r)).toEqual([usage])
+  })
+  it('still hides the filler after an interrupt, in a plain turn and in a command turn', () => {
+    const plain = new ChatReducer({ now: () => 1 })
+    plain.userSent('hello')
+    plain.line(line('No response requested.'))
+    expect(texts(plain)).toEqual([])
+    const cmd = new ChatReducer({ now: () => 1 })
+    cmd.userSent('/code-review')
+    cmd.line(line('No response requested.'))
+    expect(texts(cmd)).toEqual([])
+  })
+  it('a skill that reached the model is an ordinary turn again', () => {
+    const r = new ChatReducer({ now: () => 1 })
+    r.userSent('/code-review')
+    r.line({ type: 'assistant', message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Reviewing' }] } })
+    r.line(line('Something the CLI made up'))
+    expect(texts(r)).toEqual(['Reviewing'])
+  })
+})

@@ -251,7 +251,8 @@ Tests: reducer fixtures (partial deltas, a tool with a streamed input, can_use_t
 
 ## 6. Risks
 - The stream-json control protocol is the SDK's wire format, stable in practice but not a public CLI contract. Mitigations: the `CHAT_VERIFIED` version gate, falling back to the terminal, and fixture tests to re-record on each CLI bump.
-- Slash commands in `-p` are the subset `initialize` lists. We show the rest honestly as terminal-only.
+- Slash commands in `-p` are the subset `initialize` lists. We show the rest honestly as terminal-only. Commands the CLI answers itself (`/usage`, `/context`, `/mcp`: no model call, 0 tokens) reply with a `<synthetic>` assistant message; the reducer shows it only on a turn that began with a slash command, so the interrupt filler stays hidden.
+- Codex has no slash commands over app-server. The menu is Principia's `/usage` (`account/rateLimits/read`, answered without a turn; `/status` is the same) plus `skills/list`; `/skill-name …` attaches the skill to the turn as a `skill` input.
 - Memory: about one node process per active chat. Sleeping after 10 minutes bounds it.
 - Hook `PermissionRequest` in `-p`: must not create a second ask. The chat channel owns it (covered by a test).
 - `mcp_status` and `get_settings` responses hold secrets. Main must never forward them (covered by a test).

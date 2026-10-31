@@ -84,7 +84,7 @@ phone as a chat, live (`src/main/remote/terminalFeed.ts`):
   while it works the words go in as one bracketed paste and then Enter, which Claude Code and Codex read right after
   the current step. Never into a dialog: an open ask (its card shows in the conversation), a prompt detected on
   screen, or any numbered choice on screen (`› 1. …`) refuses it in plain words and the composer says why. Only plain
-  words: text that starts with `!`, `/` or `#` (a shell command, a slash command such as `/permissions`, a memory note)
+  words (a live chat is different: `/` lists what its CLI offers on the phone too, and goes through the chat): text that starts with `!`, `/` or `#` (a shell command, a slash command such as `/permissions`, a memory note)
   is refused; control characters are dropped, and line breaks stay inside the paste (a reply at the prompt joins them).
   The Enter is checked again after the paste: if a choice or ask opened meanwhile (a Codex approval has no hook) it
   is not pressed, the words stay unsent in its prompt, and the app log says so. The paste is only for Claude Code and

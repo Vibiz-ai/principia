@@ -153,6 +153,15 @@ export class CodexReducer {
     }
     return this.take()
   }
+  /** A command Principia answers itself (no turn, no model): both sides read like the conversation, nothing echoes. */
+  localCommand(text: string): ChatOp[] {
+    this.add({ id: this.newId('u'), kind: 'user', parent: null, text, images: 0, state: 'sent', at: this.now() })
+    return this.take()
+  }
+  localReply(md: string): ChatOp[] {
+    this.add({ id: this.newId('t'), kind: 'text', parent: null, md, streaming: false })
+    return this.take()
+  }
   notice(text: string, tone: 'info' | 'warn' | 'error' = 'info', action: 'retry' | 'openTerminal' | null = null): ChatOp[] {
     this.add({ id: this.newId('n'), kind: 'notice', parent: null, tone, text, action })
     return this.take()
@@ -511,4 +520,62 @@ export class CodexReducer {
     this.settle()
     return this.take()
   }
+}
+
+/** Codex has no slash commands over app-server: Principia answers this one itself, for no tokens. */
+export const CODEX_USAGE_COMMAND = { name: 'usage', description: 'Plan limits and when they reset', argumentHint: null }
+/** Codex's own TUI shows its limits under /status: the same answer here. */
+export const isCodexUsage = (text: string): boolean => /^\/(usage|status)$/.test(text.trim())
+
+export interface CodexSkill {
+  name: string
+  description: string
+  path: string
+}
+/** skills/list: the enabled skills, one per name (a project's own comes first in the list Codex gives). */
+export function codexSkills(r: unknown): CodexSkill[] {
+  const out = new Map<string, CodexSkill>()
+  for (const group of arr(obj(r).data).map(obj)) {
+    for (const s of arr(group.skills).map(obj)) {
+      const name = str(s.name)
+      const path = str(s.path)
+      if (!name || !path || s.enabled === false || out.has(name)) continue
+      out.set(name, { name, path, description: (str(obj(s.interface).shortDescription) ?? str(s.description) ?? '').slice(0, 200) })
+    }
+  }
+  return [...out.values()]
+}
+
+function windowName(mins: number | null): string {
+  if (mins === 300) return '5-hour limit'
+  if (mins === 10080) return 'Weekly limit'
+  if (!mins) return 'Limit'
+  return mins % 1440 === 0 ? `${mins / 1440}-day limit` : `${Math.round(mins / 60)}-hour limit`
+}
+
+/** account/rateLimits/read as the chat's answer to /usage. Only the plan's name: never the account's email or id. */
+export function codexUsageMd(r: unknown, contextPct: number | null, timeZone?: string): string {
+  const root = obj(r)
+  const main = obj(root.rateLimits)
+  const by = Object.values(obj(root.rateLimitsByLimitId)).map(obj)
+  const limits = by.length ? by : [main]
+  const lines: string[] = []
+  for (const l of limits) {
+    const who = limits.length > 1 ? `${str(l.limitName) ?? str(l.limitId) ?? 'Codex'}: ` : ''
+    for (const w of [obj(l.primary), obj(l.secondary)]) {
+      const used = num(w.usedPercent)
+      if (used == null) continue
+      const at = num(w.resetsAt)
+      const when = at != null ? ` · resets ${new Date(at * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(timeZone ? { timeZone } : {}) })}` : ''
+      lines.push(`- ${who}${windowName(num(w.windowDurationMins))}: ${Math.round(used)}% used${when}`)
+    }
+  }
+  const credits = obj(main.credits)
+  const balance = Number(str(credits.balance) ?? num(credits.balance) ?? 0)
+  if (credits.unlimited === true) lines.push('- Credits: unlimited')
+  else if (credits.hasCredits === true && balance > 0) lines.push(`- Credits: ${balance} left`)
+  if (contextPct != null) lines.push(`- This conversation: ${contextPct}% of the context window`)
+  const plan = str(main.planType)
+  const head = `**Codex usage${plan ? ` · ${plan[0]!.toUpperCase()}${plan.slice(1)} plan` : ''}**`
+  return [head, lines.length ? lines.join('\n') : 'Codex reported no limits for this account.'].join('\n\n')
 }

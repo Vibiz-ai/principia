@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatImage, ChatMeta, ChatModeOption, ChatTurn } from '@shared/chat'
-import { CHAT_IMAGE_BYTES, CHAT_IMAGE_MAX, TERMINAL_ONLY_COMMANDS } from '@shared/chat'
+import { CHAT_IMAGE_BYTES, CHAT_IMAGE_MAX, TERMINAL_ONLY_COMMANDS, slashMatches } from '@shared/chat'
 import { Icon } from '../Icon'
 import { hive, nativeMenu } from '../../lib/hive'
 import { toast } from '../../state/store'
@@ -145,8 +145,7 @@ export function Composer({
   const slashItems = useMemo(() => {
     if (menu?.kind !== 'slash') return []
     const q = menu.query.toLowerCase()
-    const rank = (n: string): number => (n.toLowerCase().startsWith(q) ? 0 : 1)
-    const here = meta.commands.filter((c) => c.name.toLowerCase().includes(q)).sort((a, b) => rank(a.name) - rank(b.name) || a.name.length - b.name.length).slice(0, 40).map((c) => ({ name: c.name, description: c.description, terminal: false }))
+    const here = slashMatches(meta.commands, q).map((c) => ({ name: c.name, description: c.description, terminal: false }))
     const known = new Set(meta.commands.map((c) => c.name))
     // Codex chats have no terminal view to hand a command to
     const term = meta.harness === 'codex' ? [] : TERMINAL_ONLY_COMMANDS.filter((c) => !known.has(c.name) && c.name.includes(q)).map((c) => ({ ...c, terminal: true }))

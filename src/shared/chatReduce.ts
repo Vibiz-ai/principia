@@ -144,6 +144,8 @@ export class ChatReducer {
   private streamKey = new Map<string, string>()
   private turnFiles = new Map<string, { path: string; add: number; del: number }>()
   private turnStart: number | null = null
+  /** the running turn began with a slash command: the CLI may answer it itself */
+  private slashTurn = false
   /** user items sent by Principia waiting for the CLI's replayed copy (--replay-user-messages) */
   private awaitingEcho: { id: string; text: string }[] = []
   private out: ChatOp[] = []
@@ -183,6 +185,7 @@ export class ChatReducer {
     if (this.model.has(item.id)) this.patch(item.id, state === 'sent' ? { state, text, at: item.at } : { state, text })
     else this.add(item)
     if (state === 'sent') {
+      this.slashTurn = /^\/[\w:.-]+/.test(text.trim())
       this.awaitingEcho.push({ id: item.id, text: text.trim() })
       this.turnStart ??= this.now()
     }
@@ -237,8 +240,14 @@ export class ChatReducer {
         break
       case 'assistant':
         if (o.isSidechain === true) break
-        // the CLI's own filler after an interrupt ("No response requested.")
-        if (obj(o.message).model === '<synthetic>') break
+        if (obj(o.message).model === '<synthetic>') {
+          // a slash command the CLI answered itself (/usage, /context: no model call); anything else is the CLI's own
+          // filler after an interrupt ("No response requested.")
+          if (this.slashTurn) this.assistant(commandReply(obj(o.message)), parent)
+          break
+        }
+        // it went to the model (a skill): what comes next is not a command's own output
+        this.slashTurn = false
         this.assistant(obj(o.message), parent)
         break
       case 'user':
@@ -505,7 +514,13 @@ export class ChatReducer {
     }
     this.turnFiles.clear()
     this.turnStart = null
+    this.slashTurn = false
   }
+}
+
+/** A command's output as a message, without the CLI's filler. */
+function commandReply(m: Record<string, unknown>): Record<string, unknown> {
+  return { ...m, content: arr(m.content).filter((b) => !/^No response requested\.?$/.test((str(obj(b).text) ?? '').trim())) }
 }
 
 /**

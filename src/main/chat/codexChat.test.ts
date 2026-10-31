@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CodexReducer, commandTool, diffSides, helperLabel, unwrapShell } from '../../shared/codexReduce'
+import { CodexReducer, codexSkills, codexUsageMd, commandTool, diffSides, helperLabel, isCodexUsage, unwrapShell } from '../../shared/codexReduce'
 import type { ChatOp, ChatPermissionItem, ChatToolItem, ChatTurnEndItem } from '../../shared/chat'
 import { CodexChatSession, codexPolicy, codexServerSpec, type CodexChatDeps } from './codexSession'
 import type { ChildLike } from './streamProc'
@@ -397,5 +397,26 @@ describe('CodexChatSession', () => {
     s.kill()
     s.kill()
     expect(exits).toBe(1)
+  })
+})
+
+describe('codex slash commands', () => {
+  // recorded shape: codex-cli 0.163.0 account/rateLimits/read
+  const limits = { rateLimits: { limitId: 'codex', primary: { usedPercent: 4, windowDurationMins: 10080, resetsAt: 1793780927 }, secondary: { usedPercent: 12.4, windowDurationMins: 300, resetsAt: 1793750000 }, credits: { hasCredits: false, unlimited: false, balance: '0' }, planType: 'pro' }, accountId: 'acct-secret', email: 'someone@example.com' }
+
+  it('words the limits, never the account', () => {
+    const md = codexUsageMd(limits, 37, 'UTC')
+    expect(md).toBe('**Codex usage · Pro plan**\n\n- Weekly limit: 4% used · resets Nov 4, 8:28 AM\n- 5-hour limit: 12% used · resets Nov 3, 11:53 PM\n- This conversation: 37% of the context window')
+    expect(md).not.toMatch(/acct-secret|example\.com/)
+  })
+  it('says so when Codex reports no limits', () => {
+    expect(codexUsageMd({}, null)).toContain('no limits')
+  })
+  it('reads the enabled skills, one per name', () => {
+    const r = { data: [{ cwd: '/w', skills: [{ name: 'a', description: 'long words', interface: { shortDescription: 'short' }, path: '/s/a/SKILL.md', enabled: true }, { name: 'off', path: '/s/o/SKILL.md', enabled: false }, { name: 'a', path: '/other', enabled: true }, { name: 'b', description: 'b words', path: '/s/b/SKILL.md' }] }] }
+    expect(codexSkills(r)).toEqual([{ name: 'a', path: '/s/a/SKILL.md', description: 'short' }, { name: 'b', path: '/s/b/SKILL.md', description: 'b words' }])
+  })
+  it('recognises /usage and Codex\'s own /status, nothing longer', () => {
+    expect([isCodexUsage('/usage'), isCodexUsage(' /status '), isCodexUsage('/usage now'), isCodexUsage('usage')]).toEqual([true, true, false, false])
   })
 })
