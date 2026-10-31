@@ -638,3 +638,122 @@ d('parallel work: two runs never share a checkout', () => {
     expect(founder()).toEqual(before)
   })
 })
+
+d('PR-84: a worktree folder the task\'s agent made by hand', () => {
+  /** A task whose checkout is busy, so a wake gives it its own worktree (no binding before this). */
+  function busy() {
+    const { companyId, repoId } = company()
+    c.setWorktreePaths((id) => wm.taskPath(id), (id) => wm.taskBranchAt(id))
+    const holder = task({ companyId, repoId, title: 'Audit the repo' }), t = task({ companyId, repoId, title: 'Fix the login redirect' })
+    return { holder, t, folder: wm.taskPath(t.identifier) }
+  }
+  let seq = 0
+  const wake = (id: string) => c.startTask(id, undefined, (target, companyId, link) => {
+    const run: Run = { id: `run_w${++seq}`, kind: 'prompt', title: 'Task', target, workflowId: null, scheduleId: null, parentRunId: null, trigger: 'manual', status: 'queued', reason: null, createdAt: new Date().toISOString(), startedAt: null, endedAt: null, artifactsDir: root, artifactCount: 0 }
+    runs.push({ run, target, opts: { trigger: 'task', companyId, taskId: link.taskId } })
+    return run
+  })
+  /** The executor's end of a turn workdir refused: the run fails with the error's message. */
+  const failWith = (e: unknown) => c.syncRun({ ...lastRun().run, status: 'failed', reason: e instanceof Error ? e.message : String(e) })
+  const refused = async (id: string) => { const e = await svc.workdir(id).then(() => null, (x: unknown) => x); expect(e).toBeInstanceOf(Error); return e as Error }
+
+  it('adopts the worktree on its real branch: the open PR\'s commits stay, the wake names that branch and the push guard holds', async () => {
+    const { holder, t, folder } = busy()
+    wake(holder.id)
+    fs.mkdirSync(path.dirname(folder), { recursive: true })
+    git(repo, ['worktree', 'add', '-q', '-b', 'hive/hand-made', folder, 'main'])
+    commitIn(folder, 'work.txt')
+    const tip = git(folder, ['rev-parse', 'HEAD'])
+    const before = founder()
+
+    wake(t.id)
+    expect(promptOf(lastRun().target)).toContain('on branch hive/hand-made')
+    const wd = await svc.workdir(t.id)
+
+    expect(wd!.cwd).toBe(folder)
+    expect(git(folder, ['rev-parse', 'HEAD'])).toBe(tip)
+    expect(git(repo, ['branch', '--list', 'hive/*fix*'])).toBe('')
+    const main = git(repo, ['rev-parse', 'main'])
+    expect(c.task(t.id).work).toMatchObject({ branch: 'hive/hand-made', worktreePath: folder, startedAt: expect.any(String), baseSha: main })
+    expect(git(folder, ['config', '--worktree', 'core.hooksPath'])).toBe(wm.hooksDir(t.id))
+    expect(activity(t.id).join('\n')).toContain('already there, picked up on hive/hand-made')
+    // its commits count as its own: taken off the board only with the work on a remote
+    await expect(wm.removeTask(t.id)).rejects.toThrow('1 unpushed commit')
+    expect(fs.existsSync(path.join(folder, 'work.txt'))).toBe(true)
+    expect(founder()).toEqual(before)
+  })
+
+  it('a failed Start never takes an adopted worktree away', async () => {
+    const { companyId, repoId } = company()
+    const t = task({ companyId, repoId })
+    const folder = wm.taskPath(t.identifier)
+    fs.mkdirSync(path.dirname(folder), { recursive: true })
+    git(repo, ['worktree', 'add', '-q', '-b', 'hive/hand-made', folder, 'main'])
+    fs.writeFileSync(path.join(folder, 'wip.txt'), 'not committed\n')
+    const start = c.startTask.bind(c)
+    c.startTask = () => { throw new Error('no seat') }
+    await expect(svc.startTask(t.id)).rejects.toThrow('no seat')
+    c.startTask = start
+    expect(fs.readFileSync(path.join(folder, 'wip.txt'), 'utf8')).toBe('not committed\n')
+    expect(git(folder, ['branch', '--show-current'])).toBe('hive/hand-made')
+  })
+
+  it('a plain folder parks in Needs you with the reason, untouched, and the task runs once it is moved', async () => {
+    const { holder, t, folder } = busy()
+    wake(holder.id)
+    fs.mkdirSync(folder, { recursive: true })
+    fs.writeFileSync(path.join(folder, 'notes.txt'), 'mine\n')
+
+    wake(t.id)
+    const e = await refused(t.id)
+    expect(e.message).toContain('it is not a git worktree of this repository')
+    failWith(e)
+
+    const parked = c.task(t.id)
+    expect(parked).toMatchObject({ status: 'blocked', blockReason: 'agent' })
+    expect(activity(t.id).join('\n')).toContain('Move it away, then start the task again.')
+    expect(fs.readFileSync(path.join(folder, 'notes.txt'), 'utf8')).toBe('mine\n')
+
+    fs.renameSync(folder, `${folder}-moved`)
+    c.unpark(t.id)
+    wake(t.id)
+    expect((await svc.workdir(t.id))!.cwd).toBe(folder)
+    expect(c.task(t.id).work?.branch).toMatch(/^hive\//)
+  })
+
+  it.each([
+    ['a detached HEAD', ['worktree', 'add', '-q', '--detach'], 'on no branch'],
+    ['a branch the push guard refuses', ['worktree', 'add', '-q', '-b', 'fix/mine'], 'on fix/mine']
+  ])('%s is not adopted', async (_name, add, why) => {
+    const { holder, t, folder } = busy()
+    wake(holder.id)
+    fs.mkdirSync(path.dirname(folder), { recursive: true })
+    git(repo, [...add, folder, 'main'])
+    wake(t.id)
+    const e = await refused(t.id)
+    expect(e.message).toContain(why)
+    failWith(e)
+    expect(c.task(t.id)).toMatchObject({ status: 'blocked', blockReason: 'agent' })
+    expect(wm.forTask(t.id)?.status).not.toBe('active')
+  })
+
+  it('a worktree of another repository is not adopted', async () => {
+    const { holder, t, folder } = busy()
+    wake(holder.id)
+    const other = path.join(root, 'other')
+    git(root, ['init', '-q', '-b', 'main', other])
+    commitIn(other, 'b.txt')
+    fs.mkdirSync(path.dirname(folder), { recursive: true })
+    git(other, ['worktree', 'add', '-q', '-b', 'hive/theirs', folder])
+    wake(t.id)
+    expect((await refused(t.id)).message).toContain('it is not a git worktree of this repository')
+  })
+
+  it('a folder with no binding on a free checkout is left alone: the turn runs in the checkout', async () => {
+    const { companyId, repoId } = company()
+    c.setWorktreePaths((id) => wm.taskPath(id), (id) => wm.taskBranchAt(id))
+    const t = task({ companyId, repoId })
+    wake(t.id)
+    expect(await svc.workdir(t.id)).toBeNull()
+  })
+})

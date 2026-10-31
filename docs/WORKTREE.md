@@ -124,6 +124,12 @@ and a `work` activity "VO-12 is already working in the app checkout, so VO-15 ru
 workspace and plain folders (no git), a workflow seat's run, and Open as session (the founder's own interactive
 session, in the folder as it is). Without the task worktree service (no `setWorktreePaths`) a checkout is shared.
 
+A folder already at the task's path (an agent ran `git worktree add` there by hand): `WorktreeManager.ensureTask` adopts
+it when it is a worktree of this repository on a `hive/` branch that nothing else owns. The binding takes its real
+branch (the wake names it too), its base is where the branch left the default branch, it gets the push guard, and a
+failed start never removes it. Anything else (a plain folder, another repository's worktree, a detached HEAD, a branch
+the push guard refuses) is left untouched: the turn ends in blocked(agent), in Needs you, saying what to move.
+
 ## 4. Following the work
 
 The service checks a started task on its run end, every 60 s and on window focus (at most every 10 s):
