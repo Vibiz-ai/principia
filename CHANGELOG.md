@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5](https://github.com/Vibiz-ai/principia/compare/v0.4.4...v0.4.5) (2026-11-02)
+
+
+### Bug Fixes
+
+* **release:** retry stapling when the connection to Apple drops ([1e41138](https://github.com/Vibiz-ai/principia/commit/1e41138df8df1d380aadac94a67049f0c37e88ce))
+* **release:** retry stapling when the connection to Apple drops ([f35c6d1](https://github.com/Vibiz-ai/principia/commit/f35c6d182339efa9af90054aa440182e77e99778))
+
 ## [0.4.4](https://github.com/Vibiz-ai/principia/compare/v0.4.3...v0.4.4) (2026-11-02)
 
 
