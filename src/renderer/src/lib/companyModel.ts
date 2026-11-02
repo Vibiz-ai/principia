@@ -4,7 +4,7 @@
  */
 import type { CompanyOverview, CompanyPassport, CompanyTask } from '@shared/company'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
-import { taskLane, type LaneContext } from './departments'
+import { needsDecision, taskLane, type LaneContext } from './departments'
 import type { AgentNode, Ask } from '@shared/live'
 import type { Id, Repo, Session, Workflow } from '@shared/types'
 import { liveTruth, needsIn, truthResolver, workingIn, type LiveTruth, type TruthInput } from './liveTruth'
@@ -339,7 +339,7 @@ export function taskCounts(tasks: CompanyTask[], ctx: LaneContext, now: Date = n
     const lane = taskLane(t, ctx)
     const c = (out[t.companyId] ??= { working: 0, needsYou: 0, doneToday: 0 })
     if (lane === 'working') c.working++
-    else if (lane === 'needs_you') {
+    else if (needsDecision(t, ctx)) {
       c.needsYou++
       if (t.status === 'in_progress') c.liveAsks = (c.liveAsks ?? 0) + 1
     } else if (t.status === 'done' && t.updatedAt >= midnight) c.doneToday++

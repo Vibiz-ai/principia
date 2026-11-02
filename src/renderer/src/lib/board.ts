@@ -280,12 +280,13 @@ export interface NeedsYouItem { task: CompanyTask; reason: NeedsYouReason; group
  * `skipLiveAsks`: where the live ask rows are listed too (All mode, Portfolio), a running task waiting on a live ask is
  * already there once; it is not listed again as a task.
  */
-export function needsYouTasks(tasks: CompanyTask[], ctx: LaneContext, companyId?: Id, opts: { skipLiveAsks?: boolean } = {}): NeedsYouItem[] {
+export function needsYouTasks(tasks: CompanyTask[], ctx: LaneContext, companyId?: Id, opts: { skipLiveAsks?: boolean; decisions?: boolean } = {}): NeedsYouItem[] {
   const order: NeedsYouGroup[] = ['ask', 'review', 'parked', 'unassigned']
   const out: NeedsYouItem[] = []
   for (const t of tasks) {
     if (companyId && t.companyId !== companyId) continue
     const reason = taskReason(t, ctx)
+    if (opts.decisions && reason === 'review') continue
     if (reason && !(opts.skipLiveAsks && reason === 'live_ask')) out.push({ task: t, reason, group: needsGroupOf(reason) })
   }
   return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || (a.task.updatedAt < b.task.updatedAt ? -1 : 1))

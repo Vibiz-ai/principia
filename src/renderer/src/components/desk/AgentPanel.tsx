@@ -70,7 +70,8 @@ function useExtTabs(kind: 'agent' | 'session'): PanelTabExt[] {
 
 // ---------- open / closed, wide / narrow ----------
 
-const OPEN_KEY = 'hive.convoPanel.open'
+// CHAT-UI.md §9: closed until you ask for it, agents and Claude alike (a new key: everyone starts closed)
+const OPEN_KEY = 'hive.convoPanel.open.v2'
 const TAB_KEY = 'hive.convoPanel.tab'
 /** Below this width of the conversation area (chat + panel) the panel opens over the chat instead of beside it. */
 export const PANEL_DOCK_MIN = 900
@@ -95,7 +96,7 @@ function useRoomy(ref: React.RefObject<HTMLElement | null>): boolean {
  */
 export function usePanel(ref: React.RefObject<HTMLElement | null>): { open: boolean; docked: boolean; toggle: () => void; close: () => void } {
   const wide = useRoomy(ref)
-  const [pref, setPref] = useState<boolean>(() => loadJson<boolean>(OPEN_KEY, true))
+  const [pref, setPref] = useState<boolean>(() => loadJson<boolean>(OPEN_KEY, false))
   const [overlay, setOverlay] = useState(false)
   useEffect(() => setOverlay(false), [wide])
   const open = wide ? pref : overlay

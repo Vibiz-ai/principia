@@ -42,6 +42,7 @@ import { JournalStore, journalMeta } from '../onboarding/journal'
 import { checkAndStash, keyStash, type KeyStash } from '../onboarding/keys'
 import { LaunchService, type LaunchDeps } from '../onboarding/launch'
 import { BriefService } from '../onboarding/brief'
+import { companyFromBrief } from '../onboarding/fromBrief'
 import { PlanService } from '../onboarding/plan'
 import { inspectFolders, runScan, type FolderStore } from '../onboarding/scan'
 import { fetchSite } from '../onboarding/site'
@@ -240,6 +241,24 @@ export function registerOnboardingHandlers(h: Hive): void {
   })
 
   const launch = new LaunchService(onboardingLaunchDeps(h, { journal, keys, providers: () => providers }))
+
+  // CHAT-UI.md §12: the main chat's hq_create_company: the same services as this flow, with no screens
+  h.createCompany = async (req) => {
+    await loadProviders()
+    return companyFromBrief(
+      {
+        readBrief: (r) => briefs.extract(r),
+        plan: ({ requestId, input }) => {
+          const available = availableFor(input, { sharedHas, stashed, adapters: installedAdapters(providers), flagsOn: true, personasElsewhere: personasInUse(h.company) })
+          return plans.generate({ requestId, draftKey: requestId, input: { ...input, hasCode: available.hasCode, departmentsOn: available.departmentsOn }, available, useAgent: true })
+        },
+        launch: (r) => launch.launch(r),
+        hold: (journalId) => launch.start({ journalId, autopilot: false, scheduleRefs: [] }),
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+      },
+      req
+    )
+  }
 
   const folderStore: FolderStore = {
     getRepoByPath: (p) => {

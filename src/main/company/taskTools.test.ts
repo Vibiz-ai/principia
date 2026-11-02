@@ -11,7 +11,7 @@ import { buildHandlers } from '../memory/server/build'
 import { withTaskTools } from '../memory/server/tools'
 import { Dispatcher, HookedCompanyStore, type DispatcherSessions } from './dispatcher'
 import { parseTaskReport } from './reportHarvest'
-import { callTaskTool, taskResultFromAnswer, TASK_MAX_OUTPUT, TASK_NOTE, TASK_TOOLS, type TaskTool } from './taskToolDefs'
+import { callTaskTool, taskResultFromAnswer, TASK_AUTHOR_TOOLS, TASK_MAX_OUTPUT, TASK_NOTE, TASK_TOOLS, type TaskTool } from './taskToolDefs'
 import { TASK_CREATE_CAPS, TaskTools, type TaskCaller } from './taskTools'
 import type { LiveOwner, StartRunOptions } from '../../shared/engine'
 import type { CompanyTaskInput } from '../../shared/company'
@@ -204,6 +204,9 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     }
     const hivemem = withTaskTools(buildHandlers({}).handlers, { HIVE_TASK_ID: mine.id, HIVE_TASK_COMPANY_ID: a.co.id, HIVE_LIVE_DIR: liveDir })
     expect(hivemem.listTools().map(t => t.name)).toEqual(expect.arrayContaining([...TASK_TOOLS]))
+    // AUTHORING.md PO1: a task's run proposes routines; running a workflow stays with chats
+    expect(hivemem.listTools().map(t => t.name)).toEqual(expect.arrayContaining([...TASK_AUTHOR_TOOLS]))
+    expect(hivemem.listTools().map(t => t.name)).not.toContain('hive_workflow_run')
     const own = await callTaskTool(liveDir, 'task_get', {}, {}, { companyId: a.co.id, taskId: mine.id }, serve(owner))
     expect(own.isError).toBeFalsy()
     const cross = await callTaskTool(liveDir, 'task_get', { id: theirs.id }, {}, { companyId: a.co.id, taskId: mine.id }, serve(owner))
@@ -229,8 +232,8 @@ describe('DEPARTMENTS.md §6 hivetask: scope', () => {
     const b = board()
     const t = b.task()
     const req = { runId: 'r_1', taskId: t.id, agentId: b.writer.id, stepId: 's', adapter: 'claude' as const, companyId: b.co.id }
-    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, 'connections_list', 'principia_help'] })
-    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, 'connections_list', 'principia_help'])
+    expect(tools.toolset(req)).toEqual({ env: { HIVE_TASK_ID: t.id, HIVE_TASK_COMPANY_ID: b.co.id }, toolNames: [...TASK_TOOLS, ...TASK_AUTHOR_TOOLS, 'connections_list', 'principia_help'] })
+    expect(tools.toolset({ ...req, adapter: 'codex' })?.toolNames).toEqual([...TASK_TOOLS, ...TASK_AUTHOR_TOOLS, 'connections_list', 'principia_help'])
     // gemini: offered here; the executor attaches it only once MCP_VERIFIED.gemini (untested: not installed)
     expect(tools.toolset({ ...req, adapter: 'gemini' })).not.toBeNull()
     expect(tools.toolset({ ...req, adapter: 'cursor' })).toBeNull()

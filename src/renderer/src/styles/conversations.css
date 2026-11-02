@@ -114,7 +114,6 @@
 .cx-side-new .kbd, .cx-side-new kbd { margin-left: auto; }
 .cx-side-all { display: block; margin: 2px 10px 0; padding: 3px 10px; border: 0; background: none; color: var(--text-tertiary); font-size: var(--text-sm); text-align: left; cursor: pointer; }
 .cx-side-all:hover { color: var(--text-primary); }
-.cx-side-group { padding: 10px 12px 4px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
 
 /* Chats › New conversation */
 .cx-newpane { max-width: 720px; width: 100%; margin: 0 auto; padding: 48px 24px; }
@@ -122,8 +121,6 @@
 .cx-newpane__sub { margin: 0 0 18px; color: var(--text-secondary); }
 .cx-newpane__sec { margin: 26px 0 8px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
 
-.cx-newtopic { flex: none; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; background: none; color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer; }
-.cx-newtopic:hover, .cx-newtopic[aria-pressed='true'] { color: var(--text-primary); border-color: var(--text-tertiary); }
 
 /* ---------- CHAT-UI.md §8: the live task card and the "Working on it" strip ---------- */
 /* white line art on the dark surface; colour only on the small state mark (status tokens, never warm) */
@@ -260,3 +257,12 @@
 .cx-newpane-view { position: relative; }
 .cx-drop { position: absolute; inset: 6px; z-index: 6; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; text-align: center; border: 1.5px dashed var(--border-focus); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface-1) 88%, transparent); color: var(--text-primary); font-size: var(--text-sm); pointer-events: none; }
 .cx-newpane-view > .cx-drop { inset: 10px; }
+
+/* CHAT-UI.md §9: a team thread reads like a chat: your bubble as in .chat-user, the others as plain text under their name */
+.cx-thread__body > * { width: 100%; max-width: 780px; margin-left: auto; margin-right: auto; }
+.cx-msg { max-width: 780px; }
+.cx-msg__face { display: none; }
+.cx-msg.is-mine { max-width: 78%; margin-right: max(0px, calc((100% - 780px) / 2)); }
+.cx-msg.is-mine .cx-msg__who { display: none; }
+.cx-msg.is-mine .cx-msg__bubble { padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px 14px 4px 14px; }
+.task-chat__hint { max-width: 780px; margin: 4px auto 0; padding: 0 24px; font-size: var(--text-xs); color: var(--text-tertiary); }

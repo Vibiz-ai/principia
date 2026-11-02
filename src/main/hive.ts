@@ -41,6 +41,7 @@ import type { Plan } from '../shared/plans'
 import type { AgentNode, Ask } from '../shared/live'
 import { retryTime, type LimitHit } from './engine'
 import type { AuthorBroker } from './author/broker'
+import type { FromBriefResult } from './onboarding/fromBrief'
 import type { WorktreeManager } from './worktrees'
 import type { NotifyNode } from './notifyNode'
 import type { ClaudeHistory } from './history'
@@ -129,6 +130,8 @@ export class Hive {
   author: AuthorBroker | null = null
   /** shared/chatCompany.ts: the "start a company from this chat" cards (author/wire.ts). */
   chatProposals: import('./company/chatProposals').ChatProposals | null = null
+  /** CHAT-UI.md §12: a whole company from a name and a brief (set by the onboarding handlers). */
+  createCompany: ((req: { name: string; brief: string; website: string | null }) => Promise<FromBriefResult>) | null = null
   worktrees: WorktreeManager | null = null
   /** WORKTREE.md: a task's own worktree, branch and PR (company/taskWork.ts; null until wired) */
   taskWork: import('./company/taskWork').TaskWorkService | null = null

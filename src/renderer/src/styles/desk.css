@@ -408,3 +408,4 @@ button.live-banner__line:hover { text-decoration: underline; text-underline-offs
 .convo-panel__status--live:hover .desk-status__text { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; }
 .convo-panel__watch { display: block; margin-top: 4px; font-size: var(--text-xs); }
 .convo-panel__status--many .convo-panel__watch { text-align: inherit; }
+.home5__reviews { display: block; margin: 8px 0 0; font-size: var(--text-sm); }

@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS author_drafts (
   id            TEXT PRIMARY KEY,
   kind          TEXT NOT NULL,                   -- create | update | run
   status        TEXT NOT NULL,                   -- pending | approved | rejected | expired
-  owner_kind    TEXT NOT NULL,                   -- 'session' (PO1: interactive panes only)
+  owner_kind    TEXT NOT NULL,                   -- 'session', or 'step' for a board task's run (PO1)
   session_id    TEXT, run_id TEXT, step_id TEXT, agent_id TEXT,
   owner_key     TEXT NOT NULL,
   owner_label   TEXT NOT NULL,

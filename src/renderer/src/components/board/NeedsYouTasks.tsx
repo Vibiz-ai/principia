@@ -77,7 +77,7 @@ export function NeedsYouTasks({ companyId, limit, skipLiveAsks, playfulTop = tru
   const [open, setOpen] = useState<Id | null>(null)
   const skip = skipLiveAsks ?? !companyId
   const ctx = useLaneContext()
-  const items = useMemo(() => needsYouTasks(tasks, ctx, companyId, { skipLiveAsks: skip }), [tasks, ctx, companyId, skip])
+  const items = useMemo(() => needsYouTasks(tasks, ctx, companyId, { skipLiveAsks: skip, decisions: true }), [tasks, ctx, companyId, skip])
   if (!on || !items.length) return null
   const shown = limit ? items.slice(0, limit) : items
   const more = items.length - shown.length

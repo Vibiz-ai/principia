@@ -3,9 +3,9 @@
  * sidebar itself into the conversations list, same width, same place. Its top keeps you oriented (CHAT-UI.md §7: the
  * synthetic users lost their menu here): "‹ Menu" returns to the menu (also Esc while the list has focus, and ⌘[), and
  * Home, Team and Board stay one click away. Below: New conversation (the same button as the menu's), search (titles,
- * who is in them, what they are about), Everything / Live only, then the conversations in groups: With the team,
- * One-on-one, Agent sessions, Claude, Working. Right-click › Close takes a chat off the list (PR-59); "N closed" at the
- * bottom keeps them one click away.
+ * who is in them, what they are about), Everything / Live only, then one list of chats, whatever needs you first
+ * (CHAT-UI.md §9). Right-click › Close takes a chat off the list (PR-59); "N closed" at the bottom keeps them one click
+ * away.
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChatsFilter } from '../../state/store'
@@ -18,7 +18,7 @@ import { rowKeyOfLive } from '../../lib/liveRow'
 import { useTaskChannels } from '../../state/conversations'
 import { pausedChatsLine } from '../../state/desk'
 import { PRIMARY, viewFor } from '../../lib/nav'
-import { CHATS_FILTERS, ChatRow, filterRows, groupRows, lastChat, rowRank, splitClosed, useChatRows, visibleRows, type ChatGroup, type ChatRowModel } from './ChatList'
+import { CHATS_FILTERS, ChatRow, filterRows, lastChat, rowRank, splitClosed, useChatRows, type ChatRowModel } from './ChatList'
 
 export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Element {
   useTick()
@@ -28,8 +28,6 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   const rows = useChatRows(scope)
   const tasks = useStore((s) => s.tasks)
   const [query, setQuery] = useState('')
-  // PR-47: each group shows its first few rows until you ask for the rest (a search always shows every match)
-  const [expanded, setExpanded] = useState<Partial<Record<ChatGroup, boolean>>>({})
   const [showClosed, setShowClosed] = useState(false)
   const closedChats = useStore((s) => s.closedChats)
   const picked = view.name === 'chats' ? view.chat : undefined
@@ -40,7 +38,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   // the open conversation: the one picked, else the one ChatsView opened (the last one, else the first row)
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: a company opens Chats on "New conversation" until you pick one (chat=new…); All companies keeps the last
-  const pane = !!scope && (!picked || picked.startsWith('new'))
+  const pane = (!!scope && !picked) || !!picked?.startsWith('new')
   // a task's chat keeps its parent conversation (or its own task row) selected (CHAT-UI.md §8.6)
   const taskChannels = useTaskChannels(scope)
   const liveOwner = rowKeyOfLive(picked, tasks, taskChannels)
@@ -155,22 +153,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
                   : 'No chats yet. Ask Claude or Codex anything.'}
           </div>
         )}
-        {groupRows(shown).map((g) => {
-          const open = !!expanded[g.group]
-          const cut = visibleRows(g.group, g.rows, { expanded: false, selected: cur })
-          const vis = open || searching ? { rows: g.rows, hidden: 0 } : cut
-          return (
-            <div key={g.group} role="group" aria-label={g.label} data-group={g.group}>
-              <div className="cx-side-group">{g.label}</div>
-              {vis.rows.map(row)}
-              {!searching && cut.hidden > 0 && (
-                <button type="button" className="side-chats__more" data-chatux="group-more" aria-expanded={open} onClick={() => setExpanded((x) => ({ ...x, [g.group]: !open }))}>
-                  {open ? 'Show less' : `Show ${cut.hidden} more`}
-                </button>
-              )}
-            </div>
-          )
-        })}
+        {shown.map(row)}
         {!searching && filter !== 'live' && split.closed.length > 0 && (
           <div role="group" aria-label="Closed" data-group="closed">
             <button type="button" className="side-chats__more" data-chatux="closed-more" aria-expanded={showClosed} onClick={() => setShowClosed((x) => !x)}>

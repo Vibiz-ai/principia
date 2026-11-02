@@ -104,7 +104,7 @@ export function useNeedsYouTaskCount(companyId?: Id): number {
   const on = useStore((s) => departmentsOn(s))
   const tasks = useStore((s) => s.tasks)
   const ctx = useLaneContext()
-  return useMemo(() => (on ? needsYouTasks(tasks, ctx, companyId, { skipLiveAsks: !companyId }).length : 0), [on, tasks, ctx, companyId])
+  return useMemo(() => (on ? needsYouTasks(tasks, ctx, companyId, { skipLiveAsks: !companyId, decisions: true }).length : 0), [on, tasks, ctx, companyId])
 }
 
 /** Lane context from the store's asks and seats; recomputed only when they change. */

@@ -27,6 +27,8 @@ import { repoForCwd } from '../memory/service'
 import { AuthorBroker } from './broker'
 import { ChatProposals } from '../company/chatProposals'
 import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
+import { HQ_TOOLS } from '../../shared/hq'
+import { Hq } from '../company/hq'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
 import { CONNECTIONS_TOOL, HELP_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
 import { connectionsReport } from '../company/connectionsReport'
@@ -236,6 +238,30 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     }
   })
   h.chatProposals = proposals
+  const hq = new Hq({
+    companies: () => h.company.listPassports(),
+    tasks: () => h.company.listTasks(),
+    asks: () => Object.fromEntries((h.live?.listOpenAsks() ?? []).map((a) => [a.id, a])),
+    agents: () => h.company.departments.listAgents({}),
+    startChat: (companyId, prompt, title) => {
+      if (h.quitting) throw new HiveError('conflict', 'Principia is quitting')
+      return h.sessions.create({ adapter: 'claude', repoId: null, cols: 120, rows: 32, companyId, title, initialPrompt: prompt })
+    },
+    startAgentChat: async (agentId, prompt) => {
+      if (h.quitting || !h.agentChats || !h.chats) throw new HiveError('conflict', 'Agent chats are not available')
+      const s = h.agentChats.open(agentId)
+      await h.chats.send(s.id, prompt)
+      return s
+    },
+    createCompany: (req) => {
+      if (h.quitting || !h.createCompany) throw new HiveError('conflict', 'Principia cannot create a company right now')
+      return h.createCompany(req) as unknown as Promise<Record<string, unknown>>
+    },
+    chat: (sessionId) => {
+      const v = h.chats?.snapshot(sessionId, h.store.getSession(sessionId))
+      return { turn: v?.turn ?? 'ended', items: v?.items ?? [] }
+    }
+  })
   h.author = new AuthorBroker({
     drafts,
     owner: (sessionId): DraftOwner | null => {
@@ -249,6 +275,12 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
         ownerLabel: s.title,
         adapter: s.adapter
       }
+    },
+    stepOwner: (step, taskId): DraftOwner | null => {
+      const run = h.store.getRun(step.runId)
+      if (!run) return null
+      const root = h.live?.rootOfStep(step.stepId) ?? null
+      return { kind: 'step', sessionId: null, runId: step.runId, stepId: step.stepId, agentId: root?.id ?? null, ownerKey: `task:${taskId}`, ownerLabel: run.title, adapter: root?.provider ?? 'claude' }
     },
     ctx,
     providers: () => h.safe(() => h.engine.providers.cached(), []),
@@ -330,8 +362,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     startRun,
     openAsk: (rec: DraftRecord): Ask | null => {
-      if (!h.live || !rec.sessionId) return null
-      const root = h.live.rootOfSession(rec.sessionId)
+      if (!h.live) return null
+      const root = rec.sessionId ? h.live.rootOfSession(rec.sessionId) : rec.stepId ? h.live.rootOfStep(rec.stepId) : null
       if (!root) return null
       const verb = rec.kind === 'create' ? 'Create workflow' : rec.kind === 'update' ? 'Update workflow' : 'Run workflow'
       const now = new Date()
@@ -340,8 +372,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
         agentId: root.id,
         rootId: root.id,
         sessionId: rec.sessionId,
-        runId: null,
-        stepId: null,
+        runId: rec.runId,
+        stepId: rec.stepId,
         provider: rec.adapter,
         kind: 'approval',
         channel: 'author',
@@ -400,6 +432,13 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // shared/chatCompany.ts: the confirmation card behind principia_propose_company
     proposals: { propose: (sessionId, args, signal) => proposals.propose(sessionId, args, signal) },
+    hq: {
+      allowed: (sessionId) => {
+        const s = h.store.getSession(sessionId)
+        return !!s && !s.taskId && !s.companyAgentId && (s.companyId || PERSONAL_COMPANY_ID) === PERSONAL_COMPANY_ID
+      },
+      call: (tool, args, signal) => hq.call(tool, args, signal)
+    },
     // connections_list: the caller's own company (session, else its run), never the line's
     connections: {
       list: (owner, args, hints) => {
@@ -426,7 +465,10 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   const broker = h.author
   const handleCall = broker.handleCall.bind(broker)
   broker.handleCall = (owner, line, writeAnswer) => {
-    if (!('sessionId' in owner)) return handleCall(owner, line, writeAnswer)
+    if (!('sessionId' in owner)) {
+      const company = h.store.getRun(owner.runId)?.companyId
+      return company ? authorCompany.run(company, () => handleCall(owner, line, writeAnswer)) : handleCall(owner, line, writeAnswer)
+    }
     const companyId = sessionCompany(owner.sessionId)
     const l = (line && typeof line === 'object' ? line : {}) as { call_id?: unknown; company_id?: unknown }
     if (typeof l.company_id === 'string' && l.company_id !== companyId && h.store.companyGuardsEnforced()) {
@@ -471,6 +513,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           /* older db */
         }
       }
+      // CHAT-UI.md §11: a chat of Personal is the main chat: it creates companies itself rather than through the card
+      const main = (companyId ?? PERSONAL_COMPANY_ID) === PERSONAL_COMPANY_ID && !!o?.chat && !taskId
       return {
         name: AUTHOR_SERVER_NAME,
         command: process.execPath,
@@ -481,7 +525,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
           // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
           // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}`,
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${main || taskId ? '' : ',newco'}${main ? ',hq' : ''}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
           // PROACTIVE.md §2: the passive wording of the company tools when "Agents use Principia on their own" is off
           ...(proactiveOn(h) ? {} : { HIVE_PROACTIVE: '0' }),
@@ -499,7 +543,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       // company_create_department always does (a second yes).
       const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
       // connections_list and principia_help are read-only (what is connected; how Principia itself works)
-      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, HELP_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
+      return [...AUTHOR_TOOLS, ...HQ_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, HELP_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
   }

@@ -7,8 +7,8 @@
  *   session's panel; a session that is not a chat shows who and where, what it is doing, its questions and its last
  *   answer (code companies get a Terminal button, C7: no Terminal elsewhere).
  * - A conversation with the team, or your private one with one agent (CHAT-UI.md §7): the thread itself.
- * - With nothing picked (or "New conversation") a company opens New conversation: To: Principia picks ▾, the line
- *   that says who will answer, and your recent conversations. All companies opens the last chat you had open.
+ * - With nothing picked (or "New conversation") a company opens New task: To: Claude ▾, the line that says who will
+ *   answer, and your recent conversations. All companies opens the last chat you had open.
  * - Empty: the company's own empty state ("No chats in Harbor Dental Group yet…").
  * - `task:<id>` (CHAT-UI.md §8.4): a task as a chat (TaskLiveView): its brief, what the agent says, its steps folded, a note box.
  */
@@ -28,7 +28,7 @@ import { isIdleWaiting, lastSaid } from '../lib/live'
 import { age } from '../lib/time'
 import { sessionEndLabel } from '../lib/format'
 import { useSessionDrafts } from '../state/authoring'
-import { useChat } from '../state/chat'
+import { useChatMode } from '../state/chat'
 import { focusAgent, useOpenAsks } from '../state/live'
 import { pausedChatsLine } from '../state/desk'
 import { focusSession, openNewChat, providerLabel, useStore, type ChatsFilter } from '../state/store'
@@ -36,6 +36,7 @@ import { MarkdownLite } from '../components/diagrams/MarkdownLite'
 import { ConversationThread, DropHint, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
 import { useFileDrop } from '../lib/dropFiles'
 import type { Id } from '@shared/types'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { TaskLiveView } from '../components/chats/TaskLiveView'
 import { taskOfChatKey } from '../lib/liveRow'
 import '../styles/diagrams.css'
@@ -47,7 +48,7 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
   const rows = useChatRows(scope)
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: in a company, Chats with nothing picked is New conversation, not the newest row
-  const pane = !!scope && (!chat || chat.startsWith('new'))
+  const pane = (!!scope && !chat) || !!chat?.startsWith('new')
   const liveTask = taskOfChatKey(chat)
   // PR-59: a closed chat opens when asked for by name, never as the default
   const open = splitClosed(rows, useStore((s) => s.closedChats), chat).open
@@ -58,7 +59,8 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
     if (cur) rememberChat(scope, cur.key)
   }, [scope, cur?.key])
   if (liveTask) return <TaskLiveView key={liveTask} taskId={liveTask} />
-  if (pane && scope) return <NewConversationPane companyId={scope} chat={chat} companyName={company?.name ?? ''} />
+  // CHAT-UI.md §11: in All companies, New task is the main chat
+  if (pane) return <NewConversationPane companyId={scope ?? PERSONAL_COMPANY_ID} chat={chat} companyName={company?.name ?? 'All companies'} main={!scope} />
   if (!cur)
     return (
       <div className="view">
@@ -87,7 +89,7 @@ function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): Reac
   if (row.kind === 'conv')
     return (
       <div className="view convo-view">
-        <Toolbar title="Chats" sub={<span className="company-toolbar-meta">{row.conv.private ? 'One-on-one · private' : 'With the team'}</span>} />
+        <Toolbar title="Chats" sub={row.conv.private ? <span className="company-toolbar-meta">One-on-one · private</span> : undefined} />
         <ConversationThread companyId={row.companyId} channelId={row.conv.id} />
       </div>
     )
@@ -116,7 +118,7 @@ function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): Reac
 }
 
 /** CHAT-UI.md §7: New conversation (the sidebar button, ⌥⌘N, Team › Message): the composer and your recent ones. */
-function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; chat: string | undefined; companyName: string }): React.JSX.Element {
+function NewConversationPane({ companyId, chat, companyName, main = false }: { companyId: Id; chat: string | undefined; companyName: string; main?: boolean }): React.JSX.Element {
   // an image or file dropped anywhere on the page goes into the box, as in a chat
   const dropTo = useRef<((files: FileList | File[]) => void) | null>(null)
   const drop = useFileDrop((files) => dropTo.current?.(files))
@@ -127,8 +129,8 @@ function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; 
       <div className="scroll view__body">
         <div className="cx-newpane" data-chatux="new-pane">
           <h2 className="cx-newpane__title">New task</h2>
-          <p className="cx-newpane__sub">Say what you need. Principia brings in the right people, or pick someone in To.</p>
-          <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} dropRef={dropTo} />
+          <p className="cx-newpane__sub">Say what you need. Claude does the work, with your company’s tools and memory.</p>
+          <TeamComposer key={chat ?? 'new'} companyId={companyId} variant="pane" autoFocus initialTo={toFromChat(chat)} onStarted={openConversation} dropRef={dropTo} {...(main ? { placeholder: 'Ask across all your companies, tell one what to do, or start a new one…' } : {})} />
           <div className="cx-newpane__sec">Recent conversations</div>
           <RecentConversations companyId={companyId} limit={8} onOpen={openConversation} empty="Your conversations show here, each with who is in it." />
         </div>
@@ -139,8 +141,8 @@ function NewConversationPane({ companyId, chat, companyName }: { companyId: Id; 
 
 /** A direct chat: the chat itself when it is one (CHAT-UI.md), else what the session is doing. */
 function DirectChat({ session: s, code }: { session: Session; code: boolean }): React.JSX.Element {
-  const v = useChat(s.id)
-  const isChat = (s.adapter === 'claude' || s.adapter === 'codex') && v.available
+  // CHAT-UI.md §9: an ended chat is still a chat (its history, and your next message picks it up), as an agent's is
+  const isChat = useChatMode(s) === 'chat'
   return <SessionConversation session={s}>{isChat ? undefined : <SessionSummary session={s} code={code} />}</SessionConversation>
 }
 

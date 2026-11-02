@@ -18,8 +18,11 @@ export const sha256 = (s: string): string => crypto.createHash('sha256').update(
 export const workflowHash = (w: Pick<WorkflowDraft, 'name' | 'description' | 'inputs' | 'nodes' | 'worktree'>): string => sha256(canonicalDraftJson(w))
 
 export interface DraftOwner {
-  kind: 'session'
-  sessionId: Id
+  /** `step`: a headless step of a board task's run (AUTHORING.md PO1) */
+  kind: 'session' | 'step'
+  sessionId: Id | null
+  runId?: Id | null
+  stepId?: Id | null
   agentId: Id | null
   ownerKey: string
   ownerLabel: string
@@ -208,13 +211,15 @@ export class AuthorDrafts {
         `INSERT INTO author_drafts(id, kind, status, owner_kind, session_id, run_id, step_id, agent_id, owner_key, owner_label, adapter,
           summary, workflow_id, workflow_name, payload_json, base_json, schedule_json, run_now_json, content_hash, flags_json,
           warnings_json, created_at)
-         VALUES (?,?, 'pending', ?,?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         VALUES (?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         id,
         d.kind,
         d.owner.kind,
         d.owner.sessionId,
+        d.owner.runId ?? null,
+        d.owner.stepId ?? null,
         d.owner.agentId,
         d.owner.ownerKey,
         this.red(d.owner.ownerLabel, 200),

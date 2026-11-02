@@ -765,3 +765,64 @@ with X tasks being done, so I can focus my eyes there." `lib/convWork.ts`:
   the note hint), `lib/sessionRows.test.ts`, `lib/plainActivity.test.ts`, `components/chats/taskLive.render.test.ts`
   (the task chat, its composer and its comment delivery), `components/chats/chats.render.test.ts` (rows),
   `main/forum` (`unreadTasks`, `taskChannels`), `main/engine/live` (the stored description).
+
+## 9. Only chats: New task is Claude, agents when you ask (2026-11-02)
+
+The founder, looking at With the team, Tasks, Agent sessions and Claude, asked for just the chats, and said New task
+with Claude selected is the experience they love: clear, and it still uses Principia. This replaces the routing
+and the groups of §7 and the Tasks group of §8.6; the rest of §7 and §8 stands.
+
+- **Sidebar**: one list, no sections and no "Show N more": whatever needs you, then live work, unread news, the rest.
+  Every row kind stays (conversations, agents' chats, sessions, task rows, runs), so nothing that needs you gets lost.
+- **New task** (Home, Chats, ⌥⌘N): To: Claude by default, the chat you get from "Claude directly" before. To: lists
+  Claude, Claude in each repository, then the agents under "For something specific". "Principia picks" and "Everyone on
+  the team" are gone from it; words no longer route anyone.
+- **An agent is the same chat with its own prompt and skills**: picking one, typing @name or Team › Message opens its
+  standing chat (AGENT CHAT), never a new private conversation. Its session gets the same `hive` tools as a Claude
+  chat. Private conversations you already have stay in the list and keep working. @all still starts a team conversation.
+- **Agents that work in the background can ask for what a chat can do**: AUTHORING.md PO1.
+- **One way to draw a chat** (founder: "why we have different logic to render"): a chat with Claude, an agent's chat and
+  a task are all ChatPane's pieces (`Blocks`, the `chat-pane` frame, `Composer`). `lib/taskThread.ts taskChatItems` turns
+  a task's thread into chat items, which replaced the task chat's own bubbles, tool rows and note box. The side panel
+  stays closed until you open it, for everyone, and an ended Claude chat keeps its history and picks up on your next
+  message, as an agent's does. Team threads (`ConversationThread`, several speakers) keep their code but read the same.
+- **An agent is its name** (founder: "we already know what it should be working on"): its row, its header and New task's
+  To: say the name, never its role or the task it is on. Two rows of one agent add the task only to tell them apart.
+
+## 10. A badge means a decision (2026-11-02)
+
+The founder's Principia badge read 36, and 19 of them were finished tasks waiting for review. Every number (rail, status
+bar, sidebar, Home, ⌘J) now counts what needs a decision: open questions, approvals, stopped tasks, tasks with no agent.
+`needsDecision` (lib/departments.ts) is the one rule and `needsYouTasks(…, { decisions: true })` the one list.
+
+Finished work keeps its place in the Board's Needs you lane and gets one quiet line on Home ("19 finished · ready for
+review"). A stopped run is not retried on its own: it may have posted or deployed halfway, so a person decides (a run
+stopped by the usage limit still restarts at the reset). The phone keeps its review cards and still lists them.
+
+## 11. The main chat (2026-11-02)
+
+The founder runs many companies and did not want to enter each one: "start in the main one, and that one starts Claude or
+agents inside each of the businesses". All companies opens with a chat box. It is a chat of Personal, so it needs no new
+kind of session; a chat of Personal that holds no task lists the `hq` toolset (`shared/hq.ts`, `main/company/hq.ts`):
+
+- `hq_overview`: each company's headlines: what works, decisions with their question, finished work waiting.
+- `hq_start_chat`: starts a Claude chat, or a named agent's own chat, inside one company.
+- `hq_chat_result`: that chat's status and last answer. Only chats this main chat started, and only until a restart.
+
+The company locks stay. The work runs inside the company with its own keys, memory and connections, and the main chat
+never gets those: only headlines and answers. Main checks the owner on every call, so another company's chat cannot call
+these tools even if it lists them. The tools are pre-allowed: a page the main chat reads could try to steer it, and
+every chat it starts opens with normal permissions in that company.
+
+## 12. A new company, by talking (2026-11-02)
+
+The founder: creating a business should happen by talking with the top of the portfolio, the whole thing, not split
+across a card and setup screens. In the main chat, `hq_create_company` (name, brief, website) runs the onboarding's own
+services with no screens (`main/onboarding/fromBrief.ts`): read the brief, plan, launch. It returns what it made, and the
+company appears in the rail with Autopilot off. The chat asks only if it lacks a name or what the company does. The
+founder's words in the chat are the yes, so a chat must never act on a page or file that says to create one, and at most
+three companies are made per hour.
+
+Company chats keep `principia_propose_company` and its card. New task in All companies opens the main chat's page, with
+no sheet asking who or where (`NewChatSheet` is gone).
+
