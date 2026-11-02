@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.4](https://github.com/Vibiz-ai/principia/compare/v0.4.3...v0.4.4) (2026-11-02)
+
+
+### Features
+
+* chats only, main chat across companies, decision badges ([60702da](https://github.com/Vibiz-ai/principia/commit/60702da5eeb7fce4465e54e2ec78452987e6262f))
+* **chats:** only chats, New task is Claude, agents on request ([b18cebb](https://github.com/Vibiz-ai/principia/commit/b18cebbe6b79bf29ce3d336453ce2ba6dc470457))
+* **hq:** a main chat above the companies ([b2c8e7d](https://github.com/Vibiz-ai/principia/commit/b2c8e7d7586d8b009dbfedae70f1dd88e8baf7cb))
+* **hq:** create a company by talking, and start chats with no sheet ([646b49f](https://github.com/Vibiz-ai/principia/commit/646b49fd51a5e3c886335f62b79cd2f0cb6db93f))
+* **needs:** a badge counts decisions, not finished work ([c556a37](https://github.com/Vibiz-ai/principia/commit/c556a3774e8a37c6641d0c07efd23549a9aaa24e))
+* **onboarding:** create a company from a chat with one click ([e01af11](https://github.com/Vibiz-ai/principia/commit/e01af115f74fafea5c6af7be6a7761443041882b))
+
+
+### Bug Fixes
+
+* **browser:** keep a conversation's tabs across its replies and let the founder reach every open tab ([fa8f32d](https://github.com/Vibiz-ai/principia/commit/fa8f32db3ddd83bfd83a2e5e38291a19d054c4d2))
+* **ci:** stop the stall test and smoke install from failing main (PR-91) ([3b09be0](https://github.com/Vibiz-ai/principia/commit/3b09be0996a6c8aded4ba3d1e6b02a0ec7cab09a))
+* combine the open PRs for the 0.4.4 release (PR-88) ([deaeb8f](https://github.com/Vibiz-ai/principia/commit/deaeb8f0d8f4ef66b0c6c7c004ea82ebe0885ee0))
+
+
+### Reverts
+
+* drop the one-click company card flow ([2346633](https://github.com/Vibiz-ai/principia/commit/2346633f011af10a3e0a2bba7fb9b548b64d7bdd))
+
 ## [0.4.3](https://github.com/Vibiz-ai/principia/compare/v0.4.2...v0.4.3) (2026-10-31)
 
 
