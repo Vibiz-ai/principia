@@ -44,6 +44,7 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
+import { isHqTool, type HqTool } from '../../shared/hq'
 import { isBoardTool, isCompanyTool, isConnectionsTool, isHelpTool, isTaskAuthorTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
@@ -130,6 +131,8 @@ export interface BrokerDeps {
     alertUserId(): string | null
     channelName(id: string): string
   }
+  /** shared/hq.ts: the main chat's tools, for a chat of Personal that holds no task. Absent = the tools are unknown. */
+  hq?: { allowed(sessionId: Id): boolean; call(tool: HqTool, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> | Record<string, unknown> }
   /**
    * shared/chatCompany.ts: `principia_propose_company` (interactive chat sessions only). Opens the confirmation card
    * and waits for the founder's decision. Absent = the tool is unknown.
@@ -227,6 +230,22 @@ export class AuthorBroker {
         .then(() => this.taskCall(owner, tool, args, line))
         .then((result) => answer({ ok: true, result }))
         .catch((e: unknown) => answer({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      return
+    }
+    // CHAT-UI.md §11: the main chat: only a chat of Personal, whatever the server listed
+    if (isHqTool(tool)) {
+      if (!('sessionId' in owner) || !this.d.hq?.allowed(owner.sessionId)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const ac = new AbortController()
+      this.calls.set(key, ac)
+      Promise.resolve()
+        .then(() => this.d.hq!.call(tool, isObj(line.args) ? line.args : {}, ac.signal))
+        .then((result) => {
+          if (!ac.signal.aborted) answer({ ok: true, result })
+        })
+        .catch((e: unknown) => {
+          if (!ac.signal.aborted) answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+        })
       return
     }
     // "Start a company from this chat": a session owner only; the card waits for the founder (nothing is created here)

@@ -103,13 +103,16 @@ export function TeamComposer({
   autoFocus = false,
   initialTo,
   variant = 'home',
-  dropRef
+  dropRef,
+  placeholder
 }: {
   companyId: Id
   onStarted: (conversationId: Id) => void
   autoFocus?: boolean
   initialTo?: To
   variant?: 'home' | 'pane'
+  /** the main chat's own question (CHAT-UI.md §11) */
+  placeholder?: string
   /** the page around it (New conversation) takes files dropped anywhere on it and hands them in through this */
   dropRef?: React.MutableRefObject<((files: FileList | File[]) => void) | null>
 }): React.JSX.Element {
@@ -227,7 +230,7 @@ export function TeamComposer({
           aria-label="New task"
           aria-autocomplete="list"
           aria-expanded={mentions.open}
-          placeholder={picked ? `Message ${picked.name}…` : 'New task… say what you need'}
+          placeholder={placeholder ?? (picked ? `Message ${picked.name}…` : 'New task… say what you need')}
           onChange={(e) => {
             setText(e.target.value)
             mentions.update(e.target.value, e.target.selectionStart)

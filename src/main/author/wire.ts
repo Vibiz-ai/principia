@@ -27,6 +27,8 @@ import { repoForCwd } from '../memory/service'
 import { AuthorBroker } from './broker'
 import { ChatProposals } from '../company/chatProposals'
 import { CHAT_COMPANY_TOOL } from '../../shared/chatCompany'
+import { HQ_TOOLS } from '../../shared/hq'
+import { Hq } from '../company/hq'
 import { TASK_TOOLS, TaskTools, type TaskCaller } from '../company/taskTools'
 import { CONNECTIONS_TOOL, HELP_TOOL, SESSION_TASK_TOOLS } from '../company/taskToolDefs'
 import { connectionsReport } from '../company/connectionsReport'
@@ -236,6 +238,26 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     }
   })
   h.chatProposals = proposals
+  const hq = new Hq({
+    companies: () => h.company.listPassports(),
+    tasks: () => h.company.listTasks(),
+    asks: () => Object.fromEntries((h.live?.listOpenAsks() ?? []).map((a) => [a.id, a])),
+    agents: () => h.company.departments.listAgents({}),
+    startChat: (companyId, prompt, title) => {
+      if (h.quitting) throw new HiveError('conflict', 'Principia is quitting')
+      return h.sessions.create({ adapter: 'claude', repoId: null, cols: 120, rows: 32, companyId, title, initialPrompt: prompt })
+    },
+    startAgentChat: async (agentId, prompt) => {
+      if (h.quitting || !h.agentChats || !h.chats) throw new HiveError('conflict', 'Agent chats are not available')
+      const s = h.agentChats.open(agentId)
+      await h.chats.send(s.id, prompt)
+      return s
+    },
+    chat: (sessionId) => {
+      const v = h.chats?.snapshot(sessionId, h.store.getSession(sessionId))
+      return { turn: v?.turn ?? 'ended', items: v?.items ?? [] }
+    }
+  })
   h.author = new AuthorBroker({
     drafts,
     owner: (sessionId): DraftOwner | null => {
@@ -406,6 +428,13 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     // shared/chatCompany.ts: the confirmation card behind principia_propose_company
     proposals: { propose: (sessionId, args, signal) => proposals.propose(sessionId, args, signal) },
+    hq: {
+      allowed: (sessionId) => {
+        const s = h.store.getSession(sessionId)
+        return !!s && !s.taskId && !s.companyAgentId && (s.companyId || PERSONAL_COMPANY_ID) === PERSONAL_COMPANY_ID
+      },
+      call: (tool, args, signal) => hq.call(tool, args, signal)
+    },
     // connections_list: the caller's own company (session, else its run), never the line's
     connections: {
       list: (owner, args, hints) => {
@@ -490,7 +519,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
           // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
           // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}`,
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}${companyId === PERSONAL_COMPANY_ID && o?.chat && !taskId ? ',hq' : ''}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
           // PROACTIVE.md §2: the passive wording of the company tools when "Agents use Principia on their own" is off
           ...(proactiveOn(h) ? {} : { HIVE_PROACTIVE: '0' }),
@@ -508,7 +537,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       // company_create_department always does (a second yes).
       const board = boardOn() ? [...TASK_TOOLS, ...SESSION_TASK_TOOLS, 'company_departments', ...(proactiveOn(h) ? ['company_file_task'] : [])] : []
       // connections_list and principia_help are read-only (what is connected; how Principia itself works)
-      return [...AUTHOR_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, HELP_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
+      return [...AUTHOR_TOOLS, ...HQ_TOOLS, CHAT_COMPANY_TOOL, CONNECTIONS_TOOL, HELP_TOOL, ...(h.slack?.connector.isConfigured() ? SLACK_TOOLS : []), ...board]
     },
     spawnDir
   }

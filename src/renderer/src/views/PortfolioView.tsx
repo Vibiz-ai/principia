@@ -13,6 +13,8 @@ import { CompanyChip } from '../components/CompanyChip'
 import { Button, RelativeTime, SectionHeader, Segmented, StatusGlyph, Toolbar, useTick } from '../components/ui'
 import { companyLabel, EMPTY_BADGE, isCompanyPaused, isPersonal, reposOf, useCompanyBadges, useLiveItems, useTaskCounts, type CompanyBadge, type LiveItem, type TaskCounts } from '../lib/company'
 import { NeedsYouTasks } from '../components/board/NeedsYouTasks'
+import { openConversation, TeamComposer } from '../components/conversations/ConversationKit'
+import { PERSONAL_COMPANY_ID } from '@shared/company'
 import { CloudNeedsYou, useCloudNeedsCount } from '../components/cloud/NeedsYou'
 import { runTitle } from '../lib/format'
 import { runVisual } from '../lib/graph'
@@ -109,6 +111,10 @@ export function PortfolioView(): React.JSX.Element {
         </Button>
       </Toolbar>
       <div className="scroll view__body">
+        {/* CHAT-UI.md §11: the main chat: a chat of Personal that sees every company and starts work inside one */}
+        <div className="portfolio__ask" data-chatux="main-chat">
+          <TeamComposer companyId={PERSONAL_COMPANY_ID} variant="pane" onStarted={openConversation} placeholder="Ask across all your companies, or tell one what to do…" />
+        </div>
         <div className="portfolio">
           {moved && <ThingsMovedCard />}
           {/* design §4.8: Needs you across companies comes first; every action acts inside its own company (B6) */}

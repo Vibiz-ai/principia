@@ -799,3 +799,18 @@ Finished work keeps its place in the Board's Needs you lane and gets one quiet l
 review"). A stopped run is not retried on its own: it may have posted or deployed halfway, so a person decides (a run
 stopped by the usage limit still restarts at the reset). The phone keeps its review cards and still lists them.
 
+## 11. The main chat (2026-11-02)
+
+The founder runs many companies and did not want to enter each one: "start in the main one, and that one starts Claude or
+agents inside each of the businesses". All companies opens with a chat box. It is a chat of Personal, so it needs no new
+kind of session; a chat of Personal that holds no task lists the `hq` toolset (`shared/hq.ts`, `main/company/hq.ts`):
+
+- `hq_overview`: each company's headlines: what works, decisions with their question, finished work waiting.
+- `hq_start_chat`: starts a Claude chat, or a named agent's own chat, inside one company.
+- `hq_chat_result`: that chat's status and last answer. Only chats this main chat started, and only until a restart.
+
+The company locks stay. The work runs inside the company with its own keys, memory and connections, and the main chat
+never gets those: only headlines and answers. Main checks the owner on every call, so another company's chat cannot call
+these tools even if it lists them. The tools are pre-allowed: a page the main chat reads could try to steer it, and
+every chat it starts opens with normal permissions in that company.
+
