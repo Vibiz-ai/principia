@@ -814,3 +814,10 @@ never gets those: only headlines and answers. Main checks the owner on every cal
 these tools even if it lists them. The tools are pre-allowed: a page the main chat reads could try to steer it, and
 every chat it starts opens with normal permissions in that company.
 
+## 12. A new company from a chat, one click (2026-11-02)
+
+The founder did not want to walk the onboarding by hand. The chat's card is now the only step: **Create <Name>** runs the
+existing From a prompt pipeline by itself (read the brief, make the plan, launch) and opens the company with Autopilot
+off. The card remains because a company costs money once its agents start, so the founder's click stays. Anything that
+needs them stops at that step of the onboarding with what was read kept: no name found, no plan, a failed launch.
+

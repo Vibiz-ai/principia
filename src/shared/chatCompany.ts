@@ -2,8 +2,8 @@
  * "Start a company from this chat": a chat (an interactive claude session with the `hive` server) hears the founder
  * say they want a new project / company / business, ASKS whether to set it up as a Principia company, and only after
  * a yes calls `principia_propose_company`. Nothing is created by the call: Principia shows a confirmation card (name,
- * brief and logo editable), and confirming opens the existing onboarding "From a prompt" (Brief → Plan → Launch)
- * prefilled with it. The tool answers the chat with the outcome (opened / declined / expired) so the agent can go on.
+ * brief and logo editable). One Create click runs the existing onboarding "From a prompt" (Brief → Plan → Launch) with
+ * no more clicks, Autopilot off. The tool answers the chat with the outcome (accepted / declined / expired).
  *
  * Shared and pure (no Node, no DOM): the tool schema, argument normalization, the brief the onboarding gets, the
  * session hints, and the generated emblem logo (white line art, no warm colours) used when no repo logo is found.
@@ -25,7 +25,7 @@ export const CHAT_COMPANY_TOOL_DEF = {
   description:
     'Offers to set up a NEW Principia company (its own Passport, departments, agents, first tasks and logo) from what the user said in this chat. ' +
     'Only after you asked "Want me to set this up as a new Principia company?" and the user said yes. Creates nothing by itself: Principia shows the user a confirmation card, ' +
-    'and on confirm opens the company onboarding prefilled with your brief, where the user reviews the plan before anything is launched. Waits for the decision and returns it.',
+    'and one Create click plans it from your brief and sets it up with Autopilot off. Waits for the decision and returns it.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -47,7 +47,7 @@ export const CHAT_COMPANY_TOOL_DEF = {
 
 export const CHAT_COMPANY_SERVER_INSTRUCTIONS =
   `${CHAT_COMPANY_TOOL}: when the user says they want to start a new project, company, business, startup or side project, first ASK "Want me to set this up as a new Principia company?". ` +
-  'Call the tool only after they agree, with a brief of what they told you. It opens a confirmation card in Principia and returns whether they opened the onboarding or declined. Never call it twice for the same idea.'
+  'Call the tool only after they agree, with a brief of what they told you. It opens a confirmation card in Principia and returns whether they created it or declined. Never call it twice for the same idea.'
 
 /** Appended to an interactive claude session's system prompt (with the `hive` server attached). */
 export const CHAT_COMPANY_HINT =
@@ -148,7 +148,7 @@ export function proposalResult(p: Pick<CompanyProposal, 'status' | 'name'>): Pro
       return {
         status: 'accepted',
         name,
-        note: `Opened onboarding for ${name} in Principia. The user reviews the brief, the departments, agents and first tasks there and launches it; nothing is created until they do. Tell them it is open and continue the conversation.`
+        note: `The user pressed Create. Principia is now planning ${name} and setting it up, with Autopilot off, and opens it when done. If something needs them, the setup stops there. Tell them it is on its way.`
       }
     case 'declined':
       return { status: 'declined', name, note: 'The user declined. Do not propose it again for this idea; carry on in the chat.' }

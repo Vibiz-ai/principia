@@ -99,7 +99,7 @@ describe('prompt to prefill', () => {
     expect(proposalBrief({ name: '', brief: BRIEF, website: null })).toBe(BRIEF)
   })
   it('results tell the agent what happened and what to do next', () => {
-    expect(proposalResult({ status: 'accepted', name: 'Sunday Bakery' }).note).toMatch(/^Opened onboarding for Sunday Bakery/)
+    expect(proposalResult({ status: 'accepted', name: 'Sunday Bakery' }).note).toMatch(/^The user pressed Create\. Principia is now planning Sunday Bakery/)
     expect(proposalResult({ status: 'declined', name: '' }).note).toMatch(/declined/)
     expect(proposalResult({ status: 'expired', name: 'X' }).note).toMatch(/Do not call again/)
   })
@@ -205,7 +205,7 @@ describe('broker + mailbox round trip', () => {
     const res = (await result) as { isError?: boolean; structuredContent?: Record<string, unknown> }
     expect(res.isError).toBeFalsy()
     expect(res.structuredContent).toMatchObject({ status: 'accepted', name: 'Sunday Bakery' })
-    expect(String(res.structuredContent?.note)).toMatch(/^Opened onboarding for Sunday Bakery/)
+    expect(String(res.structuredContent?.note)).toMatch(/^The user pressed Create\. Principia is now planning Sunday Bakery/)
     ch.close()
   })
 })

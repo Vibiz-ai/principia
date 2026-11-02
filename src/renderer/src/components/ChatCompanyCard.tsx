@@ -1,8 +1,8 @@
 /**
  * "Create <Name> from this chat?" (shared/chatCompany.ts): the confirmation a chat's principia_propose_company call
- * (or the "New company from chat" button) puts up. Name, brief and logo are editable; nothing is created here:
- * "Set up <Name>" opens the onboarding "From a prompt" with it (views/onboarding/fromChat.ts), where the plan is
- * reviewed before launch. "Not now" tells the chat the founder declined. One card at a time, oldest first.
+ * (or the "New company from chat" button) puts up. Name, brief and logo are editable. "Create <Name>" is the one click:
+ * Claude plans the company and it is set up with Autopilot off (views/onboarding/fromChat.ts). "Not now" tells the chat
+ * the founder declined. One card at a time, oldest first.
  */
 import { useMemo, useState } from 'react'
 import { EMBLEM_VARIANTS, emblemDataUrl, type CompanyProposal, type EmblemVariant } from '@shared/chatCompany'
@@ -41,9 +41,9 @@ export function ChatCompanyCard({ p }: { p: CompanyProposal }): React.JSX.Elemen
       onCancel={() => void declineChatCard(p)}
       cancelLabel="Not now"
       onPrimary={() => void go()}
-      primaryLabel={busy ? 'Opening…' : name ? `Set up ${name}` : 'Set up company'}
+      primaryLabel={busy ? 'Starting…' : name ? `Create ${name}` : 'Create company'}
       primaryDisabled={!canGo}
-      footerLeft={<span className="text-tertiary chat-co__foot">Nothing is created until you launch the plan.</span>}
+      footerLeft={<span className="text-tertiary chat-co__foot">Autopilot stays off until you turn it on.</span>}
     >
       <div className="chat-co">
         <p className="chat-co__lead text-secondary">
@@ -52,7 +52,7 @@ export function ChatCompanyCard({ p }: { p: CompanyProposal }): React.JSX.Elemen
               From <b className="chat-co__strong">{p.sessionTitle}</b>.{' '}
             </>
           ) : null}
-          Principia plans its departments, agents and first tasks from this brief. You review the plan before anything is set up.
+          Claude plans its departments, agents and first tasks from this brief and sets it all up.
         </p>
         <label className="chat-co__field">
           <span className="chat-co__label">Name</span>

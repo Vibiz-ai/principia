@@ -37,6 +37,7 @@ const fakeHive = {
     })
   },
   onboarding: {
+    launch: vi.fn(async () => ({ journalId: 'j1', companyId: 'co_new', status: 'done', steps: [] })),
     status: vi.fn(async () => null),
     key: vi.fn(async () => undefined),
     plan: vi.fn(async () => {
@@ -131,6 +132,30 @@ describe('confirm', () => {
     expect(await f.confirmChatCard(P(), edits)).toBe(true)
     expect(m.getState().chatProposals).toEqual([])
     expect(m.getState().onboarding?.open).toBe(true)
+  })
+})
+
+describe('one click', () => {
+  const wait = async (ok: () => boolean): Promise<void> => {
+    for (let i = 0; i < 50 && !ok(); i++) await flush()
+  }
+  it('stops with nothing launched when there is no plan, and never touches another setup', async () => {
+    await f.confirmChatCard(P(), edits)
+    await wait(() => m.getState().onboardingDraft?.step === 'plan')
+    m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, plan: null } as never })
+    expect(await f.autoLaunch(async () => undefined)).toBe(false)
+    expect(fakeHive.onboarding.launch).not.toHaveBeenCalled()
+    m.setState({ onboardingDraft: null })
+    expect(await f.autoLaunch(async () => undefined)).toBe(false)
+  })
+  it('gives up when the plan never arrives, leaving the founder on the Plan step', async () => {
+    await f.confirmChatCard(P(), edits)
+    await wait(() => m.getState().onboardingDraft?.step === 'plan')
+    m.setState({ onboardingPlanPending: true })
+    let t = 0
+    expect(await f.autoLaunch(async () => void (t += 60_000), () => t)).toBe(false)
+    expect(m.getState().onboardingDraft?.step).toBe('plan')
+    m.setState({ onboardingPlanPending: false })
   })
 })
 
