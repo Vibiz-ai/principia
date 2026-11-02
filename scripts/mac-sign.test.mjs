@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { codesignArgs, DMG_BACKGROUND, DMG_LAYOUT_DIR, dmgTemplate, isMachO, makeDmg, packageRelease, parseNotaryResult, signingOrder } from './mac-sign.mjs'
+import { codesignArgs, DMG_BACKGROUND, DMG_LAYOUT_DIR, defaultExec, dmgTemplate, isMachO, isStapleNetworkError, makeDmg, packageRelease, parseNotaryResult, signingOrder, staple, STAPLE_WAITS_MS } from './mac-sign.mjs'
 import { dmgWindowLayout, readDsStore, withBookmarkVolumeUuid } from './ds-store.mjs'
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mac-sign-'))
@@ -162,6 +162,134 @@ test('packageRelease: a rejected notarization stops before the zip and dmg, afte
   assert.ok(calls.some((c) => c[0] === 'xcrun' && c[2] === 'log' && c[3] === 'sub-1'))
   assert.equal(calls.some((c) => c[0] === 'hdiutil'), false)
   assert.equal(calls.some((c) => c[0] === 'xcrun' && c[1] === 'stapler'), false)
+})
+
+// The tail of what stapler printed when the v0.4.4 release failed (exit 68), word for word
+const STAPLE_LOST_CONNECTION = {
+  ok: false,
+  status: 68,
+  out: `), NSLocalizedDescription=The network connection was lost., NSErrorFailingURLStringKey=https://api.apple-cloudkit.com/database/1/com.apple.gk.ticket-delivery/production/public/records/lookup, NSErrorFailingURLKey=https://api.apple-cloudkit.com/database/1/com.apple.gk.ticket-delivery/production/public/records/lookup, _kCFStreamErrorDomainKey=4}
+CloudKit's response is inconsistent with expections: (null)
+The staple and validate action failed! Error 68.`
+}
+// What the real stapler prints for a signed dmg that was never notarized
+const STAPLE_NO_TICKET = {
+  ok: false,
+  status: 65,
+  out: `Processing: /tmp/F.dmg
+CloudKit query for F.dmg (2/0b749b3a200cb86bcac1cdda7b42b98b9a9b60fb) failed due to "Record not found".
+Could not find base64 encoded ticket in response for 2/0b749b3a200cb86bcac1cdda7b42b98b9a9b60fb
+The staple and validate action failed! Error 65.`
+}
+const STAPLED = { ok: true, status: 0, out: '' }
+
+/** A staple run against scripted stapler answers; records the tries and the waits. */
+function stapleRun(answers, opts = {}) {
+  const tries = []
+  const waits = []
+  const exec = (cmd, argv) => {
+    tries.push([cmd, ...argv])
+    return answers[tries.length - 1]
+  }
+  const run = () => staple({ target: '/out/P.dmg', exec, sleep: (ms) => waits.push(ms), ...opts })
+  return { tries, waits, run }
+}
+
+test('staple: a staple that works runs once and waits for nothing', () => {
+  const { tries, waits, run } = stapleRun([STAPLED])
+  run()
+  assert.deepEqual(tries, [['xcrun', 'stapler', 'staple', '/out/P.dmg']])
+  assert.deepEqual(waits, [])
+})
+
+test('staple: the connection drop that failed v0.4.4 is retried after a wait, and then the staple succeeds', () => {
+  const { tries, waits, run } = stapleRun([STAPLE_LOST_CONNECTION, STAPLED])
+  run()
+  assert.equal(tries.length, 2)
+  assert.deepEqual(waits, [STAPLE_WAITS_MS[0]])
+})
+
+test('staple: gives up after every wait is used, with stapler\'s own error', () => {
+  const { tries, waits, run } = stapleRun(Array(10).fill(STAPLE_LOST_CONNECTION))
+  assert.throws(run, /stapler staple P\.dmg failed \(exit 68\): .*Error 68/)
+  assert.equal(tries.length, STAPLE_WAITS_MS.length + 1)
+  assert.deepEqual(waits, STAPLE_WAITS_MS)
+})
+
+test('staple: a real error fails on the first try, even after a network retry', () => {
+  const never = stapleRun([STAPLE_NO_TICKET, STAPLED])
+  assert.throws(never.run, /stapler staple P\.dmg failed \(exit 65\): .*Error 65/)
+  assert.equal(never.tries.length, 1)
+  assert.deepEqual(never.waits, [])
+
+  const thenReal = stapleRun([STAPLE_LOST_CONNECTION, STAPLE_NO_TICKET, STAPLED])
+  assert.throws(thenReal.run, /failed \(exit 65\)/)
+  assert.equal(thenReal.tries.length, 2)
+})
+
+test('staple: exit 68 alone is not a network error, stapler(1) also uses it for a file that was never notarized', () => {
+  const { tries, run } = stapleRun([{ ...STAPLE_NO_TICKET, status: 68 }, STAPLED])
+  assert.throws(run, /failed \(exit 68\)/)
+  assert.equal(tries.length, 1)
+})
+
+test('isStapleNetworkError: connection failures yes, ticket and file problems no', () => {
+  for (const out of [
+    STAPLE_LOST_CONNECTION.out,
+    'Error Domain=NSURLErrorDomain Code=-1001 "The request timed out."',
+    'The Internet connection appears to be offline.',
+    'Could not connect to the server.',
+    'A server with the specified hostname could not be found.'
+  ]) assert.equal(isStapleNetworkError(out), true, out)
+  for (const out of [
+    STAPLE_NO_TICKET.out,
+    'File /tmp/x.dmg does not exist. Error Domain=NSCocoaErrorDomain Code=260',
+    'Processing: /tmp/plain.dmg',
+    '',
+    undefined
+  ]) assert.equal(isStapleNetworkError(out), false, String(out))
+})
+
+test('staple: the default wait really blocks, and the real runner\'s output reaches the check', () => {
+  // a stand-in xcrun on PATH: the first run drops the connection on stderr, the second works
+  const bin = tmp()
+  const seen = path.join(bin, 'tries')
+  const shim = path.join(bin, 'xcrun')
+  fs.writeFileSync(shim, `#!/bin/sh
+echo x >> "${seen}"
+[ "$(wc -l < "${seen}")" -gt 1 ] && exit 0
+echo 'NSLocalizedDescription=The network connection was lost.' >&2
+exit 68
+`, { mode: 0o755 })
+  const before = process.env.PATH
+  process.env.PATH = `${bin}${path.delimiter}${before}`
+  try {
+    const start = Date.now()
+    staple({ target: '/out/P.dmg', waitsMs: [50], exec: (cmd, argv) => defaultExec(cmd, argv, { quiet: true }) })
+    assert.ok(Date.now() - start >= 50)
+  } finally {
+    process.env.PATH = before
+  }
+  assert.equal(fs.readFileSync(seen, 'utf8').trim().split('\n').length, 2)
+})
+
+test('packageRelease: a dropped connection on the dmg\'s staple does not stop the release', () => {
+  const app = fakeApp()
+  const out = path.dirname(app)
+  const { calls, exec } = recorder()
+  let dropped = false
+  const flaky = (cmd, argv, o) => {
+    if (cmd === 'xcrun' && argv[0] === 'stapler' && argv[2].endsWith('.dmg') && !dropped) {
+      dropped = true
+      calls.push([cmd, ...argv])
+      return STAPLE_LOST_CONNECTION
+    }
+    return exec(cmd, argv, o)
+  }
+  const waits = []
+  packageRelease({ app, zip: path.join(out, 'P.zip'), dmg: path.join(out, 'P.dmg'), volname: 'Principia', identity: 'ABCDEF', entitlements: 'a', entitlementsInherit: 'i', notaryArgs: ['--keychain-profile', 'p'], sleep: (ms) => waits.push(ms), exec: flaky })
+  assert.equal(calls.filter((c) => c[1] === 'stapler' && c[3].endsWith('P.dmg')).length, 2)
+  assert.deepEqual(waits, [STAPLE_WAITS_MS[0]])
 })
 
 test('packageRelease without notary credentials (dry run): ad-hoc, nothing sent to Apple', () => {

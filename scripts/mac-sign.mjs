@@ -124,8 +124,32 @@ export function notarize({ file, notaryArgs, exec = defaultExec }) {
   throw new Error(`notarization of ${path.basename(file)} ${res ? `ended ${res.status}${res.id ? ` (submission ${res.id})` : ''}` : `failed: ${r.out.split('\n').slice(-2).join(' | ')}`}`)
 }
 
-export function staple({ target, exec = defaultExec }) {
-  must(exec('xcrun', ['stapler', 'staple', target]), `stapler staple ${path.basename(target)}`)
+// How stapler words a connection that failed, not a ticket that is missing. The exit code can't tell them apart:
+// stapler(1) gives 68 both to "not notarized" and to "unexpected response", so the release's 68 alone proves nothing.
+const STAPLE_NETWORK_ERROR = /NSURLErrorDomain|network connection was lost|request timed out|internet connection appears to be offline|could not connect to the server|hostname could not be found|CloudKit's response is inconsistent/i
+/** The waits between tries: 4 tries over about 2.5 minutes, enough for a dropped connection to Apple to come back. */
+export const STAPLE_WAITS_MS = [15_000, 45_000, 90_000]
+
+/** stapler's output says it could not reach Apple's ticket service (not that the ticket or the file is wrong). */
+export const isStapleNetworkError = (out) => STAPLE_NETWORK_ERROR.test(String(out))
+
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * Staple the notary's ticket, trying again when the connection to Apple drops: notarization has already passed by
+ * now, and a failed staple would throw all of that away. Anything else (no ticket, a bad file) fails on the first try.
+ */
+export function staple({ target, exec = defaultExec, sleep = sleepMs, waitsMs = STAPLE_WAITS_MS }) {
+  const what = `stapler staple ${path.basename(target)}`
+  const attempt = () => exec('xcrun', ['stapler', 'staple', target])
+  let r = attempt()
+  for (const [i, ms] of waitsMs.entries()) {
+    if (r.ok || !isStapleNetworkError(r.out)) break
+    console.log(`  ${what}: lost the connection to Apple, try ${i + 2} of ${waitsMs.length + 1} in ${ms / 1000}s`)
+    sleep(ms)
+    r = attempt()
+  }
+  must(r, what)
 }
 
 /** The updater's zip (and the notary upload of an app): ditto keeps symlinks, modes and extended attributes. */
@@ -154,7 +178,6 @@ export const DMG_LAYOUT_DIR = path.resolve(path.dirname(fileURLToPath(import.met
 export const DMG_BACKGROUND = '.background.tiff'
 // com.apple.FinderInfo of the volume's root folder with kHasCustomIcon (0x0400) set: use /.VolumeIcon.icns
 const FINDER_INFO_CUSTOM_ICON = `${'00'.repeat(8)}0400${'00'.repeat(22)}`
-const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 /**
  * The template in `dir`, checked against this dmg: it must place `appName` and Applications, and its background
@@ -238,7 +261,7 @@ export function makeDmg({ app, dmg, volname, layout = { dir: DMG_LAYOUT_DIR, ico
  *   sign the app → notarize + staple it → updater zip (of the stapled app) → dmg → sign the dmg → notarize + staple it.
  * notaryArgs null = no notarization (dry run, ad-hoc identity).
  */
-export function packageRelease({ app, zip, dmg, volname, identity, keychain = null, entitlements, entitlementsInherit, notaryArgs = null, dmgLayout, exec = defaultExec }) {
+export function packageRelease({ app, zip, dmg, volname, identity, keychain = null, entitlements, entitlementsInherit, notaryArgs = null, dmgLayout, exec = defaultExec, sleep = sleepMs }) {
   signApp({ app, identity, keychain, entitlements, entitlementsInherit, exec })
   must(exec('codesign', ['--verify', '--deep', '--strict', app], { quiet: true }), 'codesign --verify (app, before notarizing)')
   if (notaryArgs) {
@@ -250,14 +273,14 @@ export function packageRelease({ app, zip, dmg, volname, identity, keychain = nu
     } finally {
       fs.rmSync(upload, { force: true })
     }
-    staple({ target: app, exec })
+    staple({ target: app, exec, sleep })
   }
   makeZip({ app, zip, exec })
-  makeDmg({ app, dmg, volname, ...(dmgLayout !== undefined ? { layout: dmgLayout } : {}), exec })
+  makeDmg({ app, dmg, volname, ...(dmgLayout !== undefined ? { layout: dmgLayout } : {}), exec, sleep })
   // a dmg is signed without the runtime option or entitlements (they are for executables)
   must(exec('codesign', codesignArgs({ target: dmg, identity, keychain, runtime: false })), `codesign ${path.basename(dmg)}`)
   if (notaryArgs) {
     notarize({ file: dmg, notaryArgs, exec })
-    staple({ target: dmg, exec })
+    staple({ target: dmg, exec, sleep })
   }
 }
