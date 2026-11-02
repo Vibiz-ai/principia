@@ -4,13 +4,15 @@
  * reaper kills a step's whole tree on cancel and on a natural end.
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentNode } from '../../../shared/live'
 import type { AdapterId, EngineEvent } from '../../../shared/types'
 import { DEFAULT_ADAPTERS, type Adapter } from '../adapters'
 import { createEngineWith } from '../index'
+import { StallMonitor } from '../live/stall'
 import { createClaudeParser } from '../parse'
 import { Reaper, spawnIdOf, systemProcessTable } from '../reaper'
 import { addWorkflow, fakeCtx, fakeProviders, profile, waitRun, type FakeCtx } from './fakes'
@@ -28,7 +30,7 @@ function limitClaude(): Adapter {
   }
 }
 
-async function engineFor(ctx: FakeCtx, adapters: Partial<Record<AdapterId, Adapter>> = {}, extra: { stallThresholdMs?: number; stallSweepMs?: number } = {}) {
+async function engineFor(ctx: FakeCtx, adapters: Partial<Record<AdapterId, Adapter>> = {}, extra: { stallThresholdMs?: number; stallSweepMs?: number; stall?: StallMonitor } = {}) {
   const e = createEngineWith(ctx, { adapters, detect: fakeProviders(['claude', 'shell']), ...extra })
   await e.init()
   return e
@@ -111,30 +113,77 @@ describe('usage limit -> stop reason -> retry at reset', () => {
 })
 
 describe('Stalled? on steps', () => {
-  it('a silent step is flagged and cleared when it ends; a chatty one never is', async () => {
+  // No real-time margins: a loaded CI runner can delay output and sweeps by any amount, so nothing here depends on how
+  // long a step takes. Steps run until the test creates `go`, and the test waits on conditions.
+  const CONDITION = { timeout: 15_000, interval: 5 }
+  let dir: string
+  let go: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'stall-'))
+    go = join(dir, 'go')
+  })
+  afterEach(() => {
+    writeFileSync(go, '') // a failed assertion must not leave a step looping until its timeout
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const untilGo = (body: string): string => `while [ ! -e ${JSON.stringify(go)} ]; do ${body}sleep 0.02; done`
+  const updatesOf = (ctx: FakeCtx, stepId: string): AgentNode[] => rootUpdates(ctx.events).filter((a) => a.stepId === stepId)
+
+  it('the sweep timer flags a silent step; the flag clears when the step ends', async () => {
     const ctx = fakeCtx()
-    const engine = await engineFor(ctx, {}, { stallThresholdMs: 400, stallSweepMs: 50 })
+    const engine = await engineFor(ctx, {}, { stallThresholdMs: 50, stallSweepMs: 10 })
+    const wf = addWorkflow(ctx, {
+      name: 'stall',
+      description: '',
+      inputs: [],
+      nodes: [{ id: 'quiet', type: 'shell', label: 'quiet', after: [], cwd: null, timeoutMin: 1, command: untilGo('') }]
+    })
+    const started = engine.runs.start({ kind: 'workflow', workflowId: wf.id, inputs: {} }, { trigger: 'manual' })
+    await vi.waitFor(() => {
+      const step = ctx.store.stepsOf(started.id)[0]
+      expect(step && updatesOf(ctx, step.id).some((a) => !!a.stalledSince)).toBe(true)
+    }, CONDITION)
+    writeFileSync(go, '')
+    const run = await waitRun(ctx, started.id)
+    expect(run.status).toBe('passed')
+    const quiet = ctx.store.stepsOf(run.id)[0]!
+    await vi.waitFor(() => expect(updatesOf(ctx, quiet.id).at(-1)!.stalledSince ?? null).toBeNull(), CONDITION)
+    await engine.shutdown()
+  }, 30_000)
+
+  it('output keeps a step from being flagged, so only the silent step is', async () => {
+    const ctx = fakeCtx()
+    let clock = 0
+    const stall = new StallMonitor({ thresholdMs: () => 1000, now: () => clock })
+    const touch = vi.spyOn(stall, 'touch')
+    const engine = await engineFor(ctx, {}, { stall })
     const wf = addWorkflow(ctx, {
       name: 'stall',
       description: '',
       inputs: [],
       nodes: [
-        { id: 'quiet', type: 'shell', label: 'quiet', after: [], cwd: null, timeoutMin: 1, command: 'sleep 1.2; echo done' },
-        { id: 'chatty', type: 'shell', label: 'chatty', after: [], cwd: null, timeoutMin: 1, command: 'for i in 1 2 3 4 5 6; do echo $i; sleep 0.2; done' }
+        { id: 'quiet', type: 'shell', label: 'quiet', after: [], cwd: null, timeoutMin: 1, command: untilGo('') },
+        { id: 'chatty', type: 'shell', label: 'chatty', after: [], cwd: null, timeoutMin: 1, command: untilGo('echo tick; ') }
       ]
     })
-    const run = await waitRun(ctx, engine.runs.start({ kind: 'workflow', workflowId: wf.id, inputs: {} }, { trigger: 'manual' }).id)
-    expect(run.status).toBe('passed')
-    await new Promise((r) => setTimeout(r, 250))
-    const steps = ctx.store.stepsOf(run.id)
+    const started = engine.runs.start({ kind: 'workflow', workflowId: wf.id, inputs: {} }, { trigger: 'manual' })
+    await vi.waitFor(() => expect(stall.size()).toBe(2), CONDITION)
+    // A full threshold passes, and chatty speaks after it; quiet stays silent. The sweep then has to tell them apart.
+    clock += 1000
+    touch.mockClear()
+    await vi.waitFor(() => expect(touch).toHaveBeenCalled(), CONDITION)
+    const steps = ctx.store.stepsOf(started.id)
     const quiet = steps.find((s) => s.nodeId === 'quiet')!
     const chatty = steps.find((s) => s.nodeId === 'chatty')!
-    const q = rootUpdates(ctx.events).filter((a) => a.stepId === quiet.id)
-    expect(q.some((a) => !!a.stalledSince)).toBe(true)
-    expect(q.at(-1)!.stalledSince ?? null).toBeNull()
-    expect(rootUpdates(ctx.events).filter((a) => a.stepId === chatty.id).some((a) => !!a.stalledSince)).toBe(false)
+    expect(stall.sweep()).toEqual([quiet.id])
+    writeFileSync(go, '')
+    const run = await waitRun(ctx, started.id)
+    expect(run.status).toBe('passed')
+    expect(updatesOf(ctx, quiet.id).some((a) => !!a.stalledSince)).toBe(true)
+    await vi.waitFor(() => expect(updatesOf(ctx, quiet.id).at(-1)!.stalledSince ?? null).toBeNull(), CONDITION)
+    expect(updatesOf(ctx, chatty.id).some((a) => !!a.stalledSince)).toBe(false)
     await engine.shutdown()
-  })
+  }, 30_000)
 })
 
 // ---------- reaper through the executor (real processes; macOS) ----------
