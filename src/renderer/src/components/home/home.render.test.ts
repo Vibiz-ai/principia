@@ -150,7 +150,7 @@ describe('Needs you (VOICE.md §3.6)', () => {
     expect(out.match(/Ave!/g)).toHaveLength(1)
     // the second Marketing agent resolves to Ovid
     expect(out).toContain('Ovid needs your answer')
-    expect(out).toContain('Ovid needs your review')
+    expect(out).not.toContain('Ovid needs your review')
     expect(out).toContain(' · Copywriter')
     expect(out).toMatch(/<svg[^>]*class="rm-la rm-bust[^"]*"[^>]*width="24"/)
     // list avatars (16 to 28 px) carry the faint --rm-ln-3 ring (VOICE.md §5.4)

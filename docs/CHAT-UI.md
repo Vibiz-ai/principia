@@ -789,3 +789,13 @@ and the groups of §7 and the Tasks group of §8.6; the rest of §7 and §8 stan
 - **An agent is its name** (founder: "we already know what it should be working on"): its row, its header and New task's
   To: say the name, never its role or the task it is on. Two rows of one agent add the task only to tell them apart.
 
+## 10. A badge means a decision (2026-11-02)
+
+The founder's Principia badge read 36, and 19 of them were finished tasks waiting for review. Every number (rail, status
+bar, sidebar, Home, ⌘J) now counts what needs a decision: open questions, approvals, stopped tasks, tasks with no agent.
+`needsDecision` (lib/departments.ts) is the one rule and `needsYouTasks(…, { decisions: true })` the one list.
+
+Finished work keeps its place in the Board's Needs you lane and gets one quiet line on Home ("19 finished · ready for
+review"). A stopped run is not retried on its own: it may have posted or deployed halfway, so a person decides (a run
+stopped by the usage limit still restarts at the reset). The phone keeps its review cards and still lists them.
+

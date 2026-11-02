@@ -115,6 +115,12 @@ export function HomeView(): React.JSX.Element {
           </Button>
         </div>
       )}
+      {/* CHAT-UI.md §10: finished work has no badge; it waits here, one quiet line */}
+      {reviews > 0 && (
+        <button type="button" className="link-btn text-tertiary home5__reviews" data-chatux="home-reviews" onClick={() => openBoard(scope)}>
+          {reviews} finished · ready for review
+        </button>
+      )}
       <PrincipiaSuggestions items={sugs.items} onChanged={sugs.reload} />
     </>
   )
@@ -244,7 +250,7 @@ function NeedsList({ scope, code, drafts, empty, paused }: { scope: Id; code: bo
   const tasks = useStore((s) => s.tasks)
   const on = useStore((s) => departmentsOn(s))
   const ctx = useLaneContext()
-  const items = useMemo(() => (on ? needsYouTasks(tasks, ctx, scope, { skipLiveAsks: true }) : []), [on, tasks, ctx, scope])
+  const items = useMemo(() => (on ? needsYouTasks(tasks, ctx, scope, { skipLiveAsks: true, decisions: true }) : []), [on, tasks, ctx, scope])
   const leftovers = useLeftovers()
   return (
     <>
