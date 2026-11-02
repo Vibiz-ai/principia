@@ -21,7 +21,7 @@ export const LIMITS = { readPerMinute: 30, writePerHour: 20, writesPerHourAll: 2
 
 const json = (status, body) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
 
-function redis(env) {
+function redis(env = process.env) {
   const url = env.KV_REST_API_URL ?? env.UPSTASH_REDIS_REST_URL
   const token = env.KV_REST_API_TOKEN ?? env.UPSTASH_REDIS_REST_TOKEN
   return url && token ? { url, token } : null
@@ -44,10 +44,11 @@ const idOf = (req) => {
 }
 const counted = (key, ttl) => [['INCR', key], ['EXPIRE', key, ttl]]
 
-export async function GET(req, env = process.env) {
+// Vercel calls these with (request, event), so a second parameter here would be the event and never the environment.
+export async function GET(req) {
   const id = idOf(req)
   if (!id) return json(400, { message: 'Bad id' })
-  const db = redis(env)
+  const db = redis()
   if (!db) return json(503, { message: 'No store' })
   try {
     const minute = Math.floor(Date.now() / 60_000)
@@ -59,7 +60,7 @@ export async function GET(req, env = process.env) {
   }
 }
 
-export async function PUT(req, env = process.env) {
+export async function PUT(req) {
   const id = idOf(req)
   if (!id) return json(400, { message: 'Bad id' })
   const text = await req.text().catch(() => '')
@@ -72,7 +73,7 @@ export async function PUT(req, env = process.env) {
   }
   if (typeof body?.write !== 'string' || typeof body.sealed !== 'string' || !SEALED_RE.test(body.sealed)) return json(400, { message: 'Bad body' })
   if (createHash('sha256').update(body.write).digest('hex') !== id) return json(403, { message: 'Not yours' })
-  const db = redis(env)
+  const db = redis()
   if (!db) return json(503, { message: 'No store' })
   try {
     const hour = Math.floor(Date.now() / 3_600_000)

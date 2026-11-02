@@ -8,7 +8,10 @@
  * - The PR (gh, read-only): looked up once the branch is pushed, then polled every 60 s while open and on window focus.
  *   Ready → in_review; changes requested (a review not handled yet) → the agent goes again with the reviewer's note;
  *   approved by a reviewer → done ("Approved #N", the worktree stays until it merges); merged (on GitHub, or Merge…
- *   here) or a local merge into the base → done, doneNote "Merged #N". Errors back off.
+ *   here) or a local merge into the base → done, doneNote "Merged #N". Errors back off. A task unblocked with its own
+ *   PR already merged goes done the same way instead of waking (settleUnblocked).
+ * - A worktree an agent made by hand at the task's path is adopted on its real branch. A folder that cannot be adopted
+ *   parks a turn in Needs you with the reason, untouched (WorktreeManager.ensureTask).
  * - The worktree folder gone while the task is open → a banner: Cancel Task · Back to Backlog · Keep As Is.
  *
  * Every status move is a compare-and-set on the task's status with a `work` activity by 'system', checked by
@@ -17,11 +20,11 @@
  */
 import fs from 'node:fs'
 import { HiveError } from '../../shared/errors'
-import { atInFlightLimit, type BoardTask, type TaskStatus } from '../../shared/company'
+import { atInFlightLimit, UNBLOCKED_WAKE, type BoardTask, type TaskStatus } from '../../shared/company'
 import type { StartRunOptions } from '../../shared/engine'
 import type { Run, RunTarget } from '../../shared/types'
 import { GH_TEXT, canStartWork, taskBranchName, nextMove, workBrief, workGone, workQueued, workStarted, type GhState, type TaskPr, type TaskWork } from '../../shared/taskWork'
-import type { WorktreeManager } from '../worktrees'
+import { WorktreeInTheWay, type WorktreeManager } from '../worktrees'
 import type { CompanyStore } from './index'
 import { assertTransition, transitionError } from './taskState'
 import { taskWorkSchema } from './taskWorkSchema'
@@ -67,6 +70,8 @@ export class TaskWorkService {
   private readonly startPoints = new Map<string, string>()
   /** per In Review task: when its linked pull requests were last asked about (sweepReviewed) */
   private readonly reviewSeen = new Map<string, number>()
+  /** per unblocked task: when settleUnblocked last asked about its pull requests */
+  private readonly unblockedSeen = new Map<string, number>()
 
   constructor(private readonly d: TaskWorkDeps) {}
   /**
@@ -190,14 +195,16 @@ export class TaskWorkService {
     const wm = this.wt()
     // a new worktree means a new folder: the provider conversation (keyed by folder) starts fresh
     if (t.agentSessionId) this.c.patchInFlight(taskId, { agentSessionId: null })
+    // a folder already there is adopted, not made here: it can hold the agent's work, so no failed start cleans it up
+    const adopted = fs.existsSync(wm.taskPath(t.identifier))
     // a task that had a worktree before (Keep As Is, Remove Worktree…) checks its own branch out again
     const row = await wm.ensureTask({ taskId, identifier: t.identifier, title: t.title, repo: repo.path, branch: t.work?.startedAt ? t.work.branch : null, startPoint: this.startPoints.get(taskId) ?? null })
     if (row.status !== 'active') throw new HiveError('internal', `Could not create the worktree: ${row.error ?? 'unknown error'}`)
     const base = wm.taskBase(taskId)
     const at = this.now().toISOString()
     this.writeWork(taskId, { ...this.blank(t, row.path), ...(t.work && !t.work.removedAt ? t.work : {}), worktreePath: row.path, branch: row.branch, baseSha: base.baseSha, baseRef: base.baseRef, startedAt: at, worktreeId: row.id, queuedAt: null, goneAt: null, removedAt: null })
-    this.c.activity(taskId, 'work', `Worktree created on ${row.branch} (${base.baseRef ?? 'HEAD'} @ ${(base.baseSha ?? '').slice(0, 7)}). Your checkout is not touched.`, 'system')
-    return true
+    this.c.activity(taskId, 'work', `Worktree ${adopted ? 'already there, picked up' : 'created'} on ${row.branch} (${base.baseRef ?? 'HEAD'} @ ${(base.baseSha ?? '').slice(0, 7)}). Your checkout is not touched.`, 'system')
+    return !adopted
   }
 
   /** TaskRunBridge.workdir: every prompt turn of a Started task runs in its worktree. A queued task claimed by the
@@ -218,7 +225,12 @@ export class TaskWorkService {
     // queued (no worktree yet), or its worktree was removed (Keep As Is, Remove Worktree…): the turn gets the task's own
     // worktree again on its branch. A task that had a worktree never runs in the founder's checkout; when this fails,
     // so does the turn. Gone and not chosen yet: the missing folder fails the turn.
-    if (!w.startedAt || w.removedAt) await this.ensureWorktree(taskId)
+    if (!w.startedAt || w.removedAt) {
+      await this.ensureWorktree(taskId).catch((e: unknown) => {
+        if (e instanceof WorktreeInTheWay) this.c.expectStop(taskId, 'worktree_in_the_way')
+        throw e
+      })
+    }
     const cur = this.c.task(taskId).work!
     const env = this.wt().guardEnv(taskId)
     return { cwd: cur.worktreePath, env: { ...env, HIVE_TASK_ID: t.identifier } }
@@ -404,6 +416,60 @@ export class TaskWorkService {
       if (this.c.task(t.id).status === 'done') this.reviewSeen.delete(t.id)
       this.changed(t.companyId)
     }
+  }
+  /**
+   * Before a pump hands out work: a task about to wake only because its dependencies finished (PR-82) goes Done when its
+   * own pull request already merged, instead of starting a run with nothing left to do. A stacked task can park with
+   * its PR open and see it merge alongside its dependency. It may have no binding at all (an agent that made its own
+   * worktree), so its report and link proof are read too. When in doubt it wakes as usual. Tasks another task's
+   * completion unblocks are checked in the same pass, because the pump claims them right after this.
+   */
+  async settleUnblocked(companyId: string): Promise<void> {
+    if (this.c.heal(companyId).length) this.changed(companyId)
+    const checked = new Set<string>()
+    const unblocked = () => this.c.listTasks(companyId).filter((t) => !checked.has(t.id) && !t.plan && t.status === 'todo' && !!t.pendingWake?.reasons.length && t.pendingWake.reasons.every((r) => r === UNBLOCKED_WAKE))
+    for (let tasks = unblocked(); tasks.length; tasks = unblocked()) {
+      for (const t of tasks) {
+        if (this.disposed) return
+        checked.add(t.id)
+        const seen = this.unblockedSeen.get(t.id)
+        if (seen !== undefined && Date.now() - seen < WORK_POLL_MS) continue
+        this.unblockedSeen.set(t.id, Date.now())
+        try {
+          // a binding is followed the usual way: a local merge, a PR found by its branch
+          if (t.work) await this.checkTask(t.id)
+          const cur = this.c.task(t.id)
+          if (cur.status !== 'todo') continue
+          const merged = await this.ownMergedPrs(cur)
+          if (!merged.length) continue
+          this.complete(cur, `Merged ${merged.map((p) => `#${p.number}`).join(', ')}`)
+          this.changed(companyId)
+        } catch (e) {
+          this.d.log?.warn('task work: settling an unblocked task', { taskId: t.id, error: String(e) })
+        }
+      }
+    }
+  }
+  /**
+   * The task's own linked pull requests once none of them is open, else nothing. "Own" is decided by the head branch: a
+   * report also links the PRs it waits on, and those merging says nothing about this task's work. An unreadable PR
+   * counts as not knowing.
+   */
+  private async ownMergedPrs(t: BoardTask): Promise<TaskPr[]> {
+    const links = (t.proof ?? []).filter((p) => p.kind === 'link').map((p) => p.ref)
+    const urls = prUrlsIn([t.work?.pr?.url ?? '', ...links, t.report?.summary ?? '', ...(t.report?.evidence ?? [])])
+    if (!urls.length) return []
+    const cwd = this.companyCwd(t.companyId)
+    if (!cwd || (await this.ghState(cwd)) !== 'ok') return []
+    const prefix = `${taskBranchName(t.identifier, '')}-`
+    const own: TaskPr[] = []
+    for (const url of urls) {
+      const found = await lookupPr(this.d.gh, { cwd, url, branch: url }, this.now())
+      if (found.kind !== 'pr') return []
+      const head = found.pr.head
+      if (head && (head === t.work?.branch || head.startsWith(prefix))) own.push(found.pr)
+    }
+    return own.some((p) => p.state === 'OPEN') ? [] : own.filter((p) => p.state === 'MERGED')
   }
   /** A folder gh can run in for this company: its first repository still on disk. */
   private companyCwd(companyId: string): string | null {
