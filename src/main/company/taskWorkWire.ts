@@ -22,7 +22,7 @@ export function wireTaskWork(h: Hive): TaskWorkService {
   })
   // parallel work: a task whose checkout another run already works in gets its own worktree (CompanyStore.startTask)
   const wm = h.worktrees
-  h.company.setWorktreePaths(wm ? (identifier) => wm.taskPath(identifier) : null)
+  h.company.setWorktreePaths(wm ? (identifier) => wm.taskPath(identifier) : null, wm ? (identifier) => wm.taskBranchAt(identifier) : null)
   // after the dispatcher's own hook (registered first): the run end has already moved the task
   h.runHooks.push((run) => svc.onRunUpdated(run))
   return svc

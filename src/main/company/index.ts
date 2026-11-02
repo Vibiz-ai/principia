@@ -58,6 +58,8 @@ export class CompanyStore {
   private boardOn: () => boolean = ()=>true
   /** WORKTREE.md: a task's own worktree folder (setWorktreePaths); null = a busy checkout is shared */
   private worktreePath: ((identifier: string) => string) | null = null
+  /** the branch a worktree already at that folder is on (an agent made it by hand): it is adopted, so the wake names it */
+  private worktreeBranch: ((identifier: string) => string | null) | null = null
   /** why main canceled a task's run (time or wake cap); consumed at its run end */
   private readonly stopReasons = new Map<string, StopReason>()
   /** runs.task_id / agent_id exist (healed by openDatabase) */
@@ -988,7 +990,7 @@ export class CompanyStore {
       // are shared.
       const holder=repoId&&this.worktreePath&&!workflow&&!task.plan&&!task.work&&!opts.lease&&this.store.getRepo(repoId)?.isGit ? this.checkoutHolder(repoId,task.id) : null
       if(holder) {
-        const work=taskWorkSchema.parse({repoId,worktreePath:this.worktreePath!(task.identifier),branch:taskBranchName(task.identifier,task.title)}) as TaskWork
+        const work=taskWorkSchema.parse({repoId,worktreePath:this.worktreePath!(task.identifier),branch:this.worktreeBranch?.(task.identifier) ?? taskBranchName(task.identifier,task.title)}) as TaskWork
         task={...task,repoId,agentSessionId:null,work}
         wake=[...wake,workBrief(work)]
         this.activity(id,'work',`${holder.identifier} is already working in the ${this.store.getRepo(repoId!)?.name ?? 'repository'} checkout, so ${task.identifier} runs in its own worktree on ${work.branch}. Your checkout is not touched.`,'system')
@@ -1056,7 +1058,7 @@ export class CompanyStore {
     return null
   }
   /** WORKTREE.md: where a task's own worktree goes (WorktreeManager.taskPath), plugged in with the task worktree service; unset = no isolation (a busy checkout is shared). */
-  setWorktreePaths(fn: ((identifier: string) => string) | null): void { this.worktreePath = fn }
+  setWorktreePaths(fn: ((identifier: string) => string) | null, branch: ((identifier: string) => string | null) | null = null): void { this.worktreePath = fn;this.worktreeBranch = branch }
   private companyWorkspace(companyId: string): string|null {
     if(!this.scope.companiesRoot) return null
     return this.scope.ensureWorkspace(companyId)
