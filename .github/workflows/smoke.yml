@@ -33,7 +33,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      # The electron-rebuild postinstall downloads headers, and a network blip there fails the whole job (same as
+      # desktop-and-cloud in ci.yml): each attempt gets 5 minutes, and a stall or failure is retried once.
+      - name: npm ci
+        id: npm-ci
+        timeout-minutes: 5
+        continue-on-error: true
+        run: npm ci
+      - name: npm ci (retry)
+        if: steps.npm-ci.outcome == 'failure'
+        timeout-minutes: 5
+        run: |
+          echo "::warning title=npm ci retried::The first npm ci failed or stalled for 5 minutes (see its log); retrying once."
+          npm ci
       - name: Package the unsigned app
         run: npm run pack:dir
       - name: Smoke test the packaged app

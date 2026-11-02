@@ -104,6 +104,8 @@ export interface EngineOverrides {
   stallSweepMs?: number
   /** Stall threshold (tests). Default Settings.stallMinutes. */
   stallThresholdMs?: number
+  /** Replace the stall monitor (tests drive its clock and sweeps themselves). */
+  stall?: StallMonitor
   /** Wait-node time unit (tests). Default 1000 ms. */
   waitSecondMs?: number
   /** Harness fallback filter (ExecDeps.harnessFallback). Absent = the desktop's rule. */
@@ -131,16 +133,18 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
   let providers: ProviderInfo[] = []
   const executions = new Map<string, Execution>()
   // CONTRACT §13: one stall monitor for every running step (threshold read live from Settings.stallMinutes)
-  const stall = new StallMonitor({
-    thresholdMs: () => {
-      if (overrides.stallThresholdMs) return overrides.stallThresholdMs
-      try {
-        return stallThresholdMs(ctx.getSettings().stallMinutes)
-      } catch {
-        return stallThresholdMs(10)
+  const stall =
+    overrides.stall ??
+    new StallMonitor({
+      thresholdMs: () => {
+        if (overrides.stallThresholdMs) return overrides.stallThresholdMs
+        try {
+          return stallThresholdMs(ctx.getSettings().stallMinutes)
+        } catch {
+          return stallThresholdMs(10)
+        }
       }
-    }
-  })
+    })
   const semaphore = new Semaphore(() => concurrencyLimit(ctx.getSettings().concurrency))
   const replySemaphore = new Semaphore(() => overrides.replySlots ?? REPLY_SLOTS)
 
