@@ -236,6 +236,11 @@ test('staple: exit 68 alone is not a network error, stapler(1) also uses it for 
 test('isStapleNetworkError: connection failures yes, ticket and file problems no', () => {
   for (const out of [
     STAPLE_LOST_CONNECTION.out,
+    // the same drop caught from the real stapler on a Mac (exit 68, about 7s in); its next try reached Apple
+    `Processing: /tmp/F.dmg
+error is Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost." UserInfo={_kCFStreamErrorCodeKey=-4}
+CloudKit's response is inconsistent with expections: (null)
+The staple and validate action failed! Error 68.`,
     'Error Domain=NSURLErrorDomain Code=-1001 "The request timed out."',
     'The Internet connection appears to be offline.',
     'Could not connect to the server.',
