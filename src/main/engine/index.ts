@@ -298,7 +298,8 @@ export function createEngineWith(ctx: EngineContext, overrides: EngineOverrides 
       snapshot,
       task ? { ...task, resumeSessionId: opts.resumeSessionId ?? null } : null,
       task ? null : (opts.agentId ?? null),
-      !!opts.reply && !task
+      !!opts.reply && !task,
+      opts.channelId ?? null
     )
     stall.startTimer(overrides.stallSweepMs ?? 15_000)
     executions.set(id, exec)

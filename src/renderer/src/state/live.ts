@@ -435,7 +435,7 @@ export function goNextNeedsYou(): void {
   if (live) return void focusAgent(live.agentId, live.askId)
   if (departmentsOn(s)) {
     const paused = new Set(s.companies.filter((c) => c.pausedAt).map((c) => c.id))
-    const task = needsYouTasks(s.tasks, laneContext(s.asks, s.companyAgents, paused), scope, { skipLiveAsks: true })[0]
+    const task = needsYouTasks(s.tasks, laneContext(s.asks, s.companyAgents, paused), scope, { skipLiveAsks: true, decisions: true })[0]
     if (task) return void openBoard(task.task.companyId, { taskId: task.task.id })
   }
   // outside any company scope (Personal sessions): the hub's own order

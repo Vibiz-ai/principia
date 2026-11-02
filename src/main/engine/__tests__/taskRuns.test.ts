@@ -167,6 +167,22 @@ describe('engine: board task runs', () => {
     expect(calls[2]!.mcpArgs!.join(' ')).not.toContain('task_get')
     expect(calls[2]!.mcpArgs!.join(' ')).not.toContain('HIVE_LIVE_DIR')
   })
+  it('browser tabs outlive a run: replies share their conversation\'s tabs, wakes share their task\'s (PR-93)', async () => {
+    const { ctx } = setup()
+    const scopes: string[] = []
+    ctx.browser = { attachment: (req) => (scopes.push(req.sessionKey), null), toolNames: () => [] }
+    const engine = await engineFor(ctx, [], () => ({ exitCode: 0 }))
+    const reply = (): string => engine.runs.start(prompt(), { trigger: 'manual', companyId: 'co_acme', agentId: 'agt_1', reply: true, channelId: 'fch_1' }).id
+    await waitRun(ctx, reply())
+    await waitRun(ctx, reply())
+    const wake = (): string => engine.runs.start(prompt(), { trigger: 'task', taskId: 'task_1', agentId: 'agt_1' }).id
+    await waitRun(ctx, wake())
+    await waitRun(ctx, wake())
+    const lone = engine.runs.start(prompt(), { trigger: 'manual', companyId: 'co_acme' })
+    await waitRun(ctx, lone.id)
+    expect(scopes).toEqual(['chat:fch_1', 'chat:fch_1', 'task:task_1', 'task:task_1', `run:${lone.id}`])
+  })
+
   it('task-mode schedules go to the company bridge board (§8): a fire wakes the card and starts no run', async () => {
     const { ctx } = setup()
     const fired: string[] = []

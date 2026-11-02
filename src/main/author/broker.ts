@@ -1,8 +1,8 @@
 /**
  * Author broker (AUTHORING.md §1.2, §2; PO1-PO4, PO8). Main's single authority for the `hive` tools:
  * - identity comes ONLY from the live dir a call arrived in (LiveOwner), never from the line's content;
- * - PO1: only interactive session owners are served (headless steps never get the server; a step owner is refused);
- *   the exceptions are the slack toolset (SA2) and the task_* toolset of task runs (DEPARTMENTS.md §6);
+ * - PO1: interactive session owners are served; a step owner is refused, except for the slack toolset (SA2), the task_*
+ *   toolset of task runs (DEPARTMENTS.md §6) and TASK_AUTHOR_TOOLS of a run that holds its board task;
  * - dispatches exactly AUTHOR_TOOLS; anything else is "Unknown tool";
  * - writes (create/update/run) become drafts + an approval Ask; the call blocks until the user decides (or wait_s);
  * - decide() persists (workflow + origin, schedule, run) and answers every waiting call.
@@ -44,7 +44,8 @@ import type {
 } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackTriggerInput, type SlackWorkTool } from '../../shared/slack'
-import { isBoardTool, isCompanyTool, isConnectionsTool, isHelpTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
+import { isHqTool, type HqTool } from '../../shared/hq'
+import { isBoardTool, isCompanyTool, isConnectionsTool, isHelpTool, isTaskAuthorTool, TASK_MUTATIONS, type BoardTool, type TaskTool } from '../company/taskToolDefs'
 import { AuthorDrafts, publicDraft, stripWorkflow, workflowHash, type DraftOwner, type DraftRecord, type DraftResult } from './drafts'
 import { validateAuthoredDraft } from './validateDraft'
 import { isChatCompanyTool } from '../../shared/chatCompany'
@@ -69,6 +70,8 @@ export interface BrokerDeps {
   drafts: AuthorDrafts
   /** Session owner identity (title, adapter, agentSessionId, root agent). null = unknown session. */
   owner(sessionId: Id): DraftOwner | null
+  /** PO1: the owner of a draft a board task's run proposes. Absent = task runs cannot propose. */
+  stepOwner?(step: { stepId: Id; runId: Id }, taskId: Id): DraftOwner | null
   ctx(): AuthoringContext
   providers(): ProviderInfo[]
   engineValidate(d: WorkflowDraft): ValidationError[]
@@ -128,6 +131,8 @@ export interface BrokerDeps {
     alertUserId(): string | null
     channelName(id: string): string
   }
+  /** shared/hq.ts: the main chat's tools, for a chat of Personal that holds no task. Absent = the tools are unknown. */
+  hq?: { allowed(sessionId: Id): boolean; call(tool: HqTool, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> | Record<string, unknown> }
   /**
    * shared/chatCompany.ts: `principia_propose_company` (interactive chat sessions only). Opens the confirmation card
    * and waits for the founder's decision. Absent = the tool is unknown.
@@ -227,6 +232,22 @@ export class AuthorBroker {
         .catch((e: unknown) => answer({ ok: false, error: e instanceof Error ? e.message : String(e) }))
       return
     }
+    // CHAT-UI.md §11: the main chat: only a chat of Personal, whatever the server listed
+    if (isHqTool(tool)) {
+      if (!('sessionId' in owner) || !this.d.hq?.allowed(owner.sessionId)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+      if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
+      const ac = new AbortController()
+      this.calls.set(key, ac)
+      Promise.resolve()
+        .then(() => this.d.hq!.call(tool, isObj(line.args) ? line.args : {}, ac.signal))
+        .then((result) => {
+          if (!ac.signal.aborted) answer({ ok: true, result })
+        })
+        .catch((e: unknown) => {
+          if (!ac.signal.aborted) answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+        })
+      return
+    }
     // "Start a company from this chat": a session owner only; the card waits for the founder (nothing is created here)
     if (isChatCompanyTool(tool)) {
       if (!('sessionId' in owner) || !this.d.proposals) return answer({ ok: false, error: `Unknown tool: ${tool}` })
@@ -245,15 +266,23 @@ export class AuthorBroker {
     }
     // SLACK.md §11.4: the work toolset rides on the same handler (it decides from the owner: Slack-triggered steps only)
     const isSlack = (SLACK_TOOLS as readonly string[]).includes(tool) || (SLACK_WORK_TOOLS as readonly string[]).includes(tool)
-    // PO1 / SA2: a step owner may call only the slack toolset; an authoring tool from a step is unknown
-    if (!isSlack && !('sessionId' in owner)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+    // PO1 / SA2: a step owner may call the slack toolset, and a board task's run may propose routines; else unknown
+    let who: Id | DraftOwner | null = 'sessionId' in owner ? owner.sessionId : null
+    if (!isSlack && !('sessionId' in owner)) {
+      try {
+        who = isTaskAuthorTool(tool) ? this.taskRunOwner(owner, line) : null
+      } catch (e) {
+        return answer({ ok: false, error: e instanceof Error ? e.message : String(e) })
+      }
+      if (!who) return answer({ ok: false, error: `Unknown tool: ${tool}` })
+    }
     if (!isSlack && !(AUTHOR_TOOLS as readonly string[]).includes(tool)) return answer({ ok: false, error: `Unknown tool: ${tool}` })
     if (isSlack && !this.d.slack) return answer({ ok: false, error: `Unknown tool: ${tool}` })
     if (!this.allow(owner)) return answer({ ok: false, error: 'Too many Hive tool calls (limit 60 per minute). Wait a minute.' })
     const ac = new AbortController()
     this.calls.set(key, ac)
     const args = isObj(line.args) ? line.args : {}
-    const run = isSlack ? this.d.slack!.call(owner, tool as SlackTool | SlackWorkTool, args) : this.dispatch((owner as { sessionId: Id }).sessionId, tool as AuthorTool, args, ac.signal)
+    const run = isSlack ? this.d.slack!.call(owner, tool as SlackTool | SlackWorkTool, args) : this.dispatch(who as Id | DraftOwner, tool as AuthorTool, args, ac.signal)
     run
       .then((result) => {
         if (!ac.signal.aborted) answer({ ok: true, result })
@@ -308,9 +337,36 @@ export class AuthorBroker {
     this.calls.delete(key)
   }
 
+  /** PO1: the draft owner of a board task's run. null = a step with no task; throws when the line or the task is not its own. */
+  private taskRunOwner(step: { stepId: Id; runId: Id }, line: Record<string, unknown>): DraftOwner | null {
+    let caller: TaskCallerRef
+    try {
+      if (!this.d.tasks || !this.d.stepOwner) return null
+      caller = this.d.tasks.resolve(step)
+    } catch {
+      return null
+    }
+    if (!caller.taskId) return null
+    const companyId = str(line.company_id, 64)
+    const taskId = str(line.task_id, 64)
+    if (companyId && companyId !== caller.companyId) throw new Error('This task tool server belongs to another company. Restart the session.')
+    if (taskId && taskId !== caller.taskId) throw new Error('This task tool server was started for another task')
+    if (!caller.holdsTask) throw new Error('This task is no longer yours to change (its run or session ended)')
+    return this.d.stepOwner(step, caller.taskId)
+  }
+
   // ---------- tools ----------
 
-  async dispatch(sessionId: Id, tool: AuthorTool, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async dispatch(who: Id | DraftOwner, tool: AuthorTool, rawArgs: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+    const step = typeof who !== 'string'
+    // PO1: a task's run never sits on a slot waiting for a click: the card stays open and approving it saves the routine
+    const args = step ? { ...rawArgs, wait_s: 0 } : rawArgs
+    const out = await this.call(who, tool, args, signal)
+    if (step && out.status === 'pending') return { ...out, note: 'The approval card is with the founder and saves this when they approve it, even after this run ends. Do not wait or propose it again: end the turn with task_ask saying the card is waiting.' }
+    return out
+  }
+
+  private async call(sessionId: Id | DraftOwner, tool: AuthorTool, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
     switch (tool) {
       case 'hive_workflow_schema':
         return this.schema(str(args.topic, 20) ?? 'all')
@@ -512,14 +568,14 @@ export class AuthorBroker {
       .map((s) => ({ sentence: s.sentence, nextAt: s.nextFireAt }))
   }
 
-  private ownerOf(sessionId: Id): DraftOwner {
-    const o = this.d.owner(sessionId)
+  private ownerOf(who: Id | DraftOwner): DraftOwner {
+    const o = typeof who === 'string' ? this.d.owner(who) : who
     if (!o) throw new Error('This Hive session is no longer known to Hive.')
     return o
   }
 
   /** hive_workflow_create / hive_workflow_update. */
-  async propose(sessionId: Id, kind: 'create' | 'update', args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async propose(sessionId: Id | DraftOwner, kind: 'create' | 'update', args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
     const owner = this.ownerOf(sessionId)
     const summary = str(args.summary, 800)?.trim() ?? ''
     if (summary.length < 10) return { status: 'invalid', errors: [{ path: 'summary', message: 'summary is required (10-800 chars): what it does, when, what it touches' }], warnings: [] }
@@ -597,7 +653,7 @@ export class AuthorBroker {
   }
 
   /** hive_workflow_run (§2.4, PO3). */
-  async run(sessionId: Id, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async run(sessionId: Id | DraftOwner, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
     const owner = this.ownerOf(sessionId)
     const wf = this.d.getWorkflow(String(args.workflow_id ?? ''))
     if (!wf) return { status: 'invalid', errors: [{ path: 'workflow_id', message: 'Workflow not found. Call hive_workflow_list.' }], warnings: [] }
@@ -641,7 +697,7 @@ export class AuthorBroker {
     return this.waitFor(rec.id, clampWait(args.wait_s, DEFAULT_WAIT_S), signal)
   }
 
-  async draftStatus(sessionId: Id, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async draftStatus(sessionId: Id | DraftOwner, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
     const owner = this.ownerOf(sessionId)
     const rec = this.d.drafts.get(String(args.draft_id ?? ''))
     if (!rec || rec.ownerKey !== owner.ownerKey) throw new Error('Draft not found (only your own drafts are visible).')
@@ -787,8 +843,8 @@ export class AuthorBroker {
           ownerLabel: rec.ownerLabel,
           ownerKey: rec.ownerKey,
           sessionId: rec.sessionId,
-          runId: null,
-          stepId: null,
+          runId: rec.runId,
+          stepId: rec.stepId,
           draftId: rec.id,
           approvedAt: at,
           edited

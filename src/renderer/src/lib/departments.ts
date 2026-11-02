@@ -55,6 +55,12 @@ export function taskDepartment(t: CompanyTask, ctx: LaneContext): Id | null {
   return t.departmentId ?? seatOf(t, ctx)?.departmentId ?? null
 }
 
+/**
+ * A badge counts what needs a decision. Finished work waiting for review stays in the Needs you lane of the Board and in
+ * Home's quiet line, but never in a number (CHAT-UI.md §10).
+ */
+export const needsDecision = (t: CompanyTask, ctx: LaneContext): boolean => taskLane(t, ctx) === 'needs_you' && taskReason(t, ctx) !== 'review'
+
 export interface LaneCounts {
   needsYou: number
   working: number
@@ -70,10 +76,8 @@ export function departmentCounts(tasks: CompanyTask[], ctx: LaneContext): Record
     const dep = taskDepartment(t, ctx)
     if (!dep) continue
     const lane = taskLane(t, ctx)
-    if (lane !== 'needs_you' && lane !== 'working') continue
-    const c = (out[dep] ??= zero())
-    if (lane === 'needs_you') c.needsYou++
-    else c.working++
+    if (lane === 'working') (out[dep] ??= zero()).working++
+    else if (needsDecision(t, ctx)) (out[dep] ??= zero()).needsYou++
   }
   return out
 }
@@ -84,7 +88,7 @@ export function boardCounts(tasks: CompanyTask[], companyId: Id, ctx: LaneContex
   for (const t of tasks) {
     if (t.companyId !== companyId) continue
     const lane = taskLane(t, ctx)
-    if (lane === 'needs_you') {
+    if (needsDecision(t, ctx)) {
       c.needsYou++
       if (t.status === 'in_progress') c.liveAsks!++
     } else if (lane === 'working') c.working++

@@ -22,7 +22,7 @@ import { AgentBust } from '../../shell/DepartmentGroup'
 import { agentVisual, saidPreview } from '../../lib/live'
 import { inScope } from '../../lib/scope'
 import { age } from '../../lib/time'
-import { firstLine, sessionEndLabel } from '../../lib/format'
+import { sessionEndLabel } from '../../lib/format'
 import { lastChatKey, sessionUnread } from '../../lib/agentChatView'
 import { liveTaskKey } from '../../lib/liveRow'
 import { byWork, isOrphanTask, orphanUnread, workLine, workOf, workRank, workState, type ConvWork } from '../../lib/convWork'
@@ -33,7 +33,7 @@ import { useWorking } from '../../state/live'
 import { useDeskWho } from '../../state/desk'
 import { isClosed, type ClosedChats } from '../../lib/closedChats'
 import { departmentsOn, getState, loadJson, providerLabel, reopenChat, saveJson, sessionTitle, TASK_SEEN_SINCE, useStore, type ChatsFilter } from '../../state/store'
-import { useAgentStatus, useIsCode } from '../desk/Desk'
+import { useIsCode } from '../desk/Desk'
 import { useAgentDisplay } from '../board/NeedsYouTasks'
 import { conversationText, renameConversation, useConversations, useTaskChannels, whoLine, type ConversationRow } from '../../state/conversations'
 import { nativeMenu } from '../../lib/hive'
@@ -47,9 +47,9 @@ export type ChatRowModel =
   /** CHAT-UI.md §7: a conversation with the team (Principia brought them in), or your private one with one agent */
   | { key: string; kind: 'conv'; conv: ConversationRow; companyId: Id; live: boolean; at: string; work?: ConvWork<CompanyTask> }
   /** CHAT-UI.md §8.6: a task with no conversation (autopilot, Run now, a routine); opens its task chat */
-  | { key: string; kind: 'task'; task: CompanyTask; companyId: Id; live: boolean; at: string; unread: boolean }
+  | { key: string; kind: 'task'; task: CompanyTask; companyId: Id; live: boolean; at: string; unread: boolean; twin?: boolean }
 
-/** Chats shows Everything or Live only; the groups say what each row is (older links' Agents / Direct read as Everything). */
+/** Chats shows Everything or Live only (older links' Agents / Direct read as Everything). */
 export const CHATS_FILTERS: { value: ChatsFilter; label: string }[] = [
   { value: 'all', label: 'Everything' },
   { value: 'live', label: 'Live only' }
@@ -61,34 +61,6 @@ export function filterRows(rows: readonly ChatRowModel[], filter: ChatsFilter, q
   return rows.filter((r) => (filter === 'live' ? r.live : true) && (!q || rowText(r).toLowerCase().includes(q)))
 }
 
-export type ChatGroup = 'team' | 'private' | 'tasks' | 'agent' | 'claude' | 'working'
-export const CHAT_GROUP_LABEL: Record<ChatGroup, string> = { team: 'With the team', private: 'One-on-one', tasks: 'Tasks', agent: 'Agent sessions', claude: 'Claude', working: 'Working' }
-/** Which group a row is listed under: With the team, One-on-one (private), Tasks, Agent sessions, Claude, Working. */
-export function chatGroup(r: ChatRowModel): ChatGroup {
-  if (r.kind === 'conv') return r.conv.private ? 'private' : 'team'
-  if (r.kind === 'task') return 'tasks'
-  if (r.kind === 'agent') return 'agent'
-  if (r.kind === 'session') return 'claude'
-  return 'working'
-}
-/** The rows in their groups, in the fixed order above; empty groups are left out. */
-export function groupRows(rows: readonly ChatRowModel[]): { group: ChatGroup; label: string; rows: ChatRowModel[] }[] {
-  return (Object.keys(CHAT_GROUP_LABEL) as ChatGroup[]).map((g) => ({ group: g, label: CHAT_GROUP_LABEL[g], rows: rows.filter((r) => chatGroup(r) === g) })).filter((g) => g.rows.length > 0)
-}
-/**
- * PR-47 (founder: "too much for the user's head, you lose focus"): how many rows a group shows before "Show N more".
- * Rows come sorted (needs you, live, unread first), so the cut only hides what waits on nobody.
- */
-export const GROUP_LIMIT: Record<ChatGroup, number> = { team: 6, private: 6, tasks: 4, agent: 4, claude: 4, working: 4 }
-/** The rows a group shows: the first GROUP_LIMIT (all when expanded), plus the open one if the cut hid it. */
-export function visibleRows(group: ChatGroup, rows: readonly ChatRowModel[], o: { expanded: boolean; selected: string | null }): { rows: ChatRowModel[]; hidden: number } {
-  const n = GROUP_LIMIT[group]
-  if (o.expanded || rows.length <= n) return { rows: [...rows], hidden: 0 }
-  const head = rows.slice(0, n)
-  const picked = o.selected ? rows.slice(n).find((r) => r.key === o.selected) : undefined
-  const out = picked ? [...head, picked] : head
-  return { rows: out, hidden: rows.length - out.length }
-}
 function rowText(r: ChatRowModel): string {
   if (r.kind === 'agent') {
     const p = r.agent.data.persona
@@ -204,6 +176,14 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
       if (/#chat-|(^|\s)replying in “/i.test(i.title)) continue
       rows.push({ key: `run:${i.agentId}`, kind: 'run', agentId: i.agentId, title: i.title, detail: i.detail, companyId: i.companyId, live: true, at: i.at })
     }
+    // the task tells apart the rows that would otherwise both read "Marcus": its tasks, and its own chat
+    const perAgent = new Map<Id, number>()
+    const agentOf = (r: ChatRowModel): Id | null => (r.kind === 'task' ? r.task.agentId : r.kind === 'agent' ? r.agent.id : null) ?? null
+    for (const r of rows) {
+      const a = agentOf(r)
+      if (a) perAgent.set(a, (perAgent.get(a) ?? 0) + 1)
+    }
+    for (const r of rows) if (r.kind === 'task' && r.task.agentId) r.twin = (perAgent.get(r.task.agentId) ?? 0) > 1
     return byWork(rows.map((r) => ({ r, rank: rowRank(r), at: r.at }))).map((x) => x.r)
   }, [sessions, agents, tasks, on, working, scope, convs, taskChannels, seen, turnsJson])
 }
@@ -269,7 +249,6 @@ export function ChatRow({ row, selected, onPick, onClose }: { row: ChatRowModel;
 
 function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowModel, { kind: 'agent' }>; selected: boolean; onPick: (key?: string) => void; onClose: () => void }): React.JSX.Element {
   const who = useDeskWho(row.agent)
-  const status = useAgentStatus(row.agent)
   const node = useSessionAgent(row.chat?.id)
   const seen = useStore((x) => (node ? !!x.seenIdle[node.id] : false))
   // CHAT-UI.md §8.6: live only while it answers in THIS chat; its tasks show on the conversations that filed them
@@ -279,17 +258,16 @@ function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRow
   const needs = node?.status === 'needs_you' && node.needs !== 'idle'
   // like a bot list: what it is doing while it answers here, else the last thing it said here
   const said = node ? saidPreview(node, 160) : null
-  const resting = status.kind === 'working' ? `${who.role} · open the chat` : status.text
-  const line = turnWorking ? (node?.activity ? (plainActivity(node.activity) ?? firstLine(node.activity, 120)) : 'Working…') : needs ? 'Waiting for you to allow something' : (said ?? resting)
+  // CHAT-UI.md §9: an agent is its name: you know what it does, so never the task it is on
+  const line = turnWorking ? 'Working…' : needs ? 'Waiting for you to allow something' : (said ?? 'Ready')
   return (
-    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={`${who.name} · ${who.role}`}>
+    <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={who.name}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
         <AgentBust agent={row.agent} size={30} />
       </span>
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{who.name}</span>
-          <span className="chats5-row__role">{who.role}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
         <span className={`chats5-row__last ${working ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>{line}</span>
@@ -412,7 +390,7 @@ function TaskChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
   const st = workState(t)
   const needs = st === 'needs_you'
   const unread = !selected && row.unread
-  const line = needs ? 'Needs you' : row.live ? (plainActivity(activity, { code }) ?? 'Working…') : st === 'failed' ? 'Stopped · unread' : 'Finished · unread'
+  const line = needs ? 'Needs you' : row.live ? (seat ? 'Working…' : (plainActivity(activity, { code }) ?? 'Working…')) : st === 'failed' ? 'Stopped · unread' : 'Finished · unread'
   return (
     <button type="button" role="option" aria-selected={selected} data-chatux="task-row" data-task={t.identifier} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live ? 'is-shimmering' : ''} ${unread || needs ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={`${seat ? `${who.name} · ` : ''}${taskName(t, code)}`}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
@@ -420,11 +398,12 @@ function TaskChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
       </span>
       <span className="chats5-row__body">
         <span className="chats5-row__top">
-          <span className="chats5-row__name">{taskName(t, code)}</span>
+          <span className="chats5-row__name">{seat ? who.name : taskName(t, code)}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
         <span className={`chats5-row__last ${row.live ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>
-          {seat ? `${who.name} · ` : ''}
+          {/* CHAT-UI.md §9: the agent's name is enough; the task only tells apart two rows of one agent */}
+          {seat && row.twin ? `${taskName(t, code)} · ` : ''}
           {line}
         </span>
       </span>

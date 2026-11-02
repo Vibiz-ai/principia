@@ -15,8 +15,7 @@ describe("Home: Answer opens the task's chat", () => {
     expect(home).not.toContain("{open ? 'Close' : 'Answer'}")
   })
   it('the task chat shows the open question and answers it from its composer, focused on arrival', () => {
-    expect(chat).toContain("data-chatux': 'task-chat-question'")
-    expect(chat).toContain('answers={!!question}')
-    expect(chat).toMatch(/if \(answers\) input\.current\?\.focus\(\)/)
+    expect(chat).toContain('data-chatux="task-chat-question"')
+    expect(chat).toContain('focused={!!question}')
   })
 })

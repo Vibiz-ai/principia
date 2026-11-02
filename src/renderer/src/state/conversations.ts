@@ -13,7 +13,7 @@ import type { ForumMessage } from '@shared/forum'
 import type { Id } from '@shared/types'
 import { errorMessage, hive } from '../lib/hive'
 import type { DeskAgent } from '../lib/desk'
-import { conversationRows, conversationSlug, conversationTitle, everyone, handoffLine, mentionedAll, privateWith, type ConversationRow, type TeamRoute } from '../lib/conversations'
+import { conversationRows, conversationSlug, conversationTitle, everyone, handoffLine, mentionedAll, type ConversationRow, type TeamRoute } from '../lib/conversations'
 
 export { conversationRows, conversationText, privateWith, whoLine, type ConversationRow } from '../lib/conversations'
 import { getForum, initForumEvents, loadChannel, loadForum, loadThread, post, useForum } from './forum'
@@ -50,14 +50,12 @@ export function useTaskChannels(companyId: Id | null | undefined): Record<string
 }
 
 /**
- * "Message Marcus" (Team, the agent page, ⌘K): your private conversation with them, or New conversation already
- * addressed to them. One kind of one-on-one everywhere.
+ * "Message Marcus" (Team, the agent page, ⌘K): their own chat, or New task already addressed to them. One kind of
+ * one-on-one everywhere.
  */
 export async function messageAgent(companyId: Id, agentId: Id): Promise<void> {
-  await loadForum(companyId).catch(() => undefined)
-  const st = getForum().byCompany[companyId]?.state
-  const mine = st ? privateWith(conversationRows(st, companyId), agentId) : null
-  openChatsIn(companyId, mine ? `conv:${mine.id}` : `new:agent:${agentId}`)
+  // CHAT-UI.md §9: their own chat, the same chat as Claude's; an agent with none yet starts on your first message
+  openChatsIn(companyId, getState().sessions.some((s) => s.companyAgentId === agentId) ? `agent:${agentId}` : `new:agent:${agentId}`)
 }
 
 /** CHAT-UI.md §8.6: the conversation a task was filed from (its live work shows there), or null. */

@@ -32,6 +32,9 @@ async function withState(departments: boolean, extra: Record<string, unknown> = 
   })
 }
 
+// the conversation panel opens on your click (CHAT-UI.md §9); these tests read what is in it
+vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'hive.convoPanel.open.v2' ? 'true' : null), setItem: () => undefined, removeItem: () => undefined })
+
 describe('AskForm', () => {
   it('renders a choice ask with its options, a confirm as Yes / No, and nothing once answered', async () => {
     const { AskForm } = await import('./AskForm')
@@ -76,14 +79,14 @@ describe('TaskCard', () => {
 
 describe('NeedsYouTasks', () => {
   beforeEach(() => vi.resetModules())
-  it('lists the company’s asks, reviews and parked tasks; nothing while departments are off', async () => {
+  it('lists the company’s asks and parked tasks, never finished work; nothing while departments are off', async () => {
     // a company with code (a repository) shows task codes; pm-review C7: one without code shows titles only
     await withState(true, { repos: [{ id: 'repo_a', companyId: 'co_a' }] })
     const { NeedsYouTasks } = await import('./NeedsYouTasks')
     const html = renderToStaticMarkup(createElement(NeedsYouTasks, { companyId: 'co_a' }))
     expect(html).toContain('PRN-1')
     expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('PRN-4')
+    expect(html).not.toContain('PRN-4')
     expect(html).not.toContain('PRN-2')
     expect(html).not.toContain('PRN-3')
     await withState(false)
@@ -157,9 +160,9 @@ describe('Sidebar Needs you task items', () => {
     await withState(true)
     const { NeedsYouTasksSlot, useNeedsYouTaskCount } = await import('../../shell/DepartmentGroup')
     const html = renderToStaticMarkup(createElement(NeedsYouTasksSlot, { companyId: 'co_a', heading: true }))
-    // PRN-1 (question) and PRN-4 (review) wait on you
+    // PRN-1 (a question) needs a decision; PRN-4 (a review) does not
     expect(html).toContain('Needs you')
-    expect(html).toContain('◆ 2')
+    expect(html).toContain('◆ 1')
     expect(html).toContain('Task 1')
     expect(html).not.toContain('PRN-1')
     // All mode keeps the Sidebar's own header: no second one from the slot
@@ -167,7 +170,7 @@ describe('Sidebar Needs you task items', () => {
     let count = -1
     const Probe = (): null => { count = useNeedsYouTaskCount(); return null }
     renderToStaticMarkup(createElement(Probe))
-    expect(count).toBe(2)
+    expect(count).toBe(1)
     await withState(true, { tasks: [task('5', { status: 'done' })] })
     expect(renderToStaticMarkup(createElement(NeedsYouTasksSlot, { companyId: 'co_a', heading: true }))).toBe('')
   })
@@ -281,7 +284,7 @@ describe('Department and agent pages with personas', () => {
     const html = renderToStaticMarkup(createElement(AgentSeatView, { id: 'agt_copy' }))
     // the header: Team › Marcus · Copywriter (no left identity column any more)
     expect(html).toContain('>Team<')
-    expect(html).toMatch(/convo-title__name">Marcus<.*convo-title__role">· Copywriter</)
+    expect(html).toMatch(/convo-title__name">Marcus</)
     expect(html).not.toContain('desk-left')
     // the conversation is Marcus's own live chat; with no chat yet nothing starts from looking: the empty chat and its
     // composer, and the first message starts it
@@ -328,7 +331,7 @@ describe('Company rail tiles (five doors E14)', () => {
     expect(html).toContain('rail-mark--personal')
   })
   it('keeps the badges: the needs-you pill hides the health line, a failed run shows the red square', async () => {
-    await withState(true, { ...healthy, tasks: [...healthy.tasks, task('4', { status: 'in_review', agentId: 'agt_copy' })] })
+    await withState(true, { ...healthy, tasks: [...healthy.tasks, task('4', { status: 'blocked', blockReason: 'run_failed', agentId: 'agt_copy' })] })
     let { CompanyRail } = await import('../../shell/CompanyRail')
     let html = renderToStaticMarkup(createElement(CompanyRail))
     expect(html).not.toContain('all agents healthy')

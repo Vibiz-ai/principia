@@ -335,7 +335,7 @@ export function RailPopover({ company, top, onEnter, onLeave, onClose }: { compa
   // A2: the badge counts the Board's tasks that wait on you too, so the label lists them (live asks are items already)
   const tasks = useStore((s) => s.tasks)
   const ctx = useLaneContext()
-  const taskRows = useMemo(() => (company ? needsYouTasks(tasks, ctx, company.id, { skipLiveAsks: true }) : []), [tasks, ctx, company])
+  const taskRows = useMemo(() => (company ? needsYouTasks(tasks, ctx, company.id, { skipLiveAsks: true, decisions: true }) : []), [tasks, ctx, company])
   const paused = isCompanyPaused(company)
   // PR-47: Esc closes it, wherever the focus is
   useEffect(() => {

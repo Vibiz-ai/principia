@@ -1,7 +1,7 @@
 /**
  * Home (five doors step 3, design §4.1): the 5-second answer. "Good morning, Maya. Northwind Coffee · 3 things need
  * you, 1 agent is working." Then, in this order:
- * 1. New conversation (CHAT-UI.md §7, TeamComposer): To: Principia picks ▾ and a line that says who will answer before
+ * 1. New conversation (CHAT-UI.md §9, TeamComposer): To: Claude ▾ and a line that says who will answer before
  *    you send ("→ Principia brings in Marcus"); Send opens the conversation in Chats, listed under Recent in the
  *    sidebar. Shown in the first week too: that is when "where do I talk?" matters most.
  * 2. Needs you (the top three, "+ N more"): everything that waits on you in this company, from the one live source (useNeeds): live asks and
@@ -114,6 +114,12 @@ export function HomeView(): React.JSX.Element {
             {allNeeds ? 'Show fewer' : `+ ${needsTotal - 3} more`}
           </Button>
         </div>
+      )}
+      {/* CHAT-UI.md §10: finished work has no badge; it waits here, one quiet line */}
+      {reviews > 0 && (
+        <button type="button" className="link-btn text-tertiary home5__reviews" data-chatux="home-reviews" onClick={() => openBoard(scope)}>
+          {reviews} finished · ready for review
+        </button>
       )}
       <PrincipiaSuggestions items={sugs.items} onChanged={sugs.reload} />
     </>
@@ -244,7 +250,7 @@ function NeedsList({ scope, code, drafts, empty, paused }: { scope: Id; code: bo
   const tasks = useStore((s) => s.tasks)
   const on = useStore((s) => departmentsOn(s))
   const ctx = useLaneContext()
-  const items = useMemo(() => (on ? needsYouTasks(tasks, ctx, scope, { skipLiveAsks: true }) : []), [on, tasks, ctx, scope])
+  const items = useMemo(() => (on ? needsYouTasks(tasks, ctx, scope, { skipLiveAsks: true, decisions: true }) : []), [on, tasks, ctx, scope])
   const leftovers = useLeftovers()
   return (
     <>

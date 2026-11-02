@@ -15,7 +15,7 @@ import type { NotifyResult } from '../../shared/authoring'
 import type { Ask, AskAnswer } from '../../shared/live'
 import type { MemoryMode } from '../../shared/memory'
 import { newId } from '../../shared/ids'
-import { runScope, taskScope } from '../../shared/browser'
+import { scopeForRun } from '../../shared/browser'
 import type {
   AdapterId,
   AgentNode,
@@ -241,7 +241,9 @@ export class Execution {
     /** FORUM.md §3: a seat run without a board task (a Forum reply): the step still gets that seat's Forum access */
     private seatAgentId: string | null = null,
     /** StartRunOptions.reply: a person is waiting on this run */
-    private reply = false
+    private reply = false,
+    /** StartRunOptions.channelId: the Forum conversation this run replies in */
+    private channelId: string | null = null
   ) {
     this.done = new Promise((r) => (this.resolveDone = r))
     const t = run.target
@@ -882,11 +884,11 @@ export class Execution {
           this.ctx.log.warn('engine: forum MCP attach failed; the step keeps the CLI and the fenced block', { stepId, error: String(e) })
         }
       }
-      // BROWSER.md §3: the company browser (its own token, this run's company only; the task's own tabs, kept across its wakes)
+      // BROWSER.md §3: the company browser (its own token, this run's company only; the task's or conversation's own tabs, kept across its runs)
       let browserTools: string[] = []
       if (runnable && this.run.companyId && this.ctx.browser && (s.adapterId === 'claude' || s.adapterId === 'codex')) {
         try {
-          const spec = this.ctx.browser.attachment({ companyId: this.run.companyId, agent: s.participantLabel ?? s.profile?.name ?? (s.adapterId === 'codex' ? 'Codex' : 'Claude'), sessionKey: this.task ? taskScope(this.task.taskId) : runScope(this.run.id) })
+          const spec = this.ctx.browser.attachment({ companyId: this.run.companyId, agent: s.participantLabel ?? s.profile?.name ?? (s.adapterId === 'codex' ? 'Codex' : 'Claude'), sessionKey: scopeForRun({ taskId: this.task?.taskId, channelId: this.channelId, runId: this.run.id }) })
           if (spec) {
             const dir = live?.channel?.dir ?? mem?.grant.spawnDir ?? join(this.ctx.paths.runLogsDir, this.run.id)
             const att = attachForum(s.adapterId, spec, this.ctx.browser.toolNames(), slackMcp ?? mem?.attachment ?? null, join(dir, `${stepId}.browser.mcp.json`))

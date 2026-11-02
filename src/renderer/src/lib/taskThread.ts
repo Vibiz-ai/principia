@@ -4,6 +4,7 @@
  * ("Ran 6 commands · read 3 files · checked memory"), its questions, and your notes, in time order. Pure: no hive, no DOM.
  */
 import type { AgentEvent } from '@shared/live'
+import type { ChatItem, ToolStatus } from '@shared/chat'
 import type { CompanyTask, TaskActivity } from '@shared/company'
 import { connectorCall, plainActivity, serviceName } from './plainActivity'
 
@@ -156,6 +157,36 @@ export function taskThread(input: { task: BriefTask; activity?: readonly TaskAct
       it.running = it.events.some((e) => e.state === 'running')
     }
   return out
+}
+
+/**
+ * CHAT-UI.md §9: a task is drawn by the same code as a chat with Claude, so its thread becomes the chat's own items: the
+ * brief is your first message, what it says is its text, its tool calls are tool rows in their own words.
+ */
+export function taskChatItems(thread: readonly ThreadItem[], code = true): ChatItem[] {
+  const base = (id: string) => ({ id, parent: null })
+  return thread.flatMap((it): ChatItem[] => {
+    if (it.kind === 'brief') return [{ ...base(it.key), kind: 'user', text: it.text, images: 0, state: 'sent', at: Date.parse(it.at) }]
+    if (it.kind === 'note') return [{ ...base(it.key), kind: 'notice', tone: 'info', text: it.text, action: null }]
+    if (it.kind === 'say') {
+      if (it.by === 'you') return [{ ...base(it.key), kind: 'user', text: it.text, images: 0, state: 'sent', at: Date.parse(it.at) }]
+      if (it.thought) return [{ ...base(it.key), kind: 'thinking', text: it.text, streaming: false, startedAt: null, ms: null }]
+      return [{ ...base(it.key), kind: 'text', md: it.text, streaming: false }]
+    }
+    return it.events.map((e): ChatItem => ({
+      ...base(`ev:${e.seq}`),
+      kind: 'tool',
+      toolUseId: e.toolUseId ?? `ev:${e.seq}`,
+      name: SHELL.test(e.name ?? '') ? 'Bash' : (e.name ?? 'Tool'),
+      input: { description: toolWords(e, code), ...(SHELL.test(e.name ?? '') ? { command: e.summary } : {}) },
+      inputPartial: '',
+      status: (e.state ?? 'ok') as ToolStatus,
+      resultText: e.detail ?? '',
+      resultTruncated: false,
+      startedAt: null,
+      ms: null
+    }))
+  })
 }
 
 /**

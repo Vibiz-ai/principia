@@ -98,7 +98,6 @@ beforeAll(async () => {
     ['Team', async () => el((await import('../views/TeamView')).TeamView, {})],
     ['Board', async () => el((await import('../views/BoardView')).BoardView, {})],
     // step 3 QA: the New chat sheet offers this company's agents and repositories only
-    ['New chat sheet', async () => (store.setState({ newChat: { companyId: store.getState().activeCompanyId as string, nonce: 1 } }), el((await import('../components/desk/NewChatSheet')).NewChatSheet, {}))],
     // step 4: every Settings page of this company, and Spend
     ...(['company', 'team', 'connections', 'repos', 'keys', 'danger', 'general', 'providers', 'storage'] as const).map<Surface>((section) => [
       `Settings › ${section}`,
@@ -148,30 +147,28 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect(side).toContain('reading ledgerline notes')
     const palette = renderToStaticMarkup(await surfaces[3]![1]())
     expect(palette.toLowerCase()).toContain('ledgerline')
-    const sheet = renderToStaticMarkup(await surfaces.find(([n]) => n === 'New chat sheet')![1]())
-    expect(sheet.toLowerCase()).toContain('ledgerline writer')
     const surface = async (name: string): Promise<string> => renderToStaticMarkup(await surfaces.find(([n]) => n === name)![1]())
     // Home lists the company's own review in Needs you, with Approve in place; Chats lists its own agent thread
     // step 4: Settings shows this company's own team and its own Instagram account, nobody else's
     expect((await surface('Settings › team')).toLowerCase()).toContain('ledgerline writer')
     expect(await surface('Settings › Connections (Instagram sheet open)')).toContain('@ledgerlineshop')
     const home = await surface('Home')
-    expect(home).toContain('ledgerline homepage copy')
-    expect(home).toContain('Approve')
-    expect((await surface('Chats › Agents')).toLowerCase()).toContain('ledgerline launch plan')
-    expect((await surface('Agent desk')).toLowerCase()).toContain('ledgerline launch plan')
+    expect(home).toContain('1 finished · ready for review')
+    // CHAT-UI.md §9: an agent's header is its name, so these are the company's own marker rather than the task's title
+    expect((await surface('Chats › Agents')).toLowerCase()).toContain('ledgerline')
+    expect((await surface('Agent desk')).toLowerCase()).toContain('ledgerline')
     const chats = await surface('Sidebar in Chats')
     expect(chats).toContain('aria-label="Back to the menu"')
     // CHAT-UI.md §8.6: its working task (no conversation filed it) is a row of its own, not the agent's resting chat
-    expect(chats.toLowerCase()).toContain('ledgerline launch plan')
+    expect(chats).toContain('data-chatux="task-row"')
     expect(chats.toLowerCase()).toContain('ledgerline chat')
     store.setState({ view: { name: 'home' } })
     // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it
     expect((await surface('Home › first week')).toLowerCase()).toContain('ledgerline writer')
     expect(await surface('Automations › Autopilot')).toContain('Auto-start for Ledgerly App')
-    // step 5 QA (A2): the rail's hover label lists the Board task that needs you, as the badge counts it
+    // step 5 QA (A2): the rail's hover label agrees with the badge: finished work is not in it (CHAT-UI.md §10)
     const hover = await surface('Rail hover label')
-    expect(hover).toContain('ledgerline homepage copy')
+    expect(hover).not.toContain('ledgerline homepage copy')
     expect(hover).not.toContain('Nothing running')
   })
 })
@@ -207,15 +204,15 @@ describe('A2: every count agrees', () => {
       const t = truthOf(store.getState())
       const needs = needsIn(t, c.id).count
       const working = workingIn(t, c.id).count
-      // one ask + one board task in review; one working task run (resolved through its task, never Personal)
-      expect(needs).toBe(2)
+      // one ask (the board task in review is no decision, CHAT-UI.md §10); one working task run (through its task, never Personal)
+      expect(needs).toBe(1)
       expect(working).toBe(1)
       expect(badgesFromTruth(t, store.getState().companies).byCompany[c.id]).toMatchObject({ needsYou: needs, working })
       const bar = renderToStaticMarkup(await surfaces[1]![1]())
       expect(bar).toContain(`${working} working`)
-      expect(bar).toContain(`${needs} need you`)
+      expect(bar).toContain(`${needs} needs you`)
       const side = renderToStaticMarkup(await surfaces[0]![1]())
-      expect(side).toContain(`aria-label="${needs} need you"`)
+      expect(side).toMatch(new RegExp(`aria-label="${needs} [^"]*you`))
       expect(side).toContain(`aria-label="${working} working"`)
     }
     expect(workingIn(truthOf(store.getState()), 'co_personal').count).toBe(0)

@@ -36,6 +36,11 @@ body.is-resizing-dock { cursor: col-resize; user-select: none; }
 .bp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status-running); box-shadow: 0 0 0 3px var(--status-running-soft); animation: bp-pulse 1.4s ease-in-out infinite; flex: none; }
 @keyframes bp-pulse { 50% { opacity: 0.45; } }
 .bp.is-takeover .bp-status { background: var(--accent-soft); }
+.bp-also { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); font-size: 12px; overflow-x: auto; }
+.bp-also > .bp-muted { flex: none; }
+.bp-also-item { flex: 0 1 200px; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: none; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.bp-also-item:hover { color: var(--text-primary); background: var(--accent-soft); }
+.bp-also-who { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
 
 /* the native page view sits exactly over this box; it shows through when nothing is open */
 .bp-live { position: relative; flex: 1; min-height: 120px; background: var(--term-bg); }

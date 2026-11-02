@@ -111,7 +111,7 @@ describe('the sidebar menu: Recent and LIVE', () => {
 })
 
 describe('Chats', () => {
-  it('rows: the conversation carries its work, the orphan task is a Tasks row, the resting chat is not live, Claude lists a restarted chat once', async () => {
+  it('rows: the conversation carries its work, the orphan task is a row of its own, the resting chat is not live, Claude lists a restarted chat once', async () => {
     const store = await import('../../state/store')
     store.setState({ view: { name: 'chats', filter: 'all', chat: 'conv:newer' } })
     const { Sidebar } = await import('../../shell/Sidebar')
@@ -119,16 +119,18 @@ describe('Chats', () => {
     expect(html).toMatch(/data-title="Spring launch" data-work="2 tasks working"/)
     expect(html).toMatch(/chats5-row__last shimmer-text\s*">\w+ · 2 tasks working</)
     expect(html).toMatch(/data-title="Pricing page" data-work="VO-16 finished · unread"/)
-    expect(html).toContain('aria-label="Tasks"')
     expect(html).toMatch(/data-chatux="task-row" data-task="VO-50"/)
     // Julia's own chat keeps its own last line and is not shimmering
-    const agentRow = html.slice(html.indexOf('aria-label="Agent sessions"'), html.indexOf('aria-label="Claude"'))
+    const rowOf = (text: string): string => {
+      const at = html.indexOf(text)
+      return html.slice(html.lastIndexOf('<button', at), html.indexOf('</button>', at))
+    }
+    const agentRow = rowOf('Here is the outline you asked for.')
     expect(agentRow).toContain('Here is the outline you asked for.')
     expect(agentRow).not.toContain('is-shimmering')
     expect(agentRow).not.toMatch(/Working on \d tasks/)
     // CLAUDE: the restarted chat once
-    const claude = html.slice(html.indexOf('aria-label="Claude"'))
-    expect(claude.match(/VO-15 · Check why/g)?.length).toBe(1)
+    expect(html.match(/VO-15 · Check why/g)?.length).toBe(1)
     // Live only counts the conversation with work and the orphan task (not Julia's resting chat)
     expect(html).toMatch(/Live only<span class="side-chats__n">2</)
   })

@@ -598,6 +598,18 @@ export class BrowserHost {
     }
   }
 
+  /** Every scope with tabs open in this company, for the founder only (an agent never sees another scope's tabs). */
+  openScopes(companyId: string): { scope: BrowserScope; title: string; tabs: number }[] {
+    const c = this.companies.get(companyId)
+    if (!c) return []
+    return c.tabs.openScopes().flatMap(({ scope, tabs, active }) => {
+      const wc = active.view.webContents
+      if (wc.isDestroyed()) return []
+      const title = wc.getTitle()
+      return [{ scope, tabs, title: title && title !== 'about:blank' ? title : wc.getURL().replace(/^about:blank$/, '') || 'New tab' }]
+    })
+  }
+
   private changed(c: Company, scope: BrowserScope): void {
     if (c.emitTimers.has(scope)) return
     c.emitTimers.set(

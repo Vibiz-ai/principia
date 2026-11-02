@@ -6,7 +6,6 @@ import { LogoPickerSheet } from './components/LogoPicker'
 import { ChatCompanyCardHost } from './components/ChatCompanyCard'
 import { installKeyboard } from './shell/keyboard'
 import { SiblingOffer, Toasts } from './shell/Overlays'
-import { NewChatSheet } from './components/desk/NewChatSheet'
 import { ConnectSheetHost } from './components/connections/ConnectSheet'
 import { DiagramOverlays } from './components/diagrams/DiagramOverlays'
 import { Sidebar } from './shell/Sidebar'
@@ -121,7 +120,6 @@ export function App(): React.JSX.Element {
       <CommandPalette />
       <RunInputsSheet />
       <SiblingOffer />
-      <NewChatSheet />
       <DiagramOverlays />
       <Toasts />
       {/* VOICE.md §7: one toast per company per newly earned milestone (mounted once, outside the first-run flow) */}

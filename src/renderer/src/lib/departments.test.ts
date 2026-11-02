@@ -93,17 +93,17 @@ describe('department and board counts', () => {
   ]
   it('counts needs-you and working per department, through the agent when the task has none', () => {
     expect(taskDepartment(tasks[4]!, ctx)).toBe('dep_d')
-    expect(departmentCounts(tasks, ctx)).toEqual({ dep_m: { needsYou: 1, working: 1 }, dep_d: { needsYou: 1, working: 0 } })
+    expect(departmentCounts(tasks, ctx)).toEqual({ dep_m: { needsYou: 0, working: 1 }, dep_d: { needsYou: 1, working: 0 } })
   })
   it('the Board row counts the whole company, department or not', () => {
-    expect(boardCounts(tasks, 'co_a', ctx)).toEqual({ needsYou: 3, working: 1, liveAsks: 1 })
-    expect(boardCounts(tasks, 'co_b', ctx)).toEqual({ needsYou: 1, working: 0, liveAsks: 0 })
+    expect(boardCounts(tasks, 'co_a', ctx)).toEqual({ needsYou: 1, working: 1, liveAsks: 1 })
+    expect(boardCounts(tasks, 'co_b', ctx)).toEqual({ needsYou: 0, working: 0, liveAsks: 0 })
   })
   it('the company header never counts a live ask twice (once as the ask, once as its task)', () => {
     // the live badge already holds the open ask on run_ask and two running agents
     const badge = { needsYou: 1, working: 2, failed: false }
     const merged = mergeBoardBadge(badge, boardCounts(tasks, 'co_a', ctx))
-    expect(merged).toEqual({ needsYou: 3, working: 2, failed: false })
+    expect(merged).toEqual({ needsYou: 1, working: 2, failed: false })
     // with no board work the header is exactly the live badge
     expect(mergeBoardBadge(badge, boardCounts([], 'co_a', ctx))).toEqual(badge)
   })

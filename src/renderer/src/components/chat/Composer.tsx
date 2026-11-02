@@ -91,7 +91,8 @@ export function Composer({
   onSetMode,
   onSetModel,
   who = 'Claude',
-  dropRef
+  dropRef,
+  note
 }: {
   sessionId: string
   turn: ChatTurn
@@ -108,6 +109,8 @@ export function Composer({
   who?: string
   /** the chat pane hands files dropped anywhere on the conversation to the composer through this */
   dropRef?: React.MutableRefObject<((files: FileList | File[]) => void) | null>
+  /** a message to a task's run, not a live chat: this placeholder, and no model, mode or attachments to pick */
+  note?: { placeholder: string }
 }): React.JSX.Element {
   const [text, setTextState] = useState(drafts.get(sessionId) ?? '')
   const [images, setImages] = useState<Attached[]>([])
@@ -301,7 +304,9 @@ export function Composer({
   }
 
   const modelName = meta.models.find((m) => m.value === meta.model || meta.model?.includes(m.value))?.label ?? (meta.model ? meta.model.replace(/^claude-/, '') : 'Model')
-  const placeholder = exited
+  const placeholder = note
+    ? note.placeholder
+    : exited
     ? 'Send a message to pick this chat up again…'
     : disabled
       ? 'This conversation is open in the terminal'
@@ -403,12 +408,12 @@ export function Composer({
         >
           @
         </button>
-        <button type="button" className="chat-pill" onClick={() => void modelMenu()} disabled={disabled || !meta.models.length} title={`Model: ${modelName}`}>
+        {!note && <button type="button" className="chat-pill" onClick={() => void modelMenu()} disabled={disabled || !meta.models.length} title={`Model: ${modelName}`}>
           <span className="chat-pill__l">{modelName}</span> <Icon name="chevronDown" size={10} />
-        </button>
-        <button type="button" className="chat-pill" onClick={() => void modeMenu()} disabled={disabled || meta.bypass} title={meta.bypass ? 'Settings › Agents: sessions skip permission prompts' : `When ${who} asks you first: ${modeLabel(meta.permissionMode, meta.bypass, meta.modes)}`}>
+        </button>}
+        {!note && <button type="button" className="chat-pill" onClick={() => void modeMenu()} disabled={disabled || meta.bypass} title={meta.bypass ? 'Settings › Agents: sessions skip permission prompts' : `When ${who} asks you first: ${modeLabel(meta.permissionMode, meta.bypass, meta.modes)}`}>
           <Icon name="shield" size={11} /> <span className="chat-pill__l">{modeLabel(meta.permissionMode, meta.bypass, meta.modes)}</span> {!meta.bypass && <Icon name="chevronDown" size={10} />}
-        </button>
+        </button>}
         <span className="flex1" />
         <Meter meta={meta} />
         {working || needs ? (
