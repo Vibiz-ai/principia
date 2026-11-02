@@ -113,7 +113,7 @@ export function PortfolioView(): React.JSX.Element {
       <div className="scroll view__body">
         {/* CHAT-UI.md §11: the main chat: a chat of Personal that sees every company and starts work inside one */}
         <div className="portfolio__ask" data-chatux="main-chat">
-          <TeamComposer companyId={PERSONAL_COMPANY_ID} variant="pane" onStarted={openConversation} placeholder="Ask across all your companies, or tell one what to do…" />
+          <TeamComposer companyId={PERSONAL_COMPANY_ID} variant="pane" onStarted={openConversation} placeholder="Ask across all your companies, tell one what to do, or start a new one…" />
         </div>
         <div className="portfolio">
           {moved && <ThingsMovedCard />}

@@ -11,7 +11,7 @@ import { waitForAnswer } from '../../live/hook'
 import type { CallContext, McpHandlers } from '../../memory/server/jsonrpc'
 import type { ToolDef, ToolResult } from '../../memory/server/tools'
 import { AUTHOR_SERVER_INSTRUCTIONS, AUTHOR_TOOLS, type AuthorTool } from '../../../shared/authoring'
-import { HQ_SERVER_INSTRUCTIONS, HQ_TOOL_DEFS, HQ_TOOLS, type HqTool } from '../../../shared/hq'
+import { HQ_CREATE_TIMEOUT_MS, HQ_SERVER_INSTRUCTIONS, HQ_TOOL_DEFS, HQ_TOOLS, type HqTool } from '../../../shared/hq'
 import { SLACK_TOOLS, SLACK_WORK_TOOLS, type SlackTool, type SlackWorkTool } from '../../../shared/slack'
 import { CHAT_COMPANY_SERVER_INSTRUCTIONS, CHAT_COMPANY_TOOL, CHAT_COMPANY_TOOL_DEF, PROPOSAL_WAIT_S, type ChatCompanyTool } from '../../../shared/chatCompany'
 import { BRIEF_SERVER_INSTRUCTIONS, callHelpTool, CONNECTIONS_SERVER_INSTRUCTIONS, CONNECTIONS_TOOL, CONNECTIONS_TOOL_DEF, HELP_SERVER_INSTRUCTIONS, HELP_TOOL, HELP_TOOL_DEF, isConnectionsTool, isHelpTool, isBriefTool, callTaskTool, CHAT_TASK_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS, COMPANY_SERVER_INSTRUCTIONS_PROACTIVE, COMPANY_TOOL_DEFS, COMPANY_TOOLS, isBoardTool, SESSION_TASK_TOOLS, TASK_SERVER_INSTRUCTIONS, TASK_TOOL_DEFS, TASK_TOOLS } from '../../company/taskToolDefs'
@@ -397,6 +397,7 @@ type HiveCallTool = AuthorTool | SlackTool | SlackWorkTool | ChatCompanyTool | H
 export function callTimeoutMs(tool: HiveCallTool, args: Record<string, unknown>): number {
   // the confirmation card waits for the founder (the main side ends the wait first and answers 'expired')
   if (tool === CHAT_COMPANY_TOOL) return PROPOSAL_WAIT_S * 1000 + GRACE_MS
+  if (tool === 'hq_create_company') return HQ_CREATE_TIMEOUT_MS + GRACE_MS
   const w = typeof args.wait_s === 'number' && Number.isFinite(args.wait_s) ? Math.min(Math.max(Math.floor(args.wait_s), 0), MAX_WAIT_S) : null
   if (WRITE_TOOLS.has(tool)) return (w ?? DEFAULT_WAIT_S) * 1000 + GRACE_MS
   if (WAITING_READS.has(tool)) return (w ?? 0) * 1000 + GRACE_MS

@@ -6,7 +6,7 @@ import type { Ask } from '../../shared/live'
 import type { CompanyAgent, CompanyPassport, CompanyTask } from '../../shared/company'
 import type { ChatItem, ChatTurn } from '../../shared/chat'
 import type { Id } from '../../shared/types'
-import { HQ_LIMITS, HQ_MAX_WAIT_S, type HqTool } from '../../shared/hq'
+import { HQ_CREATE_PER_HOUR, HQ_LIMITS, HQ_MAX_WAIT_S, type HqTool } from '../../shared/hq'
 import { needsYouTasks } from '../../renderer/src/lib/board'
 import { laneContext } from '../../renderer/src/lib/departments'
 import { taskCounts } from '../../renderer/src/lib/companyModel'
@@ -19,6 +19,7 @@ export interface HqDeps {
   startChat(companyId: Id, prompt: string, title: string): { id: Id }
   startAgentChat(agentId: Id, prompt: string): Promise<{ id: Id }>
   chat(sessionId: Id): { turn: ChatTurn; items: readonly ChatItem[] }
+  createCompany(req: { name: string; brief: string; website: string | null }): Promise<Record<string, unknown>>
   sleep?(ms: number, signal: AbortSignal): Promise<void>
   now?(): number
 }
@@ -36,11 +37,13 @@ const pause = (ms: number, signal: AbortSignal): Promise<void> =>
 
 export class Hq {
   private started = new Map<Id, string>()
+  private creations: number[] = []
   constructor(private d: HqDeps) {}
 
   call(tool: HqTool, args: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> | Record<string, unknown> {
     if (tool === 'hq_overview') return this.overview()
     if (tool === 'hq_start_chat') return this.start(args)
+    if (tool === 'hq_create_company') return this.create(args)
     return this.result(args, signal)
   }
 
@@ -70,6 +73,18 @@ export class Hq {
         }
       })
     }
+  }
+
+  private async create(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const name = str(args.name, HQ_LIMITS.name)
+    const brief = str(args.brief, HQ_LIMITS.brief)
+    if (!name || brief.length < 10) throw new Error('Pass `name` and a `brief` of what it is and for whom. Ask the founder if you do not know.')
+    if (this.d.companies().some((c) => !c.archivedAt && c.name.toLowerCase() === name.toLowerCase())) throw new Error(`${name} already exists.`)
+    const now = (this.d.now ?? Date.now)()
+    this.creations = this.creations.filter((t) => now - t < 3_600_000)
+    if (this.creations.length >= HQ_CREATE_PER_HOUR) throw new Error(`${HQ_CREATE_PER_HOUR} companies were created this hour. Wait before making another.`)
+    this.creations.push(now)
+    return this.d.createCompany({ name, brief, website: str(args.website, HQ_LIMITS.website) || null })
   }
 
   private company(name: string): CompanyPassport {

@@ -249,6 +249,19 @@ describe('closing a chat from the sidebar (PR-59)', () => {
   })
 })
 
+describe('New task in All companies (CHAT-UI.md §12)', () => {
+  it('opens the main chat at once: no sheet asking who or where', async () => {
+    const { ChatsView } = await import('../../views/ChatsView')
+    const store = await import('../../state/store')
+    const before = store.getState().activeCompanyId
+    store.setState({ activeCompanyId: 'all' })
+    const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'new' }))
+    expect(html).toContain('data-chatux="new-pane"')
+    expect(html).toContain('placeholder="Ask across all your companies')
+    store.setState({ activeCompanyId: before })
+  })
+})
+
 describe('one list of chats (CHAT-UI.md §9)', () => {
   it('no sections and no Show more: the sidebar is only the chats', async () => {
     const { Sidebar } = await import('../../shell/Sidebar')

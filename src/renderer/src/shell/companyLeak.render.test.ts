@@ -98,7 +98,6 @@ beforeAll(async () => {
     ['Team', async () => el((await import('../views/TeamView')).TeamView, {})],
     ['Board', async () => el((await import('../views/BoardView')).BoardView, {})],
     // step 3 QA: the New chat sheet offers this company's agents and repositories only
-    ['New chat sheet', async () => (store.setState({ newChat: { companyId: store.getState().activeCompanyId as string, nonce: 1 } }), el((await import('../components/desk/NewChatSheet')).NewChatSheet, {}))],
     // step 4: every Settings page of this company, and Spend
     ...(['company', 'team', 'connections', 'repos', 'keys', 'danger', 'general', 'providers', 'storage'] as const).map<Surface>((section) => [
       `Settings › ${section}`,
@@ -148,8 +147,6 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect(side).toContain('reading ledgerline notes')
     const palette = renderToStaticMarkup(await surfaces[3]![1]())
     expect(palette.toLowerCase()).toContain('ledgerline')
-    const sheet = renderToStaticMarkup(await surfaces.find(([n]) => n === 'New chat sheet')![1]())
-    expect(sheet.toLowerCase()).toContain('ledgerline writer')
     const surface = async (name: string): Promise<string> => renderToStaticMarkup(await surfaces.find(([n]) => n === name)![1]())
     // Home lists the company's own review in Needs you, with Approve in place; Chats lists its own agent thread
     // step 4: Settings shows this company's own team and its own Instagram account, nobody else's

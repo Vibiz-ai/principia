@@ -19,6 +19,7 @@ function hq(over: Partial<HqDeps> = {}) {
     startChat: (c, p, t) => (calls.push(['chat', c, p, t]), { id: 's_1' }),
     startAgentChat: async (a, p) => (calls.push(['agent', a, p]), { id: 's_2' }),
     chat: () => ({ turn: 'idle', items: [] }),
+    createCompany: async (r) => (calls.push(['create', r]), { company_id: 'co_new', name: r.name }),
     ...over
   }
   return { hq: new Hq(deps), calls }
@@ -53,6 +54,17 @@ describe('the main chat', () => {
     const { session_id } = (await h.hq.call('hq_start_chat', { company: 'Oddsfile', prompt: 'Fix' }, signal())) as { session_id: string }
     expect(await h.hq.call('hq_chat_result', { session_id, wait_s: 5 }, signal())).toMatchObject({ status: 'done', answer: 'Fixed.', company: 'Oddsfile' })
     await expect(h.hq.call('hq_chat_result', { session_id: 's_other' }, signal())).rejects.toThrow('Not a chat')
+  })
+  it('creates a company from the conversation, never a duplicate, and stops a runaway loop', async () => {
+    const h = hq()
+    const brief = 'A sourdough bakery in Lisbon'
+    expect(await h.hq.call('hq_create_company', { name: 'Sunday Bakery', brief, website: 'https://sunday.example' }, signal())).toMatchObject({ company_id: 'co_new' })
+    expect(h.calls[0]).toEqual(['create', { name: 'Sunday Bakery', brief, website: 'https://sunday.example' }])
+    await expect(h.hq.call('hq_create_company', { name: 'ODDSFILE', brief }, signal())).rejects.toThrow('already exists')
+    await expect(h.hq.call('hq_create_company', { name: 'New', brief: 'short' }, signal())).rejects.toThrow('Pass `name`')
+    await h.hq.call('hq_create_company', { name: 'Two', brief }, signal())
+    await h.hq.call('hq_create_company', { name: 'Three', brief }, signal())
+    await expect(h.hq.call('hq_create_company', { name: 'Four', brief }, signal())).rejects.toThrow('this hour')
   })
   it('says when the chat waits for the founder', async () => {
     const h = hq({ chat: () => ({ turn: 'needs', items: [] }) })

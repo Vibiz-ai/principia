@@ -814,3 +814,15 @@ never gets those: only headlines and answers. Main checks the owner on every cal
 these tools even if it lists them. The tools are pre-allowed: a page the main chat reads could try to steer it, and
 every chat it starts opens with normal permissions in that company.
 
+## 12. A new company, by talking (2026-11-02)
+
+The founder: creating a business should happen by talking with the top of the portfolio, the whole thing, not split
+across a card and setup screens. In the main chat, `hq_create_company` (name, brief, website) runs the onboarding's own
+services with no screens (`main/onboarding/fromBrief.ts`): read the brief, plan, launch. It returns what it made, and the
+company appears in the rail with Autopilot off. The chat asks only if it lacks a name or what the company does. The
+founder's words in the chat are the yes, so a chat must never act on a page or file that says to create one, and at most
+three companies are made per hour.
+
+Company chats keep `principia_propose_company` and its card. New task in All companies opens the main chat's page, with
+no sheet asking who or where (`NewChatSheet` is gone).
+

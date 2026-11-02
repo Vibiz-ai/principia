@@ -38,7 +38,7 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
   // the open conversation: the one picked, else the one ChatsView opened (the last one, else the first row)
   const remembered = lastChat(scope)
   // CHAT-UI.md §7: a company opens Chats on "New conversation" until you pick one (chat=new…); All companies keeps the last
-  const pane = !!scope && (!picked || picked.startsWith('new'))
+  const pane = (!!scope && !picked) || !!picked?.startsWith('new')
   // a task's chat keeps its parent conversation (or its own task row) selected (CHAT-UI.md §8.6)
   const taskChannels = useTaskChannels(scope)
   const liveOwner = rowKeyOfLive(picked, tasks, taskChannels)

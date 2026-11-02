@@ -253,6 +253,10 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
       await h.chats.send(s.id, prompt)
       return s
     },
+    createCompany: (req) => {
+      if (h.quitting || !h.createCompany) throw new HiveError('conflict', 'Principia cannot create a company right now')
+      return h.createCompany(req) as unknown as Promise<Record<string, unknown>>
+    },
     chat: (sessionId) => {
       const v = h.chats?.snapshot(sessionId, h.store.getSession(sessionId))
       return { turn: v?.turn ?? 'ended', items: v?.items ?? [] }
@@ -509,6 +513,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           /* older db */
         }
       }
+      // CHAT-UI.md §11: a chat of Personal is the main chat: it creates companies itself rather than through the card
+      const main = (companyId ?? PERSONAL_COMPANY_ID) === PERSONAL_COMPANY_ID && !!o?.chat && !taskId
       return {
         name: AUTHOR_SERVER_NAME,
         command: process.execPath,
@@ -519,7 +525,7 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
           // SLACK.md §11.1: what the server LISTS; main enforces every call by owner
           // DEPARTMENTS.md §9: a chat (no task) also lists the company tools (company_departments, company_file_task)
           // shared/chatCompany.ts: every session holding no task may offer to start a new company from the chat
-          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${taskId ? '' : ',newco'}${companyId === PERSONAL_COMPANY_ID && o?.chat && !taskId ? ',hq' : ''}`,
+          HIVE_TOOLSETS: `${h.slack?.sessionToolsets() ?? 'author'}${board ? ',task' : ''}${board && o?.chat && !taskId ? ',company' : ''}${main || taskId ? '' : ',newco'}${main ? ',hq' : ''}`,
           ...(taskId ? { HIVE_TASK_ID: taskId } : {}),
           // PROACTIVE.md §2: the passive wording of the company tools when "Agents use Principia on their own" is off
           ...(proactiveOn(h) ? {} : { HIVE_PROACTIVE: '0' }),
