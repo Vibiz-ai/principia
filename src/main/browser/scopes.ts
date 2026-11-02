@@ -3,7 +3,7 @@
  * closes the tabs of its own scope; the panel shows the tabs of the chat or task on screen. Each scope keeps its own
  * active tab. No Electron import.
  */
-import type { BrowserScope } from '../../shared/browser'
+import { FOUNDER_SCOPE, type BrowserScope } from '../../shared/browser'
 
 export interface ScopedTab {
   id: string
@@ -32,6 +32,17 @@ export class ScopedTabs<T extends ScopedTab> {
 
   scopes(): BrowserScope[] {
     return [...new Set(this.all.map((t) => t.scope))]
+  }
+
+  /** Every scope with a live tab, used last first, with its active tab. */
+  openScopes(): { scope: BrowserScope; tabs: number; active: T }[] {
+    const used = (s: BrowserScope): number => Math.max(...this.list(s).map((t) => t.used))
+    return this.scopes()
+      .flatMap((scope) => {
+        const active = this.activeOf(scope)
+        return active ? [{ scope, tabs: this.list(scope).length, active }] : []
+      })
+      .sort((a, b) => used(b.scope) - used(a.scope))
   }
 
   /** The scope's tab with this id (never another scope's). */
@@ -90,4 +101,15 @@ export class ScopedTabs<T extends ScopedTab> {
     this.all = []
     this.active.clear()
   }
+}
+
+/** Who a scope's tabs belong to, in words for the panel. The lookups may find nothing (a deleted task or chat). */
+export function scopeLabel(scope: BrowserScope, find: { task(id: string): string | null; chat(id: string): string | null }): string {
+  if (scope === FOUNDER_SCOPE) return 'Your own tabs'
+  const at = scope.indexOf(':')
+  const kind = scope.slice(0, at)
+  const id = scope.slice(at + 1)
+  if (kind === 'task') return find.task(id) ?? 'A task'
+  if (kind === 'chat') return find.chat(id) ?? 'A conversation'
+  return kind === 'pane' ? 'A chat' : 'A run'
 }

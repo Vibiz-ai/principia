@@ -548,6 +548,8 @@ export interface StartRunOptions {
    * ends soon after its answer. Prompt runs without a task only.
    */
   reply?: boolean
+  /** A Forum reply: the channel it answers in. Its tabs are that conversation's, kept across its replies (BROWSER.md). */
+  channelId?: Id | null
   /** A resumed Claude task turn: `--resume` this provider conversation (prompt runs only). */
   resumeSessionId?: string | null
   /** Prompt runs: the title to show instead of one cut from the prompt (a board task turn: its key and title). */

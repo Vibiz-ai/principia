@@ -9,6 +9,7 @@ const px = z.number().finite().min(-10_000).max(20_000)
 
 export const BROWSER_REQUEST_SCHEMAS = {
   'browser:state': z.object({ companyId, scope }).strict(),
+  'browser:scopes': z.object({ companyId }).strict(),
   'browser:bounds': z.object({ companyId, scope, bounds: z.object({ x: px, y: px, width: px, height: px }).strict().nullable() }).strict(),
   'browser:navigate': z.object({ companyId, scope, url: z.string().min(1).max(4096) }).strict(),
   'browser:nav': z.object({ companyId, scope, action: z.enum(['back', 'forward', 'reload', 'stop']) }).strict(),

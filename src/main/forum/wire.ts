@@ -239,7 +239,7 @@ export function wireForum(h: Hive, opts: { mainDir: string }): ForumService {
         .filter((a) => !a.archivedAt && !a.pausedAt && a.kind === 'profile')
         .map((a) => a.id),
     start: ({ companyId, agentId, profileId, repoId, prompt, reply }) => {
-      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId, reply: true })
+      const run = h.engine.runs.start({ kind: 'prompt', profileId, repoId, prompt: h.vault.redact(prompt), memory: 'read' }, { trigger: 'manual', companyId, agentId, reply: true, channelId: reply.channelId })
       // the seat on the run row: the step-end harvest posts for it when it does not reply itself
       h.db.prepare('UPDATE runs SET agent_id=?, company_id=? WHERE id=?').run(agentId, companyId, run.id)
       service.noteReplyRun(run.id, reply)

@@ -10,6 +10,7 @@ import { HiveError } from '../../shared/errors'
 import { addressToUrl, type BrowserState } from '../../shared/browser'
 import { BrowserError } from './driver'
 import { BrowserHost } from './host'
+import { scopeLabel } from './scopes'
 import { BrowserService, bridgeScriptPath } from './service'
 import fs from 'node:fs'
 
@@ -76,6 +77,7 @@ export function registerBrowserHandlers(h: Hive): void {
   }
   // every call names the chat or task on screen (its scope): the panel only reaches that chat's tabs
   handle('browser:state', ({ companyId, scope }) => host().state(company(companyId), scope))
+  handle('browser:scopes', ({ companyId }) => host().openScopes(company(companyId)).map((s) => ({ ...s, label: labelOf(h, s.scope) })))
   handle('browser:bounds', ({ companyId, scope, bounds }) => {
     host().setBounds(company(companyId), scope, bounds)
   })
@@ -100,6 +102,20 @@ export function registerBrowserHandlers(h: Hive): void {
     if (err) throw new HiveError('internal', err)
   })
   handle('browser:clear', ({ companyId, scope }) => wrap(() => host().clear(company(companyId)), companyId, scope))
+}
+
+function labelOf(h: Hive, scope: string): string {
+  const quiet = (f: () => string | null | undefined): string | null => {
+    try {
+      return f() || null
+    } catch {
+      return null // the task or conversation is gone: its tabs still show
+    }
+  }
+  return scopeLabel(scope, {
+    task: (id) => quiet(() => h.company.task(id).identifier),
+    chat: (id) => quiet(() => h.forum?.store.channel(id).topic)
+  })
 }
 
 function companyExists(h: Hive, id: string): boolean {

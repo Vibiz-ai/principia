@@ -33,6 +33,8 @@ import { focusAgent, useOpenAsks } from '../state/live'
 import { pausedChatsLine } from '../state/desk'
 import { focusSession, openNewChat, providerLabel, useStore, type ChatsFilter } from '../state/store'
 import { MarkdownLite } from '../components/diagrams/MarkdownLite'
+import { BrowserToggle } from '../components/browser/BrowserToggle'
+import { chatScope } from '@shared/browser'
 import { ConversationThread, DropHint, openConversation, RecentConversations, TeamComposer, toFromChat } from '../components/conversations/ConversationKit'
 import { useFileDrop } from '../lib/dropFiles'
 import type { Id } from '@shared/types'
@@ -89,7 +91,9 @@ function Conversation({ row, code }: { row: ChatRowModel; code: boolean }): Reac
   if (row.kind === 'conv')
     return (
       <div className="view convo-view">
-        <Toolbar title="Chats" sub={row.conv.private ? <span className="company-toolbar-meta">One-on-one · private</span> : undefined} />
+        <Toolbar title="Chats" sub={row.conv.private ? <span className="company-toolbar-meta">One-on-one · private</span> : undefined}>
+          <BrowserToggle companyId={row.companyId} scope={chatScope(row.conv.id)} />
+        </Toolbar>
         <ConversationThread companyId={row.companyId} channelId={row.conv.id} />
       </div>
     )
