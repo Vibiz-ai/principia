@@ -17,7 +17,15 @@ export const FOUNDER_SCOPE: BrowserScope = 'founder'
 export const paneScope = (sessionId: string): BrowserScope => `pane:${sessionId}`
 export const taskScope = (taskId: string): BrowserScope => `task:${taskId}`
 export const runScope = (runId: string): BrowserScope => `run:${runId}`
-export const BROWSER_SCOPE_RE = /^(founder|(pane|task|run):[A-Za-z0-9_.-]{1,120})$/
+/** A Forum conversation or channel: every reply run in it shares these tabs, and its page shows them. */
+export const chatScope = (channelId: string): BrowserScope => `chat:${channelId}`
+export const BROWSER_SCOPE_RE = /^(founder|(pane|task|run|chat):[A-Za-z0-9_.-]{1,120})$/
+/**
+ * Whose tabs a run's agent gets. A task and a conversation outlive their runs, so their tabs do too: the next wake or
+ * reply finds them, and the founder finds them beside that task or conversation. Only a run that belongs to neither
+ * has tabs of its own.
+ */
+export const scopeForRun = (o: { taskId?: string | null; channelId?: string | null; runId: string }): BrowserScope => (o.taskId ? taskScope(o.taskId) : o.channelId ? chatScope(o.channelId) : runScope(o.runId))
 /** The renderer's key for one scope's state. */
 export const browserStateKey = (companyId: Id, scope: BrowserScope): string => `${companyId}|${scope}`
 
@@ -81,9 +89,21 @@ export interface BrowserBounds {
   height: number
 }
 
+/** A chat or task of a company with tabs open: lets the founder reach tabs that are not beside the page on screen. */
+export interface BrowserOpenScope {
+  scope: BrowserScope
+  /** whose tabs: "PR-92", a conversation's title, "A chat" */
+  label: string
+  /** the title of its active tab */
+  title: string
+  tabs: number
+}
+
 type V = void
 export interface BrowserInvokeMap {
   'browser:state': [{ companyId: Id; scope: BrowserScope }, BrowserState]
+  /** every chat or task of the company with tabs open, used last first */
+  'browser:scopes': [{ companyId: Id }, BrowserOpenScope[]]
   /** where the live view of this scope sits in the window (CSS pixels); null hides it */
   'browser:bounds': [{ companyId: Id; scope: BrowserScope; bounds: BrowserBounds | null }, V]
   'browser:navigate': [{ companyId: Id; scope: BrowserScope; url: string }, BrowserState]
@@ -96,6 +116,7 @@ export interface BrowserInvokeMap {
 }
 export const BROWSER_CHANNELS = [
   'browser:state',
+  'browser:scopes',
   'browser:bounds',
   'browser:navigate',
   'browser:nav',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { BROWSER_SCOPE_RE, browserStateKey, FOUNDER_SCOPE, paneScope, runScope, taskScope } from '../../../shared/browser'
-import { MAX_COMPANY_TABS, MAX_SCOPE_TABS, ScopedTabs, type ScopedTab } from '../scopes'
+import { BROWSER_SCOPE_RE, browserStateKey, chatScope, FOUNDER_SCOPE, paneScope, runScope, scopeForRun, taskScope } from '../../../shared/browser'
+import { MAX_COMPANY_TABS, MAX_SCOPE_TABS, scopeLabel, ScopedTabs, type ScopedTab } from '../scopes'
 
 let seq = 0
 const tab = (scope: string, used = ++seq): ScopedTab => ({ id: `t${++seq}`, scope, used })
@@ -66,14 +66,53 @@ describe('ScopedTabs', () => {
     for (let i = 0; i < MAX_COMPANY_TABS; i++) only.add(tab(`pane:p${i % 3}`))
     expect(() => only.makeRoom('pane:p0', new Set(['pane:p1', 'pane:p2']), full)).toThrow(`max ${MAX_COMPANY_TABS}`)
   })
+
+  it('lists every scope with live tabs, used last first, each with its active tab', () => {
+    const b = new ScopedTabs<ScopedTab>()
+    const old = tab('task:old', 1)
+    const a1 = tab('chat:a', 5)
+    const a2 = tab('chat:a', 9)
+    const closed = { ...tab('run:gone', 99), dead: true }
+    b.add(old)
+    b.add(a1)
+    b.add(a2)
+    b.add(closed)
+    b.select(a1)
+    expect(b.openScopes().map((s) => [s.scope, s.tabs, s.active.id])).toEqual([
+      ['chat:a', 2, a1.id],
+      ['task:old', 1, old.id]
+    ])
+  })
 })
 
 describe('browser scopes', () => {
+  it('keeps a task or conversation on one scope across its runs; only a run with neither gets its own', () => {
+    // the bug behind PR-93: every reply in a conversation got a new, empty run:<id> scope nothing could show
+    const reply = (runId: string): string => scopeForRun({ channelId: 'fch_1', runId })
+    expect(reply('r_1')).toBe(reply('r_2'))
+    expect(reply('r_1')).toBe(chatScope('fch_1'))
+    expect(scopeForRun({ taskId: 'tsk_1', runId: 'r_1' })).toBe(scopeForRun({ taskId: 'tsk_1', runId: 'r_2' }))
+    expect(scopeForRun({ taskId: 'tsk_1', channelId: 'fch_1', runId: 'r_1' })).toBe(taskScope('tsk_1'))
+    expect(scopeForRun({ runId: 'r_1' })).toBe(runScope('r_1'))
+    expect(scopeForRun({ taskId: null, channelId: null, runId: 'r_1' })).toBe(runScope('r_1'))
+  })
+
+  it('names whose tabs they are, and still shows them when the task or chat is gone', () => {
+    const find = { task: (id: string) => (id === 't1' ? 'PR-92' : null), chat: (id: string) => (id === 'c1' ? 'Reddit plan' : null) }
+    expect(scopeLabel('task:t1', find)).toBe('PR-92')
+    expect(scopeLabel('task:gone', find)).toBe('A task')
+    expect(scopeLabel('chat:c1', find)).toBe('Reddit plan')
+    expect(scopeLabel('chat:gone', find)).toBe('A conversation')
+    expect(scopeLabel('pane:s1', find)).toBe('A chat')
+    expect(scopeLabel('run:r1', find)).toBe('A run')
+    expect(scopeLabel(FOUNDER_SCOPE, find)).toBe('Your own tabs')
+  })
+
   it('names a chat, a task and a run, and the IPC accepts only those', () => {
     expect(paneScope('ses_1')).toBe('pane:ses_1')
     expect(taskScope('tsk_1')).toBe('task:tsk_1')
     expect(runScope('run_1')).toBe('run:run_1')
-    for (const ok of [FOUNDER_SCOPE, 'pane:ses_1', 'task:tsk-1', 'run:01HX.abc']) expect(BROWSER_SCOPE_RE.test(ok), ok).toBe(true)
+    for (const ok of [FOUNDER_SCOPE, 'pane:ses_1', 'task:tsk-1', 'run:01HX.abc', chatScope('fch_lpaw574q9r')]) expect(BROWSER_SCOPE_RE.test(ok), ok).toBe(true)
     for (const bad of ['', 'pane:', 'other:x', 'pane:a b', 'task:../x/y', `pane:${'x'.repeat(130)}`]) expect(BROWSER_SCOPE_RE.test(bad), bad).toBe(false)
     expect(browserStateKey('co_a', 'pane:1')).not.toBe(browserStateKey('co_a', 'pane:2'))
   })

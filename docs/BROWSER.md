@@ -65,13 +65,18 @@ also shows the company's name beside its tabs.
 
 **Whose tabs.** Every tab belongs to the chat or task that opened it (its scope, `src/main/browser/scopes.ts`):
 
-- `pane:<session id>` for a chat, `task:<task id>` for a board task (the same across its wakes), `run:<run id>` for a
-  run with no task, and `founder` for tabs the founder opens from a page that is no chat or task.
+- `pane:<session id>` for a chat, `task:<task id>` for a board task (the same across its wakes), `chat:<channel id>`
+  for a Forum conversation (the same across its replies), `run:<run id>` for a run with neither, and `founder` for
+  tabs the founder opens from a page that is no chat or task.
+- A run ending closes nothing: tabs stay until someone closes them, the caps below evict them, or Principia quits.
 - The spawn's token carries the scope (`sessionKey`). `browser_tabs` lists, selects and closes only that scope's tabs,
   and an agent's actions run in its own active tab. Another chat's tab id is "no tab" there.
 - The panel shows the tabs of the chat or task on screen. Switching chats switches the panel's tabs with it. An address
   the founder types opens in that chat's tabs, so its agent can use it.
 - Take over, the activity line, screenshots and downloads are per scope too.
+- **Also open.** The panel lists the company's other chats and tasks with tabs open, and picking one shows those tabs
+  there, so a tab an agent says is open can always be reached and taken over (a task asking from a conversation keeps
+  its tabs in its task scope). This list is the founder's: agents still reach only their own scope.
 - Cookies and sign-ins stay per company: a sign-in done once works in every chat of that company.
 - At most 12 tabs per scope and 30 per company. Past 30, the tab used longest ago in a chat not on screen closes.
 
@@ -149,7 +154,7 @@ Calls for one chat or task run one at a time; two chats browse side by side.
   while the founder is typing in a field, and it never takes focus. Esc closes it (unless a field outside the panel is
   being edited, or a sheet is open).
 - `principia://browser[?url=https://…][&company=co_…]` opens the panel, optionally on that page. The **Browser**
-  button in the session, agent and task toolbars toggles it, on that chat's or task's tabs.
+  button in the session, agent, conversation and task toolbars toggles it, on that chat's or task's tabs.
 
 ## 5. Security checklist
 

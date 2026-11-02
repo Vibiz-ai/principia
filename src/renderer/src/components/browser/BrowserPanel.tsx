@@ -7,12 +7,13 @@
  * by itself.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { FOUNDER_SCOPE, type BrowserScope, type BrowserState } from '@shared/browser'
+import { FOUNDER_SCOPE, type BrowserOpenScope, type BrowserScope, type BrowserState } from '@shared/browser'
 import { Button, IconButton } from '../ui'
 import { Icon } from '../Icon'
+import { AlsoOpen } from './AlsoOpen'
 import { hive } from '../../lib/hive'
 import { activityLine, overlaps } from '../../lib/browserDock'
-import { setBrowserState, stateOf, takePendingUrl, useDock } from '../../state/browser'
+import { openBrowser, setBrowserState, stateOf, takePendingUrl, useDock } from '../../state/browser'
 import { toastError } from '../../state/store'
 
 const EMPTY = (companyId: string, scope: BrowserScope): BrowserState => ({ companyId, scope, tabs: [], activeTabId: null, takeover: false, activity: null, shots: [], downloads: [] })
@@ -37,6 +38,21 @@ export function BrowserPanel({ companyId, scope = FOUNDER_SCOPE, companyName, on
       alive = false
     }
   }, [companyId, scope])
+
+  // tabs open in the company's other chats and tasks: any browser change may add or close one
+  const [open, setOpen] = useState<BrowserOpenScope[]>([])
+  useEffect(() => {
+    let alive = true
+    const load = (): void => void hive.browser.scopes({ companyId }).then((l) => alive && setOpen(l), () => undefined)
+    load()
+    const off = hive.on('browser:changed', (s) => {
+      if (s.companyId === companyId) load()
+    })
+    return () => {
+      alive = false
+      off()
+    }
+  }, [companyId])
 
   useEffect(() => {
     if (!editing) setAddress(tab?.url ?? '')
@@ -162,6 +178,8 @@ export function BrowserPanel({ companyId, scope = FOUNDER_SCOPE, companyName, on
           {state.takeover ? 'Hand back' : 'Take over'}
         </Button>
       </div>
+
+      <AlsoOpen scopes={open.filter((s) => s.scope !== scope)} onPick={(s) => openBrowser({ companyId, scope: s })} />
 
       <div className="bp-live" ref={live}>
         {!state.tabs.length && (
