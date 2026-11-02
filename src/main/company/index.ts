@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { atInFlightLimit, DEFAULT_MAX_IN_FLIGHT, GO_AHEAD, PERSONAL_COMPANY_ID, PROFILE_FIELDS, retryTime, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
+import { atInFlightLimit, DEFAULT_MAX_IN_FLIGHT, GO_AHEAD, UNBLOCKED_WAKE, PERSONAL_COMPANY_ID, PROFILE_FIELDS, retryTime, startsWithoutAutopilot, trackedBy, withTaskDefaults, type ActivityBy, type BoardSettings, type BoardTask, type CompanyAgent, type CompanyPauseCheckpoint, type CompanyCreateInput, type CompanyOverview, type CompanyPassport, type CompanyPassportInput, type CompanyTask, type CompanyTaskInput, type CompanyUpdateInput, type PassportExport, type PendingWake, type TaskActivity, type TaskActivityKind, type TaskBoardFields, type TaskDetail, type TaskRouting, type TaskStatus } from '../../shared/company'
 import type { Run, RunTarget } from '../../shared/types'
 import { HiveError } from '../../shared/errors'
 import { companySlug, defaultCompanyColor, ensureCompanyRows } from '../db/companyMigration'
@@ -533,7 +533,7 @@ export class CompanyStore {
   }
   private healOne(t: BoardTask): BoardTask {
     assertTransition(t,{status:'todo'},'system',{depsDone:true})
-    const next:BoardTask={...t,status:'todo',blockReason:null,pendingWake:addWake(t.pendingWake,'Unblocked: every dependency is done.'),updatedAt:new Date().toISOString()}
+    const next:BoardTask={...t,status:'todo',blockReason:null,pendingWake:addWake(t.pendingWake,UNBLOCKED_WAKE),updatedAt:new Date().toISOString()}
     this.writeTask(next);this.activity(t.id,'healed','Every dependency is done');return next
   }
   /**

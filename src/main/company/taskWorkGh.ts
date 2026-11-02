@@ -30,7 +30,7 @@ export function ghRunner(env: () => Record<string, string>): GhRunner {
   })
 }
 
-export const PR_FIELDS = 'number,url,state,isDraft,reviewDecision,mergedAt,baseRefName'
+export const PR_FIELDS = 'number,url,state,isDraft,reviewDecision,mergedAt,baseRefName,headRefName'
 const prSchema = z.object({
   number: z.number().int().positive(),
   url: z.string().url(),
@@ -39,10 +39,11 @@ const prSchema = z.object({
   // gh prints "" when no review is required
   reviewDecision: z.union([z.enum(REVIEW_DECISIONS), z.literal(''), z.null()]).optional(),
   mergedAt: z.string().nullable().optional(),
-  baseRefName: z.string().max(250).optional()
+  baseRefName: z.string().max(250).optional(),
+  headRefName: z.string().max(250).optional()
 })
 
-/** `gh pr view --json number,url,state,isDraft,reviewDecision,mergedAt,baseRefName` → TaskPr, or null when it is not one. */
+/** `gh pr view --json <PR_FIELDS>` → TaskPr, or null when it is not one. */
 export function parsePr(stdout: string, now: Date): TaskPr | null {
   let raw: unknown
   try { raw = JSON.parse(stdout) } catch { return null }
@@ -50,7 +51,7 @@ export function parsePr(stdout: string, now: Date): TaskPr | null {
   if (!r.success) return null
   const d = r.data
   const merged = d.mergedAt && !d.mergedAt.startsWith('0001-') ? d.mergedAt : null
-  return { number: d.number, url: d.url, state: d.state, isDraft: !!d.isDraft, reviewDecision: d.reviewDecision ? d.reviewDecision : null, mergedAt: merged, checkedAt: now.toISOString(), ...(d.baseRefName ? { base: d.baseRefName } : {}) }
+  return { number: d.number, url: d.url, state: d.state, isDraft: !!d.isDraft, reviewDecision: d.reviewDecision ? d.reviewDecision : null, mergedAt: merged, checkedAt: now.toISOString(), ...(d.baseRefName ? { base: d.baseRefName } : {}), ...(d.headRefName ? { head: d.headRefName } : {}) }
 }
 
 export type CreatePr = { kind: 'created'; url: string } | { kind: 'exists' } | { kind: 'missing' } | { kind: 'error'; message: string }

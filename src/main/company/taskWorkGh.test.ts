@@ -16,6 +16,7 @@ describe('gh pr view parsing', () => {
       number: 7, url: 'https://github.com/a/b/pull/7', state: 'OPEN', isDraft: false, reviewDecision: null, mergedAt: null, checkedAt: now.toISOString()
     })
     expect(parsePr(JSON.stringify({ number: 7, url: 'https://github.com/a/b/pull/7', state: 'MERGED', isDraft: false, reviewDecision: 'APPROVED', mergedAt: '2026-10-24T00:00:00Z' }), now)).toMatchObject({ state: 'MERGED', reviewDecision: 'APPROVED', mergedAt: '2026-10-24T00:00:00Z' })
+    expect(parsePr(JSON.stringify({ number: 7, url: 'https://github.com/a/b/pull/7', state: 'OPEN', headRefName: 'hive/pr-7-x' }), now)).toMatchObject({ head: 'hive/pr-7-x' })
     expect(parsePr('not json', now)).toBeNull()
     expect(parsePr(JSON.stringify({ number: 7, url: 'x', state: 'WEIRD' }), now)).toBeNull()
   })
@@ -39,7 +40,7 @@ describe('gh calls', () => {
   it('looks the PR up by branch until it is known, then by URL', async () => {
     const r = runner((a) => a.includes('hive/prn-1') ? fail('no pull requests found for branch "hive/prn-1"') : ok(JSON.stringify({ number: 3, url: 'https://github.com/a/b/pull/3', state: 'OPEN', isDraft: true })))
     expect(await lookupPr(r, { cwd: '/w', url: null, branch: 'hive/prn-1' }, now)).toEqual({ kind: 'none' })
-    expect(r.calls[0]).toEqual(['pr', 'view', 'hive/prn-1', '--json', 'number,url,state,isDraft,reviewDecision,mergedAt,baseRefName'])
+    expect(r.calls[0]).toEqual(['pr', 'view', 'hive/prn-1', '--json', 'number,url,state,isDraft,reviewDecision,mergedAt,baseRefName,headRefName'])
     const found = await lookupPr(r, { cwd: '/w', url: 'https://github.com/a/b/pull/3', branch: 'hive/prn-1' }, now)
     expect(found).toMatchObject({ kind: 'pr', pr: { number: 3, isDraft: true } })
     expect(await lookupPr(runner(() => fail('HTTP 502')), { cwd: '/w', url: null, branch: 'b' }, now)).toEqual({ kind: 'error', message: 'HTTP 502' })

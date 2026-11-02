@@ -36,6 +36,7 @@ class FakeGh {
   prs = new Map<string, { number: number; url: string; state: 'OPEN' | 'CLOSED' | 'MERGED'; isDraft: boolean; reviewDecision: string; mergedAt: string | null; reviews: unknown[] }>()
   merges: string[] = []
   mergeConflict = false
+  views = 0
   private n = 40
   open(branch: string, o: { draft?: boolean } = {}) {
     const number = ++this.n
@@ -47,12 +48,14 @@ class FakeGh {
     const res = (code: number, stdout = '', stderr = ''): GhResult => ({ code, stdout, stderr, missing: false })
     if (args[0] === 'auth') return this.auth === 'ok' ? res(0) : res(1, '', 'You are not logged into any GitHub hosts.')
     if (args[0] === 'pr' && args[1] === 'view') {
+      this.views++
       const key = args[2]
-      const pr = [...this.prs.entries()].find(([b, p]) => b === key || p.url === key)?.[1]
-      if (!pr) return res(1, '', `no pull requests found for branch "${key}"`)
+      const hit = [...this.prs.entries()].find(([b, p]) => b === key || p.url === key)
+      if (!hit) return res(1, '', `no pull requests found for branch "${key}"`)
+      const [headRefName, pr] = hit
       if (args[4] === 'reviews') return res(0, JSON.stringify({ reviews: pr.reviews }))
       const { reviews: _r, ...rest } = pr
-      return res(0, JSON.stringify(rest))
+      return res(0, JSON.stringify({ ...rest, headRefName }))
     }
     if (args[0] === 'pr' && args[1] === 'merge') {
       if (this.mergeConflict) return res(1, '', 'Pull request is not mergeable: the merge commit cannot be cleanly created.')
@@ -506,6 +509,110 @@ d('QA fixes', () => {
     expect(done.status).toBe('done')
     expect(done.doneNote).toBe(`Merged #${b}`)
     expect(a).not.toBe(b)
+  })
+
+  describe('PR-82: a task unblocked with its own PR already merged', () => {
+    const merge = (branch: string) => { gh.of(branch).state = 'MERGED'; gh.of(branch).mergedAt = '2026-10-30T15:39:55Z' }
+    const addLink = (id: string, url: string) => db.prepare("UPDATE company_tasks SET data=json_set(data,'$.proof',json(?)) WHERE id=?")
+      .run(JSON.stringify([{ id: 'pf_1', kind: 'link', title: 'Pull request', ref: url, by: 'agent:agt_1', at: new Date().toISOString() }]), id)
+    const askAgain = () => (svc as unknown as { unblockedSeen: Map<string, number> }).unblockedSeen.clear()
+    /** A task parked on a dependency in review; `finish` approves the dependency. */
+    function parked() {
+      const { companyId, repoId } = company()
+      const dep = task({ companyId, repoId, title: 'The base work', status: 'in_review' })
+      const t = task({ companyId, repoId, dependencyIds: [dep.id], status: 'blocked', blockReason: 'deps' })
+      return { companyId, repoId, t, finish: () => c.approve(dep.id, 'Approved') }
+    }
+
+    it('goes Done instead of waking when it has no binding: its PR is only a link proof, its folder made by hand (PR-64)', async () => {
+      const { companyId, t, finish } = parked()
+      const branch = `hive/${t.identifier.toLowerCase()}-short-name`
+      const n = gh.open(branch)
+      addLink(t.id, gh.of(branch).url)
+      merge(branch)
+      const folder = wm.taskPath(t.identifier)
+      fs.mkdirSync(folder, { recursive: true })
+      finish()
+      await svc.settleUnblocked(companyId)
+      expect(c.task(t.id)).toMatchObject({ status: 'done', doneNote: `Merged #${n}`, pendingWake: null, work: null })
+      expect(runs).toHaveLength(0)
+      expect(fs.existsSync(folder)).toBe(true)
+    })
+
+    it('reads a PR the report links, and a binding whose PR is already recorded as merged (PR-67)', async () => {
+      const { companyId, repoId, t, finish } = parked()
+      const branch = `hive/${t.identifier.toLowerCase()}-from-report`
+      const n = gh.open(branch)
+      c.patchInFlight(t.id, { report: { outcome: 'review', summary: 'Ready', evidence: [gh.of(branch).url], at: new Date().toISOString() } })
+      merge(branch)
+      const bound = task({ companyId, repoId, dependencyIds: [t.id], status: 'blocked', blockReason: 'deps' })
+      const own = `hive/${bound.identifier.toLowerCase()}-bound`
+      const m = gh.open(own)
+      merge(own)
+      const at = new Date().toISOString()
+      const pr = { number: m, url: gh.of(own).url, state: 'MERGED', isDraft: false, reviewDecision: null, mergedAt: at, checkedAt: at }
+      ;(svc as unknown as { writeWork(id: string, w: unknown): void }).writeWork(bound.id, { repoId, worktreePath: path.join(root, 'gone'), branch: own, baseSha: null, baseRef: null, pr, startedAt: at, worktreeId: 'wt_1', queuedAt: null, goneAt: null, removedAt: at, gh: 'ok', reviewSeenAt: null, readySeen: null, conflict: false, error: null })
+      finish()
+      await svc.settleUnblocked(companyId)
+      // the second one was unblocked by the first going Done: settled in the same pass, or the pump would claim it next
+      expect(c.task(t.id)).toMatchObject({ status: 'done', doneNote: `Merged #${n}` })
+      expect(c.task(bound.id)).toMatchObject({ status: 'done', doneNote: `Merged #${m}` })
+    })
+
+    it("wakes as usual when the merged PR it links is its dependency's, not its own (PR-77)", async () => {
+      const { companyId, t, finish } = parked()
+      gh.open('hive/pr-99-the-base-work')
+      c.patchInFlight(t.id, { report: { outcome: 'blocked', summary: 'Waiting on it', evidence: [gh.of('hive/pr-99-the-base-work').url], at: new Date().toISOString() } })
+      merge('hive/pr-99-the-base-work')
+      finish()
+      await svc.settleUnblocked(companyId)
+      expect(c.task(t.id)).toMatchObject({ status: 'todo' })
+      expect(c.task(t.id).pendingWake?.reasons).toEqual(['Unblocked: every dependency is done.'])
+    })
+
+    it('wakes as usual when its PR is open, gh cannot tell, or someone asked for more', async () => {
+      const { companyId, t, finish } = parked()
+      const branch = `hive/${t.identifier.toLowerCase()}-short-name`
+      gh.open(branch)
+      addLink(t.id, gh.of(branch).url)
+      finish()
+      await svc.settleUnblocked(companyId)
+      expect(c.task(t.id).status).toBe('todo')
+      merge(branch)
+      gh.auth = 'signed_out'
+      await svc.poll({ force: true })
+      askAgain()
+      await svc.settleUnblocked(companyId)
+      expect(c.task(t.id).status).toBe('todo')
+      gh.auth = 'ok'
+      await svc.poll({ force: true })
+      askAgain()
+      const wake = c.task(t.id).pendingWake!
+      c.patchInFlight(t.id, { pendingWake: { reasons: [...wake.reasons, 'The founder: also fix the footer'], count: wake.count + 1 } })
+      await svc.settleUnblocked(companyId)
+      expect(c.task(t.id).status).toBe('todo')
+    })
+
+    it('leaves a todo task alone that nothing unblocked, and asks GitHub at most once a minute per task', async () => {
+      const { companyId, repoId, t, finish } = parked()
+      const plain = task({ companyId, repoId })
+      const branch = `hive/${plain.identifier.toLowerCase()}-short-name`
+      gh.open(branch)
+      addLink(plain.id, gh.of(branch).url)
+      merge(branch)
+      await svc.settleUnblocked(companyId)
+      expect(c.task(plain.id).status).toBe('todo')
+      expect(gh.views).toBe(0)
+      const own = `hive/${t.identifier.toLowerCase()}-open`
+      gh.open(own)
+      addLink(t.id, gh.of(own).url)
+      finish()
+      await svc.settleUnblocked(companyId)
+      const asked = gh.views
+      expect(asked).toBe(1)
+      await svc.settleUnblocked(companyId)
+      expect(gh.views).toBe(asked)
+    })
   })
 
   it('PR-55: a closed-not-merged PR, a report without links or a task not In Review never moves', async () => {
