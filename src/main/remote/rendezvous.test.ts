@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { findMac, sha256Hex } from '../../cloud/phone/mac'
 import { openAddress, RDV_ID_RE, RDV_ROUTE, RDV_SEALED_RE, rdvIds, sealAddress } from '../../shared/rendezvous'
 import { helloMessage } from '../../shared/remote'
@@ -39,10 +39,14 @@ function fakeRedis() {
   })
   return { data, ttl, seen, f }
 }
-const put = async (id: string, body: unknown, ip = '1.1.1.1'): Promise<Response> => PUT(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { method: 'PUT', headers: { 'x-real-ip': ip }, body: JSON.stringify(body) }), ENV)
-const get = async (id: string, ip = '1.1.1.1'): Promise<Response> => GET(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { headers: { 'x-real-ip': ip } }), ENV)
+const put = async (id: string, body: unknown, ip = '1.1.1.1'): Promise<Response> => PUT(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { method: 'PUT', headers: { 'x-real-ip': ip }, body: JSON.stringify(body) }))
+const get = async (id: string, ip = '1.1.1.1'): Promise<Response> => GET(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { headers: { 'x-real-ip': ip } }))
 
+beforeEach(() => {
+  for (const [k, v] of Object.entries(ENV)) vi.stubEnv(k, v)
+})
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
@@ -110,8 +114,18 @@ describe('RA8: the store on the phone site', () => {
     vi.stubGlobal('fetch', fakeRedis().f)
     const { id, write } = await rdvIds(HASH)
     expect((await get(id)).status).toBe(404)
-    expect((await GET(new Request(`${SITE}${RDV_ROUTE}?id=${id}`), {})).status).toBe(503)
-    expect((await PUT(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { method: 'PUT', body: JSON.stringify({ write, sealed: await sealAddress(HASH, NEW) }) }), {})).status).toBe(503)
+    vi.stubEnv('KV_REST_API_URL', '')
+    expect((await get(id)).status).toBe(503)
+    expect((await put(id, { write, sealed: await sealAddress(HASH, NEW) })).status).toBe(503)
+  })
+  it('finds its store when called the way Vercel calls it, with an event as the second argument', async () => {
+    const r = fakeRedis()
+    vi.stubGlobal('fetch', r.f)
+    const { id, write } = await rdvIds(HASH)
+    const sealed = await sealAddress(HASH, NEW)
+    const event = { waitUntil: () => undefined }
+    expect((await PUT(new Request(`${SITE}${RDV_ROUTE}?id=${id}`, { method: 'PUT', body: JSON.stringify({ write, sealed }) }), event)).status).toBe(204)
+    expect((await GET(new Request(`${SITE}${RDV_ROUTE}?id=${id}`), event)).status).toBe(200)
   })
   it('limits each caller, and the others are not touched', async () => {
     vi.useFakeTimers({ now: Date.UTC(2026, 9, 30, 12, 0, 1), toFake: ['Date'] })
