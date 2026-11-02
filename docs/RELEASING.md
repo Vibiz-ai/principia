@@ -202,7 +202,8 @@ What it does, stopping at the first problem (nothing is published unless every s
    runtime (§2); notarize it (`xcrun notarytool submit --wait`) and staple the ticket; zip the stapled app for the
    updater (`ditto`); make the dmg (`hdiutil`: the app, an Applications link and the install window of §5.5); sign,
    notarize and staple the dmg.
-   A rejected notarization prints Apple's log and stops.
+   A rejected notarization prints Apple's log and stops. A staple that loses its connection to Apple is tried again
+   (4 tries, about 2.5 minutes); any other staple error stops at once.
 4. **Verify**: `codesign --verify --deep --strict` on the app and on the app inside the zip, hardened runtime, Team
    ID and entitlements; `spctl` must report `source=Notarized Developer ID` for the app and the dmg; `stapler
    validate` on the app, the zip's app and the dmg; the app's version.
