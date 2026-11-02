@@ -18,7 +18,8 @@ vi.mock('react', async () => {
   return { ...actual, default: { ...actual, useSyncExternalStore }, useSyncExternalStore }
 })
 vi.stubGlobal('window', { hive: { on: () => () => {} }, addEventListener: () => {}, removeEventListener: () => {}, innerHeight: 900, innerWidth: 1440 })
-vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
+const panelOpen = { on: true }
+vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'hive.convoPanel.open.v2' && panelOpen.on ? 'true' : null), setItem: () => {}, removeItem: () => {} })
 
 const T = new Date(Date.now() - 60_000).toISOString()
 const co = { id: 'co_a', name: 'Acme', slug: 'acme', color: 'var(--series-1)', sortOrder: 0, system: null, archivedAt: null, repoIds: [], createdAt: '', updatedAt: '', mission: '', brandVoice: '', audience: '', products: '', goals: '', context: '', constraints: '' } as unknown as CompanyPassport
@@ -60,11 +61,9 @@ describe('Chats switches the sidebar', () => {
     for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
     expect(html).toContain('>New task<')
     expect(html).toContain('New task in Acme (⌥⌘N)')
-    // the groups say what each row is: the agent's own session, and Claude
-    expect(html).toContain('aria-label="Agent sessions"')
-    expect(html).toContain('aria-label="Claude"')
     // a bot-like row: bust, name, role, its last line and the unread dot
-    expect(html).toContain(`chats5-row__name">${NAME}</span><span class="chats5-row__role">Content Writer<`)
+    expect(html).toContain(`chats5-row__name">${NAME}</span>`)
+    expect(html).not.toContain('chats5-row__role')
     expect(html).toContain('The draft is in drafts/launch.md.')
     expect(html).toContain('aria-label="New answer"')
     expect(html).toContain('Pricing ideas')
@@ -85,38 +84,34 @@ describe('Chats switches the sidebar', () => {
 })
 
 describe('New conversation (CHAT-UI.md §7)', () => {
-  it('Chats with nothing picked in a company is New conversation: To: Principia picks, the route line, recents', async () => {
+  it('Chats with nothing picked in a company is New task: To: Claude, the route line, recents', async () => {
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, {}))
     expect(html).toContain('data-chatux="new-pane"')
     expect(html).toContain('>New task</h2>')
-    expect(html).toMatch(/data-chatux="to-pill"[^>]*>.*Principia picks/)
-    expect(html).toContain('→ Principia brings in the right people · type @ to pick someone')
+    expect(html).toMatch(/data-chatux="to-pill"[^>]*>.*Claude/)
+    expect(html).not.toContain('Principia picks')
+    expect(html).toContain('→ Starts a chat with Claude')
     expect(html).toContain('Recent conversations')
   })
   it('Team › Message lands addressed to that person (one kind of one-on-one)', async () => {
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'new:agent:agt_julia' }))
-    expect(html).toContain(`${NAME} · Content Writer`)
+    expect(html).toMatch(new RegExp(`data-chatux="to-pill"[^>]*>${NAME}<`))
     expect(html).toContain(`placeholder="Message ${NAME}…"`)
-    expect(html).toContain(`→ ${NAME} directly · a private conversation, nobody else sees it`)
+    expect(html).toContain(`→ A chat with ${NAME}`)
   })
   it('a company with no team talks to Claude, and says so', async () => {
     const { TeamComposer } = await import('../conversations/ConversationKit')
     const html = renderToStaticMarkup(createElement(TeamComposer, { companyId: 'co_personal', onStarted: () => {} }))
-    expect(html).toContain('Claude directly')
-    expect(html).toContain('placeholder="Ask Claude anything…"')
-    expect(html).toContain('→ A chat with Claude, outside the team · none of your agents see it')
+    expect(html).toContain('placeholder="New task… say what you need"')
+    expect(html).toContain('→ Starts a chat with Claude')
   })
-  it('the rows are grouped: With the team, One-on-one, Agent sessions, Claude, Working', async () => {
-    const { groupRows } = await import('./ChatList')
-    const conv = (id: string, priv: boolean) => ({ key: `conv:${id}`, kind: 'conv' as const, companyId: 'co_a', live: false, at: T, conv: { id, companyId: 'co_a', title: id, handoff: '', agentMemberIds: ['m'], agentIds: ['a'], who: ['Julia'], workingIds: [], lastAt: T, unread: 0, working: false, private: priv } })
-    const rows = [conv('team1', false), conv('dm1', true), { key: 'session:s', kind: 'session' as const, companyId: 'co_a', live: false, at: T, session: chat('s') }]
-    expect(groupRows(rows).map((g) => [g.label, g.rows.map((r) => r.key)])).toEqual([
-      ['With the team', ['conv:team1']],
-      ['One-on-one', ['conv:dm1']],
-      ['Claude', ['session:s']]
-    ])
+  it('@name in a New task goes to that agent; plain text stays with Claude', async () => {
+    const { routeTeam, routeLine } = await import('../../lib/conversations')
+    const agents = [{ id: 'a', name: 'Julia', role: 'Writer', paused: false }] as never
+    expect(routeTeam('@Julia draft it', agents)?.by).toBe('mention')
+    expect(routeLine('', null)).toBe('→ Starts a chat with Claude')
   })
 })
 
@@ -127,7 +122,9 @@ describe('the main area is only the conversation', () => {
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'agent:agt_julia' }))
     expect(html).not.toContain('chats5-list')
-    expect(html).toContain(`convo-title__name">${NAME}</span><span class="convo-title__role">· Content Writer<`)
+    expect(html).toContain(`convo-title__name">${NAME}</span>`)
+    expect(html).not.toContain('convo-title__role')
+    expect(html).not.toContain('convo-title__sub')
     expect(html).toContain(`aria-label="Conversation with ${NAME}"`)
     expect(html).toContain(`aria-label="About ${NAME}"`)
     expect(html).toContain('Writes like a friend.')
@@ -139,9 +136,15 @@ describe('the main area is only the conversation', () => {
   it('a direct chat: the same layout with the session’s panel', async () => {
     const { ChatsView } = await import('../../views/ChatsView')
     const html = renderToStaticMarkup(createElement(ChatsView, { chat: 'session:sess_direct' }))
-    expect(html).toContain('direct chat, no agent')
+    expect(html).not.toContain('direct chat, no agent')
     expect(html).toContain('aria-label="About this chat"')
     expect(html).toContain('Where it works')
+  })
+  it('the panel stays closed until you ask for it, for Claude and agents alike (CHAT-UI.md §9)', async () => {
+    panelOpen.on = false
+    const { ChatsView } = await import('../../views/ChatsView')
+    for (const chat of ['agent:agt_julia', 'session:sess_direct']) expect(renderToStaticMarkup(createElement(ChatsView, { chat }))).not.toContain('convo-panel__')
+    panelOpen.on = true
   })
   it('the panel has a slot for later tabs (the Browser)', async () => {
     const { registerPanelTab } = await import('../desk/AgentPanel')
@@ -246,17 +249,13 @@ describe('closing a chat from the sidebar (PR-59)', () => {
   })
 })
 
-describe('a calmer list (PR-47)', () => {
-  it('each group shows its first rows (what needs you sorts first), the open one stays, the rest wait behind Show N more', async () => {
-    const { GROUP_LIMIT, visibleRows } = await import('./ChatList')
-    const rows = Array.from({ length: 9 }, (_, i) => ({ key: `task:${i}` }) as never)
-    const n = GROUP_LIMIT.tasks
-    expect(visibleRows('tasks', rows, { expanded: false, selected: null })).toMatchObject({ hidden: 9 - n })
-    expect(visibleRows('tasks', rows, { expanded: false, selected: null }).rows).toHaveLength(n)
-    const picked = visibleRows('tasks', rows, { expanded: false, selected: 'task:8' })
-    expect(picked.rows.map((r) => r.key)).toContain('task:8')
-    expect(picked.hidden).toBe(9 - n - 1)
-    expect(visibleRows('tasks', rows, { expanded: true, selected: null })).toMatchObject({ hidden: 0 })
-    expect(visibleRows('tasks', rows.slice(0, n), { expanded: false, selected: null }).hidden).toBe(0)
+describe('one list of chats (CHAT-UI.md §9)', () => {
+  it('no sections and no Show more: the sidebar is only the chats', async () => {
+    const { Sidebar } = await import('../../shell/Sidebar')
+    const html = renderToStaticMarkup(createElement(Sidebar))
+    for (const label of ['With the team', 'One-on-one', 'Tasks', 'Agent sessions']) expect(html).not.toContain(`aria-label="${label}"`)
+    expect(html).not.toContain('cx-side-group')
+    expect(html).not.toContain('data-chatux="group-more"')
+    expect(html).toContain('Pricing ideas')
   })
 })

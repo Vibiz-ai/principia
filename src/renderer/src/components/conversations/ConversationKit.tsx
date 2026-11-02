@@ -1,10 +1,9 @@
 /**
- * CHAT-UI.md §7: where you talk, who answers, where it goes.
- * - TeamComposer: "New conversation…" with **To: Principia picks ▾** (Everyone on the team, Talk to one person, or
- *   outside the team: Claude directly, Claude in <repository>) and a line under it that says, before you send, who
- *   will answer (lib/conversations.ts routeTeam, the same rules Principia uses). Typing @ opens a picker of the team
- *   with each role. Send starts a conversation (state/conversations.ts) and the caller opens it in Chats; a person you
- *   already talk to privately gets the message in that same private conversation (one thread per person).
+ * CHAT-UI.md §7, §9: where you talk, who answers, where it goes.
+ * - TeamComposer: "New task…" with **To: Claude ▾** (Claude in <repository>, or one agent for something specific) and a
+ *   line under it that says, before you send, who will answer. Send opens a chat with Claude. Picking an agent, or
+ *   typing @name, opens that agent's own chat: the same chat, with its prompt and skills. @all still starts a
+ *   conversation with the whole team (state/conversations.ts) and the caller opens it in Chats.
  * - ConversationThread: one conversation: title (Principia names it from the first message and answer; click to
  *   rename, and your name is kept), who is in it (and "Private" when it is just you and them), Principia's handoff
  *   line, "Principia is reading your request…" while it picks, every message, a new-specialist card when nobody on
@@ -28,9 +27,9 @@ import { reposOf } from '../../lib/companyModel'
 import { taskTitleFor, type DeskAgent } from '../../lib/desk'
 import { mentionAtCaret, mentionedAll, mentionOptions, names, routeLine, routeTeam, type TeamRoute } from '../../lib/conversations'
 import { age } from '../../lib/time'
-import { useDeskAgents } from '../../state/desk'
+import { sendToAgent, useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
-import { loadDraft, privateWith, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, useTaskChannels, whoLine } from '../../state/conversations'
+import { loadDraft, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, useTaskChannels, whoLine } from '../../state/conversations'
 import { byWork, workLine, workOf, workRank } from '../../lib/convWork'
 import { useIsCode } from '../desk/Desk'
 import { navigate, startSession, toast, useStore } from '../../state/store'
@@ -89,15 +88,13 @@ export function openConversation(id: Id): void {
 
 // ---------- the composer ----------
 
-export type To = { kind: 'team' } | { kind: 'everyone' } | { kind: 'agent'; id: Id } | { kind: 'claude' } | { kind: 'repo'; id: Id }
+export type To = { kind: 'agent'; id: Id } | { kind: 'claude' } | { kind: 'repo'; id: Id }
 
-/** `to` from a Chats link: "new:agent:<id>" (Team › Message), "new:everyone", else the team. */
+/** `to` from a Chats link: "new:agent:<id>" (Team › Message), "new:repo:<id>", else Claude. */
 export function toFromChat(chat: string | undefined): To {
   const m = /^new:(agent|repo):(.+)$/.exec(chat ?? '')
   if (m) return m[1] === 'agent' ? { kind: 'agent', id: m[2]! } : { kind: 'repo', id: m[2]! }
-  if (chat === 'new:everyone') return { kind: 'everyone' }
-  if (chat === 'new:claude') return { kind: 'claude' }
-  return { kind: 'team' }
+  return { kind: 'claude' }
 }
 
 export function TeamComposer({
@@ -119,7 +116,6 @@ export function TeamComposer({
   const agents = useDeskAgents(companyId)
   const allRepos = useStore((s) => s.repos)
   const repos = useMemo(() => reposOf(allRepos, companyId), [allRepos, companyId])
-  const convs = useConversations(companyId)
   const draftKey = `new:${companyId}`
   const [text, setTextRaw] = useState(() => loadDraft(draftKey))
   // the latest text, for a Send that waited for an attachment (the render with it may not have happened yet)
@@ -129,14 +125,11 @@ export function TeamComposer({
     setTextRaw(t)
     saveDraft(draftKey, t)
   }
-  const [chosen, setTo] = useState<To>(initialTo ?? { kind: 'team' })
+  const [to, setTo] = useState<To>(initialTo ?? { kind: 'claude' })
   useEffect(() => {
     if (initialTo) setTo(initialTo)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(initialTo)])
-  // a company with no team (Personal, or not loaded yet) talks to Claude
-  const to: To = (chosen.kind === 'team' || chosen.kind === 'everyone') && !agents.length ? { kind: 'claude' } : chosen
-  const [fresh, setFresh] = useState(false)
   const [menu, setMenu] = useState(false)
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -152,28 +145,15 @@ export function TeamComposer({
   if (dropRef) dropRef.current = attach
   // with a dropRef the page around takes the drop (and shows where it goes); else this box does
   const drop = useFileDrop(attach, !!dropRef || busy)
-  const toKey = JSON.stringify(to)
-  useEffect(() => setFresh(false), [toKey])
   const picked = to.kind === 'agent' ? agents.find((a) => a.id === to.id) : undefined
-  const route: TeamRoute | null =
-    to.kind === 'team' || to.kind === 'everyone' ? routeTeam(text, agents, { everyone: to.kind === 'everyone' }) : picked ? { agents: [picked], by: 'mention', why: {}, unknown: null } : null
-  // one person (picked, or one @name): your private conversation with them continues, unless you ask for a new topic
-  const solo = route && route.by === 'mention' && route.agents.length === 1 ? route.agents[0]! : null
-  const existing = solo ? privateWith(convs, solo.id) : null
-  const continues = existing && !fresh ? existing : null
+  // CHAT-UI.md §9: Claude takes everything; @name in the text is how you ask for someone specific
+  const said = to.kind === 'claude' ? routeTeam(text, agents) : null
+  const route: TeamRoute | null = picked ? { agents: [picked], by: 'mention', why: {}, unknown: null } : said && (said.by === 'mention' || said.by === 'everyone') ? said : null
+  // one agent: its own chat, the same chat as Claude's with its prompt and skills
+  const solo = route?.by === 'mention' && route.agents.length === 1 ? route.agents[0]! : null
   const repoName = (id: Id): string => repos.find((r) => r.id === id)?.name ?? 'the repository'
-  const toLabel = to.kind === 'team' ? 'Principia picks' : to.kind === 'everyone' ? 'Everyone on the team' : to.kind === 'agent' ? (picked ? `${picked.name} · ${picked.role}` : 'Someone') : to.kind === 'claude' ? 'Claude directly' : `Claude in ${repoName(to.id)}`
-  const line =
-    to.kind === 'claude'
-      ? '→ A chat with Claude, outside the team · none of your agents see it'
-      : to.kind === 'repo'
-        ? `→ A Claude Code session in ${repoName(to.id)} (its terminal opens)`
-        : continues
-          ? `→ ${solo!.name}, in your private conversation “${continues.title}”`
-          : solo && (to.kind === 'agent' || !text.trim().startsWith('@') || route?.by === 'mention')
-            ? `${route?.unknown ? `No ${route.unknown} here · ` : ''}→ ${solo.name} directly · a private conversation, nobody else sees it`
-            : routeLine(text, route)
-  const why = route?.by === 'words' ? Object.entries(route.why).map(([id, w]) => `${agents.find((a) => a.id === id)?.name}: ${w.map((x) => `“${x}”`).join(', ')}`).join(' · ') : ''
+  const toLabel = to.kind === 'agent' ? (picked?.name ?? 'Someone') : to.kind === 'claude' ? 'Claude' : `Claude in ${repoName(to.id)}`
+  const line = to.kind === 'repo' ? `→ A Claude Code session in ${repoName(to.id)} (its terminal opens)` : solo ? `${route?.unknown ? `No ${route.unknown} here · ` : ''}→ A chat with ${solo.name}` : routeLine(text, route)
 
   const send = async (): Promise<void> => {
     if (!text.trim() || busy) return
@@ -182,22 +162,21 @@ export function TeamComposer({
       // a screenshot pasted just before Send is still being saved: wait, so its @path goes with the message
       await attaching.settled()
       const t = latest.current.trim()
-      if (to.kind === 'claude' || to.kind === 'repo') {
+      if (solo) {
+        if (await sendToAgent(solo.id, t)) {
+          setText('')
+          void navigate({ name: 'chats', filter: 'all', chat: `agent:${solo.id}` })
+        }
+        return
+      }
+      if (to.kind === 'repo' || !route) {
         const s = await startSession({ repoId: to.kind === 'repo' ? to.id : null, forceNew: true, companyId, adapter: 'claude', initialPrompt: t, title: taskTitleFor(t).slice(0, 80), focus: to.kind === 'repo' })
         if (s) {
           setText('')
-          if (to.kind === 'claude') void navigate({ name: 'chats', filter: 'all', chat: `session:${s.id}` })
+          if (to.kind !== 'repo') void navigate({ name: 'chats', filter: 'all', chat: `session:${s.id}` })
         }
         return
       }
-      if (continues) {
-        if (await replyInConversation(companyId, continues.id, t, agents)) {
-          setText('')
-          onStarted(continues.id)
-        }
-        return
-      }
-      if (!route) return
       const id = await startConversation(companyId, t, route)
       if (id) {
         setText('')
@@ -248,7 +227,7 @@ export function TeamComposer({
           aria-label="New task"
           aria-autocomplete="list"
           aria-expanded={mentions.open}
-          placeholder={agents.length ? (to.kind === 'agent' && picked ? `Message ${picked.name}…` : to.kind === 'everyone' ? 'Tell everyone…' : 'New task… say what you need') : 'Ask Claude anything…'}
+          placeholder={picked ? `Message ${picked.name}…` : 'New task… say what you need'}
           onChange={(e) => {
             setText(e.target.value)
             mentions.update(e.target.value, e.target.selectionStart)
@@ -271,14 +250,9 @@ export function TeamComposer({
         {drop.dragging && <DropHint />}
         {mentions.menu}
         <div className="cx-composer__foot">
-          <button type="button" className="cx-routeline" data-chatux="route-line" onClick={() => setMenu(true)} title={why ? `Why: ${why}. Click to pick who gets it.` : 'Pick who gets it'}>
+          <button type="button" className="cx-routeline" data-chatux="route-line" onClick={() => setMenu(true)} title="Pick who gets it">
             {line}
           </button>
-          {existing && (
-            <button type="button" className="cx-newtopic" data-chatux="new-topic" aria-pressed={fresh} onClick={() => setFresh((v) => !v)} title={fresh ? `Back to your conversation “${existing.title}”` : `Start a separate conversation with ${solo?.name}`}>
-              {fresh ? 'Continue instead' : 'New topic'}
-            </button>
-          )}
           <span className="flex1" />
           <Button type="submit" size="sm" variant="primary" icon="send" data-chatux="composer-send" disabled={busy || !text.trim()} title="Send (↵)" aria-label="Send" />
         </div>
@@ -296,13 +270,9 @@ function ToPicker({ open, setOpen, label, to, agents, repos, onPick, labelledBy 
   type Opt = { to: To; value: string; title: string; sub: string; section?: string; disabled?: boolean; icon?: 'branch' | 'chat' }
   const options: Opt[] = useMemo(() => {
     const out: Opt[] = []
-    if (agents.length) {
-      out.push({ to: { kind: 'team' }, value: 'team', title: 'Principia picks', sub: 'Brings in whoever fits, up to three' })
-      if (agents.length > 1) out.push({ to: { kind: 'everyone' }, value: 'everyone', title: 'Everyone on the team', sub: `All ${Math.min(agents.length, 8)} answer · or type @all` })
-      agents.forEach((a, i) => out.push({ to: { kind: 'agent', id: a.id }, value: `agent:${a.name}`, title: a.name, sub: `${a.role}${a.paused ? ' · paused' : ''}`, section: i === 0 ? 'Talk to one person' : undefined, disabled: a.paused }))
-    }
-    out.push({ to: { kind: 'claude' }, value: 'claude', title: 'Claude directly', sub: 'Plain Claude, not one of your agents', section: 'Outside the team', icon: 'chat' })
+    out.push({ to: { kind: 'claude' }, value: 'claude', title: 'Claude', sub: 'Your company’s tools and memory', icon: 'chat' })
     for (const r of repos) out.push({ to: { kind: 'repo', id: r.id }, value: `repo:${r.name}`, title: `Claude in ${r.name}`, sub: 'Code session with its terminal', icon: 'branch' })
+    agents.forEach((a, i) => out.push({ to: { kind: 'agent', id: a.id }, value: `agent:${a.name}`, title: a.name, sub: `${a.role}${a.paused ? ' · paused' : ''}`, section: i === 0 ? 'For something specific' : undefined, disabled: a.paused }))
     return out
   }, [agents, repos])
   const shown = q ? options.filter((o) => `${o.title} ${o.sub}`.toLowerCase().includes(q.toLowerCase())) : options
@@ -350,11 +320,6 @@ function ToPicker({ open, setOpen, label, to, agents, repos, onPick, labelledBy 
           }
         }}
       >
-        {(to.kind === 'team' || to.kind === 'everyone') && (
-          <span className="cx-to__mark" aria-hidden>
-            ◆
-          </span>
-        )}
         {label}
         <Icon name="chevronDown" size={10} />
       </button>
@@ -403,13 +368,7 @@ function ToPicker({ open, setOpen, label, to, agents, repos, onPick, labelledBy 
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => pick(o)}
                 >
-                  {o.to.kind === 'team' || o.to.kind === 'everyone' ? (
-                    <span className="cx-to__mark" aria-hidden>
-                      ◆
-                    </span>
-                  ) : o.icon ? (
-                    <Icon name={o.icon} size={12} />
-                  ) : null}
+                  {o.icon ? <Icon name={o.icon} size={12} /> : null}
                   <span className="cx-menu__main">
                     {o.title}
                     <span className="cx-menu__sub">{o.sub}</span>

@@ -12,26 +12,21 @@ import { Icon } from '../Icon'
 import { ChatModeToggle } from '../chat/ChatPane'
 import { ChatSurface } from '../chat/ChatSurface'
 import { AgentBust } from '../../shell/DepartmentGroup'
-import { taskName } from '../../lib/desk'
 import { useAgentChat, useDeskWho } from '../../state/desk'
 import { navigate, providerLabel, sessionTitle, setCompanyPaused, useStore } from '../../state/store'
 import { useCompanyShortName } from '../../lib/company'
-import { AgentChat, useAgentStatus, useIsCode } from './Desk'
+import { AgentChat } from './Desk'
 import { AgentPanel, PanelToggle, SessionPanel, usePanel } from './AgentPanel'
 import { BrowserToggle } from '../browser/BrowserToggle'
 import { paneScope } from '@shared/browser'
 
 export function AgentConversation({ agent, crumb = false, nonce }: { agent: CompanyAgent; crumb?: boolean; nonce?: number }): React.JSX.Element {
   const who = useDeskWho(agent)
-  const status = useAgentStatus(agent)
-  const code = useIsCode(agent.companyId)
   const chat = useAgentChat(agent)
   const area = useRef<HTMLDivElement>(null)
   const panel = usePanel(area)
   const companyPaused = useStore((s) => s.companies.find((c) => c.id === agent.companyId)?.pausedAt ?? null)
   const short = useCompanyShortName(agent.companyId)
-  const cur = status.seat.current
-  const doing = status.kind === 'working' && cur && status.seat.working.length < 2 ? `${taskName(cur, code)} · ${status.text}` : status.text
   return (
     <div className="view convo-view">
       <Toolbar
@@ -49,10 +44,8 @@ export function AgentConversation({ agent, crumb = false, nonce }: { agent: Comp
             )}
             <AgentBust agent={agent} size={24} className="convo-title__face" />
             <span className="convo-title__name">{who.name}</span>
-            <span className="convo-title__role">· {who.role}</span>
           </span>
         }
-        sub={<span className={`convo-title__sub ${status.kind === 'working' ? 'shimmer-text' : ''}`}>{doing}</span>}
       >
         {companyPaused && !agent.archivedAt && (
           <Button size="sm" icon="play" variant="primary" onClick={() => void setCompanyPaused(agent.companyId, false)} title={`${short} is paused, so ${who.name} is too.`}>
@@ -89,7 +82,6 @@ export function SessionConversation({ session: s, children }: { session: Session
               <Icon name={s.repoId ? 'branch' : s.departmentId ? 'department' : 'chat'} size={13} />
             </span>
             <span className="convo-title__name">{name}</span>
-            <span className="convo-title__role">· {s.departmentId ? 'with the department' : 'direct chat, no agent'}</span>
           </span>
         }
         sub={<span className="convo-title__sub">{custom ? s.title : sessionTitle(s)}{place && s.repoId ? ` · ${place}` : ''}</span>}

@@ -178,7 +178,7 @@ export function ChatPane({ session: s, focused, who }: { session: Session; focus
           <Blocks blocks={shown} live={live} stamps={stamps} actions={exited ? null : { answer, hotkeyFor: focused ? openReq : null, cwd: s.cwd }} onNotice={exited ? undefined : onNotice} />
           {live && (
             <div className="chat-working">
-              {who?.face ? <span className="chat-working__face" aria-hidden>{who.face}</span> : <span className="chat-spin" aria-hidden />}
+              <span className="chat-spin" aria-hidden />
               <span className="shimmer-text">{v.turn === 'needs' ? 'Waiting for you' : who ? `${name} · ${v.activity ?? 'Working'}…` : `${v.activity ?? 'Working'}…`}</span>
               {elapsed && <span className="chat-meta">{elapsed}</span>}
               {v.turn !== 'starting' && <span className="chat-meta">· esc to stop</span>}

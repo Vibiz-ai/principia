@@ -250,6 +250,12 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
         adapter: s.adapter
       }
     },
+    stepOwner: (step, taskId): DraftOwner | null => {
+      const run = h.store.getRun(step.runId)
+      if (!run) return null
+      const root = h.live?.rootOfStep(step.stepId) ?? null
+      return { kind: 'step', sessionId: null, runId: step.runId, stepId: step.stepId, agentId: root?.id ?? null, ownerKey: `task:${taskId}`, ownerLabel: run.title, adapter: root?.provider ?? 'claude' }
+    },
     ctx,
     providers: () => h.safe(() => h.engine.providers.cached(), []),
     engineValidate: (d) => {
@@ -330,8 +336,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
     },
     startRun,
     openAsk: (rec: DraftRecord): Ask | null => {
-      if (!h.live || !rec.sessionId) return null
-      const root = h.live.rootOfSession(rec.sessionId)
+      if (!h.live) return null
+      const root = rec.sessionId ? h.live.rootOfSession(rec.sessionId) : rec.stepId ? h.live.rootOfStep(rec.stepId) : null
       if (!root) return null
       const verb = rec.kind === 'create' ? 'Create workflow' : rec.kind === 'update' ? 'Update workflow' : 'Run workflow'
       const now = new Date()
@@ -340,8 +346,8 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
         agentId: root.id,
         rootId: root.id,
         sessionId: rec.sessionId,
-        runId: null,
-        stepId: null,
+        runId: rec.runId,
+        stepId: rec.stepId,
         provider: rec.adapter,
         kind: 'approval',
         channel: 'author',
@@ -426,7 +432,10 @@ export function wireAuthoring(h: Hive, opts: { mainDir: string; reaper: ProcessR
   const broker = h.author
   const handleCall = broker.handleCall.bind(broker)
   broker.handleCall = (owner, line, writeAnswer) => {
-    if (!('sessionId' in owner)) return handleCall(owner, line, writeAnswer)
+    if (!('sessionId' in owner)) {
+      const company = h.store.getRun(owner.runId)?.companyId
+      return company ? authorCompany.run(company, () => handleCall(owner, line, writeAnswer)) : handleCall(owner, line, writeAnswer)
+    }
     const companyId = sessionCompany(owner.sessionId)
     const l = (line && typeof line === 'object' ? line : {}) as { call_id?: unknown; company_id?: unknown }
     if (typeof l.company_id === 'string' && l.company_id !== companyId && h.store.companyGuardsEnforced()) {

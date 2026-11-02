@@ -466,6 +466,38 @@ describe('SLACK.md §9.5: slack_trigger rides on create (one card, one click)', 
     expect((saved[0] as { workflowId: string }).workflowId).toMatch(/^wf_/)
   })
 
+  it("a board task's run proposes a routine: the same card, no waiting, and a run with no task is still refused", async () => {
+    const step = { stepId: 'st_0000000001', runId: 'r_0000000001' }
+    const hh = harness({
+      tasks: { resolve: () => ({ kind: 'run', companyId: 'co_a', taskId: 'task_1', holdsTask: true }), call: async () => ({}) },
+      stepOwner: (o, taskId) => ({ kind: 'step', sessionId: null, runId: o.runId, stepId: o.stepId, agentId: null, ownerKey: `task:${taskId}`, ownerLabel: 'VO-109', adapter: 'claude' })
+    })
+    const answers: [string, { ok: boolean; result?: Record<string, unknown>; error?: string }][] = []
+    const call = (id: string, tool: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}): void => hh.broker.handleCall(step, { hive: 'author_call', call_id: id, tool, args, ...extra }, (c, p) => answers.push([c, p as never]))
+    call('hac_0000000020', 'hive_workflow_create', { workflow: SIMPLE, summary: 'Checks campaigns every morning', wait_s: 600 })
+    await flush()
+    expect(answers[0]?.[1].result).toMatchObject({ status: 'pending' })
+    expect(String(answers[0]?.[1].result?.note)).toContain('task_ask')
+    expect(hh.asks).toHaveLength(1)
+    expect(hh.workflows.size).toBe(0)
+    const rec = hh.db.prepare('SELECT owner_kind, session_id, run_id, step_id, owner_key FROM author_drafts').get()
+    expect(rec).toEqual({ owner_kind: 'step', session_id: null, run_id: step.runId, step_id: step.stepId, owner_key: 'task:task_1' })
+    // running a workflow stays with chats; another task's line is refused
+    call('hac_0000000021', 'hive_workflow_run', {})
+    call('hac_0000000022', 'hive_workflow_list', {}, { task_id: 'task_2' })
+    await flush()
+    expect(answers.find(([c]) => c === 'hac_0000000021')?.[1]).toEqual({ ok: false, error: 'Unknown tool: hive_workflow_run' })
+    expect(answers.find(([c]) => c === 'hac_0000000022')?.[1].error).toContain('another task')
+    // a task that left this run, and a workflow step with no task
+    const gone = harness({ tasks: { resolve: () => ({ kind: 'run', companyId: 'co_a', taskId: 'task_1', holdsTask: false }), call: async () => ({}) }, stepOwner: () => null })
+    const none = harness({ tasks: { resolve: () => { throw new Error('not a task run') }, call: async () => ({}) }, stepOwner: () => null })
+    const out: unknown[] = []
+    gone.broker.handleCall(step, { hive: 'author_call', call_id: 'hac_0000000023', tool: 'hive_workflow_create', args: {} }, (_c, p) => out.push(p))
+    none.broker.handleCall(step, { hive: 'author_call', call_id: 'hac_0000000024', tool: 'hive_workflow_create', args: {} }, (_c, p) => out.push(p))
+    await flush()
+    expect(out).toEqual([{ ok: false, error: 'This task is no longer yours to change (its run or session ended)' }, { ok: false, error: 'Unknown tool: hive_workflow_create' }])
+  })
+
   it('a step owner can call slack tools but never authoring tools', async () => {
     const calls: string[] = []
     const hh = harness({ slack: { call: async (_o, tool) => (calls.push(tool), { ok: 1 }) } })

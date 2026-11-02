@@ -23,6 +23,13 @@ export const isTaskTool = (name: string): name is TaskTool => (TASK_TOOLS as rea
 /** PROACTIVE.md §3: listed to interactive sessions that hold no task (chats); refused anywhere else. */
 export const SESSION_TASK_TOOLS = ['task_update'] as const
 export type SessionTaskTool = (typeof SESSION_TASK_TOOLS)[number]
+/**
+ * AUTHORING.md PO1: what a board task's run may use to propose a routine. Writes become the same approval card as a
+ * chat's; nothing is saved without the founder's click. hive_workflow_run stays with chats.
+ */
+export const TASK_AUTHOR_TOOLS = ['hive_workflow_schema', 'hive_profiles_list', 'hive_repos_list', 'hive_workflow_list', 'hive_workflow_get', 'hive_workflow_validate', 'hive_workflow_create', 'hive_workflow_update', 'hive_draft_status'] as const
+export type TaskAuthorTool = (typeof TASK_AUTHOR_TOOLS)[number]
+export const isTaskAuthorTool = (name: string): name is TaskAuthorTool => (TASK_AUTHOR_TOOLS as readonly string[]).includes(name)
 export const isSessionTaskTool = (name: string): name is SessionTaskTool => (SESSION_TASK_TOOLS as readonly string[]).includes(name)
 
 /** §6: every result is capped at 8000 chars and marked as data. */
@@ -35,7 +42,8 @@ export const BRIEF_TOOL_LIMITS = { text: 20_000 } as const
 export const TASK_SERVER_INSTRUCTIONS =
   'Principia task board (hivetask): you are working on one task of a company board. Read it with task_get, the board with task_list. ' +
   'End every turn with exactly one of task_report (outcome review or blocked), task_ask (a decision only the human can make) or task_handoff (another department or agent should take it). ' +
-  'task_comment adds a note and never wakes anyone. task_create files a follow-up task (blocksCurrent makes this task wait for it). You cannot mark tasks done: a human approves every task.'
+  'task_comment adds a note and never wakes anyone. task_create files a follow-up task (blocksCurrent makes this task wait for it). You cannot mark tasks done: a human approves every task. ' +
+  'For a routine or schedule, propose it yourself with hive_workflow_create: the founder gets the approval card right away and the call returns at once. Then end the turn with task_ask saying the card is waiting. Never ask the founder to paste anything into another chat, and never edit the database.'
 /** PLANS.md §1: listed only where a task is held (a task run, a session opened for a task); a chat never sees it. */
 export const BRIEF_SERVER_INSTRUCTIONS =
   'The task brief is yours to keep true: task_decide (a decision and why), task_criterion (tick an acceptance criterion), task_attach_proof, task_brief_edit (rewrite the handoff for the next agent).'
@@ -364,7 +372,7 @@ export interface TaskCallScope {
 /** One hivetask tools/call through the live-dir mailbox. */
 export async function callTaskTool(
   liveDir: string,
-  tool: BoardTool | ConnectionsTool,
+  tool: BoardTool | ConnectionsTool | TaskAuthorTool,
   rawArgs: unknown,
   ctx: Partial<CallContext> = {},
   scope: TaskCallScope = {},

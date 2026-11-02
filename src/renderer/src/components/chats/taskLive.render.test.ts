@@ -53,13 +53,13 @@ describe('a task is a chat', () => {
     const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-15' }))
     expect(html).toContain('data-chatux="task-live"')
     expect(html).toContain('data-state="working"')
-    expect(html).toContain('VO-15 Check why maria@example.com’s workspace')
+    expect(html).not.toContain('convo-title__role')
     expect(html).toMatch(/data-chatux="task-clock">4m 1[23]s</)
     expect(html).toContain('>Pause<')
     expect(html).toContain('>Open task<')
     expect(html).toMatch(/data-chatux="task-chat-from"[^>]*>From: Spring launch</)
     // the thread starts with the brief, and says what it does now in words
-    expect(html).toMatch(/data-chatux="task-chat-brief".*Check why maria@example.com/)
+    expect(html).toMatch(/chat-user__text">[^<]*Check why maria@example.com/)
     expect(html).toMatch(/data-chatux="task-live-activity"[^>]*>.*Running a SQL query in PostHog/)
     expect(html).not.toContain('execute-sql')
     // the full log is one click away, not the pane
@@ -95,17 +95,23 @@ describe('a task is a chat', () => {
     expect(html).toMatch(/→ Answers [^<]+ question, and the task goes on/)
     store.setState({ tasks: before })
   })
-  it('folded tool calls read as words; the raw call never shows until a step is opened', async () => {
-    const { ThreadRow } = await import('./TaskLiveView')
-    const ev = (seq: number, name: string, summary: string, description?: string) => ({ seq, agentId: 'n_run', ts: T, kind: 'tool' as const, toolUseId: `t${seq}`, name, summary, detail: null, state: 'ok' as const, ...(description ? { description } : {}) })
-    const it2 = { kind: 'tools' as const, key: 'ev:1', at: T, events: [ev(1, 'ToolSearch', 'ToolSearch select:mcp__hivemem__task_get,mcp__hivemem__task_comment'), ev(2, 'mcp__hivemem__task_get', 'hivemem.task_get VO-15'), ev(3, 'Bash', 'Bash npm test', 'Run the unit tests'), ev(4, 'Bash', 'Bash git status')], label: 'Ran 2 commands · read the task', running: false }
-    const html = renderToStaticMarkup(createElement(ThreadRow, { it: it2, head: true, who: 'Julia', role: null, face: null, code: true }))
-    expect(html).toContain('Ran 2 commands · read the task')
-    expect(html).toContain('4 steps')
-    expect(html).not.toMatch(/ToolSearch|mcp__|hivemem|select:/)
-    const one = renderToStaticMarkup(createElement(ThreadRow, { it: { ...it2, events: [it2.events[2]!], label: 'Run the unit tests' }, head: true, who: 'Julia', role: null, face: null, code: true }))
-    expect(one).toContain('Run the unit tests')
-    expect(one).not.toContain('npm test')
+  it('tool calls read as words in the same rows as a chat; the raw call never shows until a step is opened', async () => {
+    const { taskChatItems } = await import('../../lib/taskThread')
+    const { buildBlocks } = await import('@shared/chatView')
+    const { Blocks } = await import('../chat/ChatCards')
+    const ev = (seq: number, name: string, summary: string, description?: string) => ({ seq, agentId: 'n_run', ts: T, kind: 'tool' as const, toolUseId: `t${seq}`, name, summary, detail: null, state: 'ok' as const, description })
+    const thread = [
+      { kind: 'brief' as const, key: 'b', at: T, text: 'Check the campaign' },
+      { kind: 'say' as const, key: 's', at: T, by: 'agent' as const, text: 'Looking now' },
+      { kind: 'tools' as const, key: 'ev:1', at: T, events: [ev(1, 'Bash', 'node scripts/check.js', 'Run the unit tests')], label: 'Run the unit tests', running: false },
+      { kind: 'note' as const, key: 'n', at: T, text: 'Julia started' }
+    ]
+    const items = taskChatItems(thread)
+    expect(items.map((i) => i.kind)).toEqual(['user', 'text', 'tool', 'notice'])
+    const html = renderToStaticMarkup(createElement(Blocks, { blocks: buildBlocks(items), live: false, actions: null }))
+    expect(html).toContain('chat-user')
+    expect(html).toContain('chat-text')
+    expect(html).toContain('Run the unit tests')
   })
 })
 

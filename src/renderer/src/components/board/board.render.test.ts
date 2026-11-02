@@ -32,6 +32,9 @@ async function withState(departments: boolean, extra: Record<string, unknown> = 
   })
 }
 
+// the conversation panel opens on your click (CHAT-UI.md §9); these tests read what is in it
+vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'hive.convoPanel.open.v2' ? 'true' : null), setItem: () => undefined, removeItem: () => undefined })
+
 describe('AskForm', () => {
   it('renders a choice ask with its options, a confirm as Yes / No, and nothing once answered', async () => {
     const { AskForm } = await import('./AskForm')
@@ -281,7 +284,7 @@ describe('Department and agent pages with personas', () => {
     const html = renderToStaticMarkup(createElement(AgentSeatView, { id: 'agt_copy' }))
     // the header: Team › Marcus · Copywriter (no left identity column any more)
     expect(html).toContain('>Team<')
-    expect(html).toMatch(/convo-title__name">Marcus<.*convo-title__role">· Copywriter</)
+    expect(html).toMatch(/convo-title__name">Marcus</)
     expect(html).not.toContain('desk-left')
     // the conversation is Marcus's own live chat; with no chat yet nothing starts from looking: the empty chat and its
     // composer, and the first message starts it

@@ -1,21 +1,22 @@
 /**
  * CHAT-UI.md §8.4: a task is a chat (`task:<id>` in Chats), the subagent of the conversation that filed it. The
  * header names who and what ("Julia · VO-15 Check why…"), "Working · 4m 12s", Pause, Open task and "From: <the
- * conversation>" back to its parent. The body is a conversation thread (lib/taskThread.ts): the brief as the first
- * message, what the agent says and thinks as bubbles, its tool calls folded between them into one line ("Ran 6
- * commands · read 3 files · checked memory", a click opens each call in words and the raw call under it), its
- * questions, your notes. At the bottom a composer: "Add a note for Julia…" posts a task comment (tasks:comment) that
+ * conversation>" back to its parent. The body is the same chat as a chat with Claude (CHAT-UI.md §9): the thread
+ * (lib/taskThread.ts) becomes chat items, drawn by ChatCards with the chat's Composer. The brief is the first
+ * message, then what the agent says, its tool rows, its questions, your notes. At the bottom the composer: "Add a note for Julia…" posts a task comment (tasks:comment) that
  * shows in the thread at once and reaches the agent through the task's wake, the same inbox teammates' messages use
  * (picked up as soon as the running turn ends); with an open question, Send answers it (tasks:answer).
  * Full log opens the run's Activity / Output (TaskLog), unchanged.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentEvent } from '@shared/live'
+import { EMPTY_CHAT_META } from '@shared/chat'
+import { buildBlocks } from '@shared/chatView'
 import type { TaskActivity, TaskDetail } from '@shared/company'
 import type { Id } from '@shared/types'
 import { SLOT_WAIT_LABEL, SLOT_WAIT_LINE, SLOT_WAIT_WHY, TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
 import { Button, EmptyState, Toolbar } from '../ui'
-import { Icon } from '../Icon'
+import { Blocks, ChatWho } from '../chat/ChatCards'
+import { Composer } from '../chat/Composer'
 import { BrowserToggle } from '../browser/BrowserToggle'
 import { taskScope } from '@shared/browser'
 import { AskCard } from '../agents/AskCard'
@@ -23,15 +24,14 @@ import { AgentGlyph } from '../agents/AgentBits'
 import { AgentBust } from '../../shell/DepartmentGroup'
 import { useAgentDisplay } from '../board/NeedsYouTasks'
 import { TaskLog, WorkClock } from '../conversations/TaskCard'
-import { Bubble, openConversation } from '../conversations/ConversationKit'
+import { openConversation } from '../conversations/ConversationKit'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { pauseTask, useIsCode } from '../desk/Desk'
 import { openAskOfRun, rootOfRun } from '../../lib/taskCardView'
 import { plainActivity } from '../../lib/plainActivity'
 import { taskName } from '../../lib/desk'
-import { durationMs } from '../../lib/time'
-import { eventDurations } from '../../lib/live'
-import { noteHint, taskThread, toolWords, type ThreadItem } from '../../lib/taskThread'
+import { stampsFor } from '../../lib/agentChatView'
+import { noteHint, taskChatItems, taskThread, toolWords } from '../../lib/taskThread'
 import { focusAgent, mergeAgents, useAgentEvents } from '../../state/live'
 import { useForum } from '../../state/forum'
 import { useForumLoaded } from '../../state/conversations'
@@ -101,6 +101,8 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const who = display?.name ?? seat?.name ?? 'The agent'
   const activity = useMemo(() => [...(detail?.activity ?? []), ...mine], [detail, mine])
   const items = useMemo(() => (task ? taskThread({ task, activity, events, agentName: who, code }) : []), [task, activity, events, who, code])
+  const blocks = useMemo(() => buildBlocks(taskChatItems(items, code)), [items, code])
+  const stamps = useMemo(() => stampsFor(blocks), [blocks])
   const [logOpen, setLogOpen] = useState(false)
   const body = useRef<HTMLDivElement>(null)
   const atEnd = useRef(true)
@@ -128,9 +130,8 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const result = taskCardResult({ report: task.report ?? null, doneNote: task.doneNote ?? null })
   const since = slotWait ?? root?.startedAt ?? task.updatedAt
   const question = state === 'needs_you' && task.ask && !task.ask.answer ? task.ask : null
-  const face = seat ? <AgentBust agent={seat} size={26} /> : <AgentGlyph visual="running" />
   return (
-    <div className="view convo-view task-live task-chat" data-chatux="task-live" data-state={state}>
+    <div className="view convo-view" data-chatux="task-live" data-state={state}>
       <Toolbar
         title={
           <span className="convo-title">
@@ -141,10 +142,8 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
                 <AgentGlyph visual="running" />
               </span>
             )}
-            <span className="convo-title__name">{who}</span>
-            <span className="convo-title__role" title={taskName(task, code)}>
-              · {taskName(task, code)}
-            </span>
+            {/* CHAT-UI.md §9: an agent is its name; a task with nobody on it keeps its title */}
+            <span className="convo-title__name">{seat ? who : taskName(task, code)}</span>
           </span>
         }
         sub={
@@ -179,126 +178,92 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
         {/* BROWSER.md §6: this task's own browser tabs (the same across its wakes); they open beside it, never elsewhere */}
         <BrowserToggle companyId={task.companyId} scope={taskScope(task.id)} />
       </Toolbar>
-      <div
-        className="cx-thread__body scroll task-chat__body"
-        ref={body}
-        data-chatux="task-chat"
-        onScroll={(e) => {
-          const el = e.currentTarget
-          atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-        }}
-      >
-        {items.map((it, i) => (
-          <ThreadRow key={it.key} it={it} head={startsRun(items, i)} who={who} role={display?.role ?? null} face={face} code={code} />
-        ))}
-        {ask && <AskCard ask={ask} onOpen={() => void focusAgent(ask.agentId, ask.id)} />}
-        {question && (
-          <Bubble mine={false} head face={face} who={who} role={display?.role ?? null} className="is-question" data={{ 'data-chatux': 'task-chat-question' }} after={question.options?.length ? <AnswerChips taskId={task.id} options={question.options} /> : null}>
-            <MarkdownLite text={question.prompt} />
-          </Bubble>
-        )}
-        {isFinishedCard(state) && (
-          <div className="cx-handoff cx-handoff--small" data-chatux="task-chat-outcome">
-            <span className={`cx-strip__mark is-${state}`} aria-hidden />
-            <span>
-              {TASK_CARD_LABEL[state]}
-              {result ? ` · ${result}` : ''}
-            </span>
+      <div className="convo">
+        <section className="convo__chat" aria-label={`Chat with ${who}`}>
+          <div className="agent-chat">
+            <ChatWho.Provider value={who}>
+              <div className="chat-pane" data-turn={isWorking ? 'working' : 'idle'}>
+                <div
+                  className="chat-scroll"
+                  ref={body}
+                  onScroll={(e) => {
+                    const el = e.currentTarget
+                    atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+                  }}
+                >
+                  <div className="chat-col" data-chatux="task-chat">
+                    <Blocks blocks={blocks} live={isWorking} actions={null} stamps={stamps} />
+                    {ask && <AskCard ask={ask} onOpen={() => void focusAgent(ask.agentId, ask.id)} />}
+                    {question && (
+                      <div className="chat-text" data-chatux="task-chat-question">
+                        <MarkdownLite text={question.prompt} />
+                        {question.options?.length ? <AnswerChips taskId={task.id} options={question.options} /> : null}
+                      </div>
+                    )}
+                    {isFinishedCard(state) && (
+                      <div className="chat-notice" data-chatux="task-chat-outcome">
+                        {TASK_CARD_LABEL[state]}
+                        {result ? ` · ${result}` : ''}
+                      </div>
+                    )}
+                    {now && (
+                      <div className="chat-working" data-chatux="task-live-activity" aria-live="polite">
+                        <span className="chat-spin" aria-hidden />
+                        <span className={slotWait ? '' : 'shimmer-text'} title={slotWait ? SLOT_WAIT_WHY : undefined}>{now}</span>
+                      </div>
+                    )}
+                    {!rootId && isWorking && !slotWait && (
+                      <div className="chat-working">
+                        <span className="chat-spin" aria-hidden />
+                        <span className="shimmer-text">{who} is starting on it…</span>
+                      </div>
+                    )}
+                    {rootId && runId && (
+                      <div className="task-chat__log">
+                        <button type="button" className="link-btn" data-chatux="task-chat-fulllog" onClick={() => setLogOpen(!logOpen)} aria-expanded={logOpen}>
+                          {logOpen ? 'Hide the full log' : 'Full log'}
+                        </button>
+                        {logOpen && <TaskLog agentId={rootId} runId={runId} stepId={root!.stepId} live={rootLive} code={code} />}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="chat-dock" data-chatux="task-chat-composer">
+                  <Composer
+                    sessionId={`task:${task.id}`}
+                    turn="idle"
+                    meta={EMPTY_CHAT_META}
+                    disabled={false}
+                    exited={false}
+                    focused={!!question}
+                    who={who}
+                    note={{ placeholder: question ? `Answer ${who}…` : `Add a note for ${who}…` }}
+                    onSend={async (text) => {
+                      try {
+                        const a = await sendTaskNote(task.id, text, !!question)
+                        setMine((l) => [...l, a])
+                        atEnd.current = true
+                        reload()
+                        return true
+                      } catch (e) {
+                        toast(errorMessage(e), 'error')
+                        return false
+                      }
+                    }}
+                    onStop={() => undefined}
+                    onTerminal={() => toast(`${who} works in the background: open the session from Open task`)}
+                    onSetMode={() => undefined}
+                    onSetModel={() => undefined}
+                  />
+                  <div className="task-chat__hint" data-chatux="task-chat-hint">
+                    {noteHint(who, state, { answers: !!question })}
+                  </div>
+                </div>
+              </div>
+            </ChatWho.Provider>
           </div>
-        )}
-        {now && (
-          <div className="cx-pending" data-chatux="task-live-activity" aria-live="polite">
-            <span className="task-live__dot" aria-hidden />
-            <span className={slotWait ? '' : 'shimmer-text'} title={slotWait ? SLOT_WAIT_WHY : undefined}>{now}</span>
-          </div>
-        )}
-        {!rootId && isWorking && !slotWait && <div className="task-live__empty text-tertiary">{who} is starting on it…</div>}
-        {rootId && runId && (
-          <div className="task-chat__log">
-            <button type="button" className="link-btn" data-chatux="task-chat-fulllog" onClick={() => setLogOpen(!logOpen)} aria-expanded={logOpen}>
-              {logOpen ? 'Hide the full log' : 'Full log'}
-            </button>
-            {logOpen && <TaskLog agentId={rootId} runId={runId} stepId={root!.stepId} live={rootLive} code={code} />}
-          </div>
-        )}
+        </section>
       </div>
-      <TaskNoteComposer taskId={task.id} who={who} state={state} answers={!!question} onSent={(a) => { setMine((l) => [...l, a]); atEnd.current = true; reload() }} />
-    </div>
-  )
-}
-
-/** A bubble starts a group after a different speaker or anything that is not a bubble. */
-function startsRun(items: readonly ThreadItem[], i: number): boolean {
-  const it = items[i]!
-  const prev = items[i - 1]
-  if (it.kind !== 'say') return true
-  return !prev || prev.kind !== 'say' || prev.by !== it.by
-}
-
-export function ThreadRow({ it, head, who, role, face, code }: { it: ThreadItem; head: boolean; who: string; role: string | null; face: React.ReactNode; code: boolean }): React.JSX.Element {
-  if (it.kind === 'brief')
-    return (
-      <div className="task-chat__brief" data-chatux="task-chat-brief">
-        <div className="task-chat__brief-label">The task</div>
-        <MarkdownLite text={it.text} />
-      </div>
-    )
-  if (it.kind === 'note')
-    return (
-      <div className="cx-handoff cx-handoff--small" data-chatux="task-chat-note">
-        <span className="cx-handoff__mark" aria-hidden>
-          ◆
-        </span>
-        <span>{it.text}</span>
-      </div>
-    )
-  if (it.kind === 'tools') return <ToolGroup it={it} code={code} />
-  return (
-    <Bubble mine={it.by === 'you'} head={head} face={face} who={who} role={role} at={it.at} className={`${it.thought ? 'is-thought' : ''} ${it.question ? 'is-question' : ''}`} data={{ 'data-chatux': 'task-chat-msg', 'data-by': it.by, ...(it.thought ? { 'data-thought': '1' } : {}) }}>
-      <MarkdownLite text={it.text} />
-    </Bubble>
-  )
-}
-
-/** "Ran 6 commands · read 3 files · checked memory", folded; open: each call in words, its raw call one click further. */
-function ToolGroup({ it, code }: { it: Extract<ThreadItem, { kind: 'tools' }>; code: boolean }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const durs = useMemo(() => eventDurations(it.events), [it.events])
-  const failed = it.events.filter((e) => e.state === 'error' || e.state === 'denied').length
-  return (
-    <div className={`task-chat__tools ${open ? 'is-open' : ''}`} data-chatux="task-chat-tools" data-count={it.events.length}>
-      <button type="button" className="task-chat__tools-head" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? 'Fold' : 'Show each step'}>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={11} />
-        <span className={`task-chat__tools-label ${it.running ? 'shimmer-text' : ''}`} data-chatux="task-chat-tools-label">
-          {it.label}
-        </span>
-        {it.events.length > 1 && <span className="task-chat__tools-n">{it.events.length} steps</span>}
-        {failed > 0 && <span className="task-chat__tools-n text-failed">{failed} failed</span>}
-      </button>
-      {open && (
-        <div className="task-chat__steps">
-          {it.events.map((e) => (
-            <ToolStep key={e.seq} e={e} dur={durs.get(e.seq)} code={code} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ToolStep({ e, dur, code }: { e: AgentEvent; dur: number | undefined; code: boolean }): React.JSX.Element {
-  const [raw, setRaw] = useState(false)
-  const words = toolWords(e, code)
-  const call = [e.name, e.summary].filter(Boolean).join(' · ')
-  return (
-    <div className={`task-chat__step ${e.state ? `is-${e.state}` : ''}`} data-chatux="task-chat-step">
-      <button type="button" className="task-chat__step-head" onClick={() => setRaw(!raw)} aria-expanded={raw} title="Show the raw call">
-        <span className="task-chat__step-words">{words}</span>
-        {e.state === 'running' && <span className="task-live__dot" aria-hidden />}
-        {(e.state === 'error' || e.state === 'denied') && <span className="text-failed">{e.state === 'denied' ? 'denied' : 'failed'}</span>}
-        {dur !== undefined && <span className="task-chat__step-dur">{durationMs(dur)}</span>}
-      </button>
-      {raw && <pre className="tl__detail selectable">{[call, e.detail && e.detail !== e.summary ? e.detail : null].filter(Boolean).join('\n\n')}</pre>}
     </div>
   )
 }
@@ -328,69 +293,5 @@ function AnswerChips({ taskId, options }: { taskId: Id; options: readonly string
         </Button>
       ))}
     </div>
-  )
-}
-
-/**
- * "Add a note for Julia…": a task comment (tasks:comment, by you) that is in the thread at once and reaches the agent
- * through the task's wake (lib/taskThread.ts noteHint says when). With an open question it is the answer.
- */
-function TaskNoteComposer({ taskId, who, state, answers, onSent }: { taskId: Id; who: string; state: ReturnType<typeof taskCardState>; answers: boolean; onSent: (a: TaskActivity) => void }): React.JSX.Element {
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const input = useRef<HTMLTextAreaElement>(null)
-  // PR-48: Home's Answer lands here; with an open question the cursor is already in the answer box
-  useEffect(() => {
-    if (answers) input.current?.focus()
-  }, [taskId, answers])
-  const send = async (): Promise<void> => {
-    const t = text.trim()
-    if (!t || busy) return
-    setBusy(true)
-    try {
-      onSent(await sendTaskNote(taskId, t, answers))
-      setText('')
-    } catch (e) {
-      toast(errorMessage(e), 'error')
-    } finally {
-      setBusy(false)
-      input.current?.focus()
-    }
-  }
-  return (
-    <form
-      className="cx-thread__reply"
-      data-chatux="task-chat-composer"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void send()
-      }}
-    >
-      <textarea
-        ref={input}
-        className="cx-composer__input"
-        data-chatux="task-chat-input"
-        rows={1}
-        value={text}
-        disabled={busy}
-        maxLength={8000}
-        placeholder={answers ? `Answer ${who}…` : `Add a note for ${who}…`}
-        aria-label={answers ? `Answer ${who}` : `Add a note for ${who}`}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault()
-            void send()
-          }
-        }}
-      />
-      <div className="cx-composer__foot">
-        <span className="cx-routeline cx-routeline--static" data-chatux="task-chat-hint">
-          {noteHint(who, state, { answers })}
-        </span>
-        <span className="flex1" />
-        <Button type="submit" size="sm" variant="primary" icon="send" data-chatux="task-chat-send" disabled={busy || !text.trim()} aria-label="Send" />
-      </div>
-    </form>
   )
 }

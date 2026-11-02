@@ -49,6 +49,12 @@ scheduled (if asked), runnable workflow. Anything that does not serve that loop 
   `node:`/`run:` owner keys, the depth guard, the synthetic `author_wait`/`author_done` lines and their StepLive
   handling, step drafts in RunView. Why: a headless reviewer reading an outside contributor's PR diff must never be
   one prompt injection away from proposing or running workflows, and nobody asked for workflows that write workflows.
+  **Amended 2026-11-02 (founder: an agent could not create a routine even after "i approve", and sent them to paste
+  a prompt into another chat):** a headless step of a run that holds a board task may also propose: `TASK_AUTHOR_TOOLS`
+  on its hivemem server, the broker checking the task as for every task tool. It becomes the same card with the same
+  checks; nothing is saved without the click. It never waits (a run does not hold a slot for a click), and the card
+  outlives the run. `hive_workflow_run` stays with chats, and plain workflow steps keep no authoring tools. The risk
+  this reopens: a task reading outside content can be talked into proposing something, so the card is the guard.
 - **PO2. One card, one click.** `hive_workflow_create` / `hive_workflow_update` take optional `schedule` (the `when`
   object) and `run_now` (`{inputs}`). The card's primary button says what it does: **Approve**, **Approve & schedule**,
   **Approve & run now**, or **Approve, schedule & run now**, and one click does all of it. `hive_schedule_create` is

@@ -765,3 +765,27 @@ with X tasks being done, so I can focus my eyes there." `lib/convWork.ts`:
   the note hint), `lib/sessionRows.test.ts`, `lib/plainActivity.test.ts`, `components/chats/taskLive.render.test.ts`
   (the task chat, its composer and its comment delivery), `components/chats/chats.render.test.ts` (rows),
   `main/forum` (`unreadTasks`, `taskChannels`), `main/engine/live` (the stored description).
+
+## 9. Only chats: New task is Claude, agents when you ask (2026-11-02)
+
+The founder, looking at With the team, Tasks, Agent sessions and Claude, asked for just the chats, and said New task
+with Claude selected is the experience they love: clear, and it still uses Principia. This replaces the routing
+and the groups of §7 and the Tasks group of §8.6; the rest of §7 and §8 stands.
+
+- **Sidebar**: one list, no sections and no "Show N more": whatever needs you, then live work, unread news, the rest.
+  Every row kind stays (conversations, agents' chats, sessions, task rows, runs), so nothing that needs you gets lost.
+- **New task** (Home, Chats, ⌥⌘N): To: Claude by default, the chat you get from "Claude directly" before. To: lists
+  Claude, Claude in each repository, then the agents under "For something specific". "Principia picks" and "Everyone on
+  the team" are gone from it; words no longer route anyone.
+- **An agent is the same chat with its own prompt and skills**: picking one, typing @name or Team › Message opens its
+  standing chat (AGENT CHAT), never a new private conversation. Its session gets the same `hive` tools as a Claude
+  chat. Private conversations you already have stay in the list and keep working. @all still starts a team conversation.
+- **Agents that work in the background can ask for what a chat can do**: AUTHORING.md PO1.
+- **One way to draw a chat** (founder: "why we have different logic to render"): a chat with Claude, an agent's chat and
+  a task are all ChatPane's pieces (`Blocks`, the `chat-pane` frame, `Composer`). `lib/taskThread.ts taskChatItems` turns
+  a task's thread into chat items, which replaced the task chat's own bubbles, tool rows and note box. The side panel
+  stays closed until you open it, for everyone, and an ended Claude chat keeps its history and picks up on your next
+  message, as an agent's does. Team threads (`ConversationThread`, several speakers) keep their code but read the same.
+- **An agent is its name** (founder: "we already know what it should be working on"): its row, its header and New task's
+  To: say the name, never its role or the task it is on. Two rows of one agent add the task only to tell them apart.
+
