@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { codesignArgs, DMG_BACKGROUND, DMG_LAYOUT_DIR, defaultExec, dmgTemplate, isMachO, isStapleNetworkError, makeDmg, packageRelease, parseNotaryResult, signingOrder, staple, STAPLE_WAITS_MS } from './mac-sign.mjs'
+import { codesignArgs, DMG_BACKGROUND, DMG_LAYOUT_DIR, defaultExec, dmgTemplate, isMachO, isStapleNetworkError, makeDmg, retryStapler, packageRelease, parseNotaryResult, signingOrder, staple, STAPLE_WAITS_MS } from './mac-sign.mjs'
 import { dmgWindowLayout, readDsStore, withBookmarkVolumeUuid } from './ds-store.mjs'
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mac-sign-'))
@@ -461,4 +461,18 @@ test('makeDmg: a volume that never lets go fails the build, after a forced detac
   assert.ok(tries.some((a) => a.includes('-force')))
   assert.equal(calls.some((c) => c[1] === 'convert'), false)
   assert.equal(fs.existsSync(`${dmg}.rw.dmg`), false)
+})
+
+test('retryStapler: tries again while Apple cannot be reached, stops on a real failure, returns the last result', () => {
+  const drop = { ok: false, out: "CloudKit's response is inconsistent with expections: (null) | The validate action failed! Error 68." }
+  const quiet = { sleep: () => undefined, waitsMs: [1, 2, 3] }
+  let tries = [drop, drop, { ok: true, out: 'The validate action worked!' }]
+  assert.equal(retryStapler({ what: 'validate', attempt: () => tries.shift(), ...quiet }).ok, true)
+  assert.equal(tries.length, 0)
+  let n = 0
+  assert.equal(retryStapler({ what: 'validate', attempt: () => (n++, drop), ...quiet }).ok, false)
+  assert.equal(n, 4)
+  n = 0
+  assert.equal(retryStapler({ what: 'validate', attempt: () => (n++, { ok: false, out: 'does not have a ticket stapled to it' }), ...quiet }).ok, false)
+  assert.equal(n, 1)
 })

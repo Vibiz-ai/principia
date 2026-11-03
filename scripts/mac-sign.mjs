@@ -135,13 +135,8 @@ export const isStapleNetworkError = (out) => STAPLE_NETWORK_ERROR.test(String(ou
 
 const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
-/**
- * Staple the notary's ticket, trying again when the connection to Apple drops: notarization has already passed by
- * now, and a failed staple would throw all of that away. Anything else (no ticket, a bad file) fails on the first try.
- */
-export function staple({ target, exec = defaultExec, sleep = sleepMs, waitsMs = STAPLE_WAITS_MS }) {
-  const what = `stapler staple ${path.basename(target)}`
-  const attempt = () => exec('xcrun', ['stapler', 'staple', target])
+/** Runs a stapler call, again after each wait while its output says Apple could not be reached. Returns the last result. */
+export function retryStapler({ what, attempt, sleep = sleepMs, waitsMs = STAPLE_WAITS_MS }) {
   let r = attempt()
   for (const [i, ms] of waitsMs.entries()) {
     if (r.ok || !isStapleNetworkError(r.out)) break
@@ -149,7 +144,16 @@ export function staple({ target, exec = defaultExec, sleep = sleepMs, waitsMs = 
     sleep(ms)
     r = attempt()
   }
-  must(r, what)
+  return r
+}
+
+/**
+ * Staple the notary's ticket, trying again when the connection to Apple drops: notarization has already passed by
+ * now, and a failed staple would throw all of that away. Anything else (no ticket, a bad file) fails on the first try.
+ */
+export function staple({ target, exec = defaultExec, sleep = sleepMs, waitsMs = STAPLE_WAITS_MS }) {
+  const what = `stapler staple ${path.basename(target)}`
+  must(retryStapler({ what, attempt: () => exec('xcrun', ['stapler', 'staple', target]), sleep, waitsMs }), what)
 }
 
 /** The updater's zip (and the notary upload of an app): ditto keeps symlinks, modes and extended attributes. */

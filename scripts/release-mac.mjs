@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url'
 import { tagTargetProblem } from './release-target.mjs'
 import { assetProblems, checksumsText, describeFiles, parseChecksums, SUMS_FILE } from './release-assets.mjs'
 import { channelFiles, parseUpdateInfo, releaseChannel, sha512Base64File, writeUpdateInfo } from './update-info.mjs'
-import { packageRelease } from './mac-sign.mjs'
+import { packageRelease, retryStapler } from './mac-sign.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -307,8 +307,9 @@ fs.copyFileSync(dmg, dmgVersioned)
 
 // ---------- 4. verify ----------
 console.log('\nVerify')
-const verify = (label, cmd, argv, { expectFail = false } = {}) => {
-  const r = run(cmd, argv)
+const verify = (label, cmd, argv, { expectFail = false, apple = false } = {}) => {
+  // apple: the check asks Apple's ticket service: a dropped connection says nothing about the file, so it tries again
+  const r = apple ? retryStapler({ what: label, attempt: () => run(cmd, argv) }) : run(cmd, argv)
   const shown = r.out.replaceAll(root + path.sep, '').split('\n').filter(Boolean).slice(-2).join(' | ')
   if (expectFail) console.log(`  · ${label}: ${r.ok ? 'accepted' : 'rejected'} (expected for an ad-hoc build) ${shown ? `- ${shown}` : ''}`)
   else check(r.ok, `${label}${shown ? ` - ${shown}` : ''}`, `${label} failed${shown ? `: ${shown}` : ''}`)
@@ -330,15 +331,15 @@ if (dryRun) {
   notarized('spctl (app)', verify('spctl Gatekeeper (app)', 'spctl', ['-a', '-vvv', '-t', 'exec', appPath]))
   // a disk image is assessed as a document to open; `-t install` is for installer packages
   notarized('spctl (dmg)', verify('spctl Gatekeeper (dmg)', 'spctl', ['-a', '-vvv', '-t', 'open', '--context', 'context:primary-signature', dmg]))
-  verify('stapler validate (app)', 'xcrun', ['stapler', 'validate', appPath])
-  verify('stapler validate (dmg)', 'xcrun', ['stapler', 'validate', dmg])
+  verify('stapler validate (app)', 'xcrun', ['stapler', 'validate', appPath], { apple: true })
+  verify('stapler validate (dmg)', 'xcrun', ['stapler', 'validate', dmg], { apple: true })
 }
 // the updater installs the app from the zip: check the app as it comes out of it
 const unzipped = fs.mkdtempSync(path.join(outDir, 'zip-check-'))
 if (run('ditto', ['-x', '-k', zip, unzipped]).ok) {
   const z = path.join(unzipped, 'Principia.app')
   verify('codesign --verify --deep --strict (app from the zip)', 'codesign', ['--verify', '--deep', '--strict', z])
-  if (!dryRun) verify('stapler validate (app from the zip)', 'xcrun', ['stapler', 'validate', z])
+  if (!dryRun) verify('stapler validate (app from the zip)', 'xcrun', ['stapler', 'validate', z], { apple: true })
 } else check(false, '', 'the zip does not extract')
 fs.rmSync(unzipped, { recursive: true, force: true })
 // the update manifests (scripts/update-info.mjs): one per channel this version is offered on
