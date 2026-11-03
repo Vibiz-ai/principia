@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.6](https://github.com/Vibiz-ai/principia/compare/v0.4.5...v0.4.6) (2026-11-03)
+
+
+### Bug Fixes
+
+* **release:** retry the ticket checks when Apple cannot be reached ([90a6e8a](https://github.com/Vibiz-ai/principia/commit/90a6e8aaee204e0e1a4aa9205246679d956602fb))
+* **release:** retry the ticket checks when Apple cannot be reached ([1534739](https://github.com/Vibiz-ai/principia/commit/1534739d965ee0d4c2bd5d9628c228497fedd7bd))
+
 ## [0.4.5](https://github.com/Vibiz-ai/principia/compare/v0.4.4...v0.4.5) (2026-11-02)
 
 
