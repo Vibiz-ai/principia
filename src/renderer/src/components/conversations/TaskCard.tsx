@@ -29,7 +29,7 @@ import { Button, IconButton, Segmented } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
 import { AgentTimeline } from '../agents/AgentTimeline'
 import { StepLog } from '../StepLog'
-import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, stripWord, tailLines, taskCardView } from '../../lib/taskCardView'
+import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, chatIdOfTask, openAskOfRun, parseRunStarts, rootOfChat, rootOfRun, runStartsKey, stripTasks, stripWord, tailLines, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
 import { eventGlyph } from '../../lib/live'
@@ -254,7 +254,9 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   const card: ForumTaskCard | undefined = stored
   const task = useStore((s) => (card ? (s.tasks.find((t) => t.id === card.taskId) ?? null) : null))
   const runId = task?.runId ?? card?.runId ?? null
-  const root = useStore((s) => (runId ? rootOfRun(Object.values(s.agents), runId) : null))
+  // PR-100: a chat's own tracked task shows that chat's activity, never a run that is "Starting…"
+  const chatId = useStore((s) => chatIdOfTask(task, s.sessions))
+  const root = useStore((s) => (chatId ? rootOfChat(Object.values(s.agents), chatId) : runId ? rootOfRun(Object.values(s.agents), runId) : null))
   const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
   const co = companyId ?? task?.companyId ?? null
@@ -272,8 +274,8 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   // the run's agents load on demand (a chat reopened after a restart has none in the store yet)
   const hasRoot = !!root
   useEffect(() => {
-    if (runId && !hasRoot) void hive.agents.list({ runId, rootsOnly: true, limit: 20 }).then(mergeAgents, () => undefined)
-  }, [runId, hasRoot])
+    if (runId && !hasRoot) void hive.agents.list({ ...(chatId ? { sessionId: chatId } : { runId }), rootsOnly: true, limit: 20 }).then(mergeAgents, () => undefined)
+  }, [runId, chatId, hasRoot])
   // a start that went through clears the error it showed before
   useEffect(() => setRunError(null), [task?.status, task?.runId])
   if (!card) return null
@@ -281,7 +283,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   const who = display?.name ?? seat?.name ?? 'Nobody yet'
   const [queueText, queueRun] = queue ? queue.split('\u0000') : ['Waiting for its turn', '0']
   const canRun = v.state === 'queued' && queueRun === '1' && !!task
-  const logAgent = root && root.runId === v.runId ? root : null
+  const logAgent = root && (chatId ? root.sessionId === chatId : root.runId === v.runId) ? root : null
   const rootLive = !!logAgent && (logAgent.status === 'working' || logAgent.status === 'starting' || logAgent.status === 'needs_you')
   const act = async (fn: () => Promise<unknown>, label: string): Promise<void> => {
     if (busy) return
@@ -345,7 +347,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
               {SLOT_WAIT_LINE}
             </span>
           ) : v.state === 'working' ? (
-            !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)
+            !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">{chatId ? 'Being worked on in its chat' : 'Starting…'}</span></div></div>)
           ) : v.state === 'needs_you' ? (
             <span className="cx-task__activity cx-task__dockline" data-chatux="task-needs" title={v.needs?.prompt}>
               {v.needs?.prompt}
@@ -424,7 +426,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
               </span>
             ) : (
               <span className="cx-task__activity shimmer-text" data-chatux="task-activity">
-                {logAgent ? 'Working' : 'Starting'}
+                {logAgent || chatId ? 'Working' : 'Starting'}
               </span>
             )}
             <span className="cx-task__sep">·</span>
@@ -457,7 +459,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           {v.result}
         </div>
       )}
-      {v.state === 'working' && !v.slotWait && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">Starting…</span></div></div>)}
+      {v.state === 'working' && !v.slotWait && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">{chatId ? 'Being worked on in its chat' : 'Starting…'}</span></div></div>)}
       {logOpen && logAgent && v.runId && <TaskLog agentId={logAgent.id} runId={v.runId} stepId={logAgent.stepId} live={rootLive} />}
       {runError && (
         <div className="cx-task__error" role="alert" data-chatux="task-run-error">

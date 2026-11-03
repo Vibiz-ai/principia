@@ -5,7 +5,8 @@
  * Pure: no hive, no DOM.
  */
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
-import type { CompanyTask } from '@shared/company'
+import { trackedBy, type CompanyTask } from '@shared/company'
+import type { Session } from '@shared/types'
 import type { ForumMessage } from '@shared/forum'
 import { elapsedLabel, isFinishedCard, isOpenCard, SLOT_WAIT_LABEL, taskCardResult, taskCardState, TASK_CARD_LABEL, type ForumTaskCard, type StripTask, type TaskCardState } from '@shared/taskCard'
 import { parseDeepLink } from '@shared/deepLink'
@@ -40,6 +41,29 @@ export function rootOfRun(agents: Iterable<AgentNode>, runId: string | null | un
   let best: AgentNode | null = null
   for (const a of agents) if (a.runId === runId && a.parentId === null && (!best || a.updatedAt > best.updatedAt)) best = a
   return best
+}
+
+/**
+ * PR-100: the chat a task is worked on in. A chat's own tracked task (task_create from a chat) has the chat's session
+ * id as its run id and no agent run of its own, so its progress is the chat's: never a run that is "Starting…".
+ */
+export function chatIdOfTask(task: Pick<CompanyTask, 'runId' | 'source' | 'externalId'> | null | undefined, sessions: readonly Pick<Session, 'id'>[]): string | null {
+  const id = task?.runId
+  if (!id) return null
+  return trackedBy(task) === id || sessions.some((s) => s.id === id) ? id : null
+}
+
+/** The chat's root agent (its session root), newest first: the chat-tracked task's activity line comes from it. */
+export function rootOfChat(agents: Iterable<AgentNode>, sessionId: string | null | undefined): AgentNode | null {
+  if (!sessionId) return null
+  let best: AgentNode | null = null
+  for (const a of agents) if (a.sessionId === sessionId && a.parentId === null && (!best || a.updatedAt > best.updatedAt)) best = a
+  return best
+}
+
+/** Where "Open chat" goes in Chats: an agent's standing chat opens as that agent, any other chat as itself. */
+export function chatTarget(sessionId: string, session?: Pick<Session, 'companyAgentId'> | null): string {
+  return session?.companyAgentId ? `agent:${session.companyAgentId}` : `session:${sessionId}`
 }
 
 /** The open live ask of a run (a permission or question the CLI shows now), if any. */

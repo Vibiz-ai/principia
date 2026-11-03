@@ -115,6 +115,40 @@ describe('a task is a chat', () => {
   })
 })
 
+describe('PR-100: a task tracked by a chat shows that chat, never "Starting…"', () => {
+  // LOL-5: task_create from the chat "Use App Store regional price tiers"; its run id is the chat's session, no run exists
+  const chatTask = task('lol-5', { status: 'in_progress', runId: 's_chat1', source: 'agent', externalId: 'track:s_chat1:t1', agentId: null, title: 'Use App Store regional price tiers' } as Partial<CompanyTask>)
+  const chatRoot = { ...root, id: 'n_chat', rootId: 'n_chat', kind: 'session', sessionId: 's_chat1', runId: null, stepId: null, title: 'Chat', activity: 'Writing a file', status: 'working' } as unknown as AgentNode
+  const render = async (): Promise<string> => {
+    const { TaskLiveView } = await import('./TaskLiveView')
+    return renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'lol-5' }))
+  }
+  it("the chat working: its live activity and a link to it, no spinner that waits for a run, no Pause", async () => {
+    const store = await import('../../state/store')
+    const before = store.getState()
+    store.setState({ tasks: [...before.tasks, chatTask], sessions: [{ id: 's_chat1', title: 'Use App Store regional price tiers', status: 'running', repoId: null, companyId: 'co_a' }] as never, agents: { ...before.agents, n_chat: chatRoot } })
+    const html = await render()
+    expect(html).toContain('data-state="working"')
+    expect(html).toMatch(/data-chatux="task-in-chat"[^>]*>Being worked on in chat <button[^>]*data-chatux="task-open-chat"[^>]*>Use App Store regional price tiers</)
+    expect(html).toMatch(/data-chatux="task-live-activity"/)
+    expect(html).not.toContain('Starting…')
+    expect(html).not.toContain('is starting on it')
+    expect(html).not.toContain('>Pause<')
+    store.setState({ tasks: before.tasks, sessions: before.sessions, agents: before.agents })
+  })
+  it('the chat not loaded yet: still the link, never "Starting…"', async () => {
+    const store = await import('../../state/store')
+    const before = store.getState()
+    store.setState({ tasks: [...before.tasks, chatTask] })
+    const html = await render()
+    expect(html).toContain('data-chatux="task-in-chat"')
+    expect(html).toContain('data-chatux="task-open-chat"')
+    expect(html).not.toContain('Starting…')
+    expect(html).not.toContain('is starting on it')
+    store.setState({ tasks: before.tasks })
+  })
+})
+
 describe('the note reaches the agent', () => {
   it('Send posts a task comment by you (the wake path teammates use), or answers the open question', async () => {
     const { sendTaskNote } = await import('./TaskLiveView')

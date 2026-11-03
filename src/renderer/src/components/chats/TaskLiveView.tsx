@@ -27,7 +27,7 @@ import { TaskLog, WorkClock } from '../conversations/TaskCard'
 import { openConversation } from '../conversations/ConversationKit'
 import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { pauseTask, useIsCode } from '../desk/Desk'
-import { openAskOfRun, rootOfRun } from '../../lib/taskCardView'
+import { chatIdOfTask, chatTarget, openAskOfRun, rootOfChat, rootOfRun } from '../../lib/taskCardView'
 import { plainActivity } from '../../lib/plainActivity'
 import { taskName } from '../../lib/desk'
 import { stampsFor } from '../../lib/agentChatView'
@@ -36,7 +36,7 @@ import { focusAgent, mergeAgents, useAgentEvents } from '../../state/live'
 import { useForum } from '../../state/forum'
 import { useForumLoaded } from '../../state/conversations'
 import { errorMessage, hive } from '../../lib/hive'
-import { attempt, markTaskSeen, openBoard, toast, useStore } from '../../state/store'
+import { attempt, markTaskSeen, navigate, openBoard, toast, useStore } from '../../state/store'
 import '../../styles/conversations.css'
 import '../../styles/desk.css'
 
@@ -44,7 +44,10 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const task = useStore((s) => s.tasks.find((t) => t.id === taskId) ?? null)
   const seat = useStore((s) => (task?.agentId ? s.companyAgents.find((a) => a.id === task.agentId && a.companyId === task.companyId) : undefined))
   const runId = task?.runId ?? null
-  const root = useStore((s) => (runId ? rootOfRun(Object.values(s.agents), runId) : null))
+  // PR-100: a chat's own tracked task: its run id is the chat's session, and its progress is that chat's
+  const chatId = useStore((s) => chatIdOfTask(task, s.sessions))
+  const chat = useStore((s) => (chatId ? (s.sessions.find((x) => x.id === chatId) ?? null) : null))
+  const root = useStore((s) => (chatId ? rootOfChat(Object.values(s.agents), chatId) : runId ? rootOfRun(Object.values(s.agents), runId) : null))
   const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
   const code = useIsCode(task?.companyId)
@@ -52,8 +55,8 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   // the run's agents load on demand (opened from a link before the live snapshot has them)
   const hasRoot = !!root
   useEffect(() => {
-    if (runId && !hasRoot) void hive.agents.list({ runId, rootsOnly: true, limit: 20 }).then(mergeAgents, () => undefined)
-  }, [runId, hasRoot])
+    if (runId && !hasRoot) void hive.agents.list({ ...(chatId ? { sessionId: chatId } : { runId }), rootsOnly: true, limit: 20 }).then(mergeAgents, () => undefined)
+  }, [runId, chatId, hasRoot])
   // the parent conversation (CHAT-UI.md §8.6): "From: …" goes back to it
   useForumLoaded(task?.companyId ?? null)
   const parent = useForum((s) => {
@@ -96,7 +99,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
     if (task) markTaskSeen(task.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task?.id, task?.updatedAt, task?.status])
-  const rootId = root && root.runId === runId ? root.id : null
+  const rootId = root && (chatId ? root.sessionId === chatId : root.runId === runId) ? root.id : null
   const { events } = useAgentEvents(rootId)
   const who = display?.name ?? seat?.name ?? 'The agent'
   const activity = useMemo(() => [...(detail?.activity ?? []), ...mine], [detail, mine])
@@ -126,7 +129,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const slotWait = isWorking ? slotWaitSince : null
   // what it does this moment: the running call in its own words ("Run the scheduler tests"), else the live line
   const runningCall = [...events].reverse().find((e) => e.kind === 'tool' && e.state === 'running')
-  const now = slotWait ? SLOT_WAIT_LINE : isWorking ? (rootLive ? (runningCall ? toolWords(runningCall, code) : (plainActivity(root!.activity, { code }) ?? 'Working…')) : 'Starting…') : null
+  const now = slotWait ? SLOT_WAIT_LINE : isWorking ? (rootLive ? (runningCall ? toolWords(runningCall, code) : (plainActivity(root!.activity, { code }) ?? 'Working…')) : chatId ? null : 'Starting…') : null
   const result = taskCardResult({ report: task.report ?? null, doneNote: task.doneNote ?? null })
   const since = slotWait ?? root?.startedAt ?? task.updatedAt
   const question = state === 'needs_you' && task.ask && !task.ask.answer ? task.ask : null
@@ -167,7 +170,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
           </span>
         }
       >
-        {task.status === 'in_progress' && task.runId && (
+        {task.status === 'in_progress' && task.runId && !chatId && (
           <Button size="sm" icon="pause" onClick={() => void pauseTask(task)}>
             Pause
           </Button>
@@ -212,13 +215,21 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
                         <span className={slotWait ? '' : 'shimmer-text'} title={slotWait ? SLOT_WAIT_WHY : undefined}>{now}</span>
                       </div>
                     )}
-                    {!rootId && isWorking && !slotWait && (
+                    {chatId && !isFinishedCard(state) && (
+                      <div className="chat-notice" data-chatux="task-in-chat">
+                        Being worked on in chat{' '}
+                        <button type="button" className="link-btn" data-chatux="task-open-chat" onClick={() => void navigate({ name: 'chats', filter: 'all', chat: chatTarget(chatId, chat) })} title="Open the chat working on this task">
+                          {chat?.title || 'this task came from'}
+                        </button>
+                      </div>
+                    )}
+                    {!rootId && !chatId && isWorking && !slotWait && (
                       <div className="chat-working">
                         <span className="chat-spin" aria-hidden />
                         <span className="shimmer-text">{who} is starting on it…</span>
                       </div>
                     )}
-                    {rootId && runId && (
+                    {rootId && runId && !chatId && (
                       <div className="task-chat__log">
                         <button type="button" className="link-btn" data-chatux="task-chat-fulllog" onClick={() => setLogOpen(!logOpen)} aria-expanded={logOpen}>
                           {logOpen ? 'Hide the full log' : 'Full log'}

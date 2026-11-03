@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentEvent, AgentNode, Ask } from '@shared/live'
 import type { ForumMessage } from '@shared/forum'
 import type { ForumTaskCard, StripTask } from '@shared/taskCard'
-import { cardsOfMessages, connectToolsIn, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, questionText, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
+import { cardsOfMessages, chatIdOfTask, chatTarget, rootOfChat, connectToolsIn, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, questionText, isOpenTaskQuestion, openAskOfRun, parseRunStarts, rootOfRun, runStartsKey, stripTasks, tailLines, taskCardView } from './taskCardView'
 
 const T0 = '2026-10-27T10:00:00.000Z'
 const NOW = Date.parse(T0) + 125_000
@@ -192,5 +192,26 @@ describe('taskCardView: waiting for a free slot', () => {
   it('only a working task can be waiting', () => {
     const done = taskCardView(card({ runId: 'r1' }), { status: 'in_review', runId: 'r1', updatedAt: T0 } as never, { now, slotWaitSince: T0 })
     expect(done.slotWait).toBeNull()
+  })
+})
+
+describe('PR-100: a chat-tracked task belongs to its chat', () => {
+  const tracked = { runId: 's_chat1', source: 'agent', externalId: 'track:s_chat1:t1' } as const
+  it('a run id that is a chat session (tracked by it, or a known chat) is the chat', () => {
+    expect(chatIdOfTask(tracked, [])).toBe('s_chat1')
+    expect(chatIdOfTask({ runId: 's_chat1', source: 'manual', externalId: null }, [{ id: 's_chat1' }])).toBe('s_chat1')
+    expect(chatIdOfTask({ runId: 'run_1', source: 'manual', externalId: null }, [{ id: 's_chat1' }])).toBeNull()
+    expect(chatIdOfTask({ runId: null, source: 'agent', externalId: 'track:s_chat1:t1' }, [])).toBeNull()
+    expect(chatIdOfTask(null, [])).toBeNull()
+  })
+  it("the chat's root agent is found by its session, the newest one", () => {
+    const a = (id: string, x: Partial<AgentNode>): AgentNode => ({ id, parentId: null, sessionId: null, runId: null, updatedAt: '2026-11-03T10:00:00Z', ...x }) as AgentNode
+    const agents = [a('n_old', { sessionId: 's_chat1' }), a('n_new', { sessionId: 's_chat1', updatedAt: '2026-11-03T11:00:00Z' }), a('n_sub', { sessionId: 's_chat1', parentId: 'n_new', updatedAt: '2026-11-03T12:00:00Z' }), a('n_run', { runId: 's_chat1' })]
+    expect(rootOfChat(agents, 's_chat1')?.id).toBe('n_new')
+    expect(rootOfChat(agents, 's_other')).toBeNull()
+  })
+  it('Open chat goes to the agent for an agent chat, else to the chat', () => {
+    expect(chatTarget('s_chat1', null)).toBe('session:s_chat1')
+    expect(chatTarget('s_chat1', { companyAgentId: 'agt_lola' })).toBe('agent:agt_lola')
   })
 })
