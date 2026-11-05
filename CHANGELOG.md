@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.8](https://github.com/Vibiz-ai/principia/compare/v0.4.7...v0.4.8) (2026-11-05)
+
+
+### Features
+
+* **chats:** newest first, a dot that clears, quiet chats fold under Older (PR-86) ([405406f](https://github.com/Vibiz-ai/principia/commit/405406f9d72da7b41a4560216a8c297c704f3ae3))
+* **chats:** newest first, a dot that clears, quiet chats fold under Older (PR-86) ([b70c651](https://github.com/Vibiz-ai/principia/commit/b70c65141ebd2b32a9000ad31353917f9283008d))
+
 ## [0.4.7](https://github.com/Vibiz-ai/principia/compare/v0.4.6...v0.4.7) (2026-11-05)
 
 
