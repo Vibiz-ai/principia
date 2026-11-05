@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LiveItem } from './companyModel'
-import { byWork, groupLive, isOrphanTask, orphanUnread, workingTarget, workLine, workOf, workRank, workersLine, type WorkTask } from './convWork'
+import { byWork, groupLive, isOrphanTask, orphanUnread, workingTarget, workLine, workOf, workRank, workersLine, type WorkTask, newestFirst, unseenNeeds } from './convWork'
 
 const T = '2026-10-28T10:00:00.000Z'
 const task = (id: string, x: Partial<WorkTask> = {}): WorkTask => ({ id, companyId: 'co', identifier: id.toUpperCase(), title: `Task ${id}`, status: 'in_progress', runId: `run_${id}`, agentId: 'julia', updatedAt: T, ...x })
@@ -88,5 +88,18 @@ describe('an orphan task’s news is unread until its chat is opened', () => {
     expect(orphanUnread({ ...done, runId: null }, {}, since, now)).toBe(false)
     expect(orphanUnread(done, {}, '2026-10-28T11:30:00.000Z', now)).toBe(false)
     expect(orphanUnread({ ...done, updatedAt: '2026-10-10T11:00:00.000Z' }, {}, '2026-10-01T00:00:00.000Z', now)).toBe(false)
+  })
+})
+
+describe('PR-86: newest first, and a dot that clears', () => {
+  it('the list is newest first, even over what needs you', () => {
+    const rows = [{ k: 'old-needs', at: '2026-10-01' }, { k: 'new', at: '2026-10-28' }, { k: 'mid', at: '2026-10-20' }]
+    expect(newestFirst(rows).map((r) => r.k)).toEqual(['new', 'mid', 'old-needs'])
+  })
+  it('the needs-you dot is for what changed since you opened it', () => {
+    const t = { id: 'a', updatedAt: '2026-10-20' }
+    expect(unseenNeeds([t], {})).toBe(true)
+    expect(unseenNeeds([t], { a: '2026-10-20' })).toBe(false)
+    expect(unseenNeeds([{ ...t, updatedAt: '2026-10-21' }], { a: '2026-10-20' })).toBe(true)
   })
 })

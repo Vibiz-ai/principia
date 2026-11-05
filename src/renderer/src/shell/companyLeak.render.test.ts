@@ -159,9 +159,11 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect((await surface('Agent desk')).toLowerCase()).toContain('ledgerline')
     const chats = await surface('Sidebar in Chats')
     expect(chats).toContain('aria-label="Back to the menu"')
-    // CHAT-UI.md §8.6: its working task (no conversation filed it) is a row of its own, not the agent's resting chat
-    expect(chats).toContain('data-chatux="task-row"')
     expect(chats.toLowerCase()).toContain('ledgerline chat')
+    // CHAT-UI.md §8.6: its working task (no conversation filed it) stays on the Board, and is a row under Live only
+    expect(chats).not.toContain('data-chatux="task-row"')
+    store.setState({ view: { name: 'chats', filter: 'live' } })
+    expect(renderToStaticMarkup(await surfaces[0]![1]())).toContain('data-chatux="task-row"')
     store.setState({ view: { name: 'home' } })
     // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it
     expect((await surface('Home › first week')).toLowerCase()).toContain('ledgerline writer')

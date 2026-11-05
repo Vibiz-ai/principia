@@ -54,7 +54,7 @@ export function ChatsView({ chat }: { filter?: ChatsFilter; chat?: string }): Re
   const liveTask = taskOfChatKey(chat)
   // PR-59: a closed chat opens when asked for by name, never as the default
   const open = splitClosed(rows, useStore((s) => s.closedChats), chat).open
-  const cur = pane || liveTask ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && open.find((r) => r.key === remembered)) || open[0] || null
+  const cur = pane || liveTask ? null : (chat && rows.find((r) => r.key === chat)) || (remembered && open.find((r) => r.key === remembered)) || open.find((r) => r.kind !== 'task') || null
   const code = useIsCode(scope)
   const paused = useStore((s) => (scope ? !!s.companies.find((c) => c.id === scope)?.pausedAt : false))
   useEffect(() => {

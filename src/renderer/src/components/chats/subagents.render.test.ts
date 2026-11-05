@@ -84,14 +84,15 @@ beforeAll(async () => {
 })
 
 describe('the sidebar menu: Recent and LIVE', () => {
-  it('Recent: the conversation with working tasks comes first and says so; an unread result says which', async () => {
+  it('Recent: newest activity first; the conversation with working tasks says so; an unread result says which', async () => {
     const store = await import('../../state/store')
     store.setState({ view: { name: 'home' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     const recent = html.slice(html.indexOf('aria-label="Recent"'), html.indexOf('aria-label="Live"'))
     const order = [...recent.matchAll(/data-title="([^"]+)"/g)].map((m) => m[1])
-    expect(order).toEqual(['Spring launch', 'Pricing page', 'Newsletter ideas'])
+    expect([...order].sort()).toEqual(['Newsletter ideas', 'Pricing page', 'Spring launch'])
+    expect(order[0]).toBe('Newsletter ideas')
     expect(recent).toMatch(/data-title="Spring launch" data-work="2 tasks working"/)
     expect(recent).toMatch(/data-title="Pricing page" data-work="VO-16 finished · unread"/)
     expect(recent).toMatch(/cx-recent__row[^"]*is-unread[^"]*" data-chatux="recent-row" data-title="Pricing page"/)
@@ -111,7 +112,7 @@ describe('the sidebar menu: Recent and LIVE', () => {
 })
 
 describe('Chats', () => {
-  it('rows: the conversation carries its work, the orphan task is a row of its own, the resting chat is not live, Claude lists a restarted chat once', async () => {
+  it('rows: the conversation carries its work, the orphan task is a row under Live only, the resting chat is not live, Claude lists a restarted chat once', async () => {
     const store = await import('../../state/store')
     store.setState({ view: { name: 'chats', filter: 'all', chat: 'conv:newer' } })
     const { Sidebar } = await import('../../shell/Sidebar')
@@ -120,9 +121,14 @@ describe('Chats', () => {
     // PR-103: the state leads, who works on it comes after
     expect(html).toMatch(/chats5-row__last shimmer-text\s*">2 tasks working · \w+</)
     expect(html).toMatch(/data-title="Pricing page" data-work="VO-16 finished · unread"/)
-    expect(html).toMatch(/data-chatux="task-row" data-task="VO-50" data-state="working"/)
+    // tasks stay on the Board: not in Everything, a row under Live only while it works
+    expect(html).not.toContain('data-task="VO-50"')
+    store.setState({ view: { name: 'chats', filter: 'live', chat: 'conv:newer' } })
+    const live = renderToStaticMarkup(createElement(Sidebar))
+    expect(live).toMatch(/data-chatux="task-row" data-task="VO-50" data-state="working"/)
     // PR-103: the orphan task's row leads with its state (mark + words), never a bare dot
-    expect(html).toMatch(/data-task="VO-50"[\s\S]*?data-chatux="row-state" data-state="working"/)
+    expect(live).toMatch(/data-task="VO-50"[\s\S]*?data-chatux="row-state" data-state="working"/)
+    store.setState({ view: { name: 'chats', filter: 'all', chat: 'conv:newer' } })
     // Julia's own chat keeps its own last line and is not shimmering
     const rowOf = (text: string): string => {
       const at = html.indexOf(text)
@@ -169,11 +175,11 @@ describe('PR-103: one clear state per row', () => {
         task('vo-61', { title: 'Nightly build', source: 'schedule', status: 'blocked', blockReason: 'interrupted', runId: 'run_61', updatedAt: new Date().toISOString(), report: { outcome: 'blocked', summary: 'x', evidence: [], at: T } } as unknown as Partial<CompanyTask>)
       ]
     })
-    const { Sidebar } = await import('../../shell/Sidebar')
-    const html = renderToStaticMarkup(createElement(Sidebar))
+    // tasks are not in Everything any more (they stay on the Board): the rows themselves, as Live only or a search shows them
+    const { ChatRow } = await import('./ChatList')
     const rowOf = (id: string): string => {
-      const at = html.indexOf(`data-task="${id}"`)
-      return html.slice(at, html.indexOf('</button>', at))
+      const t = store.getState().tasks.find((x) => x.identifier === id)!
+      return renderToStaticMarkup(createElement(ChatRow, { row: { key: `task:${t.id}`, kind: 'task', task: t, companyId: t.companyId, live: false, at: t.updatedAt, unread: false }, selected: false, onPick: () => {}, onClose: () => {} }))
     }
     expect(rowOf('VO-60')).toMatch(/data-state="question"[\s\S]*Question for you · 7d/)
     expect(rowOf('VO-60')).toContain('chats5-row__dot is-needs')
