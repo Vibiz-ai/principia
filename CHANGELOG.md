@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.7](https://github.com/Vibiz-ai/principia/compare/v0.4.6...v0.4.7) (2026-11-05)
+
+
+### Features
+
+* **chats:** one clear state per row, and no endless loaders (PR-101) ([b1829a1](https://github.com/Vibiz-ai/principia/commit/b1829a175d319b538a99532a159c22693054cdd5))
+* **chats:** one clear state per row, no endless loaders (PR-101) ([77f2b4f](https://github.com/Vibiz-ai/principia/commit/77f2b4f6eefe32eeca166220643dba5921580dac))
+
+
+### Bug Fixes
+
+* **tasks:** a chat-tracked task shows its chat, never "Starting…" (PR-100) ([b83417f](https://github.com/Vibiz-ai/principia/commit/b83417f48add798ef6246cbdb5304cfb70e34a9d))
+
 ## [0.4.6](https://github.com/Vibiz-ai/principia/compare/v0.4.5...v0.4.6) (2026-11-03)
 
 
