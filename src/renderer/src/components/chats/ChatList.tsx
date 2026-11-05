@@ -13,7 +13,7 @@
  * "1 needs you" or "VO-16 finished · unread" and sorts first; an agent's own chat is live only while it answers there.
  */
 import { useMemo, useState } from 'react'
-import type { CompanyAgent, CompanyTask } from '@shared/company'
+import { trackedBy, type CompanyAgent, type CompanyTask } from '@shared/company'
 import type { Id, Session } from '@shared/types'
 import type { AgentNode } from '@shared/live'
 import { AgentGlyph } from '../agents/AgentBits'
@@ -25,7 +25,7 @@ import { age } from '../../lib/time'
 import { sessionEndLabel } from '../../lib/format'
 import { lastChatKey, sessionUnread } from '../../lib/agentChatView'
 import { liveTaskKey } from '../../lib/liveRow'
-import { byWork, isOrphanTask, orphanUnread, workLine, workOf, workRank, workState, type ConvWork } from '../../lib/convWork'
+import { isOrphanTask, newestFirst, unseenNeeds, orphanUnread, workLine, workOf, workRank, workState, type ConvWork } from '../../lib/convWork'
 import { dedupeSessions } from '../../lib/sessionRows'
 import { taskName } from '../../lib/desk'
 import { plainActivity } from '../../lib/plainActivity'
@@ -34,7 +34,7 @@ import { liveLine } from '../../lib/liveLine'
 import { chatRowState, showsDot, taskRowState, type RowState } from '../../lib/rowState'
 import { chatIdOfTask, openAskOfRun, rootOfChat, rootOfRun } from '../../lib/taskCardView'
 import { useDeskWho } from '../../state/desk'
-import { isClosed, type ClosedChats } from '../../lib/closedChats'
+import { isClosed, lastActivity, type ClosedChats } from '../../lib/closedChats'
 import { departmentsOn, getState, loadJson, providerLabel, reopenChat, saveJson, sessionTitle, TASK_SEEN_SINCE, useStore, type ChatsFilter } from '../../state/store'
 import { useIsCode } from '../desk/Desk'
 import { useAgentDisplay } from '../board/NeedsYouTasks'
@@ -153,6 +153,8 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
     if (on)
       for (const t of tasks) {
         if ((scope && t.companyId !== scope) || !isOrphanTask(t, taskChannels)) continue
+        // a chat's own tracked task: the chat's row carries it (its run is the chat, a row here would replace the chat)
+        if (trackedBy(t)) continue
         const st = workState(t)
         const live = st === 'working' && !!t.runId
         const unread = orphanUnread(t, seen, TASK_SEEN_SINCE)
@@ -187,7 +189,7 @@ export function useChatRows(scope: Id | undefined): ChatRowModel[] {
       if (a) perAgent.set(a, (perAgent.get(a) ?? 0) + 1)
     }
     for (const r of rows) if (r.kind === 'task' && r.task.agentId) r.twin = (perAgent.get(r.task.agentId) ?? 0) > 1
-    return byWork(rows.map((r) => ({ r, rank: rowRank(r), at: r.at }))).map((x) => x.r)
+    return newestFirst(rows.map((r) => ({ r, at: lastActivity(r) }))).map((x) => x.r)
   }, [sessions, agents, tasks, on, working, scope, convs, taskChannels, seen, turnsJson])
 }
 
@@ -242,7 +244,7 @@ export function ChatRow({ row, selected, onPick, onClose }: { row: ChatRowModel;
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{row.title}</span>
-          <span className="chats5-row__age">{age(row.at)}</span>
+          <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className="chats5-row__last shimmer-text">{row.detail ?? 'Working'}</span>
       </span>
@@ -295,7 +297,7 @@ function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRow
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{who.name}</span>
-          <span className="chats5-row__age">{age(row.at)}</span>
+          <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className="chats5-row__last">{line === null && rs ? <RowStateText s={rs} /> : line}</span>
       </span>
@@ -329,7 +331,7 @@ function SessionChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatR
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{title}</span>
-          <span className="chats5-row__age">{age(row.at)}</span>
+          <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className="chats5-row__last">
           {rs ? <RowStateText s={rs} /> : word}
@@ -362,6 +364,7 @@ function ConvChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
   // CHAT-UI.md §8.6: the tasks it filed are its subagents: "2 tasks working", "1 needs you", "VO-16 finished · unread"
   const work = row.work
   const needs = !!work?.needs.length
+  const needsDot = useStore((x) => !selected && !!work && unseenNeeds(work.needs, x.taskSeen))
   const taskLine = work ? workLine(selected ? { ...work, unread: [] } : work, { code }) : null
   const workers = work ? [...new Set(work.working.map((t) => nameOf(t.agentId ?? null)).filter(Boolean))].join(', ') : ''
   if (renaming !== null)
@@ -390,20 +393,20 @@ function ConvChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
       </div>
     )
   return (
-    <button type="button" role="option" aria-selected={selected} data-chatux="chat-row" data-title={c.title} data-work={taskLine ?? undefined} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live || c.picking ? 'is-shimmering' : ''} ${unread || needs ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose, () => setRenaming(c.title))} onKeyDown={(e) => e.key === 'F2' && (e.preventDefault(), setRenaming(c.title))} title={`${c.title} · ${who}${taskLine ? ` · ${taskLine}` : ''} · right-click to rename or close`}>
+    <button type="button" role="option" aria-selected={selected} data-chatux="chat-row" data-title={c.title} data-work={taskLine ?? undefined} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live || c.picking ? 'is-shimmering' : ''} ${unread || needsDot ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose, () => setRenaming(c.title))} onKeyDown={(e) => e.key === 'F2' && (e.preventDefault(), setRenaming(c.title))} title={`${c.title} · ${who}${taskLine ? ` · ${taskLine}` : ''} · right-click to rename or close`}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
         {first ? <MemberAvatar display={display(first)} size={30} working={row.live} /> : <Icon name="chat" size={13} />}
       </span>
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{c.title}</span>
-          <span className="chats5-row__age">{age(row.at)}</span>
+          <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className={`chats5-row__last ${row.live || c.picking ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>
           {taskLine ? `${taskLine}${work!.working.length && workers ? ` · ${workers}` : ''}` : row.live ? `${answering || who} · answering…` : c.picking && !c.who.length ? who : c.private ? who : `With ${who}`}
         </span>
       </span>
-      {(unread || needs) && <span className={`chats5-row__dot ${needs ? 'is-needs' : ''}`} aria-label={needs ? 'Needs you' : 'Unread'} />}
+      {(unread || needsDot) && <span className={`chats5-row__dot ${needsDot ? 'is-needs' : ''}`} aria-label={needsDot ? 'Needs you' : 'Unread'} />}
     </button>
   )
 }
@@ -432,7 +435,7 @@ function TaskChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{seat ? who.name : taskName(t, code)}</span>
-          <span className="chats5-row__age">{age(row.at)}</span>
+          <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className="chats5-row__last">
           <RowStateText s={rs} />

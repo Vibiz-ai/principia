@@ -19,6 +19,14 @@ export function lastActivity(row: { at: string; turnAt?: string }): string {
   return row.turnAt && row.turnAt > row.at ? row.turnAt : row.at
 }
 
+/** Days without activity after which a quiet chat folds under "Older" (it comes back with anything new). */
+export const OLDER_DAYS = 3
+/** A quiet chat (nothing live, waiting on you or unread: rank 0) with no activity for OLDER_DAYS. */
+export function isOlder(row: { at: string; turnAt?: string }, rank: number, now = Date.now()): boolean {
+  const at = Date.parse(lastActivity(row))
+  return rank === 0 && Number.isFinite(at) && at < now - OLDER_DAYS * 86_400_000
+}
+
 /** Closed until it has newer activity, or sorts higher than it did (it needs you now, went live, has news). */
 export function isClosed(row: { key: string; at: string; turnAt?: string }, rank: number, closed: ClosedChats): boolean {
   const mark = closed[row.key]

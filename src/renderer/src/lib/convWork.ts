@@ -76,6 +76,16 @@ export function workRank(w: ConvWork, answering = false): number {
   return 0
 }
 
+/** Rows by last activity, newest on top. What needs you keeps its line and dot, not a place above newer chats. */
+export function newestFirst<R extends { at: string }>(rows: readonly R[]): R[] {
+  return [...rows].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+}
+
+/** Tasks that need you and changed since you last opened them: the blue dot. Opening clears it; news brings it back. */
+export function unseenNeeds(needs: readonly Pick<WorkTask, 'id' | 'updatedAt'>[], seen: Readonly<Record<string, string>>): boolean {
+  return needs.some((t) => (t.updatedAt ?? '') > (seen[t.id] ?? ''))
+}
+
 /** Rows by rank, then newest first (the eye goes to the conversation with work). */
 export function byWork<R extends { rank: number; at: string }>(rows: readonly R[]): R[] {
   return [...rows].sort((a, b) => b.rank - a.rank || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))

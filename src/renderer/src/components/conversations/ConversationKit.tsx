@@ -30,10 +30,11 @@ import { age } from '../../lib/time'
 import { sendToAgent, useDeskAgents } from '../../state/desk'
 import { useForum, markRead, setViewing } from '../../state/forum'
 import { loadDraft, replyInConversation, renameConversation, saveDraft, startConversation, useConversationMessages, useConversations, useTaskChannels, whoLine } from '../../state/conversations'
-import { byWork, workLine, workOf, workRank } from '../../lib/convWork'
+import { newestFirst, unseenNeeds, workLine, workOf, workRank } from '../../lib/convWork'
+import { isClosed } from '../../lib/closedChats'
 import { useIsCode } from '../desk/Desk'
-import { navigate, startSession, toast, useStore } from '../../state/store'
-import { hive } from '../../lib/hive'
+import { closeChat, markTaskSeen, navigate, startSession, toast, useStore } from '../../state/store'
+import { hive, nativeMenu } from '../../lib/hive'
 import { dropMentions, useFileDrop, usePendingAttachments, withMentions } from '../../lib/dropFiles'
 import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useDockPrefs, useDockView, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
 import { ConnectionSlot } from '../connections/ConnectionSlot'
@@ -462,6 +463,12 @@ export function ConversationThread({ companyId, channelId }: { companyId: Id; ch
   const display = useMemberDisplay(state?.members ?? [])
   const agents = useDeskAgents(companyId)
   const row = useConversations(companyId).find((c) => c.id === channelId) ?? null
+  // opening it counts as seeing what needs you here: the blue dot goes, and comes back only when the task changes
+  const seenTasks = useStore((s) => s.tasks)
+  const seenChannels = useTaskChannels(companyId)
+  useEffect(() => {
+    for (const t of workOf(channelId, seenTasks, seenChannels).needs) markTaskSeen(t.id, t.updatedAt)
+  }, [channelId, seenTasks, seenChannels])
   const draftKey = `conv:${channelId}`
   const [text, setTextRaw] = useState(() => loadDraft(draftKey))
   const setText = (t: string): void => {
@@ -853,32 +860,41 @@ function TaskQuestionActions({ m, onReply }: { m: ForumMessage; onReply?: (messa
 
 // ---------- recents ----------
 
+/** Right-click a recent conversation: Close hides it until something new happens (the same Close as in Chats). */
+async function recentMenu(e: React.MouseEvent, id: Id, at: string, rank: number): Promise<void> {
+  e.preventDefault()
+  if ((await nativeMenu([{ id: 'close', label: 'Close' }])) === 'close') closeChat(`conv:${id}`, { at, rank })
+}
+
 export function RecentConversations({ companyId, limit = 5, onOpen, selected, compact = false, empty }: { companyId: Id; limit?: number; onOpen: (id: Id) => void; selected?: Id | null; compact?: boolean; empty?: string }): React.JSX.Element | null {
   const all = useConversations(companyId)
   const tasks = useStore((s) => s.tasks)
   const taskChannels = useTaskChannels(companyId)
   const code = useIsCode(companyId)
-  // CHAT-UI.md §8.6: the conversation whose tasks need you or are at work comes first, so the eye goes there
-  const rows = useMemo(() => byWork(all.map((r) => {
+  const closed = useStore((s) => s.closedChats)
+  const seen = useStore((s) => s.taskSeen)
+  // newest activity on top; a closed conversation stays off until something new happens in it
+  const rows = useMemo(() => newestFirst(all.map((r) => {
     const work = workOf(r.id, tasks, taskChannels, r.unreadTasks)
     return { r, work, rank: Math.max(workRank(work, r.working), r.unread > 0 ? 1 : 0), at: r.lastAt }
-  })).slice(0, limit), [all, tasks, taskChannels, limit])
+  })).filter((x) => x.r.id === selected || !isClosed({ key: `conv:${x.r.id}`, at: x.at }, x.rank, closed)).slice(0, limit), [all, tasks, taskChannels, limit, closed, selected])
   if (!rows.length) return empty ? <div className="cx-recent__empty">{empty}</div> : null
   return (
     <div className={`cx-recent ${compact ? 'cx-recent--compact' : ''}`} data-chatux="recent">
-      {rows.map(({ r, work }) => {
+      {rows.map(({ r, work, rank }) => {
         const open = selected === r.id
         const line = workLine(open ? { ...work, unread: [] } : work, { code })
         const live = r.working || work.working.length > 0
-        const needs = work.needs.length > 0
+        const hasNeeds = work.needs.length > 0
+        const needs = !open && unseenNeeds(work.needs, seen)
         const unread = !open && (r.unread > 0 || work.unread.length > 0)
         const sub = line ?? (r.working ? `${r.who.filter((_, i) => r.workingIds.includes(r.agentMemberIds[i]!)).join(', ')} answering…` : whoLine(r))
         return (
-          <button key={r.id} type="button" className={`cx-recent__row ${live ? 'is-shimmering' : ''} ${open ? 'is-selected' : ''} ${unread || needs ? 'is-unread' : ''}`} data-chatux="recent-row" data-title={r.title} data-work={line ?? undefined} title={`${r.title}\n${whoLine(r)}${line ? ` · ${line}` : r.working ? ' · answering…' : ''}`} onClick={() => onOpen(r.id)}>
+          <button key={r.id} type="button" className={`cx-recent__row ${live ? 'is-shimmering' : ''} ${open ? 'is-selected' : ''} ${unread || needs ? 'is-unread' : ''}`} data-chatux="recent-row" data-title={r.title} data-work={line ?? undefined} title={`${r.title}\n${whoLine(r)}${line ? ` · ${line}` : r.working ? ' · answering…' : ''}`} onClick={() => onOpen(r.id)} onContextMenu={(e) => void recentMenu(e, r.id, r.lastAt, rank)}>
             <span className={`cx-recent__dot ${needs ? 'is-needs' : live ? 'is-working' : unread ? 'is-unread' : ''}`} aria-hidden />
             <span className="cx-recent__text">
               <span className={`cx-recent__title ${live ? 'shimmer-text' : ''}`}>{r.title}</span>
-              {compact && <span className={`cx-recent__sub ${needs ? 'is-needs' : ''}`}>{sub}</span>}
+              {compact && <span className={`cx-recent__sub ${hasNeeds ? 'is-needs' : ''}`}>{sub}</span>}
             </span>
             {!compact && <span className={`cx-recent__who ${line ? 'is-work' : ''}`}>{line ?? whoLine(r)}</span>}
             <span className="cx-recent__age">{age(r.lastAt)}</span>
