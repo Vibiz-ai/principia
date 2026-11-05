@@ -29,6 +29,7 @@ import { Button, IconButton, Segmented } from '../ui'
 import { AgentFace, useAgentDisplay } from '../board/NeedsYouTasks'
 import { AgentTimeline } from '../agents/AgentTimeline'
 import { StepLog } from '../StepLog'
+import { liveLine, type LiveLine } from '../../lib/liveLine'
 import { cardsOfMessages, DOCK_PREFS_KEY, DOCK_VISIBLE, dockedTasks, dockMark, dockRefLine, dockRows, dockSummary, openDocked, parseDockPrefs, type DockPref, type DockPrefs, chatIdOfTask, openAskOfRun, parseRunStarts, rootOfChat, rootOfRun, runStartsKey, stripTasks, stripWord, tailLines, taskCardView } from '../../lib/taskCardView'
 import { openAskRuns } from '../../lib/departments'
 import { reposOf } from '../../lib/companyModel'
@@ -259,6 +260,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   const root = useStore((s) => (chatId ? rootOfChat(Object.values(s.agents), chatId) : runId ? rootOfRun(Object.values(s.agents), runId) : null))
   const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
+  const stallMinutes = useStore((s) => s.settings?.stallMinutes ?? 10)
   const co = companyId ?? task?.companyId ?? null
   const code = useStore((s) => (co ? reposOf(s.repos, co).length > 0 : true))
   const seat = useStore((s) => (card ? s.companyAgents.find((a) => a.id === (task?.agentId ?? card.agentId)) : undefined))
@@ -285,6 +287,9 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
   const canRun = v.state === 'queued' && queueRun === '1' && !!task
   const logAgent = root && (chatId ? root.sessionId === chatId : root.runId === v.runId) ? root : null
   const rootLive = !!logAgent && (logAgent.status === 'working' || logAgent.status === 'starting' || logAgent.status === 'needs_you')
+  // PR-102: what a working card says when the agent's own tail is not the whole story (starting, quiet, not responding)
+  const line = liveLine({ working: v.state === 'working', slotWaitSince: v.slotWait ? slotWaitSince : null, inChat: !!chatId, root: logAgent, doing: v.activity, since: logAgent?.startedAt ?? task?.updatedAt ?? v.since, stallMinutes, now })
+  const tailLine = line && (!logAgent || line.kind === 'slow' || line.kind === 'stuck' || line.kind === 'waiting') ? line : null
   const act = async (fn: () => Promise<unknown>, label: string): Promise<void> => {
     if (busy) return
     setBusy(true)
@@ -330,7 +335,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           <span className="flex1" />
           <span className={`cx-task__state is-${v.state}`} data-chatux="task-state">
             <span className="cx-task__mark" aria-hidden />
-            <span className={v.state === 'working' && !v.slotWait ? 'shimmer-text' : ''}>{v.label}</span>
+            <span className={v.state === 'working' && !v.slotWait && line?.spin !== false ? 'shimmer-text' : ''} title={line?.why}>{line && (line.kind === 'slow' || line.kind === 'stuck') ? line.label : v.label}</span>
           </span>
           <span className="cx-task__sep">·</span>
           {v.state === 'working' ? (
@@ -347,7 +352,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
               {SLOT_WAIT_LINE}
             </span>
           ) : v.state === 'working' ? (
-            !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">{chatId ? 'Being worked on in its chat' : 'Starting…'}</span></div></div>)
+            !logOpen && (logAgent && !tailLine ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} n={2} /> : tailLine && <LiveTail line={tailLine} />)
           ) : v.state === 'needs_you' ? (
             <span className="cx-task__activity cx-task__dockline" data-chatux="task-needs" title={v.needs?.prompt}>
               {v.needs?.prompt}
@@ -412,7 +417,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
         <span className="flex1" />
         <span className={`cx-task__state is-${v.state}`} data-chatux="task-state">
           <span className="cx-task__mark" aria-hidden />
-          <span className={v.state === 'working' && !v.slotWait ? 'shimmer-text' : ''}>{v.label}</span>
+          <span className={v.state === 'working' && !v.slotWait && line?.spin !== false ? 'shimmer-text' : ''} title={line?.why}>{line && (line.kind === 'slow' || line.kind === 'stuck') ? line.label : v.label}</span>
         </span>
       </div>
       <div className="cx-task__line">
@@ -459,7 +464,7 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
           {v.result}
         </div>
       )}
-      {v.state === 'working' && !v.slotWait && !logOpen && (logAgent ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : <div className="cx-task__tail"><div className="cx-task__tl"><span className="cx-task__tl-glyph" aria-hidden>●</span><span className="cx-task__tl-text shimmer-text">{chatId ? 'Being worked on in its chat' : 'Starting…'}</span></div></div>)}
+      {v.state === 'working' && !v.slotWait && !logOpen && (logAgent && !tailLine ? <TaskTail agentId={logAgent.id} code={code} fallback={v.activity ?? 'Working…'} /> : tailLine && <LiveTail line={tailLine} />)}
       {logOpen && logAgent && v.runId && <TaskLog agentId={logAgent.id} runId={v.runId} stepId={logAgent.stepId} live={rootLive} />}
       {runError && (
         <div className="cx-task__error" role="alert" data-chatux="task-run-error">
@@ -518,6 +523,18 @@ export function TaskCardView({ card: stored, companyId, channelId, dock = false,
  * working on VO-9 · 2m · Watch", "2 tasks running"). Click the line to list them. A working task's clock counts from
  * its run's start, like its card.
  */
+/** PR-102: the card's one live line when the agent's tail is not it: a named wait, "Not responding", its chat. */
+function LiveTail({ line }: { line: LiveLine }): React.JSX.Element {
+  return (
+    <div className="cx-task__tail" data-chatux="task-card-live" data-live={line.kind} title={line.why}>
+      <div className={`cx-task__tl ${line.kind === 'stuck' ? 'is-stuck' : ''}`}>
+        <span className="cx-task__tl-glyph" aria-hidden>{line.spin ? '●' : line.kind === 'stuck' ? '!' : '◷'}</span>
+        <span className={`cx-task__tl-text ${line.spin ? 'shimmer-text' : ''}`}>{line.text}</span>
+      </div>
+    </div>
+  )
+}
+
 export function WorkingStrip({ msgs, cards, dock = false }: { msgs?: readonly ForumMessage[]; cards?: readonly ForumTaskCard[]; dock?: boolean }): React.JSX.Element | null {
   const tasks = useStore((s) => s.tasks)
   const [open, setOpen] = useState(false)

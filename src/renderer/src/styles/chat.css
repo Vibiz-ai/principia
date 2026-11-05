@@ -126,6 +126,10 @@
 .chat-files { display: flex; flex-direction: column; gap: 2px; padding-left: 18px; font-size: 12px; color: var(--text-secondary); }
 .chat-files div { display: flex; gap: 8px; }
 .chat-working { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-height: 24px; }
+/* PR-102: a named wait (no spinner once it is not quick), and a stuck run in the failed tone */
+.chat-wait-mark { width: 12px; flex: none; text-align: center; color: var(--text-tertiary); font-size: 11px; line-height: 1; }
+.chat-working.is-stuck, .chat-wait-mark.is-stuck { color: var(--status-failed); }
+.chat-wait-mark.is-slow { color: var(--status-needs); }
 
 /* ---- dock: queue + composer ---- */
 .chat-dock { flex: none; padding: 0 24px 14px; }

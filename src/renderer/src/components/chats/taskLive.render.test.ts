@@ -162,3 +162,28 @@ describe('the note reaches the agent', () => {
     expect(b).toMatchObject({ kind: 'answered', by: 'human', message: 'Replacement' })
   })
 })
+
+describe('PR-102: no endless loader', () => {
+  it('a run whose agent never showed up stops spinning and says it did not start', async () => {
+    const store = await import('../../state/store')
+    const old = store.getState().tasks
+    store.setState({ tasks: [...old, task('vo-30', { status: 'in_progress', runId: 'run_ghost', updatedAt: new Date(Date.now() - 20 * 60_000).toISOString() })] })
+    const { TaskLiveView } = await import('./TaskLiveView')
+    const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-30' }))
+    expect(html).toMatch(/data-chatux="task-live-activity" data-live="stuck"[^>]*>.*Didn&#x27;t start · no agent after 20m/)
+    expect(html).toMatch(/data-chatux="task-live-label" data-live="stuck"[^>]*>Didn&#x27;t start</)
+    expect(html).not.toContain('chat-spin')
+    expect(html).not.toContain('is starting on it')
+    store.setState({ tasks: old })
+  })
+  it('a silent agent reads as taking longer, then not responding', async () => {
+    const store = await import('../../state/store')
+    const agents = store.getState().agents
+    store.setState({ agents: { ...agents, n_run: { ...root, stalledSince: new Date(Date.now() - 25 * 60_000).toISOString() } as AgentNode } })
+    const { TaskLiveView } = await import('./TaskLiveView')
+    const html = renderToStaticMarkup(createElement(TaskLiveView, { taskId: 'vo-15' }))
+    expect(html).toMatch(/data-live="stuck"[^>]*>.*Not responding · quiet for 35m/)
+    expect(html).not.toContain('chat-spin')
+    store.setState({ agents })
+  })
+})

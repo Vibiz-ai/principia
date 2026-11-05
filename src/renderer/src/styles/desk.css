@@ -377,6 +377,14 @@ button.team5-dep__name:hover { color: var(--accent-hover); }
 .chats5-row.is-unread .chats5-row__name, .chats5-row.is-unread .chats5-row__last { color: var(--text-primary); }
 .chats5-row__dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-primary); }
 .chats5-row__dot.is-needs { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* PR-103: the row's one state leads its second line, with its own mark and tone */
+.chats5-state { display: inline; }
+.chats5-state__mark { display: inline-block; width: 1.1em; text-align: center; margin-right: 3px; font-size: 10.5px; }
+.chats5-state.is-live .chats5-state__mark { color: var(--status-running); }
+.chats5-state.is-needs { color: var(--accent); }
+.chats5-state.is-bad { color: var(--status-failed); }
+.chats5-state.is-good .chats5-state__mark { color: var(--status-success); }
+.chats5-state.is-quiet { color: var(--text-tertiary); }
 .side-chats .co-tagged { display: flex; align-items: center; gap: 4px; }
 .side-chats .co-tagged__body { flex: 1; min-width: 0; }
 

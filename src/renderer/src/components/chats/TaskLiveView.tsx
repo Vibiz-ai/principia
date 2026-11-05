@@ -13,8 +13,8 @@ import { EMPTY_CHAT_META } from '@shared/chat'
 import { buildBlocks } from '@shared/chatView'
 import type { TaskActivity, TaskDetail } from '@shared/company'
 import type { Id } from '@shared/types'
-import { SLOT_WAIT_LABEL, SLOT_WAIT_LINE, SLOT_WAIT_WHY, TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
-import { Button, EmptyState, Toolbar } from '../ui'
+import { TASK_CARD_LABEL, isFinishedCard, taskCardResult, taskCardState } from '@shared/taskCard'
+import { Button, EmptyState, Toolbar, useTick } from '../ui'
 import { Blocks, ChatWho } from '../chat/ChatCards'
 import { Composer } from '../chat/Composer'
 import { BrowserToggle } from '../browser/BrowserToggle'
@@ -29,6 +29,7 @@ import { MarkdownLite } from '../diagrams/MarkdownLite'
 import { pauseTask, useIsCode } from '../desk/Desk'
 import { chatIdOfTask, chatTarget, openAskOfRun, rootOfChat, rootOfRun } from '../../lib/taskCardView'
 import { plainActivity } from '../../lib/plainActivity'
+import { liveLine } from '../../lib/liveLine'
 import { taskName } from '../../lib/desk'
 import { stampsFor } from '../../lib/agentChatView'
 import { noteHint, taskChatItems, taskThread, toolWords } from '../../lib/taskThread'
@@ -49,6 +50,9 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const chat = useStore((s) => (chatId ? (s.sessions.find((x) => x.id === chatId) ?? null) : null))
   const root = useStore((s) => (chatId ? rootOfChat(Object.values(s.agents), chatId) : runId ? rootOfRun(Object.values(s.agents), runId) : null))
   const slotWaitSince = useStore((s) => (runId ? (s.slotWaits[runId] ?? null) : null))
+  const stallMinutes = useStore((s) => s.settings?.stallMinutes ?? 10)
+  // the live line moves on with time (Starting… → Still starting → Didn't start)
+  useTick(15_000)
   const ask = useStore((s) => (runId ? openAskOfRun(Object.values(s.asks), runId) : null))
   const code = useIsCode(task?.companyId)
   const display = useAgentDisplay()(seat)
@@ -129,9 +133,11 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
   const slotWait = isWorking ? slotWaitSince : null
   // what it does this moment: the running call in its own words ("Run the scheduler tests"), else the live line
   const runningCall = [...events].reverse().find((e) => e.kind === 'tool' && e.state === 'running')
-  const now = slotWait ? SLOT_WAIT_LINE : isWorking ? (rootLive ? (runningCall ? toolWords(runningCall, code) : (plainActivity(root!.activity, { code }) ?? 'Working…')) : chatId ? null : 'Starting…') : null
-  const result = taskCardResult({ report: task.report ?? null, doneNote: task.doneNote ?? null })
   const since = slotWait ?? root?.startedAt ?? task.updatedAt
+  // PR-102: one helper names what it is doing or waiting for, and a wait that goes on too long stops spinning
+  const line = liveLine({ working: isWorking, slotWaitSince: slotWait, inChat: !!chatId, root: rootId ? root : null, doing: rootLive ? (runningCall ? toolWords(runningCall, code) : plainActivity(root!.activity, { code })) : null, since, stallMinutes, now: Date.now() })
+  const now = line && line.kind !== 'in_chat' ? line : null
+  const result = taskCardResult({ report: task.report ?? null, doneNote: task.doneNote ?? null })
   const question = state === 'needs_you' && task.ask && !task.ask.answer ? task.ask : null
   return (
     <div className="view convo-view" data-chatux="task-live" data-state={state}>
@@ -152,7 +158,7 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
         sub={
           <span className="convo-title__sub task-live__state">
             <span className={`cx-strip__mark is-${state}`} aria-hidden />
-            <span className={isWorking && !slotWait ? 'shimmer-text' : ''} title={slotWait ? SLOT_WAIT_WHY : undefined}>{slotWait ? SLOT_WAIT_LABEL : TASK_CARD_LABEL[state]}</span>
+            <span className={line?.spin ? 'shimmer-text' : ''} data-chatux="task-live-label" data-live={line?.kind} title={line?.why}>{line ? line.label : TASK_CARD_LABEL[state]}</span>
             {isWorking && (
               <>
                 <span className="cx-task__sep">·</span>
@@ -210,9 +216,9 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
                       </div>
                     )}
                     {now && (
-                      <div className="chat-working" data-chatux="task-live-activity" aria-live="polite">
-                        <span className="chat-spin" aria-hidden />
-                        <span className={slotWait ? '' : 'shimmer-text'} title={slotWait ? SLOT_WAIT_WHY : undefined}>{now}</span>
+                      <div className={`chat-working ${now.kind === 'stuck' ? 'is-stuck' : ''}`} data-chatux="task-live-activity" data-live={now.kind} aria-live="polite" title={now.why}>
+                        {now.spin ? <span className="chat-spin" aria-hidden /> : <span className={`chat-wait-mark is-${now.kind}`} aria-hidden>{now.kind === 'stuck' ? '!' : '◷'}</span>}
+                        <span className={now.spin ? 'shimmer-text' : ''}>{now.text}</span>
                       </div>
                     )}
                     {chatId && !isFinishedCard(state) && (
@@ -221,12 +227,6 @@ export function TaskLiveView({ taskId }: { taskId: Id }): React.JSX.Element {
                         <button type="button" className="link-btn" data-chatux="task-open-chat" onClick={() => void navigate({ name: 'chats', filter: 'all', chat: chatTarget(chatId, chat) })} title="Open the chat working on this task">
                           {chat?.title || 'this task came from'}
                         </button>
-                      </div>
-                    )}
-                    {!rootId && !chatId && isWorking && !slotWait && (
-                      <div className="chat-working">
-                        <span className="chat-spin" aria-hidden />
-                        <span className="shimmer-text">{who} is starting on it…</span>
                       </div>
                     )}
                     {rootId && runId && !chatId && (
