@@ -30,6 +30,9 @@ import { dedupeSessions } from '../../lib/sessionRows'
 import { taskName } from '../../lib/desk'
 import { plainActivity } from '../../lib/plainActivity'
 import { useWorking } from '../../state/live'
+import { liveLine } from '../../lib/liveLine'
+import { chatRowState, showsDot, taskRowState, type RowState } from '../../lib/rowState'
+import { chatIdOfTask, openAskOfRun, rootOfChat, rootOfRun } from '../../lib/taskCardView'
 import { useDeskWho } from '../../state/desk'
 import { isClosed, type ClosedChats } from '../../lib/closedChats'
 import { departmentsOn, getState, loadJson, providerLabel, reopenChat, saveJson, sessionTitle, TASK_SEEN_SINCE, useStore, type ChatsFilter } from '../../state/store'
@@ -247,6 +250,27 @@ export function ChatRow({ row, selected, onPick, onClose }: { row: ChatRowModel;
   )
 }
 
+/** PR-103: the row's one state, first on its second line: its mark and words in its tone. */
+function RowStateText({ s }: { s: RowState }): React.JSX.Element {
+  return (
+    <span className={`chats5-state is-${s.tone} ${s.spin ? 'shimmer-text' : ''}`} data-chatux="row-state" data-state={s.kind}>
+      <span className="chats5-state__mark" aria-hidden>
+        {s.mark}
+      </span>
+      {s.label}
+    </span>
+  )
+}
+
+/** The right edge: a needs-you mark (it is waiting on you), else the unread dot (news you have not read), else nothing. */
+function RowEdge({ s, unread, news = 'Unread' }: { s: RowState | null; unread: boolean; news?: string }): React.JSX.Element | null {
+  if (s?.needsYou) return <span className="chats5-row__dot is-needs" aria-label={s.label} title={s.label} />
+  if (showsDot(s, unread)) return <span className="chats5-row__dot" aria-label={news} />
+  return null
+}
+
+const useStallMinutes = (): number => useStore((x) => x.settings?.stallMinutes ?? 10)
+
 function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowModel, { kind: 'agent' }>; selected: boolean; onPick: (key?: string) => void; onClose: () => void }): React.JSX.Element {
   const who = useDeskWho(row.agent)
   const node = useSessionAgent(row.chat?.id)
@@ -259,7 +283,10 @@ function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRow
   // like a bot list: what it is doing while it answers here, else the last thing it said here
   const said = node ? saidPreview(node, 160) : null
   // CHAT-UI.md §9: an agent is its name: you know what it does, so never the task it is on
-  const line = turnWorking ? 'Working…' : needs ? 'Waiting for you to allow something' : (said ?? 'Ready')
+  const stallMinutes = useStallMinutes()
+  const live = turnWorking && node ? liveLine({ working: true, root: node, since: node.startedAt ?? row.at, stallMinutes, now: Date.now() }) : null
+  const rs = chatRowState({ running: row.chat?.status === 'running', working: turnWorking, needs, line: live })
+  const line = rs && rs.kind !== 'done' ? null : (said ?? 'Ready')
   return (
     <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={who.name}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
@@ -270,9 +297,9 @@ function AgentChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRow
           <span className="chats5-row__name">{who.name}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
-        <span className={`chats5-row__last ${working ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>{line}</span>
+        <span className="chats5-row__last">{line === null && rs ? <RowStateText s={rs} /> : line}</span>
       </span>
-      {(unread || needs) && <span className={`chats5-row__dot ${needs ? 'is-needs' : ''}`} aria-label={needs ? 'Needs you' : 'New answer'} />}
+      <RowEdge s={rs} unread={unread} news="New answer" />
     </button>
   )
 }
@@ -290,6 +317,10 @@ function SessionChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatR
   const glyph = s.status === 'running' && row.live && visual !== 'needs' && visual !== 'idle' ? 'running' : visual
   const working = glyph === 'running' || glyph === 'queued'
   const unread = !selected && s.status === 'running' && sessionUnread(node, seen)
+  const stallMinutes = useStallMinutes()
+  const live = working && node ? liveLine({ working: true, root: node, since: node.startedAt ?? row.at, stallMinutes, now: Date.now() }) : null
+  // PR-103: the state leads ("Working · Claude"), never after the place where the ellipsis eats it
+  const rs = chatRowState({ running: s.status === 'running', working: working && glyph === 'running', needs: visual === 'needs', line: live })
   return (
     <button type="button" role="option" aria-selected={selected} className={`chats5-row ${selected ? 'is-selected' : ''} ${s.status === 'running' ? '' : 'is-dim'} ${working ? 'is-shimmering' : ''} ${unread ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)}>
       <span className="chats5-row__face" aria-hidden>
@@ -300,12 +331,14 @@ function SessionChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatR
           <span className="chats5-row__name">{title}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
-        <span className={`chats5-row__last ${working ? 'shimmer-text' : ''}`}>
+        <span className="chats5-row__last">
+          {rs ? <RowStateText s={rs} /> : word}
+          {' · '}
           {s.departmentId && place ? `${place} chat` : providerLabel(s.adapter)}
-          {place && s.repoId ? ` · ${place}` : ''} · {word}
+          {place && s.repoId ? ` · ${place}` : ''}
         </span>
       </span>
-      {unread && <span className="chats5-row__dot" aria-label="New answer" />}
+      <RowEdge s={rs} unread={unread} news="New answer" />
     </button>
   )
 }
@@ -367,7 +400,7 @@ function ConvChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
         <span className={`chats5-row__last ${row.live || c.picking ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>
-          {taskLine ? `${work!.working.length && workers ? `${workers} · ` : ''}${taskLine}` : row.live ? `${answering || who} · answering…` : c.picking && !c.who.length ? who : c.private ? who : `With ${who}`}
+          {taskLine ? `${taskLine}${work!.working.length && workers ? ` · ${workers}` : ''}` : row.live ? `${answering || who} · answering…` : c.picking && !c.who.length ? who : c.private ? who : `With ${who}`}
         </span>
       </span>
       {(unread || needs) && <span className={`chats5-row__dot ${needs ? 'is-needs' : ''}`} aria-label={needs ? 'Needs you' : 'Unread'} />}
@@ -381,33 +414,33 @@ function TaskChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatRowM
   const code = useIsCode(t.companyId)
   const seat = useStore((s) => (t.agentId ? s.companyAgents.find((a) => a.id === t.agentId) : undefined))
   const who = { name: useAgentDisplay()(seat)?.name ?? seat?.name ?? '' }
-  const activity = useStore((s) => {
-    if (!t.runId) return null
-    let best: AgentNode | undefined
-    for (const a of Object.values(s.agents)) if (a.runId === t.runId && a.parentId === null && (!best || a.updatedAt > best.updatedAt)) best = a
-    return best?.activity ?? null
-  })
-  const st = workState(t)
-  const needs = st === 'needs_you'
+  // PR-103: the same live line as the task's chat (liveLine), so the row and the chat never disagree
+  const chatId = useStore((s) => chatIdOfTask(t, s.sessions))
+  const root = useStore((s) => (chatId ? rootOfChat(Object.values(s.agents), chatId) : t.runId ? rootOfRun(Object.values(s.agents), t.runId) : null))
+  const slotWaitSince = useStore((s) => (t.runId ? (s.slotWaits[t.runId] ?? null) : null))
+  const openAsk = useStore((s) => (t.runId ? !!openAskOfRun(Object.values(s.asks), t.runId) : false))
+  const stallMinutes = useStallMinutes()
+  const working = workState(t) === 'working'
+  const line = liveLine({ working, slotWaitSince, inChat: !!chatId, root, doing: root ? plainActivity(root.activity, { code }) : null, since: root?.startedAt ?? t.updatedAt, stallMinutes, now: Date.now() })
+  const rs = taskRowState(t, { line, openAsk })
   const unread = !selected && row.unread
-  const line = needs ? 'Needs you' : row.live ? (seat ? 'Working…' : (plainActivity(activity, { code }) ?? 'Working…')) : st === 'failed' ? 'Stopped · unread' : 'Finished · unread'
   return (
-    <button type="button" role="option" aria-selected={selected} data-chatux="task-row" data-task={t.identifier} className={`chats5-row ${selected ? 'is-selected' : ''} ${row.live ? 'is-shimmering' : ''} ${unread || needs ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={`${seat ? `${who.name} · ` : ''}${taskName(t, code)}`}>
+    <button type="button" role="option" aria-selected={selected} data-chatux="task-row" data-task={t.identifier} data-state={rs.kind} className={`chats5-row ${selected ? 'is-selected' : ''} ${rs.spin ? 'is-shimmering' : ''} ${unread || rs.needsYou ? 'is-unread' : ''}`} onClick={() => onPick()} onContextMenu={(e) => void rowMenu(e, row, onClose)} title={`${seat ? `${who.name} · ` : ''}${taskName(t, code)} · ${rs.label}`}>
       <span className="chats5-row__face chats5-row__face--bust" aria-hidden>
-        {seat ? <AgentBust agent={seat} size={30} /> : <AgentGlyph visual={row.live ? 'running' : 'idle'} />}
+        {seat ? <AgentBust agent={seat} size={30} /> : <AgentGlyph visual={rs.spin ? 'running' : 'idle'} />}
       </span>
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{seat ? who.name : taskName(t, code)}</span>
           <span className="chats5-row__age">{age(row.at)}</span>
         </span>
-        <span className={`chats5-row__last ${row.live ? 'shimmer-text' : ''} ${needs ? 'is-needs' : ''}`}>
-          {/* CHAT-UI.md §9: the agent's name is enough; the task only tells apart two rows of one agent */}
-          {seat && row.twin ? `${taskName(t, code)} · ` : ''}
-          {line}
+        <span className="chats5-row__last">
+          <RowStateText s={rs} />
+          {/* CHAT-UI.md §9: the agent's name is enough; the task only tells apart two rows of one agent, after the state */}
+          {seat && row.twin ? ` · ${taskName(t, code)}` : ''}
         </span>
       </span>
-      {(unread || needs) && <span className={`chats5-row__dot ${needs ? 'is-needs' : ''}`} aria-label={needs ? 'Needs you' : 'Unread'} />}
+      <RowEdge s={rs} unread={unread} />
     </button>
   )
 }

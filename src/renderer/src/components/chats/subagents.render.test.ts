@@ -117,9 +117,12 @@ describe('Chats', () => {
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toMatch(/data-title="Spring launch" data-work="2 tasks working"/)
-    expect(html).toMatch(/chats5-row__last shimmer-text\s*">\w+ · 2 tasks working</)
+    // PR-103: the state leads, who works on it comes after
+    expect(html).toMatch(/chats5-row__last shimmer-text\s*">2 tasks working · \w+</)
     expect(html).toMatch(/data-title="Pricing page" data-work="VO-16 finished · unread"/)
-    expect(html).toMatch(/data-chatux="task-row" data-task="VO-50"/)
+    expect(html).toMatch(/data-chatux="task-row" data-task="VO-50" data-state="working"/)
+    // PR-103: the orphan task's row leads with its state (mark + words), never a bare dot
+    expect(html).toMatch(/data-task="VO-50"[\s\S]*?data-chatux="row-state" data-state="working"/)
     // Julia's own chat keeps its own last line and is not shimmering
     const rowOf = (text: string): string => {
       const at = html.indexOf(text)
@@ -150,5 +153,31 @@ describe('the status bar', () => {
     const html = renderToStaticMarkup(createElement(StatusBar))
     expect(html).toContain('3 working')
     expect(html).toContain('title="Open Chats › Live (⇧⌘A)"')
+  })
+})
+
+describe('PR-103: one clear state per row', () => {
+  it('a week-old question leads with "Question for you · 7d"; a stopped task says why; neither shows the unread dot', async () => {
+    const store = await import('../../state/store')
+    const old = store.getState().tasks
+    const week = new Date(Date.now() - 7 * 86_400_000).toISOString()
+    store.setState({
+      view: { name: 'chats', filter: 'all' },
+      tasks: [
+        ...old,
+        task('vo-60', { title: 'Retry stapling', source: 'schedule', status: 'blocked', blockReason: 'needs_input', runId: 'run_60', updatedAt: week, ask: { kind: 'question', prompt: 'Which cert?', options: [], answer: null, askedAt: week } } as unknown as Partial<CompanyTask>),
+        task('vo-61', { title: 'Nightly build', source: 'schedule', status: 'blocked', blockReason: 'interrupted', runId: 'run_61', updatedAt: new Date().toISOString(), report: { outcome: 'blocked', summary: 'x', evidence: [], at: T } } as unknown as Partial<CompanyTask>)
+      ]
+    })
+    const { Sidebar } = await import('../../shell/Sidebar')
+    const html = renderToStaticMarkup(createElement(Sidebar))
+    const rowOf = (id: string): string => {
+      const at = html.indexOf(`data-task="${id}"`)
+      return html.slice(at, html.indexOf('</button>', at))
+    }
+    expect(rowOf('VO-60')).toMatch(/data-state="question"[\s\S]*Question for you · 7d/)
+    expect(rowOf('VO-60')).toContain('chats5-row__dot is-needs')
+    expect(rowOf('VO-61')).toMatch(/data-state="failed"[\s\S]*Stopped when the app quit/)
+    store.setState({ tasks: old })
   })
 })
