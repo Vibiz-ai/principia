@@ -41,6 +41,11 @@ jobs:
       attestations: read # gh attestation verify
       issues: write # report a failure
     steps:
+      # only for scripts/stapler-validate.mjs (plain Node, no npm ci): the stapler check retries when Apple drops the connection
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
       - name: Download and verify
         id: verify
         env:
@@ -63,6 +68,9 @@ jobs:
             echo "failed=false" >> "$GITHUB_OUTPUT"
           }
           trap finish EXIT
+          # stapler validate asks Apple's ticket service; a dropped connection is retried (it reported v0.2.0, v0.4.0
+          # and v0.4.2 as unstapled when their tickets were fine), a missing ticket still fails at once
+          staple_ok() { node "$GITHUB_WORKSPACE/scripts/stapler-validate.mjs" "$1"; }
 
           latest="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
           tag="${TAG_FROM_EVENT:-${TAG_FROM_INPUT:-$latest}}"
@@ -125,7 +133,7 @@ jobs:
           # source explicitly: on a Mac with assessments off, spctl accepts everything ("override=security disabled").
           out="$(spctl -a -vvv -t open --context context:primary-signature Principia-arm64.dmg 2>&1)"; echo "$out"
           if grep -q 'source=Notarized Developer ID' <<< "$out" && grep -q ': accepted' <<< "$out"; then ok "spctl accepts the dmg (Notarized Developer ID)"; else bad "spctl does not accept the dmg as notarized: $(tr '\n' ' ' <<< "$out")"; fi
-          if xcrun stapler validate Principia-arm64.dmg; then ok "stapler validate (dmg)"; else bad "the dmg has no valid stapled ticket"; fi
+          if staple_ok Principia-arm64.dmg; then ok "stapler validate (dmg)"; else bad "the dmg has no valid stapled ticket"; fi
 
           # 4. the app, as installed from the dmg and as the updater installs it from the zip
           check_app() { # <label> <path to Principia.app>
@@ -133,7 +141,7 @@ jobs:
             if codesign --verify --deep --strict --verbose=2 "$app"; then ok "codesign --verify --deep --strict ($label)"; else bad "codesign --verify --deep --strict fails ($label)"; fi
             out="$(spctl -a -vvv -t exec "$app" 2>&1)"; echo "$out"
             if grep -q 'source=Notarized Developer ID' <<< "$out" && grep -q ': accepted' <<< "$out"; then ok "spctl accepts the app ($label)"; else bad "spctl does not accept the app ($label): $(tr '\n' ' ' <<< "$out")"; fi
-            if xcrun stapler validate "$app"; then ok "stapler validate ($label)"; else bad "the app has no valid stapled ticket ($label)"; fi
+            if staple_ok "$app"; then ok "stapler validate ($label)"; else bad "the app has no valid stapled ticket ($label)"; fi
             v="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2>/dev/null)"
             if [ "$v" = "$version" ]; then ok "app version $v ($label)"; else bad "app version is '$v', not $version ($label)"; fi
           }
