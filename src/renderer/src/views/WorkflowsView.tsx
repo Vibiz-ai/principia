@@ -148,7 +148,7 @@ export function WorkflowsView(): React.JSX.Element {
 
   return (
     <div className="view">
-      <Toolbar title="Automations" sub={<AutomationTabs value="workflows" />}>
+      <Toolbar title="Workflows" sub={<AutomationTabs value="workflows" />}>
         <Button onClick={() => void navigate({ name: 'marketplace' })}>Add-ons</Button>
         <Button icon="plus" onClick={() => void create(true)} title="A deterministic script (Python, Node or shell): no agents, no tokens. Runs on demand, on a schedule or from Slack, with your Keys as env vars.">
           New Script

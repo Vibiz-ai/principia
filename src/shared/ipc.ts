@@ -741,7 +741,7 @@ export type UiCommand =
   | { kind: 'openSlackDraft'; draftId: Id } // Slack draft notification click (SLACK.md §8.3)
   | { kind: 'openLink'; url: string } // a principia:// link from the OS (shared/deepLink.ts; checked by main, navigates only)
 /** The app menu's View items. team, board, chats and knowledge are the five doors (⌘2-⌘5); the rest stay as aliases. */
-export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
+export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'cloud' | 'settings' | 'memory' | 'agents'
 
 export interface SessionCreateRequest {
   /**

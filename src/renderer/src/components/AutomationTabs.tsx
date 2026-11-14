@@ -1,7 +1,6 @@
 /**
- * Five doors, More → Automations: one door for Schedules, Workflows and Slack triggers (step 1 mounts the existing
- * pages as tabs; step 5 adds Autopilots; Routines, the ready-made daily and weekly routines, come first). Each tab is
- * its own route, so old deep links keep working.
+ * The Workflows door: Workflows, Schedules and Slack triggers as tabs. Each tab is its own route, so old deep links keep
+ * working (the retired Routines and Autopilot tabs resolve to Schedules in lib/nav).
  */
 import { Segmented } from './ui'
 import { navigate } from '../state/store'
@@ -18,10 +17,8 @@ export function AutomationTabs({ value, onChange }: { value: AutomationTab; onCh
       size="sm"
       className="no-drag"
       items={[
-        { value: 'routines', label: 'Routines' },
-        { value: 'autopilots', label: 'Autopilot' },
-        { value: 'schedules', label: 'Schedules' },
         { value: 'workflows', label: 'Workflows' },
+        { value: 'schedules', label: 'Schedules' },
         { value: 'slack', label: 'Slack triggers' }
       ]}
       value={value}

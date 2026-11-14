@@ -29,7 +29,7 @@ export function installKeyboard(): () => void {
     const code = e.code
     const handled = (): void => e.preventDefault()
     if (/^Digit[1-5]$/.test(code) && !e.shiftKey && !e.altKey) {
-      // five doors: ⌘1-⌘5 = Home, Team, Board, Chats, Knowledge in every mode (the app menu sends the same commands)
+      // five doors: ⌘1-⌘5 = Chats, Workflows, Memory, Keys, Cloud in every mode (the app menu sends the same commands)
       handled()
       runCommand({ kind: 'navigate', view: doorForDigit(Number(code.slice(5)))! })
     } else if (code === 'KeyA' && e.shiftKey && !e.altKey) {

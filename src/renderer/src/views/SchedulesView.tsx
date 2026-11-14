@@ -14,8 +14,6 @@ import { CompanyChip, pickCompany, useScope } from '../components/CompanyChip'
 import { companyOf, reposOf } from '../lib/companyModel'
 import { inScope } from '../lib/scope'
 import { AutomationTabs } from '../components/AutomationTabs'
-import { AutopilotsTab } from '../components/AutopilotsTab'
-import { RoutinesTab } from '../components/RoutinesTab'
 import { CloudPlacedMark } from '../components/cloud/bits'
 import { useCloudPlacement } from '../state/cloud'
 import { PERSONAL_COMPANY_ID } from '@shared/company'
@@ -25,32 +23,15 @@ const ADAPTER_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex',
 
 type SchedTab = 'routines' | 'autopilots' | 'schedules' | 'slack'
 
-export function SchedulesView({ selectedId, seed, nonce, tab, addRoutine, addPlaybook, routineTime }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab; addRoutine?: string; addPlaybook?: string; routineTime?: { at?: string; days?: string } }): React.JSX.Element {
-  // a deep link to a schedule (or a seed) opens Schedules; Automations itself opens on Autopilots
-  const [cur, setCur] = useState<SchedTab>(tab ?? 'schedules')
-  useEffect(() => setCur(tab ?? 'schedules'), [tab, nonce])
-  if (cur === 'routines')
-    return (
-      <div className="view">
-        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
-        <div className="scroll view__body">
-          <RoutinesTab suggest={tab === 'routines' ? addRoutine : undefined} suggestTime={tab === 'routines' ? routineTime : undefined} nonce={nonce} />
-        </div>
-      </div>
-    )
-  if (cur === 'autopilots')
-    return (
-      <div className="view">
-        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
-        <div className="scroll view__body">
-          <AutopilotsTab focus={tab === 'autopilots' ? addPlaybook : undefined} nonce={nonce} />
-        </div>
-      </div>
-    )
+export function SchedulesView({ selectedId, seed, nonce, tab }: { selectedId?: string; seed?: ScheduleSeed; nonce?: number; tab?: SchedTab }): React.JSX.Element {
+  // a deep link to a schedule (or a seed) opens Schedules; the retired Routines and Autopilot tabs open it too
+  const pick = (t?: SchedTab): SchedTab => (t === 'slack' ? 'slack' : 'schedules')
+  const [cur, setCur] = useState<SchedTab>(pick(tab))
+  useEffect(() => setCur(pick(tab)), [tab, nonce])
   if (cur === 'slack')
     return (
       <div className="view">
-        <Toolbar title="Automations" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
+        <Toolbar title="Workflows" sub={<ScheduleTabs value={cur} onChange={setCur} />} />
         <ScopedSlackTriggers seedWorkflowId={tab === 'slack' ? seed?.workflowId : undefined} nonce={nonce} />
       </div>
     )
@@ -176,7 +157,7 @@ function SchedulesList({ selectedId, seed, nonce, tabs }: { selectedId?: string;
   const focusedCo = useStore((st) => (scope ? (st.companies.find((c) => c.id === scope) ?? null) : null))
   return (
     <div className="view">
-      <Toolbar title="Automations" sub={tabs}>
+      <Toolbar title="Workflows" sub={tabs}>
         {/* PM review: inside a company the pause is that company's (agents, schedules, autopilot); every company only from All */}
         {multi && focusedCo && !paused ? (
           <Button icon={focusedCo.pausedAt ? 'play' : 'pause'} variant={focusedCo.pausedAt ? 'secondary' : 'ghost'} onClick={() => void setCompanyPaused(focusedCo.id, !focusedCo.pausedAt)} title={focusedCo.pausedAt ? undefined : 'This company only. Other companies keep running.'}>

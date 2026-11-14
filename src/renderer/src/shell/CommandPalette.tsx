@@ -213,7 +213,7 @@ function PaletteInner({ mode, launchCompanyId }: { mode: PaletteMode; launchComp
       { id: 'a:memSearch', group: 'Actions', label: 'Search Knowledge…', hint: 'what your agents know about the business', keywords: 'memory passport notes', icon: 'search', run: () => void navigate({ name: 'passport', search: '', nonce: Date.now() }) },
       { id: 'a:nextNeeds', group: 'Actions', label: 'Next Needs You', hint: 'the oldest thing waiting for you', icon: 'agents', kbd: '⌘J', run: goNextNeedsYou },
       // five doors: "Go to" labels are the nav's own (lib/nav), old names still match as keywords
-      ...goToEntries((k) => k !== 'plans' || plansOn).map<Item>((g) => ({
+      ...goToEntries(() => true).map<Item>((g) => ({
         id: g.id,
         group: 'Go to',
         label: g.label,

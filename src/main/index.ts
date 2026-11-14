@@ -17,6 +17,7 @@ import { openDatabase } from './db'
 import { Store } from './db/store'
 import { createEngineStore } from './db/engineStore'
 import { Vault } from './vault'
+import { retiredFlagsPatch } from './simplify'
 import { SessionManager } from './sessions'
 import { ArtifactIndexer } from './artifacts'
 import { removeThumbs } from './thumbnails'
@@ -187,6 +188,12 @@ if (!app.requestSingleInstanceLock()) {
 
     const db = openDatabase(paths.dbPath)
     const store = new Store(db)
+    // simplify.ts: no per-agent setup and no Autopilot; the switches that turned them on stay off
+    const retired = retiredFlagsPatch(store.getSettings().experimental)
+    if (retired) {
+      store.updateSettings({ experimental: retired })
+      log.info('turned off retired experimental flags (departments, plans)')
+    }
     const cipher = {
       available: () => safeStorage.isEncryptionAvailable(),
       encrypt: (s: string) => safeStorage.encryptString(s),

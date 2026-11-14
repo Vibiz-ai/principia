@@ -15,9 +15,8 @@ import { confirmNative, hive, nativeMenu, useHiveEvent } from '../lib/hive'
 import { ADAPTER_AUTH_VARS } from '../lib/secrets'
 import { personasOn, t, toneOf, type Tone } from '../lib/voice'
 import { isPersonal } from '../lib/company'
-import { autonomyPhrase } from '../lib/desk'
 import { APP_SECTIONS, companySections, pickTarget, resolveSection, type AppSection, type CompanySection, type SectionDef } from '../lib/settingsModel'
-import { attempt, enterCompany, navigate, providerLabel, refreshCompanies, refreshProfiles, refreshProviders, setCompanyAutopilot, setCompanyPaused, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
+import { attempt, enterCompany, navigate, providerLabel, refreshCompanies, refreshProfiles, refreshProviders, setState, toast, updateSettings, useStore, type SettingsSection } from '../state/store'
 import type { AuthorRunGrant } from '@shared/authoring'
 import type { RunWorktree } from '@shared/types'
 import { worktreeState } from '../lib/authoring'
@@ -28,11 +27,9 @@ import { acceptAlertSuggestion, isSetUp, useSlack } from '../state/slack'
 import { UserPicker } from '../components/slack/bits'
 import { useScope } from '../components/CompanyChip'
 import { useIsCode } from '../components/desk/Desk'
-import { useDeskAgents } from '../state/desk'
 import { ConnectionsPage } from '../components/connections/ConnectionsPage'
 import type { Purpose } from '@shared/services'
 import { DiskSection } from '../components/usage/DiskSection'
-import { PrincipiaRunsTeam } from '../components/orchestrator/PrincipiaTeam'
 import { PhoneSettings } from '../components/phone/PhoneSettings'
 import { checkForUpdates, restartForUpdate, useUpdates } from '../state/updates'
 import { DOWNLOAD_PAGE_URL, updateLine } from '@shared/updates'
@@ -86,7 +83,7 @@ export function SettingsView({ section, nonce, connect, purpose }: { section?: S
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && !document.querySelector('.sheet-layer') && !(e.target as HTMLElement).closest('input, textarea')) {
         e.preventDefault()
-        void navigate({ name: 'home' })
+        void navigate({ name: 'chats' })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -131,8 +128,6 @@ export function SettingsView({ section, nonce, connect, purpose }: { section?: S
               <CompanyPick companies={pickable} section={pickTarget(section)} />
             ) : cur === 'connections' && company ? (
               <ConnectionsPage key={connect ? `open-${nonce ?? 0}` : company.id} company={company} open={connect ?? null} {...(purpose ? { purpose } : {})} />
-            ) : cur === 'team' && company ? (
-              <TeamAutonomy company={company} />
             ) : cur === 'general' ? (
               <General />
             ) : cur === 'providers' ? (
@@ -180,82 +175,6 @@ function CompanyPick({ companies, section }: { companies: CompanyPassport[]; sec
   )
 }
 
-/**
- * Team & autonomy (design §2.4): this company's Pause and Autopilot, how many tasks run at once, "Principia runs the
- * team" (ORCHESTRATOR.md) and each agent's one autonomy phrase (the same words as Team and onboarding). Nothing here
- * touches another company.
- */
-function TeamAutonomy({ company: c }: { company: CompanyPassport }): React.JSX.Element {
-  const agents = useDeskAgents(c.id)
-  const raw = useStore((s) => s.companyAgents)
-  const paused = !!c.pausedAt
-  const short = c.name.split(/\s+/)[0]
-  const [inFlight, setInFlight] = useState(c.maxInFlight ?? 0)
-  useEffect(() => setInFlight(c.maxInFlight ?? 0), [c.maxInFlight])
-  return (
-    <div className="s5">
-      <h2 className="s5__title">Team &amp; autonomy</h2>
-      <p className="s5__lede">How {c.name}’s agents work when you’re not looking. Every switch here is for {c.name} only; your other companies keep their own.</p>
-      <div className="sgroup">
-        <SRow label={`Pause ${c.name}`} desc={paused ? `Paused. Agents start nothing and schedules wait. Chats you open yourself still work. Other companies keep running.` : 'Stops every agent and schedule in this company only. Work in flight is saved and continues when you resume.'}>
-          <Switch checked={paused} onChange={(v) => void setCompanyPaused(c.id, v)} label={`Pause ${c.name}`} />
-        </SRow>
-        <SRow label="Autopilot" desc={paused ? 'Off while paused.' : 'Agents pick up the tasks assigned to them on their own. Off: they wait for you to press Start.'}>
-          <Switch checked={!paused && !!c.autopilot} disabled={paused} onChange={(v) => void setCompanyAutopilot(c.id, v)} label="Autopilot" />
-        </SRow>
-        <SRow label="Tasks at once" desc={`0 means no limit, the default. Set a number only if you want ${short} to run fewer tasks at the same time.`}>
-          <Stepper
-            value={inFlight}
-            min={0}
-            max={20}
-            onChange={(v) => {
-              setInFlight(v)
-              void attempt(() => hive.board.autopilot({ companyId: c.id, on: !!c.autopilot, maxInFlight: v }), 'Tasks at once').then(() => refreshCompanies().catch(() => undefined))
-            }}
-            label="Tasks at once"
-          />
-        </SRow>
-      </div>
-      <PrincipiaRunsTeam companyId={c.id} companyName={c.name} />
-      <div className="sgroup">
-        <div className="sgroup__title">
-          Each agent
-          <span className="flex1" />
-          <Button size="sm" variant="ghost" onClick={() => void navigate({ name: 'team' })}>
-            Open Team →
-          </Button>
-        </div>
-        {agents.length === 0 ? (
-          <div className="srow">
-            <div className="srow__text">
-              <div className="srow__desc">No agents yet. Add a department in Team.</div>
-            </div>
-          </div>
-        ) : (
-          agents.map((a) => {
-            const seat = raw.find((x) => x.id === a.id)
-            const auto = seat?.data.autonomy === 'auto'
-            return (
-              <div key={a.id} className="srow srow--click" role="button" tabIndex={0} onClick={() => void navigate({ name: 'agentSeat', id: a.id })} onKeyDown={(e) => e.key === 'Enter' && void navigate({ name: 'agentSeat', id: a.id })}>
-                <div className="srow__text">
-                  <div>
-                    {a.name}
-                    {a.name !== a.role && <span className="text-tertiary"> · {a.role}</span>}
-                  </div>
-                  <div className="srow__desc">
-                    {autonomyPhrase({ auto, role: a.role, department: a.department ?? null })}
-                    {a.paused ? ' · Paused' : ''}
-                  </div>
-                </div>
-                <Icon name="chevronRight" size={14} />
-              </div>
-            )
-          })
-        )}
-      </div>
-    </div>
-  )
-}
 
 function SRow({ label, desc, children }: { label: string; desc?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
   return (
@@ -273,7 +192,7 @@ function SRow({ label, desc, children }: { label: string; desc?: React.ReactNode
  * VOICE.md §3.8: Tone (Playful / Plain) and "Agent names and busts". Every flavored string reads the tone through the
  * copy module, so switching applies live, without a reload. Hook-free so a test can call its handlers.
  */
-export function VoiceRows({ tone, personas }: { tone: Tone; personas: boolean }): React.JSX.Element {
+export function VoiceRows({ tone }: { tone: Tone; personas?: boolean }): React.JSX.Element {
   return (
     <>
       <SRow label={t('settings.tone.label')} desc={t('settings.tone.desc')}>
@@ -286,9 +205,6 @@ export function VoiceRows({ tone, personas }: { tone: Tone; personas: boolean })
           ]}
           onChange={(v) => void updateSettings({ tone: v })}
         />
-      </SRow>
-      <SRow label={t('settings.personas.label')} desc={t('settings.personas.desc')}>
-        <Switch checked={personas} onChange={(v) => void updateSettings({ personas: v })} label={t('settings.personas.label')} />
       </SRow>
     </>
   )
@@ -883,14 +799,11 @@ function SlackAlertRows(): React.JSX.Element {
 }
 
 /**
- * COMPANY.md / DEPARTMENTS.md §0.8: the experimental flags the refusals point at ("Settings → Experimental").
- * Departments only take effect with Companies on; turning either off never deletes anything, and Autopilot stays off
- * until turned on per company.
+ * The experimental flags. Departments and Plans are retired with the per-agent setup (main/simplify.ts), so only
+ * Companies is left; turning it off never deletes anything.
  */
 function ExperimentalSection(): React.JSX.Element {
   const flags = useStore((st) => st.settings?.experimental) ?? {}
-  const set = (patch: { companies?: boolean; departments?: boolean; plans?: boolean }): void => void updateSettings({ experimental: { ...flags, ...patch } })
-  const board = !!flags.companies && !!flags.departments
   return (
     <>
       <div className="s5">
@@ -898,13 +811,7 @@ function ExperimentalSection(): React.JSX.Element {
         <p className="s5__lede">Features still being finished. Turning one off hides it; nothing is deleted.</p>
       </div>
       <SRow label="Companies" desc="Group repos, workflows, keys and runs by company, with company guards enforced.">
-        <Switch checked={!!flags.companies} onChange={(v) => set({ companies: v })} label="Companies" />
-      </SRow>
-      <SRow label="Departments and the company board" desc="Departments, agent seats and one task board per company. Agents start work on their own only where you turn Autopilot on. Needs Companies.">
-        <Switch checked={!!flags.companies && !!flags.departments} disabled={!flags.companies} onChange={(v) => set({ departments: v })} label="Departments" />
-      </SRow>
-      <SRow label="Plans" desc="Turn one goal into milestones and tasks a head agent runs at the pace you pick, one worktree per milestone, ending in a pull request you merge. Task briefs stay on either way. Needs Departments.">
-        <Switch checked={board && !!flags.plans} disabled={!board} onChange={(v) => set({ plans: v })} label="Plans" />
+        <Switch checked={!!flags.companies} onChange={(v) => void updateSettings({ experimental: { ...flags, companies: v } })} label="Companies" />
       </SRow>
     </>
   )

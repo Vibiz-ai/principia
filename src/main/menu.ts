@@ -67,11 +67,11 @@ export function buildAppMenu(a: MenuActions): void {
       label: 'View',
       submenu: [
         // five doors: the same labels and ⌘1-⌘5 as the sidebar (renderer lib/nav PRIMARY)
-        nav('Home', 'home', '1'),
-        nav('Team', 'team', '2'),
-        nav('Board', 'board', '3'),
-        nav('Chats', 'chats', '4'),
-        nav('Knowledge', 'knowledge', '5'),
+        nav('Chats', 'chats', '1'),
+        nav('Workflows', 'workflows', '2'),
+        nav('Memory', 'knowledge', '3'),
+        nav('Keys', 'keys', '4'),
+        nav('Cloud', 'cloud', '5'),
         { label: 'Live Chats', accelerator: 'Shift+CmdOrCtrl+A', click: () => a.ui({ kind: 'navigate', view: 'agents' }) },
         { type: 'separator' },
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: () => a.ui({ kind: 'toggleSidebar' }) },

@@ -23,7 +23,6 @@ import {
   useStore
 } from '../state/store'
 import { CompanyAvatar } from './CompanyRail'
-import { AutopilotChip } from '../components/autopilot/AutopilotChip'
 
 export type HeaderState = { kind: 'paused' } | { kind: 'running'; working: number }
 
@@ -83,12 +82,6 @@ export function CompanyHeader({ company, flat = false }: { company: CompanyPassp
           {!flat && company && <span className={`co-head__glyph ${st.kind === 'paused' ? 'co-head__glyph--paused' : ''}`} aria-hidden>{st.kind === 'paused' ? '‖' : '●'}</span>}
           <span className="co-head__line">{line}</span>
         </span>
-        {/* its own row, so neither "Running" nor the chip's words are cut short */}
-        {!flat && company && (
-          <span className="co-head__ap">
-            <AutopilotChip company={company} />
-          </span>
-        )}
       </span>
       <Icon name="chevronDown" size={12} className="co-head__chev" />
     </div>

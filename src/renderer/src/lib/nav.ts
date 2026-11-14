@@ -1,5 +1,5 @@
 /**
- * Five doors (design.md §2-3, pm-review step 1): the one navigation model. The sidebar, ⌘1-⌘5, the app menu, the
+ * Five doors: the one navigation model (simplified: Chats, Workflows, Memory, Keys, Cloud). The sidebar, ⌘1-⌘5, the app menu, the
  * palette and the window title all read their labels from here, so they can never disagree. Pure: no store, no IPC.
  *
  * - PRIMARY: the five doors, fixed order, ⌘1-⌘5 in every mode.
@@ -12,8 +12,8 @@ import { PERSONAL_COMPANY_ID } from '@shared/company'
 import type { ActiveCompany } from './companyModel'
 import type { SettingsSection, ViewState } from '../state/store'
 
-export type DoorKey = 'home' | 'team' | 'board' | 'chats' | 'knowledge'
-export type MoreKey = 'automations' | 'addons' | 'files' | 'forum' | 'slack' | 'plans' | 'activity' | 'spend'
+export type DoorKey = 'chats' | 'workflows' | 'knowledge' | 'keys' | 'cloud'
+export type MoreKey = 'addons' | 'files' | 'slack' | 'activity' | 'spend'
 export type MoreGroup = 'Automate' | 'Work' | 'Insight'
 
 export interface Door {
@@ -35,32 +35,26 @@ export interface MoreItem {
   desc: string
   defaultVisibility: NavVisibility
   aliases: string[]
-  /** listed only when this holds (Plans: its experimental flag) */
-  requires?: 'plans'
   /** the old names that, typed exactly, make this the top hit; defaults to `aliases` */
   exact?: string[]
 }
 
 export const PRIMARY: readonly Door[] = [
-  { key: 'home', label: 'Home', icon: 'home', kbd: '⌘1', desc: 'What needs you, and what is running', aliases: ['dashboard', 'needs you', 'portfolio'] },
-  { key: 'team', label: 'Team', icon: 'agents', kbd: '⌘2', desc: 'Departments and the agents in them', aliases: ['agents', 'departments', 'people', 'staff', 'roster'] },
-  { key: 'board', label: 'Board', icon: 'board', kbd: '⌘3', desc: 'Every task and where it is', aliases: ['tasks', 'kanban', 'todo', 'issues'] },
-  { key: 'chats', label: 'Chats', icon: 'chat', kbd: '⌘4', desc: 'Conversations and live sessions', aliases: ['agents', 'sessions', 'session', 'terminal', 'running', 'live', 'chat'] },
-  { key: 'knowledge', label: 'Knowledge', icon: 'knowledge', kbd: '⌘5', desc: 'What your agents know about the business', aliases: ['passport', 'memory', 'notes', 'vault', 'brand voice'] }
+  { key: 'chats', label: 'Chats', icon: 'chat', kbd: '⌘1', desc: 'Talk to your agents; Principia picks Claude or Codex for you', aliases: ['agents', 'sessions', 'session', 'terminal', 'running', 'live', 'chat', 'home', 'tasks', 'board'] },
+  { key: 'workflows', label: 'Workflows', icon: 'workflows', kbd: '⌘2', desc: 'Workflows, schedules and Slack triggers', aliases: ['automations', 'schedules', 'schedule', 'cron', 'triggers', 'workflow', 'editor'] },
+  { key: 'knowledge', label: 'Memory', icon: 'knowledge', kbd: '⌘3', desc: 'What your agents know about the business', aliases: ['knowledge', 'passport', 'memory', 'notes', 'vault', 'brand voice'] },
+  { key: 'keys', label: 'Keys', icon: 'keys', kbd: '⌘4', desc: 'Accounts and secrets, added once for every agent, here and in the cloud', aliases: ['keys', 'secrets', 'api key', 'api keys', 'env', 'accounts', 'sign in', 'github', 'token'] },
+  { key: 'cloud', label: 'Cloud', icon: 'globe', kbd: '⌘5', desc: 'Agents that keep working while your Mac sleeps', aliases: ['cloud', 'vm', 'server', 'remote', 'pairing'] }
 ]
 
 export const MORE_GROUPS: readonly MoreGroup[] = ['Automate', 'Work', 'Insight']
 
 export const MORE: readonly MoreItem[] = [
-  { key: 'automations', label: 'Automations', icon: 'refresh', group: 'Automate', desc: 'Routines, Autopilot, schedules, workflows and Slack triggers', defaultVisibility: 'hidden', aliases: ['schedules', 'workflows', 'autopilots', 'routines', 'cron', 'triggers'], exact: ['automation', 'triggers'] },
   { key: 'addons', label: 'Add-ons', icon: 'addons', group: 'Automate', desc: 'Workflows and skills to install', defaultVisibility: 'hidden', aliases: ['marketplace', 'skills', 'catalog'] },
   { key: 'files', label: 'Files', icon: 'file', group: 'Work', desc: 'Everything your agents saved', defaultVisibility: 'hidden', aliases: ['artifacts', 'outputs', 'documents'] },
-  // pm-review C8: Forum is never pinned by default; it shows in PINNED while a thread has something for you
-  { key: 'forum', label: 'Forum', icon: 'forum', group: 'Work', desc: 'Agents talking to each other', defaultVisibility: 'active', aliases: ['channels', 'threads', 'agent talk'] },
   { key: 'slack', label: 'Slack', icon: 'slack', group: 'Work', desc: 'Your Slack, mirrored for agents', defaultVisibility: 'hidden', aliases: [] },
-  { key: 'plans', label: 'Plans', icon: 'plans', group: 'Work', desc: 'Goals broken into milestones (beta)', defaultVisibility: 'hidden', aliases: ['goals', 'milestones'], requires: 'plans' },
   { key: 'activity', label: 'Activity', icon: 'activity', group: 'Insight', desc: 'Live map and history of runs', defaultVisibility: 'hidden', aliases: ['canvas', 'runs', 'history', 'graph'] },
-  { key: 'spend', label: 'Spend', icon: 'coins', group: 'Insight', desc: 'Plan use and cost per agent', defaultVisibility: 'hidden', aliases: ['usage', 'cost', 'tokens', 'money', 'billing', 'disk'] }
+  { key: 'spend', label: 'Spend', icon: 'coins', group: 'Insight', desc: 'Plan use and cost', defaultVisibility: 'hidden', aliases: ['usage', 'cost', 'tokens', 'money', 'billing', 'disk'] }
 ]
 
 /** Settings sections that used to be nav items or palette-only pages. */
@@ -72,15 +66,12 @@ export interface SettingsPage {
 }
 export const SETTINGS_PAGES: readonly SettingsPage[] = [
   { section: 'company', label: 'Company settings', desc: 'Name, colour, logo, task prefix, profile', aliases: ['company', 'profile', 'rename company', 'task prefix', 'prefix', 'logo'] },
-  { section: 'team', label: 'Team & autonomy', desc: 'Pause this company, Autopilot, how many tasks run at once', aliases: ['autonomy', 'autopilot', 'pause company', 'tasks at once'] },
   { section: 'connections', label: 'Connections', desc: 'Tools this company’s agents can use: Instagram, Stripe, Slack, GitHub, Linear…', aliases: ['connections', 'connect', 'integrations', 'mcp', 'tools', 'slack', 'notion', 'github', 'stripe', 'instagram', 'linear'] },
   { section: 'repos', label: 'Repositories', desc: 'The code this company’s agents work on', aliases: ['repositories', 'repos'] },
-  { section: 'keys', label: 'Keys & secrets', desc: 'Secrets this company’s agents use, like STRIPE_SECRET_KEY', aliases: ['keys', 'api key', 'api keys', 'env', 'environment variables', 'secrets', 'token'] },
   { section: 'providers', label: 'AI providers', desc: 'Claude and Codex sign-ins, model API keys, profiles (every company)', aliases: ['ai providers', 'providers', 'api key', 'api keys', 'anthropic', 'openai', 'claude', 'codex', 'model', 'cli', 'sign in', 'plan'] },
   { section: 'storage', label: 'Storage', desc: 'Disk, agent folders, logs and Clean up (every company)', aliases: ['storage', 'disk', 'clean up', 'cleanup', 'worktrees', 'data folder', 'logs', 'archived companies', 'unarchive'] },
   { section: 'danger', label: 'Danger zone', desc: 'Export this company’s Knowledge, or archive the company', aliases: ['danger', 'danger zone', 'archive', 'archive company', 'export', 'delete company', 'remove company'] },
   { section: 'notifications', label: 'Notifications', desc: 'Mac notifications when something needs you, and Slack alerts (every company)', aliases: ['notifications', 'notify', 'alerts', 'mac notification', 'sound'] },
-  { section: 'cloud', label: 'Cloud sync', desc: 'Agents online while your Mac sleeps', aliases: ['cloud', 'principia cloud', 'pairing'] }
 ]
 
 export function doorByKey(key: DoorKey): Door {
@@ -99,28 +90,22 @@ export type NavTarget = ViewState | { name: AliasName }
 /** The view a door or More item opens. */
 export function viewFor(key: DoorKey | MoreKey, nonce = Date.now()): ViewState {
   switch (key) {
-    case 'home':
-      return { name: 'home' }
-    case 'team':
-      return { name: 'team' }
-    case 'board':
-      return { name: 'tasks' }
     case 'chats':
       return { name: 'chats' }
+    case 'workflows':
+      return { name: 'workflows' }
     case 'knowledge':
       return { name: 'passport', nonce }
-    case 'automations':
-      return { name: 'schedules', tab: 'routines', nonce }
+    case 'keys':
+      return { name: 'keys' }
+    case 'cloud':
+      return { name: 'cloud' }
     case 'addons':
       return { name: 'marketplace' }
     case 'files':
       return { name: 'artifacts' }
-    case 'forum':
-      return { name: 'forum', nonce }
     case 'slack':
       return { name: 'slack', nonce }
-    case 'plans':
-      return { name: 'plans' }
     case 'activity':
       return { name: 'canvas' }
     case 'spend':
@@ -134,8 +119,17 @@ export function viewFor(key: DoorKey | MoreKey, nonce = Date.now()): ViewState {
  */
 export function resolveView(v: NavTarget): ViewState {
   switch (v.name) {
+    // the old Home, Team, Board, Forum and Plans pages are gone: their links land on Chats
+    case 'home':
+    case 'portfolio':
+    case 'team':
+    case 'department':
+    case 'agentSeat':
+    case 'tasks':
     case 'board':
-      return { name: 'tasks' }
+    case 'forum':
+    case 'plans':
+      return { name: 'chats' }
     case 'knowledge':
       return viewFor('knowledge')
     case 'activity':
@@ -147,13 +141,18 @@ export function resolveView(v: NavTarget): ViewState {
     case 'addons':
       return { name: 'marketplace' }
     case 'automations':
-      return { name: 'schedules' }
+      return { name: 'workflows' }
+    case 'schedules':
+      // Routines and Autopilot are gone; their tabs open Schedules
+      return v.tab === 'routines' || v.tab === 'autopilots' ? { ...v, tab: 'schedules' } : v
     case 'agents':
       return { name: 'chats', filter: 'live' }
-    case 'keys':
-      return { name: 'settings', section: 'keys' }
-    case 'cloud':
-      return { name: 'settings', section: 'cloud' }
+    case 'settings':
+      // Keys and Cloud are doors now; Team & autonomy is gone
+      if (v.section === 'keys') return { name: 'keys' }
+      if (v.section === 'cloud') return { name: 'cloud' }
+      if (v.section === 'team') return { name: 'settings' }
+      return v
     case 'company':
       return { name: 'settings', section: 'company', companyId: v.companyId, create: v.create, nonce: v.nonce }
     default:
@@ -164,44 +163,33 @@ export function resolveView(v: NavTarget): ViewState {
 /** Which door, More item or Settings a view belongs to: the sidebar highlights it, the title names it. */
 export function navKeyOf(view: Pick<ViewState, 'name'>): DoorKey | MoreKey | 'settings' | null {
   switch (view.name) {
-    case 'home':
-    case 'portfolio':
-      return 'home'
-    case 'team':
-    case 'department':
-    case 'agentSeat':
-      return 'team'
-    case 'tasks':
-      return 'board'
     case 'chats':
     case 'agents':
     case 'session':
       return 'chats'
-    case 'passport':
-    case 'memory':
-      return 'knowledge'
     case 'schedules':
     case 'workflows':
     case 'editor':
-      return 'automations'
+      return 'workflows'
+    case 'passport':
+    case 'memory':
+      return 'knowledge'
+    case 'keys':
+      return 'keys'
+    case 'cloud':
+      return 'cloud'
     case 'marketplace':
       return 'addons'
     case 'artifacts':
       return 'files'
-    case 'forum':
-      return 'forum'
     case 'slack':
       return 'slack'
-    case 'plans':
-      return 'plans'
     case 'canvas':
     case 'run':
       return 'activity'
     case 'usage':
       return 'spend'
     case 'settings':
-    case 'keys':
-    case 'cloud':
     case 'company':
       return 'settings'
     default:
@@ -221,10 +209,10 @@ export const VIEW_TITLES: Record<ViewState['name'], string> = {
   chats: 'Chats',
   agents: 'Chats',
   session: 'Chat',
-  passport: 'Knowledge',
-  memory: 'Knowledge',
-  schedules: 'Automations',
-  workflows: 'Automations',
+  passport: 'Memory',
+  memory: 'Memory',
+  schedules: 'Workflows',
+  workflows: 'Workflows',
   editor: 'Workflow',
   marketplace: 'Add-ons',
   artifacts: 'Files',
@@ -234,8 +222,8 @@ export const VIEW_TITLES: Record<ViewState['name'], string> = {
   run: 'Run',
   usage: 'Spend',
   settings: 'Settings',
-  keys: 'Keys & secrets',
-  cloud: 'Cloud sync',
+  keys: 'Keys',
+  cloud: 'Cloud',
   company: 'Company settings'
 }
 
@@ -362,17 +350,15 @@ export interface GoToEntry {
  * tab); the tab the deep links open too.
  */
 const AUTOMATION_TABS: readonly GoToEntry[] = [
-  { id: 'v:routines', label: 'Automations › Routines', hint: 'ready-made daily and weekly routines, one click to turn on', icon: 'refresh', keywords: 'routine routines daily weekly morning brief review triage digest', exact: ['routine', 'routines'], target: { view: { name: 'schedules', tab: 'routines' } } },
-  { id: 'v:autopilots', label: 'Automations › Autopilot', hint: 'what runs by itself: playbooks, Auto-start and schedule packs', icon: 'refresh', keywords: 'autopilot autopilots recurring automatic', exact: ['autopilot', 'autopilots'], target: { view: { name: 'schedules', tab: 'autopilots' } } },
-  { id: 'v:schedules', label: 'Automations › Schedules', hint: 'what runs on a timer', icon: 'clock', keywords: 'schedule schedules cron timer recurring', exact: ['schedule', 'schedules', 'cron'], target: { view: { name: 'schedules', tab: 'schedules' } } },
-  { id: 'v:workflows', label: 'Automations › Workflows', hint: 'multi-step agent workflows and scripts', icon: 'workflows', keywords: 'workflow workflows editor scripts', exact: ['workflow', 'workflows'], target: { view: { name: 'workflows' } } }
+  { id: 'v:schedules', label: 'Workflows › Schedules', hint: 'what runs on a timer', icon: 'clock', keywords: 'schedule schedules cron timer recurring', exact: ['schedule', 'schedules', 'cron'], target: { view: { name: 'schedules', tab: 'schedules' } } },
+  { id: 'v:slack-triggers', label: 'Workflows › Slack triggers', hint: 'workflows a Slack message starts', icon: 'slack', keywords: 'slack trigger triggers', exact: ['triggers'], target: { view: { name: 'schedules', tab: 'slack' } } }
 ]
 export function goToEntries(available: (key: MoreKey) => boolean): GoToEntry[] {
   return [
     ...PRIMARY.map<GoToEntry>((d) => ({ id: `v:${d.key}`, label: d.label, hint: d.desc, icon: d.icon, kbd: d.kbd, keywords: d.aliases.join(' '), exact: d.aliases, target: { door: d.key } })),
     ...MORE.filter((m) => available(m.key)).map<GoToEntry>((m) => ({ id: `v:${m.key}`, label: m.label, hint: m.desc, icon: m.icon, keywords: m.aliases.join(' '), exact: m.exact ?? m.aliases, target: { more: m.key } })),
-    ...(available('automations') ? AUTOMATION_TABS : []),
-    ...SETTINGS_PAGES.map<GoToEntry>((p) => ({ id: `v:set:${p.section}`, label: p.label, hint: `Settings · ${p.desc}`, icon: p.section === 'keys' ? 'keys' : p.section === 'cloud' ? 'globe' : p.section === 'connections' ? 'link' : p.section === 'storage' ? 'folder' : 'settings', keywords: p.aliases.join(' '), exact: p.aliases, target: { settings: p.section } }))
+    ...AUTOMATION_TABS,
+    ...SETTINGS_PAGES.map<GoToEntry>((p) => ({ id: `v:set:${p.section}`, label: p.label, hint: `Settings · ${p.desc}`, icon: p.section === 'connections' ? 'link' : p.section === 'storage' ? 'folder' : 'settings', keywords: p.aliases.join(' '), exact: p.aliases, target: { settings: p.section } }))
   ]
 }
 
@@ -399,7 +385,7 @@ export function customizeRows(prefs: SidebarPrefs, available: (key: MoreKey) => 
   const pos = (r: CustomizeRow): number => (order.includes(r.key) ? order.indexOf(r.key) : order.length + MORE.findIndex((m) => m.key === r.key))
   return items.sort((a, b) => rank(a) - rank(b) || pos(a) - pos(b))
 }
-/** Back to the defaults: the doors, Forum "Show when active", everything else in More (pinned departments stay). */
+/** Back to the defaults: the doors, everything else in More (pinned departments stay). */
 export function resetVisibility(prefs: SidebarPrefs): SidebarPrefs {
   return compact({ pins: (prefs.pins ?? []).filter((p) => p.startsWith('dept:')) })
 }
