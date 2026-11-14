@@ -3,11 +3,11 @@ import { APP_SECTIONS, companySections, normalizeSection, pickTarget, prefixHint
 
 describe('Settings in two scopes (design §2.4)', () => {
   it('This company and App list the sections the step asks for', () => {
-    expect(companySections({ personal: false, code: true }).map((s) => s.label)).toEqual(['General', 'Team & autonomy', 'Connections', 'Repositories', 'Keys & secrets', 'Danger zone'])
+    expect(companySections({ personal: false, code: true }).map((s) => s.label)).toEqual(['General', 'Connections', 'Repositories', 'Danger zone'])
     // no code: no Repositories (Diego's page stays out of Maya's way)
     expect(companySections({ personal: false, code: false }).map((s) => s.id)).not.toContain('repos')
-    expect(companySections({ personal: true, code: false }).map((s) => s.id)).toEqual(['company', 'connections', 'repos', 'keys'])
-    expect(APP_SECTIONS.map((s) => s.label)).toEqual(['General', 'AI providers', 'Notifications', 'Cloud sync', 'Phone', 'Storage', 'Experimental', 'About'])
+    expect(companySections({ personal: true, code: false }).map((s) => s.id)).toEqual(['company', 'connections', 'repos'])
+    expect(APP_SECTIONS.map((s) => s.label)).toEqual(['General', 'AI providers', 'Notifications', 'Phone', 'Storage', 'Experimental', 'About'])
   })
   it('old names still open: Agents → AI providers, Data → Storage', () => {
     expect(normalizeSection('agents')).toBe('providers')
@@ -15,7 +15,7 @@ describe('Settings in two scopes (design §2.4)', () => {
   })
   it('a company page in All companies asks which company first, so keys never list across clients', () => {
     const all = { inCompany: false, personal: false, code: false }
-    expect(resolveSection('keys', all)).toBe('pick')
+    expect(resolveSection('connections', all)).toBe('pick')
     // principia://settings/phone opens App › Phone from anywhere
     expect(resolveSection('phone', all)).toBe('phone')
     expect(resolveSection('connections', all)).toBe('pick')
@@ -24,7 +24,9 @@ describe('Settings in two scopes (design §2.4)', () => {
     const nw = { inCompany: true, personal: false, code: false }
     expect(resolveSection(undefined, nw)).toBe('company')
     expect(resolveSection('repos', nw)).toBe('company')
-    expect(resolveSection('keys', nw)).toBe('keys')
+    // Keys and Team & autonomy are no longer Settings sections (Keys is a door; lib/nav resolves it before Settings)
+    expect(resolveSection('keys', nw)).toBe('company')
+    expect(resolveSection('team', nw)).toBe('company')
   })
   it('the task prefix rule is said before saving', () => {
     const cos = [

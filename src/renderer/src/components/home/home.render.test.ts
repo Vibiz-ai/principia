@@ -318,7 +318,7 @@ function walk(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
   return out
 }
 
-describe('Settings → General: Tone and Agent names and busts (VOICE.md §3.8)', () => {
+describe('Settings → General: Tone (VOICE.md §3.8; agent names and busts retired with the per-agent setup)', () => {
   beforeEach(() => updateSettings.mockClear())
 
   it('renders the rows with the §3.8 copy', async () => {
@@ -328,25 +328,20 @@ describe('Settings → General: Tone and Agent names and busts (VOICE.md §3.8)'
     expect(out).toContain('Playful adds warm copy, Latin with translations and a short launch ceremony.')
     expect(out).toMatch(/aria-checked="true"[^>]*>Playful</)
     expect(out).toContain('>Plain<')
-    expect(out).toContain('Agent names and busts')
-    expect(out).toContain('Give each agent a Roman name and a bust. The role is always shown.')
-    expect(out).toContain('role="switch" aria-checked="true"')
+    expect(out).not.toContain('Agent names and busts')
+    expect(out).not.toContain('role="switch"')
   })
 
-  it('the toggles call updateSettings with tone and personas', async () => {
+  it('the tone toggle calls updateSettings', async () => {
     const { VoiceRows } = await import('../../views/SettingsView')
-    const { Segmented, Switch } = await import('../ui')
+    const { Segmented } = await import('../ui')
     const tree = (VoiceRows as (p: { tone: 'playful' | 'plain'; personas: boolean }) => ReactElement)({ tone: 'playful', personas: true })
     const els = walk(tree)
     const seg = els.find((e) => e.type === Segmented)!.props as { onChange: (v: string) => void }
-    const sw = els.find((e) => e.type === Switch)!.props as { onChange: (v: boolean) => void; checked: boolean }
     seg.onChange('plain')
     expect(updateSettings).toHaveBeenLastCalledWith({ tone: 'plain' })
     seg.onChange('playful')
     expect(updateSettings).toHaveBeenLastCalledWith({ tone: 'playful' })
-    expect(sw.checked).toBe(true)
-    sw.onChange(false)
-    expect(updateSettings).toHaveBeenLastCalledWith({ personas: false })
   })
 })
 

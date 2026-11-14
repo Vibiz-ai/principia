@@ -1,5 +1,5 @@
 /**
- * Team in the sidebar unfolds into departments and their dashboards (TeamNav). Rendered statically, the way the shell's
+ * TeamNav, the department list, is no longer mounted in the sidebar (no Team door); its list still renders. Rendered statically, the way the shell's
  * other render tests do it: the Sidebar with the remembered state in localStorage, and the list itself with dashboards.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -48,45 +48,15 @@ beforeEach(() => {
   })
 })
 
-describe('Team unfolds into departments in the sidebar', () => {
-  it('Team carries a chevron and stays a link to the Team page', async () => {
-    const html = await sidebar()
-    expect(html).toMatch(/role="link" aria-expanded="false"[^>]*title="Team:/)
-    expect(html).toContain('aria-label="Show departments"')
-    expect(html).not.toContain('Engineering')
-  })
-
-  it('remembered open: one row per department of this company, with its open tasks', async () => {
+describe('the sidebar no longer has a Team door (the per-agent setup is retired)', () => {
+  it('lists the five doors and never unfolds departments, even remembered open', async () => {
     remember({ co_acme: { open: true, departments: [] } })
     const html = await sidebar()
-    expect(html).toMatch(/aria-expanded="true"[^>]*title="Team:/)
-    expect(html).toContain('Engineering')
-    expect(html).toContain('Marketing')
-    // only open tasks count; Marketing has none open, so it shows no number
-    expect(html).toContain('aria-label="2 open tasks"')
-    expect(html).not.toContain('Globex Sales')
-  })
-
-  it('the state is per company: another company opens closed', async () => {
-    remember({ co_acme: { open: true, departments: [] } })
-    store.setState({ activeCompanyId: 'co_globex' })
-    expect(await sidebar()).not.toContain('Globex Sales')
-  })
-
-  it('departments off: the list is one row that turns them on', async () => {
-    remember({ co_acme: { open: true, departments: [] } })
-    store.setState({ settings: { experimental: {}, sidebarNav: {} } as never })
-    const html = await sidebar()
-    expect(html).toContain('Turn on departments')
-    expect(html).not.toContain('Engineering')
-  })
-
-  it('All companies: Team is a plain door, no chevron', async () => {
-    remember({ all: { open: true, departments: [] } })
-    store.setState({ activeCompanyId: 'all' })
-    const html = await sidebar()
+    for (const d of ['Chats', 'Workflows', 'Memory', 'Keys', 'Cloud']) expect(html).toMatch(new RegExp(`title="${d}:`))
+    expect(html).not.toMatch(/title="Team:/)
     expect(html).not.toContain('Show departments')
-    expect(html).not.toContain('Hide departments')
+    expect(html).not.toContain('Engineering')
+    expect(html).not.toContain('Turn on departments')
   })
 })
 

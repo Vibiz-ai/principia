@@ -32,9 +32,9 @@ const ctx = (active: string[] = [], available: (k: MoreKey) => boolean = all, de
 
 describe('registry', () => {
   it('has exactly five doors, in the fixed order, on ⌘1-⌘5', () => {
-    expect(PRIMARY.map((d) => d.label)).toEqual(['Home', 'Team', 'Board', 'Chats', 'Knowledge'])
+    expect(PRIMARY.map((d) => d.label)).toEqual(['Chats', 'Workflows', 'Memory', 'Keys', 'Cloud'])
     expect(PRIMARY.map((d) => d.kbd)).toEqual(['⌘1', '⌘2', '⌘3', '⌘4', '⌘5'])
-    expect([1, 2, 3, 4, 5].map(doorForDigit)).toEqual(['home', 'team', 'board', 'chats', 'knowledge'])
+    expect([1, 2, 3, 4, 5].map(doorForDigit)).toEqual(['chats', 'workflows', 'knowledge', 'keys', 'cloud'])
     expect(doorForDigit(6)).toBeNull()
     expect(doorForDigit(0)).toBeNull()
   })
@@ -48,22 +48,21 @@ describe('registry', () => {
 
   it('More holds the secondary pages in three groups, nothing that was moved to Settings', () => {
     expect(moreGroups(all).map((g) => g.group)).toEqual(['Automate', 'Work', 'Insight'])
-    expect(MORE.map((m) => m.label)).toEqual(['Automations', 'Add-ons', 'Files', 'Forum', 'Slack', 'Plans', 'Activity', 'Spend'])
-    // once-ever setup is not a nav item any more
-    for (const gone of ['Keys', 'Cloud', 'Agents', 'Canvas', 'Passport', 'Usage', 'Artifacts', 'Marketplace']) {
+    expect(MORE.map((m) => m.label)).toEqual(['Add-ons', 'Files', 'Slack', 'Activity', 'Spend'])
+    // the retired pages are not nav items any more
+    for (const gone of ['Home', 'Team', 'Board', 'Forum', 'Plans', 'Automations', 'Agents', 'Canvas', 'Passport', 'Usage', 'Artifacts', 'Marketplace']) {
       expect(MORE.some((m) => m.label === gone) || PRIMARY.some((d) => d.label === gone)).toBe(false)
     }
   })
 
-  it('leaves out what is unavailable (Plans behind its flag)', () => {
-    const noPlans = moreGroups((k) => k !== 'plans')
-    expect(noPlans.flatMap((g) => g.items.map((i) => i.key))).not.toContain('plans')
-    expect(goToEntries((k) => k !== 'plans').some((e) => e.label === 'Plans')).toBe(false)
+  it('leaves out what is unavailable', () => {
+    const noSlack = moreGroups((k) => k !== 'slack')
+    expect(noSlack.flatMap((g) => g.items.map((i) => i.key))).not.toContain('slack')
+    expect(goToEntries((k) => k !== 'slack').some((e) => e.label === 'Slack')).toBe(false)
   })
 
-  it('a new user sees 7 rows: nothing pinned, Forum only "Show when active"', () => {
-    expect(MORE.filter((m) => m.defaultVisibility === 'always')).toEqual([])
-    expect(visibilityOf({}, 'forum')).toBe('active')
+  it('a new user sees 7 rows: nothing pinned, everything in More hidden', () => {
+    expect(MORE.filter((m) => m.defaultVisibility !== 'hidden')).toEqual([])
     expect(pinnedRefs({}, ctx())).toEqual([])
     // PRIMARY (5) + More + Settings
     expect(PRIMARY.length + 2).toBe(7)
@@ -73,14 +72,25 @@ describe('registry', () => {
 describe('aliases (old routes keep working)', () => {
   const cases: [ViewState | { name: string }, ViewState | Partial<ViewState>][] = [
     [{ name: 'agents' }, { name: 'chats', filter: 'live' }],
-    [{ name: 'keys' }, { name: 'settings', section: 'keys' }],
-    [{ name: 'cloud' }, { name: 'settings', section: 'cloud' }],
-    [{ name: 'board' }, { name: 'tasks' }],
+    [{ name: 'keys' }, { name: 'keys' }],
+    [{ name: 'cloud' }, { name: 'cloud' }],
+    [{ name: 'settings', section: 'keys' }, { name: 'keys' }],
+    [{ name: 'settings', section: 'cloud' }, { name: 'cloud' }],
+    [{ name: 'settings', section: 'team' }, { name: 'settings' }],
+    [{ name: 'board' }, { name: 'chats' }],
+    [{ name: 'home' }, { name: 'chats' }],
+    [{ name: 'portfolio' }, { name: 'chats' }],
+    [{ name: 'team' }, { name: 'chats' }],
+    [{ name: 'tasks' }, { name: 'chats' }],
+    [{ name: 'forum' }, { name: 'chats' }],
+    [{ name: 'plans' }, { name: 'chats' }],
+    [{ name: 'schedules', tab: 'routines' }, { name: 'schedules', tab: 'schedules' }],
+    [{ name: 'schedules', tab: 'autopilots' }, { name: 'schedules', tab: 'schedules' }],
     [{ name: 'activity' }, { name: 'canvas' }],
     [{ name: 'files' }, { name: 'artifacts' }],
     [{ name: 'spend' }, { name: 'usage' }],
     [{ name: 'addons' }, { name: 'marketplace' }],
-    [{ name: 'automations' }, { name: 'schedules' }]
+    [{ name: 'automations' }, { name: 'workflows' }]
   ]
   it.each(cases)('%o resolves to %o', (from, to) => {
     expect(resolveView(from as never)).toEqual(to)
@@ -108,21 +118,20 @@ describe('aliases (old routes keep working)', () => {
   })
 
   it('every view highlights its door (or More item) and has a nav-word title', () => {
-    expect(navKeyOf({ name: 'department' })).toBe('team')
-    expect(navKeyOf({ name: 'agentSeat' })).toBe('team')
     expect(navKeyOf({ name: 'session' })).toBe('chats')
     expect(navKeyOf({ name: 'agents' })).toBe('chats')
     expect(navKeyOf({ name: 'memory' })).toBe('knowledge')
-    expect(navKeyOf({ name: 'portfolio' })).toBe('home')
-    expect(navKeyOf({ name: 'editor' })).toBe('automations')
+    expect(navKeyOf({ name: 'editor' })).toBe('workflows')
+    expect(navKeyOf({ name: 'schedules' })).toBe('workflows')
     expect(navKeyOf({ name: 'run' })).toBe('activity')
     expect(navKeyOf({ name: 'company' })).toBe('settings')
     for (const k of [...PRIMARY.map((d) => d.key), ...MORE.map((m) => m.key)]) expect(navKeyOf(viewFor(k))).toBe(k)
     expect(VIEW_TITLES.canvas).toBe('Activity')
-    expect(VIEW_TITLES.passport).toBe('Knowledge')
+    expect(VIEW_TITLES.passport).toBe('Memory')
     expect(VIEW_TITLES.usage).toBe('Spend')
     expect(VIEW_TITLES.artifacts).toBe('Files')
-    expect(VIEW_TITLES.tasks).toBe('Board')
+    expect(VIEW_TITLES.keys).toBe('Keys')
+    expect(VIEW_TITLES.cloud).toBe('Cloud')
   })
 })
 
@@ -131,17 +140,18 @@ describe('palette labels match the nav', () => {
     const entries = goToEntries(all)
     expect(entries.filter((e) => 'door' in e.target).map((e) => [e.label, e.kbd])).toEqual(PRIMARY.map((d) => [d.label, d.kbd]))
     expect(entries.filter((e) => 'more' in e.target).map((e) => e.label)).toEqual(MORE.map((m) => m.label))
-    expect(entries.filter((e) => 'settings' in e.target).map((e) => e.label)).toEqual(['Company settings', 'Team & autonomy', 'Connections', 'Repositories', 'Keys & secrets', 'AI providers', 'Storage', 'Danger zone', 'Notifications', 'Cloud sync'])
+    expect(entries.filter((e) => 'settings' in e.target).map((e) => e.label)).toEqual(['Company settings', 'Connections', 'Repositories', 'AI providers', 'Storage', 'Danger zone', 'Notifications'])
   })
 
   it('old names are search keywords, never labels', () => {
     const byLabel = Object.fromEntries(goToEntries(all).map((e) => [e.label, e.keywords]))
     expect(byLabel.Activity).toContain('canvas')
-    expect(byLabel.Knowledge).toContain('passport')
+    expect(byLabel.Memory).toContain('passport')
     expect(byLabel.Spend).toContain('usage')
     expect(byLabel.Files).toContain('artifacts')
     expect(byLabel.Chats).toContain('session')
-    expect(byLabel['Keys & secrets']).toContain('api key')
+    expect(byLabel.Keys).toContain('api key')
+    expect(byLabel.Workflows).toContain('schedules')
   })
 })
 
@@ -160,20 +170,17 @@ describe('pins and visibility', () => {
     expect(p).toEqual({})
   })
 
-  it('Forum shows only while it has something for you, unless pinned; unpinning returns it to "Show when active"', () => {
-    expect(pinnedRefs({}, ctx())).toEqual([])
-    expect(pinnedRefs({}, ctx(['forum']))).toEqual(['forum'])
-    const pinned = togglePin({}, 'forum')
-    expect(pinnedRefs(pinned, ctx())).toEqual(['forum'])
-    const unpinned = togglePin(pinned, 'forum')
-    expect(visibilityOf(unpinned, 'forum')).toBe('active')
-    expect(unpinned).toEqual({})
+  it('a "Show when active" item shows only while it has something for you, unless pinned', () => {
+    const active = setVisibility({}, 'slack', 'active')
+    expect(pinnedRefs(active, ctx())).toEqual([])
+    expect(pinnedRefs(active, ctx(['slack']))).toEqual(['slack'])
+    const pinned = togglePin(active, 'slack')
+    expect(pinnedRefs(pinned, ctx())).toEqual(['slack'])
   })
 
   it('Hidden hides even an active item', () => {
-    const p = setVisibility({}, 'forum', 'hidden')
-    expect(pinnedRefs(p, ctx(['forum']))).toEqual([])
-    expect(p.visibility).toEqual({ forum: 'hidden' })
+    expect(pinnedRefs({}, ctx(['slack']))).toEqual([])
+    expect(visibilityOf({}, 'slack')).toBe('hidden')
   })
 
   it('departments pin by ref and vanish when the department is gone', () => {
@@ -185,7 +192,7 @@ describe('pins and visibility', () => {
   })
 
   it('skips unknown keys and unavailable items, and lists Always-show items with no pin order', () => {
-    expect(pinnedRefs({ pins: ['nope', 'plans'], visibility: { plans: 'always' } }, ctx([], (k) => k !== 'plans'))).toEqual([])
+    expect(pinnedRefs({ pins: ['nope', 'slack'], visibility: { slack: 'always' } }, ctx([], (k) => k !== 'slack'))).toEqual([])
     expect(pinnedRefs({ visibility: { spend: 'always' } }, ctx())).toEqual(['spend'])
   })
 
@@ -228,12 +235,12 @@ describe('five doors step 5: Customize sidebar', () => {
   it('lists Always show (in pin order), then Show when active, then Hidden; doors are not rows', () => {
     let p = setVisibility({}, 'spend', 'always')
     p = setVisibility(p, 'files', 'always')
-    p = setVisibility(p, 'automations', 'active')
+    p = setVisibility(p, 'slack', 'active')
     const rows = customizeRows(p, all)
     expect(rows.slice(0, 2).map((r) => r.key)).toEqual(['spend', 'files'])
-    expect(rows.filter((r) => r.visibility === 'active').map((r) => r.key)).toEqual(['automations', 'forum'])
-    expect(rows.some((r) => (r.key as string) === 'home')).toBe(false)
-    expect(rows.find((r) => r.key === 'forum')!.isDefault).toBe(true)
+    expect(rows.filter((r) => r.visibility === 'active').map((r) => r.key)).toEqual(['slack'])
+    expect(rows.some((r) => (r.key as string) === 'chats')).toBe(false)
+    expect(rows.find((r) => r.key === 'activity')!.isDefault).toBe(true)
   })
   it('moves a pin up and down and leaves the ends alone', () => {
     const p = { pins: ['spend', 'files', 'dept:dep_a'] }
@@ -242,12 +249,12 @@ describe('five doors step 5: Customize sidebar', () => {
     expect(movePin(p, 'nope', 1)).toBe(p)
   })
   it('reset goes back to the defaults and keeps pinned departments', () => {
-    const p = setVisibility(setVisibility({ pins: ['dept:dep_a'] }, 'spend', 'always'), 'forum', 'hidden')
+    const p = setVisibility(setVisibility({ pins: ['dept:dep_a'] }, 'spend', 'always'), 'slack', 'active')
     const r = resetVisibility(p)
     expect(r).toEqual({ pins: ['dept:dep_a'] })
-    expect(visibilityOf(r, 'forum')).toBe('active')
+    expect(visibilityOf(r, 'slack')).toBe('hidden')
   })
-  it('hides an unavailable item (Plans without its flag)', () => {
-    expect(customizeRows({}, (k) => k !== 'plans').some((r) => r.key === 'plans')).toBe(false)
+  it('hides an unavailable item', () => {
+    expect(customizeRows({}, (k) => k !== 'slack').some((r) => r.key === 'slack')).toBe(false)
   })
 })

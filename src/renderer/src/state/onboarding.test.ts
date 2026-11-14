@@ -609,8 +609,12 @@ describe('store: onboarding slice', () => {
     await m.refreshCompanies()
   })
 
-  it('openNewCompany opens the flow in new mode with a fresh draft; openQuickCompany opens the old sheet', () => {
+  it('openNewCompany opens the quick sheet now; the flow still opens in new mode with a fresh draft', () => {
     m.openNewCompany()
+    expect(m.getState().onboarding).toBeNull()
+    expect(m.getState().newCompanyOpen).toBe(true)
+    m.closeNewCompany()
+    m.openOnboarding('new')
     const s = m.getState()
     expect(s.onboarding).toEqual({ open: true, mode: 'new', resumable: false })
     expect(s.onboardingDraft!.step).toBe('start')
@@ -622,7 +626,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('closeOnboarding saves the draft and toasts; reopening resumes it with the banner', () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.onboardingDispatch({ type: 'chooseCode', hasCode: false })
     m.onboardingDispatch({ type: 'next' })
     m.onboardingDispatch({ type: 'setAnswers', patch: { name: 'Sunday Bakery' } })
@@ -633,7 +637,7 @@ describe('store: onboarding slice', () => {
     expect(stored.answers.name).toBe('Sunday Bakery')
     // a new session: the in-memory draft is gone, the stored one resumes
     m.setState({ onboardingDraft: null })
-    m.openNewCompany()
+    m.openOnboarding('new')
     expect(m.getState().onboarding!.resumable).toBe(true)
     expect(m.getState().onboardingDraft!.step).toBe('name')
     m.continueOnboarding()
@@ -641,7 +645,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('Start over forgets the stashed key and starts fresh', () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'content', content: { wants: true, provider: 'fal', keySource: 'stash', stashId: 'ks_9', last4: '4f2a', vibizInterest: false } } })
     m.startOverOnboarding()
     expect(keyCalls).toEqual([{ op: 'forget', stashIds: ['ks_9'] }])
@@ -660,7 +664,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('close is refused while launching or failed', () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'launching' } })
     expect(m.closeOnboarding()).toBe(false)
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'failed' } })
@@ -679,15 +683,9 @@ describe('store: onboarding slice', () => {
     expect(m.isFirstRun()).toBe(false)
   })
 
-  it('after boot: first run opens in first mode once per session; repos or more companies do not', async () => {
+  it('after boot: a first run no longer opens the retired team setup; it lands on Chats', async () => {
     status = { firstRun: true, journal: null, providers: [], claudeCli: false, flags: {}, sharedKeys: { FAL_KEY: false, OPENAI_API_KEY: false, FIRECRAWL_API_KEY: false }, gh: 'missing', defaultCloneDir: '/p', waitlistUrl: null }
-    m.setState({ repos: [{ id: 'r1' } as never] })
-    await m.detectOnboarding()
-    expect(m.getState().onboarding).toBeNull()
     m.setState({ repos: [] })
-    await m.detectOnboarding()
-    expect(m.getState().onboarding!.mode).toBe('first')
-    m.discardOnboarding()
     await m.detectOnboarding()
     expect(m.getState().onboarding).toBeNull()
   })
@@ -715,7 +713,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('progress events feed the live list; a failure moves the draft to failed', () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'launching', journalId: 'j_2' } })
     const emit = (e: ProgressEvent): void => progressListeners.get('onboarding:progress')!(e)
     m.wireOnboardingEvents()
@@ -728,9 +726,9 @@ describe('store: onboarding slice', () => {
     expect(m.getState().onboardingDraft!.step).toBe('failed')
   })
 
-  it('closing on Ready (+ New company) lands on the new company Board', async () => {
+  it('closing on Ready (+ New company) lands on the new company\'s Chats', async () => {
     companies = [CO('co_new', 'Sunday Bakery'), CO('co_personal', 'Personal', { system: 'personal' })]
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'ready', journalId: 'j_ready' } })
     status = { firstRun: false, journal: { id: 'j_ready', draftId: m.getState().onboardingDraft!.id, mode: 'new', status: 'done', companyId: 'co_new', companyName: 'Sunday Bakery', steps: [], scheduleRefs: [], updatedAt: '' }, providers: [], claudeCli: false, flags: {}, sharedKeys: { FAL_KEY: false, OPENAI_API_KEY: false, FIRECRAWL_API_KEY: false }, gh: 'missing', defaultCloneDir: '/p', waitlistUrl: null }
     expect(m.closeOnboarding()).toBe(true)
@@ -740,10 +738,10 @@ describe('store: onboarding slice', () => {
     expect(s.onboarding).toBeNull()
     expect(s.onboardingDraft).toBeNull()
     expect(s.activeCompanyId).toBe('co_new')
-    expect(s.view).toEqual({ name: 'tasks' })
+    expect(s.view).toEqual({ name: 'chats' })
   })
 
-  it('finishOnboarding enters the company and lands on Home or the Board', async () => {
+  it('finishOnboarding enters the company and lands on Chats', async () => {
     companies = [CO('co_new', 'Sunday Bakery'), CO('co_personal', 'Personal', { system: 'personal' })]
     m.openOnboarding('first')
     await m.finishOnboarding('co_new', 'board')
@@ -751,10 +749,10 @@ describe('store: onboarding slice', () => {
     expect(s.onboarding).toBeNull()
     expect(s.onboardingDraft).toBeNull()
     expect(s.activeCompanyId).toBe('co_new')
-    expect(s.view).toEqual({ name: 'tasks' })
+    expect(s.view).toEqual({ name: 'chats' })
     expect(s.settings!.onboardingDone).toBe(true)
     await m.finishOnboarding('co_new', 'home')
-    expect(m.getState().view).toEqual({ name: 'home' })
+    expect(m.getState().view).toEqual({ name: 'chats' })
   })
 
   it('finishOnboarding re-reads onboarding:status, so the launched milestone sees the finished journal at once', async () => {
@@ -767,7 +765,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('requestOnboardingPlan swaps an unedited plan and offers next to an edited one', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     for (const a of [{ type: 'chooseCode', hasCode: false }, { type: 'next' }, { type: 'setAnswers', patch: { name: 'Sunday Bakery', goals: ['customers'] } }, { type: 'next' }, { type: 'next' }, { type: 'next' }, { type: 'next' }] as OnboardingAction[]) m.onboardingDispatch(a)
     const d = m.getState().onboardingDraft!
     expect(d.step).toBe('plan')
@@ -788,7 +786,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('a newer plan request supersedes an older one', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     for (const a of [{ type: 'chooseCode', hasCode: false }, { type: 'next' }, { type: 'setAnswers', patch: { name: 'X', goals: ['customers'] } }, { type: 'next' }, { type: 'next' }, { type: 'next' }, { type: 'next' }] as OnboardingAction[]) m.onboardingDispatch(a)
     const d = m.getState().onboardingDraft!
     const tpl = planFor(d, m.onboardingPlanContext())
@@ -806,7 +804,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('a stash the draft drops (provider switch) is forgotten in main; Discard forgets it too', () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'content', content: { wants: true, provider: 'fal', keySource: 'stash', stashId: 'ks_1', last4: '4f2a', vibizInterest: false } } })
     m.onboardingDispatch({ type: 'setProvider', provider: 'openai' })
     expect(keyCalls).toEqual([{ op: 'forget', stashIds: ['ks_1'] }])
@@ -816,23 +814,23 @@ describe('store: onboarding slice', () => {
   })
 
   it('a saved draft stuck on the live list resumes at Plan when main has no journal for it', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'launching', history: ['start', 'name', 'about', 'voice', 'goals', 'plan'], journalId: 'j_gone' } })
     expect(m.closeOnboarding()).toBe(false)
     m.setState({ onboarding: null })
     status = { firstRun: false, journal: null, providers: [], claudeCli: false, flags: {}, sharedKeys: { FAL_KEY: false, OPENAI_API_KEY: false, FIRECRAWL_API_KEY: false }, gh: 'missing', defaultCloneDir: '/p', waitlistUrl: null }
-    m.openNewCompany()
+    m.openOnboarding('new')
     await flush()
     expect(m.getState().onboardingDraft!.step).toBe('plan')
     expect(m.closeOnboarding()).toBe(true)
   })
 
   it('a saved draft whose journal is done closes instead of resuming (the company exists)', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     const id = m.getState().onboardingDraft!.id
     m.setState({ onboardingDraft: { ...m.getState().onboardingDraft!, step: 'launching', journalId: 'j_done' }, onboarding: null })
     status = { firstRun: false, journal: { id: 'j_done', draftId: id, mode: 'new', status: 'done', companyId: 'co_new', companyName: 'Sunday Bakery', steps: [], scheduleRefs: [], updatedAt: '' }, providers: [], claudeCli: false, flags: {}, sharedKeys: { FAL_KEY: false, OPENAI_API_KEY: false, FIRECRAWL_API_KEY: false }, gh: 'missing', defaultCloneDir: '/p', waitlistUrl: null }
-    m.openNewCompany()
+    m.openOnboarding('new')
     await flush()
     expect(m.getState().onboarding).toBeNull()
     expect(m.getState().onboardingDraft).toBeNull()
@@ -845,7 +843,7 @@ describe('store: onboarding slice', () => {
   })
 
   it('an offered plan is dropped once the answers change; a launch cancels the plan call', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     for (const a of [{ type: 'chooseCode', hasCode: false }, { type: 'next' }, { type: 'setAnswers', patch: { name: 'Sunday Bakery', goals: ['customers'] } }, { type: 'next' }, { type: 'next' }, { type: 'next' }, { type: 'next' }] as OnboardingAction[]) m.onboardingDispatch(a)
     const d = m.getState().onboardingDraft!
     const ctx = m.onboardingPlanContext()

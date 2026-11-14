@@ -8,13 +8,12 @@ const newSch = { id: 'a:newSch', label: 'New Schedule', group: 'Actions' }
 const items = [pauseAll, newSch, ...goTo]
 
 describe('palette ranking', () => {
-  it('an old nav word lands on its new door, never on a global action ("schedules" → Automations)', () => {
-    // an old name lands on its own tab of Automations ("Schedules" ↵ never opens Autopilots)
+  it('an old nav word lands on its new door, never on a global action ("automations" → Workflows)', () => {
+    // an old name lands on its own tab of Workflows
     expect(rankPalette(items, 'schedules')[0]!.id).toBe('v:schedules')
     expect(rankPalette(items, 'Schedules')[0]!.id).toBe('v:schedules')
     expect(rankPalette(items, 'Workflows')[0]!.id).toBe('v:workflows')
-    expect(rankPalette(items, 'autopilot')[0]!.id).toBe('v:autopilots')
-    expect(rankPalette(items, 'automations')[0]!.id).toBe('v:automations')
+    expect(rankPalette(items, 'automations')[0]!.id).toBe('v:workflows')
     expect(rankPalette(items, 'canvas')[0]!.id).toBe('v:activity')
     expect(rankPalette(items, 'passport')[0]!.id).toBe('v:knowledge')
     expect(rankPalette(items, 'usage')[0]!.id).toBe('v:spend')
@@ -35,9 +34,9 @@ describe('palette ranking', () => {
 })
 
 describe('palette synonyms (design §9)', () => {
-  it('"api key" finds both Keys & secrets and AI providers; "connections" and "linear" find their pages', () => {
+  it('"api key" finds both Keys and AI providers; "connections" and "linear" find their pages', () => {
     const top = (q: string, n = 2): string[] => rankPalette(goTo, q).slice(0, n).map((x) => x.id)
-    expect(top('api key')).toEqual(['v:set:keys', 'v:set:providers'])
+    expect(top('api key')).toEqual(['v:keys', 'v:set:providers'])
     expect(top('connections', 1)).toEqual(['v:set:connections'])
     // step 4: Linear and Instagram are cards in Connections
     expect(top('linear', 1)).toEqual(['v:set:connections'])
@@ -73,8 +72,9 @@ describe('Automations tabs in ⌘K', () => {
   it('each old name opens its own tab', () => {
     const by = Object.fromEntries(goToEntries(() => true).map((g) => [g.id, g.target]))
     expect(by['v:schedules']).toEqual({ view: { name: 'schedules', tab: 'schedules' } })
-    expect(by['v:workflows']).toEqual({ view: { name: 'workflows' } })
-    expect(by['v:autopilots']).toEqual({ view: { name: 'schedules', tab: 'autopilots' } })
-    expect(goToEntries((k) => k !== 'automations').some((g) => g.id === 'v:schedules')).toBe(false)
+    expect(by['v:slack-triggers']).toEqual({ view: { name: 'schedules', tab: 'slack' } })
+    expect(by['v:workflows']).toEqual({ door: 'workflows' })
+    expect(by['v:autopilots']).toBeUndefined()
+    expect(by['v:routines']).toBeUndefined()
   })
 })

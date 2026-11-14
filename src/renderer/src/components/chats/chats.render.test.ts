@@ -48,15 +48,15 @@ beforeAll(async () => {
 })
 
 describe('Chats switches the sidebar', () => {
-  it('shows the conversations list in the sidebar itself, with Menu, Home/Team/Board, New conversation, search and the filters', async () => {
+  it('shows the conversations list in the sidebar itself, with Menu, the other doors, New conversation, search and the filters', async () => {
     const store = await import('../../state/store')
     // the direct chat is open, so Julia's unread answer keeps its dot
     store.setState({ view: { name: 'chats', filter: 'all', chat: 'session:sess_direct' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toContain('aria-label="Back to the menu"')
-    // CHAT-UI.md §7: Home, Team and Board stay one click away (the synthetic users lost their menu here)
-    for (const d of ['Home (⌘1)', 'Team (⌘2)', 'Board (⌘3)']) expect(html).toContain(`aria-label="${d}"`)
+    // CHAT-UI.md §7: the other doors stay one click away (the synthetic users lost their menu here)
+    for (const d of ['Workflows (⌘2)', 'Keys (⌘4)', 'Cloud (⌘5)']) expect(html).toContain(`aria-label="${d}"`)
     expect(html).toContain('placeholder="Search chats"')
     for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
     expect(html).toContain('>New task<')
@@ -73,13 +73,13 @@ describe('Chats switches the sidebar', () => {
   })
   it('anywhere else the sidebar is the menu, with New conversation on top', async () => {
     const store = await import('../../state/store')
-    store.setState({ view: { name: 'home' } })
+    store.setState({ view: { name: 'workflows' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
     expect(html).toContain('Search or ask…')
     expect(html).not.toContain('Back to the menu')
-    expect(html.indexOf('>New task<')).toBeGreaterThan(-1)
-    expect(html.indexOf('>New task<')).toBeLessThan(html.indexOf('Search or ask…'))
+    expect(html.indexOf('>New chat<')).toBeGreaterThan(-1)
+    expect(html.indexOf('>New chat<')).toBeLessThan(html.indexOf('Search or ask…'))
   })
 })
 
