@@ -69,6 +69,8 @@ function onEvent(e: CloudDesktopEvent): void {
     return
   }
   if (e.kind === 'changes') return refreshSoon()
+  // docs/MACHINES.md: the Cloud page's useMachine follows these itself
+  if (e.kind === 'machine') return
   const ev = e.event
   if (ev.kind === 'run') set((s) => ({ runs: [ev.run, ...s.runs.filter((r) => r.id !== ev.run.id)] }))
   else if (ev.kind === 'ask') set((s) => ({ asks: [ev.ask, ...s.asks.filter((a) => a.id !== ev.ask.id)] }))

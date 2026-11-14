@@ -4,6 +4,8 @@
  * vault, gateway, git) and Mac-side account linking through node-pty. Built lazily by `Hive.cloud`.
  */
 import { execFile } from 'node:child_process'
+import dns from 'node:dns/promises'
+import os from 'node:os'
 import { app, safeStorage } from 'electron'
 import type { CloudAdapter, ProviderTestResponse, PutProviderCredentialRequest } from '../../shared/cloud'
 import type { Id } from '../../shared/types'
@@ -19,6 +21,9 @@ import { AccountLogins, type LoginProc } from './logins'
 import { CloudAccountsSync } from './accounts'
 import { ghToken } from '../onboarding/github'
 import type { MoveDeps } from './move'
+import { CloudMachines } from './machines'
+import { runSsh, sshPublicKey } from './machines/local'
+import { digitalocean, hetzner } from './machines/providers'
 
 export interface CloudWiring {
   link: CloudLink
@@ -26,6 +31,8 @@ export interface CloudWiring {
   move: MoveDeps
   /** docs/ACCOUNTS.md: GitHub and the Shared keys marked "In the cloud" */
   accounts: CloudAccountsSync
+  /** docs/MACHINES.md: the cloud machine made from this Mac */
+  machines: CloudMachines
 }
 
 /** node-pty loads its native binding on import: load it at the first sign-in only (tests build a Hive without it). */
@@ -143,5 +150,37 @@ export function createCloud(h: Hive): CloudWiring {
     },
     log
   })
-  return { link, logins, move, accounts }
+  const machines = new CloudMachines({
+    userData,
+    cipher,
+    emit: (machine) => emit('cloud', { kind: 'machine', machine }),
+    api: (provider, token) => (provider === 'hetzner' ? hetzner(token) : digitalocean(token)),
+    sshPublicKey,
+    runSsh: (t, script, line) => runSsh(t, script, line, baseChildEnv()),
+    resolve: async (host) => (await dns.lookup(host, { family: 4 })).address,
+    pair: async (url, code) => {
+      await link.pair({ url, code })
+    },
+    linkedUrl: () => (link.linked ? link.state().url : null),
+    unlink: async () => {
+      logins.cancel()
+      await link.unlink()
+    },
+    bring: {
+      keys: async () => void (await accounts.sync()),
+      github: async () => void (await accounts.connectGithub({})),
+      login: async (adapter) => {
+        const s = await logins.start(adapter)
+        return { ok: s.phase === 'done', detail: s.message }
+      }
+    },
+    version: app.getVersion(),
+    // dev and self-builders: another image, or another ref of the public source to build from
+    image: process.env.PRINCIPIA_CLOUD_IMAGE || undefined,
+    sourceRef: process.env.PRINCIPIA_CLOUD_REF || undefined,
+    hostName: os.hostname().replace(/\.local$/, '').slice(0, 40),
+    log
+  })
+  return { link, logins, move, accounts, machines }
 }
+

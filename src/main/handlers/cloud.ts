@@ -154,6 +154,24 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
   handle('cloud:keyCloud', ({ name, on }) => accounts.setKey(name, on))
   handle('cloud:keysSync', () => accounts.sync())
 
+  // docs/MACHINES.md: make the cloud from here
+  const machines = () => {
+    if (!cloud.machines) throw new HiveError('not_implemented', 'Making a cloud is not available here.')
+    return cloud.machines
+  }
+  handle('cloud:machine', () => cloud.machines?.view() ?? null)
+  handle('cloud:machineOptions', ({ provider, token }) => machines().options(provider, token))
+  handle('cloud:machineCreate', (q) => machines().create(q))
+  handle('cloud:machineRetry', () => machines().retry())
+  handle('cloud:machineDelete', async () => {
+    logins.cancel()
+    const r = await machines().remove()
+    emit('data:changed', { domain: 'schedules' })
+    return r
+  })
+  // a machine that was being made when the app quit goes on
+  cloud.machines?.resume()
+
   // while linked: poll every 30 s and follow /v1/events (a revoked device stops itself)
   link.start()
 }

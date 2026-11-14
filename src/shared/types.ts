@@ -891,3 +891,5 @@ export type CloudDesktopEvent =
   | { kind: 'state'; state: CloudLinkState }
   | { kind: 'changes'; runs: number; asks: number }
   | { kind: 'event'; event: import('./cloud').CloudEvent }
+  /** docs/MACHINES.md: the cloud machine this Mac is making or made (null: none) */
+  | { kind: 'machine'; machine: import('./machines').MachineView | null }

@@ -23,7 +23,14 @@ RUN npx vite build --config vite.cloud.config.ts \
  && npm prune --omit=dev --ignore-scripts
 
 FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client && rm -rf /var/lib/apt/lists/*
+# What agents reach for in a run (docs/MACHINES.md §4): git and gh (signed in through GH_TOKEN and the run's askpass),
+# search and JSON tools, Python, a compiler toolchain for native modules, and the usual archive and network tools.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates openssh-client gh \
+      ripgrep fd-find jq curl wget less procps file unzip zip xz-utils bzip2 \
+      python3 python3-pip python3-venv build-essential pkg-config \
+ && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+ && rm -rf /var/lib/apt/lists/*
 # the Claude Code, Codex and Gemini CLIs, at the versions and hashes in the lockfile, linked onto the sandbox PATH
 WORKDIR /opt/agent-clis
 COPY cloud/agent-clis/package.json cloud/agent-clis/package-lock.json ./

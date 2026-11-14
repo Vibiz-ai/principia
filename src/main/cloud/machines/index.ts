@@ -1,0 +1,414 @@
+/**
+ * docs/MACHINES.md: one click makes your cloud. CloudMachines drives a machine through its phases and survives an app
+ * restart (the state is `<userData>/cloud-machine.json`, 0600, secrets encrypted with safeStorage):
+ *
+ *   creating → booting → installing → pairing → signing-in → ready      (or failed, with the phase it stopped at)
+ *
+ * - creating: the provider API makes the server (Ubuntu 24.04, this Mac's SSH key, the bootstrap script as user-data).
+ *   On "My own server" the script runs over SSH instead, and creating/booting are skipped.
+ * - installing: waits until https://<ip>.sslip.io/v1/health answers with a valid certificate.
+ * - pairing: POST /v1/pair/start with the one-time admin token (the machine knows only its hash), then the normal
+ *   pairing. The admin token is forgotten right after.
+ * - signing-in: the Shared keys marked "In the cloud" and this Mac's GitHub go up (docs/ACCOUNTS.md). Then the machine
+ *   is ready, and the Claude and Codex sign-ins you chose open in the browser, one after the other.
+ *
+ * The provider token is kept (encrypted) only so "Delete machine" can delete the server. Nothing secret reaches the
+ * renderer, an event or a log line.
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
+import { HiveError } from '../../../shared/errors'
+import {
+  IPV4_RE,
+  MACHINE_PROVIDER_INFO,
+  isPrivateIpv4,
+  sslipHost,
+  type CreateMachineRequest,
+  type MachineBring,
+  type MachineOptions,
+  type MachinePhase,
+  type MachineProvider,
+  type MachineView
+} from '../../../shared/machines'
+import type { Cipher } from '../../vault'
+import { bootstrapScript } from './bootstrap'
+import type { MachineApi } from './providers'
+
+export const MACHINE_FILE = 'cloud-machine.json'
+const LIVE: MachinePhase[] = ['creating', 'booting', 'installing', 'pairing', 'signing-in']
+
+interface MachineFile extends Omit<MachineView, 'notes'> {
+  v: 1
+  notes: string[]
+  /** base64 safeStorage ciphertext of the provider API token */
+  token: string | null
+  /** base64 safeStorage ciphertext of the one-time admin token, until pairing used it */
+  admin: string | null
+  ssh: { host: string; user: string; port: number } | null
+}
+
+export interface MachineDeps {
+  userData: string
+  cipher: Cipher
+  emit(view: MachineView | null): void
+  api(provider: Exclude<MachineProvider, 'ssh'>, token: string): MachineApi
+  /** this Mac's SSH public key (~/.ssh/id_ed25519.pub…), or null */
+  sshPublicKey(): string | null
+  /** runs the script as root on the server; `line` gets its output lines */
+  runSsh(target: { host: string; user: string; port: number }, script: string, line: (l: string) => void): Promise<{ code: number | null; tail: string }>
+  /** the IPv4 a host name resolves to */
+  resolve(host: string): Promise<string>
+  /** pairs this Mac's CloudLink with a code (link.pair) */
+  pair(url: string, code: string): Promise<void>
+  /** the URL this Mac is linked to, or null */
+  linkedUrl(): string | null
+  unlink(): Promise<void>
+  bring: {
+    keys(): Promise<void>
+    github(): Promise<void>
+    /** opens the browser sign-in for the cloud and resolves when it ended */
+    login(adapter: 'claude' | 'codex'): Promise<{ ok: boolean; detail: string | null }>
+  }
+  /** app version: the image tag and the source tag to build from */
+  version: string
+  image?: string
+  sourceRef?: string
+  hostName?: string
+  fetch?: typeof fetch
+  now?: () => Date
+  sleep?: (ms: number) => Promise<void>
+  log?: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
+  timeouts?: { bootMs?: number; installMs?: number; pollMs?: number }
+}
+
+const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
+const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+export class CloudMachines {
+  private file: MachineFile | null = null
+  private driving: Promise<void> | null = null
+  /** bumped by delete: a drive loop that sees a newer generation stops */
+  private gen = 0
+
+  constructor(private d: MachineDeps) {
+    this.load()
+  }
+
+  private get path(): string {
+    return path.join(this.d.userData, MACHINE_FILE)
+  }
+  private now(): Date {
+    return this.d.now?.() ?? new Date()
+  }
+  private sleep(ms: number): Promise<void> {
+    return this.d.sleep ? this.d.sleep(ms) : new Promise((r) => setTimeout(r, ms))
+  }
+
+  private load(): void {
+    try {
+      const f = JSON.parse(fs.readFileSync(this.path, 'utf8')) as MachineFile
+      if (f?.v === 1 && f.provider) this.file = f
+    } catch {
+      this.file = null
+    }
+  }
+  private save(): void {
+    if (!this.file) {
+      fs.rmSync(this.path, { force: true })
+      return
+    }
+    fs.mkdirSync(this.d.userData, { recursive: true })
+    const tmp = `${this.path}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(this.file, null, 2), { mode: 0o600 })
+    fs.renameSync(tmp, this.path)
+  }
+
+  view(): MachineView | null {
+    const f = this.file
+    if (!f) return null
+    const { v: _v, token: _t, admin: _a, ssh: _s, ...rest } = f
+    return { ...rest, notes: [...f.notes] }
+  }
+
+  private update(patch: Partial<MachineFile>): void {
+    if (!this.file) return
+    Object.assign(this.file, patch)
+    this.save()
+    this.d.emit(this.view())
+  }
+
+  private secret(b64: string | null): string | null {
+    return b64 ? this.d.cipher.decrypt(Buffer.from(b64, 'base64')) : null
+  }
+
+  /** Regions and sizes for the provider, with the token checked on the way. */
+  async options(provider: Exclude<MachineProvider, 'ssh'>, token: string): Promise<MachineOptions> {
+    if (!token.trim()) throw new HiveError('validation', `Paste a ${MACHINE_PROVIDER_INFO[provider].label} API token.`)
+    return this.d.api(provider, token.trim()).options()
+  }
+
+  /** Starts making the machine and returns at once; progress arrives as views (evt:cloud kind 'machine'). */
+  async create(q: CreateMachineRequest): Promise<MachineView> {
+    if (!this.d.cipher.available()) throw new HiveError('vault_unavailable', "macOS Keychain encryption is unavailable, so Principia can't keep your cloud's keys on this Mac.")
+    if (this.file && this.file.phase !== 'failed') throw new HiveError('conflict', 'You already have a cloud machine. Delete it first to make a new one.')
+    if (this.d.linkedUrl()) throw new HiveError('conflict', 'This Mac is connected to a cloud. Disconnect it first, then make a new one.')
+    if (this.file) await this.remove() // a failed one: clean up its server before the next
+    let ssh: MachineFile['ssh'] = null
+    let token: string | null = null
+    if (q.provider === 'ssh') {
+      const host = q.ssh?.host?.trim()
+      if (!host || !/^[A-Za-z0-9.-]{1,253}$/.test(host)) throw new HiveError('validation', 'Enter the server’s address (an IP or a host name).')
+      const user = (q.ssh?.user ?? 'root').trim() || 'root'
+      if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw new HiveError('validation', 'That is not a user name.')
+      ssh = { host, user, port: q.ssh?.port ?? 22 }
+    } else {
+      token = q.token?.trim() ?? ''
+      if (!token) throw new HiveError('validation', `Paste a ${MACHINE_PROVIDER_INFO[q.provider].label} API token.`)
+      if (!q.region || !q.size) throw new HiveError('validation', 'Pick a region and a size.')
+    }
+    const admin = randomBytes(32).toString('base64url')
+    this.gen++
+    this.file = {
+      v: 1,
+      provider: q.provider,
+      name: `principia-${randomBytes(3).toString('hex')}`,
+      serverId: null,
+      ip: null,
+      url: null,
+      region: q.region ?? null,
+      size: q.size ?? null,
+      createdAt: this.now().toISOString(),
+      phase: q.provider === 'ssh' ? 'installing' : 'creating',
+      failedAt: null,
+      detail: null,
+      error: null,
+      bring: { ...q.bring },
+      notes: [],
+      install: null,
+      token: token ? this.d.cipher.encrypt(token).toString('base64') : null,
+      admin: this.d.cipher.encrypt(admin).toString('base64'),
+      ssh
+    }
+    this.save()
+    this.d.log?.info('cloud machine: create', { provider: q.provider, region: q.region ?? null, size: q.size ?? null })
+    this.d.emit(this.view())
+    this.drive()
+    return this.view()!
+  }
+
+  /** Picks up a machine that was being made when the app quit. */
+  resume(): void {
+    if (this.file && LIVE.includes(this.file.phase)) this.drive()
+  }
+
+  /** Tries again from the phase where it stopped. */
+  retry(): MachineView {
+    const f = this.file
+    if (!f) throw new HiveError('not_found', 'There is no cloud machine.')
+    if (f.phase !== 'failed') return this.view()!
+    if (f.failedAt === 'pairing' && !f.admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
+    this.update({ phase: f.failedAt ?? 'creating', failedAt: null, error: null })
+    this.drive()
+    return this.view()!
+  }
+
+  /** Disconnects this Mac from it (when linked to it) and deletes the server at the provider. "My own server" is only forgotten. */
+  async remove(): Promise<null> {
+    const f = this.file
+    if (!f) return null
+    this.gen++
+    if (f.url && this.d.linkedUrl() === f.url) {
+      try {
+        await this.d.unlink()
+      } catch (e) {
+        this.d.log?.warn('cloud machine: unlink failed', { error: msg(e) })
+      }
+    }
+    if (f.provider !== 'ssh' && f.serverId) {
+      const token = this.secret(f.token)
+      if (token) await this.d.api(f.provider, token).remove(f.serverId)
+    }
+    this.d.log?.info('cloud machine: removed', { provider: f.provider })
+    this.file = null
+    this.save()
+    this.d.emit(null)
+    return null
+  }
+
+  private drive(): void {
+    if (this.driving) return
+    const gen = this.gen
+    this.driving = this.loop(gen)
+      .catch((e) => {
+        if (gen !== this.gen || !this.file) return
+        const at = this.file.phase
+        this.d.log?.warn('cloud machine: stopped', { phase: at, error: msg(e) })
+        this.update({ phase: 'failed', failedAt: LIVE.includes(at) ? at : null, error: msg(e), detail: null })
+      })
+      .finally(() => {
+        this.driving = null
+      })
+  }
+
+  private alive(gen: number): boolean {
+    return gen === this.gen && !!this.file
+  }
+
+  private async loop(gen: number): Promise<void> {
+    const t = { bootMs: 5 * 60_000, installMs: 35 * 60_000, pollMs: 5_000, ...this.d.timeouts }
+    while (this.alive(gen)) {
+      const f = this.file!
+      switch (f.phase) {
+        case 'creating':
+          await this.createServer(f)
+          break
+        case 'booting':
+          await this.boot(f, gen, t.bootMs, t.pollMs)
+          break
+        case 'installing':
+          await this.install(f, gen, t.installMs, t.pollMs * 2)
+          break
+        case 'pairing':
+          await this.pairNow(f)
+          break
+        case 'signing-in':
+          await this.signIn(f)
+          return
+        default:
+          return
+      }
+    }
+  }
+
+  private async createServer(f: MachineFile): Promise<void> {
+    if (f.provider === 'ssh') return this.update({ phase: 'installing' })
+    const token = this.secret(f.token)
+    if (!token) throw new HiveError('vault_unavailable', 'The provider token could not be read on this Mac. Delete the machine and make a new one.')
+    const api = this.d.api(f.provider, token)
+    let sshKeyId: string | null = null
+    const key = this.d.sshPublicKey()
+    if (key) {
+      try {
+        sshKeyId = await api.ensureSshKey(`principia ${this.d.hostName ?? 'Mac'}`.slice(0, 60), key)
+      } catch (e) {
+        this.d.log?.warn('cloud machine: ssh key not added', { error: msg(e) })
+      }
+    }
+    this.update({ detail: `${f.size} in ${f.region}` })
+    const userData = this.script('auto', f.admin)
+    const s = await api.create({ name: f.name, region: f.region!, size: f.size!, userData, sshKeyId })
+    this.update({ serverId: s.id, ip: s.ip, url: s.ip ? `https://${sslipHost(s.ip)}` : null, phase: 'booting', detail: null })
+  }
+
+  private script(domain: string, adminB64: string | null): string {
+    const admin = this.secret(adminB64)
+    if (!admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
+    const v = this.d.version.replace(/^v/, '')
+    return bootstrapScript({
+      domain,
+      adminTokenSha256: sha256(admin),
+      image: this.d.image ?? `ghcr.io/vibiz-ai/principia-cloud:${v}`,
+      sourceRef: this.d.sourceRef ?? `v${v}`,
+      workspaceName: `${this.d.hostName ?? 'My'} cloud`
+    })
+  }
+
+  private async boot(f: MachineFile, gen: number, timeoutMs: number, pollMs: number): Promise<void> {
+    const api = this.d.api(f.provider as Exclude<MachineProvider, 'ssh'>, this.secret(f.token)!)
+    const until = Date.now() + timeoutMs
+    while (this.alive(gen)) {
+      const s = await api.status(f.serverId!)
+      if (!s) throw new HiveError('not_found', 'The server is gone at the provider. Delete it here and make a new one.')
+      if (s.running && s.ip) return this.update({ ip: s.ip, url: `https://${sslipHost(s.ip)}`, phase: 'installing' })
+      if (Date.now() > until) throw new HiveError('internal', 'The server did not start in 5 minutes. Check it at the provider, then try again.')
+      await this.sleep(pollMs)
+    }
+  }
+
+  private async install(f: MachineFile, gen: number, timeoutMs: number, pollMs: number): Promise<void> {
+    if (f.provider === 'ssh' && f.ssh) {
+      const ip = IPV4_RE.test(f.ssh.host) ? f.ssh.host : await this.d.resolve(f.ssh.host)
+      if (isPrivateIpv4(ip)) throw new HiveError('validation', `${f.ssh.host} is a private address (${ip}). The cloud needs a public IP for its https certificate.`)
+      const url = `https://${sslipHost(ip)}`
+      this.update({ ip, url, detail: 'Connecting over SSH…' })
+      const r = await this.d.runSsh(f.ssh, this.script(sslipHost(ip), f.admin), (l) => {
+        if (l.startsWith('principia: ') && this.alive(gen)) this.update({ detail: l.slice(11, 160) })
+      })
+      if (!this.alive(gen)) return
+      if (r.code !== 0) throw new HiveError('internal', `The install stopped on the server${r.tail ? `: ${r.tail.slice(-300)}` : '.'}`)
+    }
+    const url = this.file!.url
+    if (!url) throw new HiveError('internal', 'The server has no public IPv4 address.')
+    const started = Date.now()
+    const f2 = this.d.fetch ?? fetch
+    while (this.alive(gen)) {
+      try {
+        const res = await f2(`${url}/v1/health`, { signal: AbortSignal.timeout(10_000) })
+        const j = res.ok ? ((await res.json()) as { ok?: boolean }) : null
+        if (j?.ok) return this.update({ phase: 'pairing', detail: null })
+      } catch {
+        /* not up yet, or no certificate yet */
+      }
+      const min = Math.floor((Date.now() - started) / 60_000)
+      this.update({ detail: min < 1 ? 'Installing Docker and Principia Cloud…' : `Installing… ${min} min (a first install takes 3 to 10 minutes)` })
+      if (Date.now() - started > timeoutMs) {
+        const hint = this.file?.ip ? ` To look: ssh root@${this.file.ip} tail -50 /var/log/principia-bootstrap.log` : ''
+        throw new HiveError('internal', `Principia Cloud did not answer at ${url} after ${Math.round(timeoutMs / 60_000)} minutes.${hint}`)
+      }
+      await this.sleep(pollMs)
+    }
+  }
+
+  private async pairNow(f: MachineFile): Promise<void> {
+    const admin = this.secret(f.admin)
+    if (!admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
+    const res = await (this.d.fetch ?? fetch)(`${f.url}/v1/pair/start`, { method: 'POST', headers: { authorization: `Bearer ${admin}`, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(20_000) })
+    if (!res.ok) throw new HiveError('internal', `Your cloud refused to pair (${res.status}). Delete the machine and make a new one.`)
+    const { code } = (await res.json()) as { code?: string }
+    if (!code) throw new HiveError('internal', 'Your cloud answered without a pairing code.')
+    await this.d.pair(f.url!, code)
+    // the one-time token has done its job: nothing left on this Mac can pair another device
+    this.update({ admin: null, phase: 'signing-in', detail: null })
+  }
+
+  private async signIn(f: MachineFile): Promise<void> {
+    const notes: string[] = []
+    const b: MachineBring = f.bring
+    if (b.keys) {
+      try {
+        await this.d.bring.keys()
+      } catch (e) {
+        notes.push(`Shared keys: ${msg(e)}`)
+      }
+    }
+    if (b.github) {
+      try {
+        await this.d.bring.github()
+      } catch (e) {
+        notes.push(`GitHub: ${msg(e)}`)
+      }
+    }
+    const logins = (['claude', 'codex'] as const).filter((a) => b[a])
+    for (const a of logins) notes.push(`${a === 'claude' ? 'Claude' : 'Codex'}: finish signing in in your browser.`)
+    this.update({ phase: 'ready', notes, detail: null })
+    // the browser sign-ins run after "ready": the machine works without them, and they wait for you
+    void this.logins(logins)
+  }
+
+  private async logins(adapters: ('claude' | 'codex')[]): Promise<void> {
+    for (const a of adapters) {
+      const name = a === 'claude' ? 'Claude' : 'Codex'
+      let note: string | null
+      try {
+        const r = await this.d.bring.login(a)
+        note = r.ok ? null : `${name}: ${(r.detail ?? 'Not signed in').replace(/\.+$/, '')}. Connect it on Keys.`
+      } catch (e) {
+        note = `${name}: ${msg(e)}`
+      }
+      if (!this.file) return
+      const notes = this.file.notes.filter((n) => !n.startsWith(`${name}:`))
+      this.update({ notes: note ? [...notes, note] : notes })
+    }
+  }
+}

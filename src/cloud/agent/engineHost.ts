@@ -419,7 +419,9 @@ export class EngineHost {
         /* no folder name: never cloned */
       }
     }
-    if (repoTokens.length) Object.assign(st.overlay, runAskpass(st.box.home, repoTokens))
+    // and outside them, any github.com repository through the workspace GitHub account (docs/ACCOUNTS.md)
+    const github = req.materials.secrets?.GH_TOKEN || null
+    if (repoTokens.length || github) Object.assign(st.overlay, runAskpass(st.box.home, repoTokens, github))
     this.companySecrets.set(req.companyId, { ...(req.materials.secrets ?? {}) })
     try {
       await mat.before({ ...o.sandbox.baseEnv(), ...st.overlay })

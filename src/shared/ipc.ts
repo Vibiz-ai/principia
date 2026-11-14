@@ -641,6 +641,12 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'cloud:githubRemove': [V, import('./cloud').CloudAccountsView]
   'cloud:keyCloud': [{ name: string; on: boolean }, import('./cloud').CloudAccountsView]
   'cloud:keysSync': [V, import('./cloud').CloudAccountsView]
+  // docs/MACHINES.md: a cloud machine made from this Mac (the provider token stays in main)
+  'cloud:machine': [V, import('./machines').MachineView | null]
+  'cloud:machineOptions': [{ provider: 'hetzner' | 'digitalocean'; token: string }, import('./machines').MachineOptions]
+  'cloud:machineCreate': [import('./machines').CreateMachineRequest, import('./machines').MachineView]
+  'cloud:machineRetry': [V, import('./machines').MachineView]
+  'cloud:machineDelete': [V, null]
 }
 
 export interface NativeMenuItem {
@@ -905,6 +911,7 @@ export const INVOKE_CHANNELS = [
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
   'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
   'cloud:accounts', 'cloud:githubConnect', 'cloud:githubRemove', 'cloud:keyCloud', 'cloud:keysSync',
+  'cloud:machine', 'cloud:machineOptions', 'cloud:machineCreate', 'cloud:machineRetry', 'cloud:machineDelete',
   ...PLANS_CHANNELS,
   // CHAT-UI.md §3.2
   ...CHAT_CHANNELS,

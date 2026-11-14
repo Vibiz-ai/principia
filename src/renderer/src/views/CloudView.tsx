@@ -10,6 +10,7 @@ import { Loading, Toolbar } from '../components/ui'
 import { AccountsCard, startLogin } from '../components/cloud/Accounts'
 import { CompaniesCard, MoveSheet } from '../components/cloud/Companies'
 import { NotConnected } from '../components/cloud/Connect'
+import { MachineCard, MachineProgress, MakeCloud, useMachine } from '../components/cloud/Machine'
 import { CloudHeader } from '../components/cloud/Header'
 import { NeedsYouCard } from '../components/cloud/NeedsYou'
 import { RunSheet, RunsCard } from '../components/cloud/Runs'
@@ -26,6 +27,7 @@ export function CloudView(): ReactElement {
   const [move, setMove] = useState<string | null>(null)
   const [run, setRun] = useState<string | null>(null)
   const [paste, setPaste] = useState<{ adapter: CloudAdapter; kind: ProviderCredentialKind } | null>(null)
+  const machine = useMachine()
 
   if (!state)
     return (
@@ -39,7 +41,23 @@ export function CloudView(): ReactElement {
       <div className="view cl-view">
         <Toolbar title="Cloud" />
         <div className="cl-scroll">
-          <NotConnected />
+          {machine && machine.phase !== 'ready' ? (
+            <div className="cl-connect">
+              <MachineProgress m={machine} />
+            </div>
+          ) : machine ? (
+            <div className="cl-connect cl-connect--stack">
+              <section className="cl-mini">
+                <p className="cl-mini__p">Your machine is still running, but this Mac is disconnected from it. Delete it to make a new one.</p>
+                <MachineCard m={machine} />
+              </section>
+            </div>
+          ) : (
+            <div className="cl-connect cl-connect--stack">
+              <MakeCloud />
+            </div>
+          )}
+          {!machine && <NotConnected compact />}
         </div>
       </div>
     )
@@ -75,6 +93,7 @@ export function CloudView(): ReactElement {
           <div className="cl-col">
             <RunsCard onOpen={setRun} />
             <AccountsCard paste={paste} setPaste={setPaste} />
+            {machine && <MachineCard m={machine} />}
           </div>
         </div>
       </div>

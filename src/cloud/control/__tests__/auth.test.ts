@@ -21,6 +21,16 @@ describe('pairing (CLOUD.md §5)', () => {
     } finally { await h.close() }
   })
 
+  it('a hashed admin token pairs too, and only the token whose hash it is (docs/MACHINES.md)', async () => {
+    const { createHash } = await import('node:crypto')
+    const h = await startHarness({ config: { adminToken: null, adminTokenSha256: createHash('sha256').update(ADMIN).digest('hex') } })
+    try {
+      expect((await h.call('POST', '/v1/pair/start', { token: ADMIN })).status).toBe(201)
+      expect((await h.call('POST', '/v1/pair/start', { token: `${ADMIN}x` })).status).toBe(401)
+      expect((await h.call('POST', '/v1/pair/start', { token: createHash('sha256').update(ADMIN).digest('hex') })).status).toBe(401)
+    } finally { await h.close() }
+  })
+
   it('codes expire after 10 minutes', async () => {
     let t = Date.parse('2026-10-21T09:00:00Z')
     const h = await startHarness({ now: () => new Date(t) })

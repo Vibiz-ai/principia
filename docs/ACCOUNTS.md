@@ -7,7 +7,8 @@ goes next.
 
 ## 1. What you do
 
-1. Connect a cloud (**Cloud** › paste the connect link).
+1. Get a cloud: **Cloud** › *Make my cloud* (docs/MACHINES.md: Principia creates and connects it, and does steps 2
+   and 3 for you), or paste the connect link of one you already run.
 2. On **Keys**, under *Accounts*:
    - **Claude**: *Connect Claude* (one browser sign-in on this Mac; a long-lived token goes to the cloud).
    - **Codex**: *Sign in with ChatGPT* (a second sign-in just for the cloud; Codex on this Mac stays signed in).

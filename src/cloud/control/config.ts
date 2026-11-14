@@ -26,6 +26,8 @@ PRINCIPIA_MASTER_KEY=
 PRINCIPIA_SECRETS_DIR=
 # Optional, 32+ characters: allows POST /v1/pair/start with this bearer. Without it, pair with \`principia-cloud pair\`.
 PRINCIPIA_ADMIN_TOKEN=
+# Optional: the SHA-256 (hex) of an admin token instead of the token itself (machines Principia creates use this).
+PRINCIPIA_ADMIN_TOKEN_SHA256=
 PRINCIPIA_WORKSPACE_NAME=
 # Days of run step history kept (default 30).
 PRINCIPIA_LOG_RETENTION_DAYS=
@@ -142,6 +144,8 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { consoleDir: strin
   if (pu.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(pu.hostname)) warnings.push('PRINCIPIA_PUBLIC_URL is not https: sign-in cookies are not marked Secure. Put the cloud behind HTTPS (a tunnel or a reverse proxy).')
   const adminToken = env.PRINCIPIA_ADMIN_TOKEN || null
   if (adminToken && adminToken.length < 32) throw new Error('PRINCIPIA_ADMIN_TOKEN must have at least 32 characters (or leave it unset and pair with `principia-cloud pair`).')
+  const adminTokenSha256 = env.PRINCIPIA_ADMIN_TOKEN_SHA256?.trim().toLowerCase() || null
+  if (adminTokenSha256 && !/^[0-9a-f]{64}$/.test(adminTokenSha256)) throw new Error('PRINCIPIA_ADMIN_TOKEN_SHA256 must be 64 hex characters (the SHA-256 of a token of 32+ characters).')
   const retention = Number(env.PRINCIPIA_LOG_RETENTION_DAYS || 30)
   if (!Number.isFinite(retention) || retention < 1 || retention > 3650) throw new Error('PRINCIPIA_LOG_RETENTION_DAYS must be between 1 and 3650')
   const dataDir = resolve(env.PRINCIPIA_DATA_DIR || './principia-data')
@@ -156,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { consoleDir: strin
     config: {
       publicUrl,
       adminToken,
+      adminTokenSha256,
       workspaceName: (env.PRINCIPIA_WORKSPACE_NAME || 'Principia Cloud').slice(0, 120),
       consoleDir: resolve(env.PRINCIPIA_CONSOLE_DIR || defaults.consoleDir),
       dataDir,

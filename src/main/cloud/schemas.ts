@@ -1,6 +1,7 @@
 /** zod schemas for the cloud:* invoke channels (spread into REQUEST_SCHEMAS, ipcSchemas.ts). docs/CLOUD.md §13.1. */
 import { z } from 'zod'
 import { CLOUD_ADAPTERS, CLOUD_LIMITS, PROVIDER_CREDENTIAL_KINDS } from '../../shared/cloud'
+import { MACHINE_PROVIDERS } from '../../shared/machines'
 
 const none = z.unknown().transform(() => undefined)
 const id = z.string().min(1).max(200)
@@ -55,5 +56,27 @@ export const CLOUD_REQUEST_SCHEMAS = {
   'cloud:githubConnect': z.union([z.object({ token: z.string().trim().max(400).nullable().optional() }).strict(), none]),
   'cloud:githubRemove': none,
   'cloud:keyCloud': z.object({ name: z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'Key names look like ENV_NAMES').max(128), on: z.boolean() }).strict(),
-  'cloud:keysSync': none
+  'cloud:keysSync': none,
+  // docs/MACHINES.md
+  'cloud:machine': none,
+  'cloud:machineOptions': z.object({ provider: z.enum(['hetzner', 'digitalocean']), token: z.string().trim().min(1, 'Paste an API token').max(400) }).strict(),
+  'cloud:machineCreate': z
+    .object({
+      provider: z.enum(MACHINE_PROVIDERS),
+      token: z.string().trim().max(400).optional(),
+      region: z.string().regex(/^[a-z0-9-]{1,40}$/).optional(),
+      size: z.string().regex(/^[a-z0-9-]{1,60}$/).optional(),
+      ssh: z
+        .object({
+          host: z.string().trim().min(1, 'Enter the server address').max(253),
+          user: z.string().trim().max(32).optional(),
+          port: z.number().int().min(1).max(65535).optional()
+        })
+        .strict()
+        .optional(),
+      bring: z.object({ github: z.boolean(), keys: z.boolean(), claude: z.boolean(), codex: z.boolean() }).strict()
+    })
+    .strict(),
+  'cloud:machineRetry': none,
+  'cloud:machineDelete': none
 } as const
