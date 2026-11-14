@@ -66,23 +66,17 @@ const html = async (): Promise<string> => {
 describe('Cloud pane', () => {
   beforeEach(() => vi.resetModules())
 
-  it('not connected: Make my cloud first, then one connect-link field, Connect, one hosted button and one downloadable compose file', async () => {
+  it('not connected: one button turns the cloud on; your own server, provider or connect link wait behind one link', async () => {
     await setup({ state: { ...LINKED, linked: false, url: null, workspace: null, cloudCompanyIds: [] } })
     const out = await html()
-    // docs/MACHINES.md: making one is the first way in; pasting a link is for a cloud you already have
-    expect(out.indexOf('Make my cloud')).toBeGreaterThan(-1)
-    expect(out.indexOf('Make my cloud')).toBeLessThan(out.indexOf('Already have a cloud?'))
-    expect(out).toContain('Paste your connect link')
-    expect(out).toContain('>Connect<')
-    // the connect link is the one string: URL and code only after a paste fails
-    expect(out).not.toContain('Enter URL and code')
-    expect(out).toContain('>Deploy on Render<')
-    expect(out).toContain('Or deploy one yourself. Its log shows your connect link.')
-    // one file, no clone of the hive repo
-    expect(out).toContain('curl -fsSL https://raw.githubusercontent.com/Vibiz-ai/principia/main/cloud/compose.yml -o compose.yml\ndocker compose up -d')
-    expect(out).not.toContain('-f cloud/compose.yml')
-    expect(out).toContain('Managed Principia Cloud is coming. Self-hosting is free forever.')
-    expect(out).not.toMatch(/principia-cloud pair|docker exec/)
+    // docs/FLEET.md: Principia runs it, nothing to choose
+    expect(out).toContain('Run your agents in the cloud')
+    expect(out).toContain('>Turn On Cloud<')
+    expect(out).toContain('Use my own server or provider')
+    // the self-host paths are folded away until asked for
+    expect(out).not.toContain('Make my cloud')
+    expect(out).not.toContain('Paste your connect link')
+    expect(out).not.toMatch(/API token|region|principia-cloud pair|docker exec/i)
   })
 
   it('connected: header, Needs you, Companies with Ready and one fix, Accounts with billing badges, in mockup order', async () => {

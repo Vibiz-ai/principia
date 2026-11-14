@@ -105,7 +105,7 @@ export function NotConnected({ compact = false }: { compact?: boolean } = {}): R
           </div>
           <p className="cl-dim">Or on an always-on machine you own (one file, no clone):</p>
           <pre className="cl-pre selectable">{COMPOSE_COMMANDS}</pre>
-          <p className="cl-dim">Managed Principia Cloud is coming. Self-hosting is free forever.</p>
+          <p className="cl-dim">Self-hosting is free forever.</p>
         </div>
       </div>
     </div>

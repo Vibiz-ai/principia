@@ -20,7 +20,7 @@ export type ApiProvider = 'hetzner' | 'digitalocean'
  * The managed fleet's address (fleet/, docs/FLEET.md). null: not deployed for this build, and the app offers only
  * your own provider or server. PRINCIPIA_FLEET_URL in the app's environment overrides it.
  */
-export const FLEET_URL: string | null = null
+export const FLEET_URL: string | null = 'https://iidiv5cyyd6dvedragk4kux7240eakjh.lambda-url.us-east-2.on.aws'
 
 export const MACHINE_PROVIDER_INFO: Record<MachineProvider, { label: string; tokenUrl: string | null; tokenHint: string | null; note: string }> = {
   principia: {

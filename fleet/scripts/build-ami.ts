@@ -100,8 +100,20 @@ poweroff
       if (s === 'stopped') break
       if (Date.now() > until) throw new Error('the builder did not finish in 75 minutes')
     }
-    const text = await consoleText(id)
-    if (!text.includes('principia: image ready') || text.includes('principia: build failed')) throw new Error('the build failed: see the lines above')
+    // "prepared" is the last line of prepareScript; what follows (clean-up, power-off) is trivial, and the console API
+    // often never shows the very last lines
+    const done = (t: string): boolean => t.includes('principia: image ready') || t.includes('principia: prepared')
+    // the console log reaches the API minutes late: wait for one of the two markers before deciding
+    let text = ''
+    for (let i = 0; i < 12; i++) {
+      text = await consoleText(id)
+      if (done(text) || text.includes('principia: build failed')) break
+      await sleep(30_000)
+    }
+    if (!done(text) || text.includes('principia: build failed')) {
+      say(text.split('\n').slice(-25).join('\n'))
+      throw new Error('the build failed: see the lines above')
+    }
     const name = `principia-fleet-${ref.replace(/[^A-Za-z0-9.-]/g, '-')}-${new Date().toISOString().replace(/[:.]/g, '-')}`.slice(0, 120)
     const img = await ec2.send(
       new CreateImageCommand({ InstanceId: id, Name: name, TagSpecifications: [{ ResourceType: 'image', Tags: [{ Key: 'principia-fleet', Value: 'image' }, { Key: 'principia-fleet:ref', Value: ref }] }, { ResourceType: 'snapshot', Tags: [{ Key: 'principia-fleet', Value: 'image' }] }] })
