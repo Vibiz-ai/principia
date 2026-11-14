@@ -19,6 +19,7 @@ import { openPassportActions } from '../handlers/openPassport'
 import { CloudLink, type PassportSyncPort } from './link'
 import { AccountLogins, type LoginProc } from './logins'
 import { CloudAccountsSync } from './accounts'
+import { CloudLoginVault } from './loginVault'
 import { ghToken } from '../onboarding/github'
 import type { MoveDeps } from './move'
 import { CloudMachines } from './machines'
@@ -35,6 +36,8 @@ export interface CloudWiring {
   accounts: CloudAccountsSync
   /** docs/MACHINES.md: the cloud machine made from this Mac */
   machines: CloudMachines
+  /** docs/FLEET.md §9: every cloud sign-in, kept encrypted on this Mac so a new machine is signed in by itself */
+  loginVault: CloudLoginVault
 }
 
 /** node-pty loads its native binding on import: load it at the first sign-in only (tests build a Hive without it). */
@@ -94,6 +97,7 @@ export function createCloud(h: Hive): CloudWiring {
     wake: (): Promise<boolean> => machines.wakeForUse()
   })
 
+  const loginVault = new CloudLoginVault({ userData, cipher })
   const logins = new AccountLogins({
     spawn: (file, args, opts): LoginProc => {
       // wide columns: the token is printed on one line and never wrapped
@@ -113,6 +117,7 @@ export function createCloud(h: Hive): CloudWiring {
     upload: async (adapter, kind, value) => {
       const body: PutProviderCredentialRequest = { kind, value }
       await link.call((c) => c.call('providerPut', { params: { adapter }, body }))
+      loginVault.save(adapter, kind, value)
     },
     test: (adapter: CloudAdapter) => link.call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: {} })),
     report: (s) => link.setLogin(s)
@@ -175,7 +180,21 @@ export function createCloud(h: Hive): CloudWiring {
     bring: {
       keys: async () => void (await accounts.sync()),
       github: async () => void (await accounts.connectGithub({})),
+      saved: (adapter) => loginVault.has(adapter),
       login: async (adapter) => {
+        // signed in before: the saved sign-in goes up and is tested; the browser opens only if it no longer works
+        const saved = loginVault.get(adapter)
+        if (saved) {
+          try {
+            await link.call((c) => c.call('providerPut', { params: { adapter }, body: { kind: saved.kind, value: saved.value } }))
+            const t = await link.call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: {} }))
+            if (t.ok) return { ok: true, detail: null }
+            log.warn('cloud: a saved sign-in no longer works', { adapter })
+            loginVault.forget(adapter)
+          } catch (e) {
+            log.warn('cloud: saved sign-in not restored', { adapter, error: e instanceof Error ? e.message : String(e) })
+          }
+        }
         const s = await logins.start(adapter)
         return { ok: s.phase === 'done', detail: s.message }
       }
@@ -188,7 +207,7 @@ export function createCloud(h: Hive): CloudWiring {
     log
   })
   machines.watch()
-  return { link, logins, move, accounts, machines }
+  return { link, logins, move, accounts, machines, loginVault }
 }
 
 /** The managed fleet's address: PRINCIPIA_FLEET_URL (development, self-hosted fleets) or the build's own. */

@@ -82,8 +82,10 @@ export interface MachineDeps {
   bring: {
     keys(): Promise<void>
     github(): Promise<void>
-    /** opens the browser sign-in for the cloud and resolves when it ended */
+    /** signs the cloud in: from the sign-in saved on this Mac, else the browser; resolves when it ended */
     login(adapter: 'claude' | 'codex'): Promise<{ ok: boolean; detail: string | null }>
+    /** a sign-in for this adapter is saved on this Mac (docs/FLEET.md §9): no browser needed */
+    saved?(adapter: 'claude' | 'codex'): boolean
   }
   /** app version: the image tag and the source tag to build from */
   version: string
@@ -550,7 +552,7 @@ export class CloudMachines {
       }
     }
     const logins = (['claude', 'codex'] as const).filter((a) => b[a])
-    for (const a of logins) notes.push(`${a === 'claude' ? 'Claude' : 'Codex'}: finish signing in in your browser.`)
+    for (const a of logins) notes.push(this.d.bring.saved?.(a) ? `${a === 'claude' ? 'Claude' : 'Codex'}: signing in with your saved sign-in…` : `${a === 'claude' ? 'Claude' : 'Codex'}: finish signing in in your browser.`)
     this.update({ phase: 'ready', notes, detail: null, ...(f.provider === 'principia' ? { power: 'awake' as const } : {}) })
     // the browser sign-ins run after "ready": the machine works without them, and they wait for you
     void this.logins(logins)

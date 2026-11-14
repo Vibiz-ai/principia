@@ -109,7 +109,25 @@ AWS_PROFILE=<profile> npx tsx scripts/build-ami.ts --ref <pushed git ref>
 Then set `FLEET_URL` in `src/shared/machines.ts` to the stack's `FleetUrl` output (or run the app with
 `PRINCIPIA_FLEET_URL=…`). Tests: `npm run fleet:test`.
 
-## 8. Not yet
+## 8. Same machine, sign in once
+
+**One machine per person, kept.** Sleeping is a stop, not a delete: the same disk and the same Elastic IP come back
+on every wake, so the machine, its address and everything signed in on it stay the same for its whole life. Moving to
+another instance type when a zone is full changes its size, not the machine or its address. A failed machine is
+rebuilt in place on the same address. Only *Turn Off* deletes it.
+
+**Logins are saved at two levels, so nobody signs in by hand on the machine:**
+- *On the machine:* every sign-in goes into the cloud's own store, encrypted with its master key (docs/ACCOUNTS.md),
+  on the persistent disk. It survives every sleep and wake.
+- *On the Mac:* every cloud sign-in (Claude's setup token, Codex's auth.json, a pasted key) is also kept in
+  `<userData>/cloud-logins.json`, encrypted with safeStorage (`src/main/cloud/loginVault.ts`). When a machine is made
+  again, it is signed in from there and tested; the browser opens only if nothing is saved or what is saved stopped
+  working (then the saved copy is forgotten). The fleet never sees any of it.
+
+Claude's sign-in is a `claude setup-token` token, the kind made for running Claude Code on another machine; with one
+machine and one address per person it is always used from the same place.
+
+## 9. Not yet
 
 - **Passport.** A machine built from source has no embedded Open Passport, whose sources aren't public. The
   published image (`ghcr.io/vibiz-ai/principia-cloud`) has it once the release workflow publishes it.

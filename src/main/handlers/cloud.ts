@@ -70,10 +70,13 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
   handle('cloud:providers', () => providers())
   handle('cloud:providerPut', async ({ adapter, kind, value }) => {
     await call((c) => c.call('providerPut', { params: { adapter }, body: { kind, value } }))
+    // kept on this Mac too, so a new cloud machine is signed in without asking again (docs/FLEET.md §9)
+    cloud.loginVault?.save(adapter, kind, value)
     return providers()
   })
   handle('cloud:providerDelete', async ({ adapter }) => {
     await call((c) => c.call('providerDelete', { params: { adapter } }))
+    cloud.loginVault?.forget(adapter)
     return providers()
   })
   handle('cloud:providerTest', ({ adapter, live }) => call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: live ? { live: true } : {} })))

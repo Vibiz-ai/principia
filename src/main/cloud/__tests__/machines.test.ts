@@ -337,6 +337,18 @@ describe('Principia Cloud, managed (docs/FLEET.md)', () => {
     expect(m.view()).toBeNull()
   })
 
+  it('a machine made again signs in from the saved sign-in: the note says so, no browser', async () => {
+    const t = managed()
+    t.deps.bring.saved = (a) => a === 'claude'
+    const m = new CloudMachines(t.deps)
+    await m.create({ provider: 'principia', bring: { github: false, keys: false, claude: true, codex: false } })
+    await settle(m, 'ready')
+    expect(t.views.find((x) => x?.phase === 'ready')!.notes).toEqual(['Claude: signing in with your saved sign-in…'])
+    await new Promise((r) => setTimeout(r, 5))
+    expect(t.brought).toEqual(['login claude'])
+    expect(m.view()!.notes).toEqual([])
+  })
+
   it('never wakes anything that is not a ready managed machine', async () => {
     const t = setup()
     const m = new CloudMachines(t.deps)
