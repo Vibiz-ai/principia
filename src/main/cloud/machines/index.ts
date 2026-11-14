@@ -14,6 +14,12 @@
  *
  * The provider token is kept (encrypted) only so "Delete machine" can delete the server. Nothing secret reaches the
  * renderer, an event or a log line.
+ *
+ * Provider 'principia' (docs/FLEET.md) is the managed fleet: this Mac signs in to it with its GitHub sign-in once (the
+ * fleet keeps only who you are) and gets a fleet key, kept here encrypted in place of a provider token. The fleet
+ * makes the machine from a ready image, so creating/booting is about a minute. A managed machine sleeps when idle:
+ * `wakeForUse` starts it again when this Mac needs it (a change sent to the cloud that can't get through), and
+ * `refresh` keeps its power and this month's hours on the Cloud page.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -24,15 +30,18 @@ import {
   MACHINE_PROVIDER_INFO,
   isPrivateIpv4,
   sslipHost,
+  type ApiProvider,
   type CreateMachineRequest,
   type MachineBring,
+  type MachineInfo,
   type MachineOptions,
   type MachinePhase,
-  type MachineProvider,
+  type MachinePower,
   type MachineView
 } from '../../../shared/machines'
 import type { Cipher } from '../../vault'
 import { bootstrapScript } from './bootstrap'
+import { FleetRequestError, type FleetClient, type FleetMachine } from './fleet'
 import type { MachineApi } from './providers'
 
 export const MACHINE_FILE = 'cloud-machine.json'
@@ -41,8 +50,10 @@ const LIVE: MachinePhase[] = ['creating', 'booting', 'installing', 'pairing', 's
 interface MachineFile extends Omit<MachineView, 'notes'> {
   v: 1
   notes: string[]
-  /** base64 safeStorage ciphertext of the provider API token */
+  /** base64 safeStorage ciphertext of the provider API token (managed: the fleet key) */
   token: string | null
+  /** managed: the GitHub login the fleet knows this Mac as */
+  login?: string | null
   /** base64 safeStorage ciphertext of the one-time admin token, until pairing used it */
   admin: string | null
   ssh: { host: string; user: string; port: number } | null
@@ -52,7 +63,11 @@ export interface MachineDeps {
   userData: string
   cipher: Cipher
   emit(view: MachineView | null): void
-  api(provider: Exclude<MachineProvider, 'ssh'>, token: string): MachineApi
+  api(provider: ApiProvider, token: string): MachineApi
+  /** the managed fleet, or null when this build has none */
+  fleet?: FleetClient | null
+  /** this Mac's GitHub sign-in (gh auth token), for the fleet's one-time enroll */
+  ghToken?: () => Promise<string | null>
   /** this Mac's SSH public key (~/.ssh/id_ed25519.pub…), or null */
   sshPublicKey(): string | null
   /** runs the script as root on the server; `line` gets its output lines */
@@ -79,7 +94,7 @@ export interface MachineDeps {
   now?: () => Date
   sleep?: (ms: number) => Promise<void>
   log?: { info(m: string, meta?: Record<string, unknown>): void; warn(m: string, meta?: Record<string, unknown>): void }
-  timeouts?: { bootMs?: number; installMs?: number; pollMs?: number }
+  timeouts?: { bootMs?: number; installMs?: number; pollMs?: number; managedBootMs?: number; wakeMs?: number }
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
@@ -127,8 +142,12 @@ export class CloudMachines {
   view(): MachineView | null {
     const f = this.file
     if (!f) return null
-    const { v: _v, token: _t, admin: _a, ssh: _s, ...rest } = f
+    const { v: _v, token: _t, admin: _a, ssh: _s, login: _l, ...rest } = f
     return { ...rest, notes: [...f.notes] }
+  }
+
+  info(): MachineInfo {
+    return { managed: !!this.d.fleet, github: this.file?.login ?? null }
   }
 
   private update(patch: Partial<MachineFile>): void {
@@ -143,7 +162,7 @@ export class CloudMachines {
   }
 
   /** Regions and sizes for the provider, with the token checked on the way. */
-  async options(provider: Exclude<MachineProvider, 'ssh'>, token: string): Promise<MachineOptions> {
+  async options(provider: ApiProvider, token: string): Promise<MachineOptions> {
     if (!token.trim()) throw new HiveError('validation', `Paste a ${MACHINE_PROVIDER_INFO[provider].label} API token.`)
     return this.d.api(provider, token.trim()).options()
   }
@@ -156,7 +175,9 @@ export class CloudMachines {
     if (this.file) await this.remove() // a failed one: clean up its server before the next
     let ssh: MachineFile['ssh'] = null
     let token: string | null = null
-    if (q.provider === 'ssh') {
+    if (q.provider === 'principia') {
+      if (!this.d.fleet) throw new HiveError('not_implemented', 'Principia Cloud isn’t available in this build. Use your own provider or server.')
+    } else if (q.provider === 'ssh') {
       const host = q.ssh?.host?.trim()
       if (!host || !/^[A-Za-z0-9.-]{1,253}$/.test(host)) throw new HiveError('validation', 'Enter the server’s address (an IP or a host name).')
       const user = (q.ssh?.user ?? 'root').trim() || 'root'
@@ -176,8 +197,8 @@ export class CloudMachines {
       serverId: null,
       ip: null,
       url: null,
-      region: q.region ?? null,
-      size: q.size ?? null,
+      region: q.provider === 'principia' ? null : (q.region ?? null),
+      size: q.provider === 'principia' ? null : (q.size ?? null),
       createdAt: this.now().toISOString(),
       phase: q.provider === 'ssh' ? 'installing' : 'creating',
       failedAt: null,
@@ -225,7 +246,17 @@ export class CloudMachines {
         this.d.log?.warn('cloud machine: unlink failed', { error: msg(e) })
       }
     }
-    if (f.provider !== 'ssh' && f.serverId) {
+    if (f.provider === 'principia') {
+      const key = this.secret(f.token)
+      if (key && this.d.fleet) {
+        try {
+          await this.d.fleet.remove(key)
+        } catch (e) {
+          // a key the fleet no longer knows has nothing left to delete
+          if (!(e instanceof FleetRequestError && e.status === 401)) throw e
+        }
+      }
+    } else if (f.provider !== 'ssh' && f.serverId) {
       const token = this.secret(f.token)
       if (token) await this.d.api(f.provider, token).remove(f.serverId)
     }
@@ -256,7 +287,7 @@ export class CloudMachines {
   }
 
   private async loop(gen: number): Promise<void> {
-    const t = { bootMs: 5 * 60_000, installMs: 35 * 60_000, pollMs: 5_000, ...this.d.timeouts }
+    const t = { bootMs: 5 * 60_000, installMs: 35 * 60_000, pollMs: 5_000, managedBootMs: 25 * 60_000, ...this.d.timeouts }
     while (this.alive(gen)) {
       const f = this.file!
       switch (f.phase) {
@@ -264,7 +295,7 @@ export class CloudMachines {
           await this.createServer(f)
           break
         case 'booting':
-          await this.boot(f, gen, t.bootMs, t.pollMs)
+          await (f.provider === 'principia' ? this.bootManaged(f, gen, t.managedBootMs, t.pollMs) : this.boot(f, gen, t.bootMs, t.pollMs))
           break
         case 'installing':
           await this.install(f, gen, t.installMs, t.pollMs * 2)
@@ -283,6 +314,7 @@ export class CloudMachines {
 
   private async createServer(f: MachineFile): Promise<void> {
     if (f.provider === 'ssh') return this.update({ phase: 'installing' })
+    if (f.provider === 'principia') return this.createManaged(f)
     const token = this.secret(f.token)
     if (!token) throw new HiveError('vault_unavailable', 'The provider token could not be read on this Mac. Delete the machine and make a new one.')
     const api = this.d.api(f.provider, token)
@@ -314,8 +346,135 @@ export class CloudMachines {
     })
   }
 
+  // ---------- managed (docs/FLEET.md) ----------
+
+  private fleet(): FleetClient {
+    if (!this.d.fleet) throw new HiveError('not_implemented', 'Principia Cloud isn’t available in this build.')
+    return this.d.fleet
+  }
+
+  /** The fleet key, signing this Mac in to the fleet with its GitHub sign-in the first time. */
+  private async fleetKey(f: MachineFile): Promise<string> {
+    const have = this.secret(f.token)
+    if (have) return have
+    const gh = (await this.d.ghToken?.()) ?? null
+    if (!gh) throw new HiveError('validation', 'Sign in to GitHub on this Mac first (Keys › GitHub, or `gh auth login`). Principia Cloud uses it to know it’s you.')
+    this.update({ detail: 'Signing in with GitHub…' })
+    const e = await this.fleet().enroll(gh)
+    if (!e.allowed) throw new HiveError('forbidden', `Principia Cloud isn’t open for ${e.login} yet.`)
+    this.update({ token: this.d.cipher.encrypt(e.key).toString('base64'), login: e.login })
+    return e.key
+  }
+
+  private async createManaged(f: MachineFile): Promise<void> {
+    const key = await this.fleetKey(f)
+    const admin = this.secret(f.admin)
+    if (!admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
+    this.update({ detail: 'Making your machine…' })
+    let m: FleetMachine
+    try {
+      m = await this.fleet().create(key, { adminTokenSha256: sha256(admin), workspaceName: `${this.d.hostName ?? 'My'} cloud` })
+    } catch (e) {
+      // made already (the app quit half way): carry on with it
+      if (!(e instanceof FleetRequestError && e.fleetCode === 'exists')) throw e
+      const cur = (await this.fleet().machine(key)).machine
+      if (!cur) throw e
+      m = cur
+    }
+    this.update({ serverId: m.id, url: m.url, ip: m.host ? m.host.replace(/\.sslip\.io$/, '').replace(/-/g, '.') : null, size: m.instanceType, phase: 'booting', detail: null, ...this.powerOf(m) })
+  }
+
+  private async bootManaged(f: MachineFile, gen: number, timeoutMs: number, pollMs: number): Promise<void> {
+    const key = await this.fleetKey(f)
+    const until = Date.now() + timeoutMs
+    while (this.alive(gen)) {
+      const { machine: m } = await this.fleet().machine(key)
+      if (!m) throw new HiveError('not_found', 'Your machine is gone. Make it again.')
+      if (m.state === 'failed') throw new HiveError('internal', m.error ?? 'Your machine didn’t start. Try again.')
+      this.update({ url: m.url, detail: m.state === 'running' ? null : 'Starting your machine…', ...this.powerOf(m) })
+      if (m.state === 'running') return this.update({ phase: 'installing' })
+      if (Date.now() > until) throw new HiveError('internal', `Your machine didn’t start in ${Math.round(timeoutMs / 60_000)} minutes. Try again.`)
+      await this.sleep(pollMs)
+    }
+  }
+
+  private powerOf(m: FleetMachine): Pick<MachineFile, 'power' | 'sleep' | 'usage'> {
+    const power: MachinePower = m.state === 'running' ? 'awake' : m.state === 'starting' || m.state === 'creating' ? 'waking' : 'asleep'
+    return { power, sleep: { reason: m.state === 'failed' ? m.error : m.sleepReason, wakeAt: m.wakeAt, idleMinutes: m.idleMinutes }, usage: m.usage }
+  }
+
+  /** The managed machine's power and hours, from the fleet (the Cloud page and the 1-minute watch). */
+  async refresh(): Promise<MachineView | null> {
+    const f = this.file
+    if (!f || f.provider !== 'principia' || f.phase !== 'ready' || !this.d.fleet) return this.view()
+    const key = this.secret(f.token)
+    if (!key) return this.view()
+    try {
+      const { machine: m } = await this.d.fleet.machine(key)
+      if (m && this.file === f) {
+        const next = this.powerOf(m)
+        if (JSON.stringify(next) !== JSON.stringify({ power: f.power, sleep: f.sleep, usage: f.usage })) this.update(next)
+      }
+    } catch (e) {
+      this.d.log?.warn('cloud machine: refresh failed', { error: msg(e) })
+    }
+    return this.view()
+  }
+
+  private waking: Promise<boolean> | null = null
+  /**
+   * Starts a sleeping managed machine and resolves true once its cloud answers (false: not a managed machine, or it
+   * didn't come up). Callers that wait share one wake.
+   */
+  wakeForUse(): Promise<boolean> {
+    const f = this.file
+    if (!f || f.provider !== 'principia' || f.phase !== 'ready' || !this.d.fleet || !f.url) return Promise.resolve(false)
+    this.waking ??= this.wake(f).finally(() => {
+      this.waking = null
+    })
+    return this.waking
+  }
+
+  private async wake(f: MachineFile): Promise<boolean> {
+    const key = this.secret(f.token)
+    if (!key) return false
+    const t = { wakeMs: 4 * 60_000, pollMs: 5_000, ...this.d.timeouts }
+    this.d.log?.info('cloud machine: wake')
+    const m = await this.fleet().wake(key)
+    this.update({ ...this.powerOf(m), power: 'waking' })
+    const until = Date.now() + t.wakeMs
+    const get = this.d.fetch ?? fetch
+    while (Date.now() < until && this.file === f) {
+      try {
+        const res = await get(`${f.url}/v1/health`, { signal: AbortSignal.timeout(8_000) })
+        if (res.ok && ((await res.json()) as { ok?: boolean }).ok) {
+          this.update({ power: 'awake' })
+          return true
+        }
+      } catch {
+        /* still starting */
+      }
+      await this.sleep(t.pollMs)
+    }
+    await this.refresh()
+    return false
+  }
+
+  private watchTimer: NodeJS.Timeout | null = null
+  /** Keeps power and hours fresh while the app runs (one fleet read a minute, only for a ready managed machine). */
+  watch(everyMs = 60_000): () => void {
+    if (this.watchTimer) clearInterval(this.watchTimer)
+    void this.refresh()
+    this.watchTimer = setInterval(() => void this.refresh(), everyMs)
+    this.watchTimer.unref?.()
+    return () => {
+      if (this.watchTimer) clearInterval(this.watchTimer)
+      this.watchTimer = null
+    }
+  }
+
   private async boot(f: MachineFile, gen: number, timeoutMs: number, pollMs: number): Promise<void> {
-    const api = this.d.api(f.provider as Exclude<MachineProvider, 'ssh'>, this.secret(f.token)!)
+    const api = this.d.api(f.provider as ApiProvider, this.secret(f.token)!)
     const until = Date.now() + timeoutMs
     while (this.alive(gen)) {
       const s = await api.status(f.serverId!)
@@ -351,9 +510,10 @@ export class CloudMachines {
         /* not up yet, or no certificate yet */
       }
       const min = Math.floor((Date.now() - started) / 60_000)
-      this.update({ detail: min < 1 ? 'Installing Docker and Principia Cloud…' : `Installing… ${min} min (a first install takes 3 to 10 minutes)` })
+      const managed = f.provider === 'principia'
+      this.update({ detail: managed ? 'Getting its https certificate…' : min < 1 ? 'Installing Docker and Principia Cloud…' : `Installing… ${min} min (a first install takes 3 to 10 minutes)` })
       if (Date.now() - started > timeoutMs) {
-        const hint = this.file?.ip ? ` To look: ssh root@${this.file.ip} tail -50 /var/log/principia-bootstrap.log` : ''
+        const hint = this.file?.ip && !managed ? ` To look: ssh root@${this.file.ip} tail -50 /var/log/principia-bootstrap.log` : ''
         throw new HiveError('internal', `Principia Cloud did not answer at ${url} after ${Math.round(timeoutMs / 60_000)} minutes.${hint}`)
       }
       await this.sleep(pollMs)
@@ -391,7 +551,7 @@ export class CloudMachines {
     }
     const logins = (['claude', 'codex'] as const).filter((a) => b[a])
     for (const a of logins) notes.push(`${a === 'claude' ? 'Claude' : 'Codex'}: finish signing in in your browser.`)
-    this.update({ phase: 'ready', notes, detail: null })
+    this.update({ phase: 'ready', notes, detail: null, ...(f.provider === 'principia' ? { power: 'awake' as const } : {}) })
     // the browser sign-ins run after "ready": the machine works without them, and they wait for you
     void this.logins(logins)
   }

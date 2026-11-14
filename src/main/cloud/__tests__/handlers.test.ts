@@ -48,7 +48,7 @@ afterEach(async () => {
 describe('cloud IPC', () => {
   it('registers every cloud:* channel in the contract, each with a request schema', () => {
     const cloudChannels = INVOKE_CHANNELS.filter((c) => c.startsWith('cloud:'))
-    expect(cloudChannels.length).toBe(39)
+    expect(cloudChannels.length).toBe(41)
     for (const c of cloudChannels) {
       expect(handlers.has(c), c).toBe(true)
       expect(REQUEST_SCHEMAS[c], c).toBeDefined()

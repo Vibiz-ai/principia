@@ -4,13 +4,31 @@
  * address, pairs this Mac, and signs it in with the accounts you choose (GitHub, Shared keys, Claude, Codex). Agents
  * then run there in the sandbox, signed in, with the tools they need.
  *
- * Nothing secret ever reaches the renderer: the provider token and the one-time admin token stay in main (safeStorage).
+ * The default is 'principia' (docs/FLEET.md): Principia runs the machine on its own AWS account, wakes it when you use it
+ * and stops it when it is idle. You only click "Turn on cloud". The others are under "Use my own".
+ *
+ * Nothing secret ever reaches the renderer: the provider token, the fleet key and the one-time admin token stay in
+ * main (safeStorage).
  */
 
-export const MACHINE_PROVIDERS = ['hetzner', 'digitalocean', 'ssh'] as const
+export const MACHINE_PROVIDERS = ['principia', 'hetzner', 'digitalocean', 'ssh'] as const
 export type MachineProvider = (typeof MACHINE_PROVIDERS)[number]
+/** the providers whose API this Mac calls with your token */
+export type ApiProvider = 'hetzner' | 'digitalocean'
+
+/**
+ * The managed fleet's address (fleet/, docs/FLEET.md). null: not deployed for this build, and the app offers only
+ * your own provider or server. PRINCIPIA_FLEET_URL in the app's environment overrides it.
+ */
+export const FLEET_URL: string | null = null
 
 export const MACHINE_PROVIDER_INFO: Record<MachineProvider, { label: string; tokenUrl: string | null; tokenHint: string | null; note: string }> = {
+  principia: {
+    label: 'Principia Cloud',
+    tokenUrl: null,
+    tokenHint: null,
+    note: 'We run it for you. It sleeps when nothing is running and wakes when you start something.'
+  },
   hetzner: {
     label: 'Hetzner Cloud',
     tokenUrl: 'https://console.hetzner.cloud/projects',
@@ -49,7 +67,7 @@ export interface MachineSize {
 }
 
 export interface MachineOptions {
-  provider: Exclude<MachineProvider, 'ssh'>
+  provider: ApiProvider
   regions: MachineRegion[]
   sizes: MachineSize[]
   defaultRegion: string | null
@@ -113,6 +131,20 @@ export interface MachineView {
   notes: string[]
   /** 'published' (pulled the image) or 'source' (built on the machine) once known */
   install: 'published' | 'source' | null
+  /** managed machines only: awake, asleep (stopped to save money) or waking; null for the others */
+  power?: MachinePower | null
+  /** managed machines only: why it sleeps, when it wakes on its own, and this month's awake hours */
+  sleep?: { reason: string | null; wakeAt: string | null; idleMinutes: number } | null
+  usage?: { month: string; hours: number; limitHours: number } | null
+}
+
+export type MachinePower = 'awake' | 'asleep' | 'waking'
+
+/** What this Mac can offer: the managed cloud when the fleet is there, and who it signs in as. */
+export interface MachineInfo {
+  managed: boolean
+  /** the GitHub login this Mac's gh is signed in as, or null */
+  github: string | null
 }
 
 /** sslip.io name for an IPv4 address: 1.2.3.4 → 1-2-3-4.sslip.io (dashes: each address is its own registrable name). */

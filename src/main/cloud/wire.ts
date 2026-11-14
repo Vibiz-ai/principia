@@ -24,6 +24,8 @@ import type { MoveDeps } from './move'
 import { CloudMachines } from './machines'
 import { runSsh, sshPublicKey } from './machines/local'
 import { digitalocean, hetzner } from './machines/providers'
+import { fleetClient } from './machines/fleet'
+import { FLEET_URL } from '../../shared/machines'
 
 export interface CloudWiring {
   link: CloudLink
@@ -87,7 +89,9 @@ export function createCloud(h: Hive): CloudWiring {
     released: (ids) => {
       for (const id of ids) h.safe(() => h.engine.scheduler.upsert(id), undefined)
     },
-    log
+    log,
+    // a sleeping managed cloud wakes when a change can't get through (docs/FLEET.md)
+    wake: (): Promise<boolean> => machines.wakeForUse()
   })
 
   const logins = new AccountLogins({
@@ -150,11 +154,13 @@ export function createCloud(h: Hive): CloudWiring {
     },
     log
   })
-  const machines = new CloudMachines({
+  const machines: CloudMachines = new CloudMachines({
     userData,
     cipher,
     emit: (machine) => emit('cloud', { kind: 'machine', machine }),
     api: (provider, token) => (provider === 'hetzner' ? hetzner(token) : digitalocean(token)),
+    fleet: fleetUrl() ? fleetClient(fleetUrl()!) : null,
+    ghToken: async () => (await ghToken())?.token ?? null,
     sshPublicKey,
     runSsh: (t, script, line) => runSsh(t, script, line, baseChildEnv()),
     resolve: async (host) => (await dns.lookup(host, { family: 4 })).address,
@@ -181,6 +187,13 @@ export function createCloud(h: Hive): CloudWiring {
     hostName: os.hostname().replace(/\.local$/, '').slice(0, 40),
     log
   })
+  machines.watch()
   return { link, logins, move, accounts, machines }
+}
+
+/** The managed fleet's address: PRINCIPIA_FLEET_URL (development, self-hosted fleets) or the build's own. */
+function fleetUrl(): string | null {
+  const v = process.env.PRINCIPIA_FLEET_URL?.trim()
+  return v && /^https:\/\//.test(v) ? v : FLEET_URL
 }
 

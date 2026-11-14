@@ -4,9 +4,12 @@ You click **Make my cloud** on the Cloud page. Principia creates a server, insta
 https address, connects this Mac, and signs it in with your accounts. Agents then run there in a sandbox, signed in to
 Claude, Codex and GitHub, with your keys and the tools they need. Nobody types a command or copies a link.
 
+The default is the managed cloud of docs/FLEET.md: *Turn On Cloud*, one click, Principia runs it. This page is
+*Use my own server or provider*, and the parts both share (the script, pairing, signing in).
+
 ## 1. What you do
 
-1. **Cloud** › *Make my cloud*. Choose one:
+1. **Cloud** › *Use my own server or provider*. Choose one:
    - **Hetzner Cloud**: paste an API token (Project › Security › API tokens, Read & Write), then *Check*. Pick a
      region and a size. The default is the cheapest x86 size with 4 vCPU and 8 GB.
    - **DigitalOcean**: the same, with a DigitalOcean token. The default is `s-4vcpu-8gb`.
@@ -39,7 +42,9 @@ cleans up. The app resumes a machine in progress at startup (`cloud.machines.res
 ### The bootstrap script (`machines/bootstrap.ts`)
 
 One bash script for all three ways in. It holds **nothing secret**. Tests check it with `bash -n`, and with
-`shellcheck` when it is installed.
+`shellcheck` when it is installed. It is two halves: `prepareScript` (steps 1, 2 and the image, the same on every
+machine, which the managed fleet bakes into its machine image) and `configureScript` (this machine's address, the
+admin hash, and on a managed machine its heartbeat, then `docker compose up`).
 
 1. SSH keys only: password and keyboard-interactive login off, root password locked. Docker comes from
    get.docker.com.

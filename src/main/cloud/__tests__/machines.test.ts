@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest'
 import type { MachineView } from '../../../shared/machines'
 import { isPrivateIpv4, sslipHost } from '../../../shared/machines'
 import { CloudMachines, MACHINE_FILE, type MachineDeps } from '../machines'
-import { bootstrapScript } from '../machines/bootstrap'
+import { bootstrapScript, configureScript, prepareScript } from '../machines/bootstrap'
+import { FleetRequestError, type FleetClient, type FleetMachine } from '../machines/fleet'
 import { digitalocean, hetzner, pickDefaultSize, type MachineApi } from '../machines/providers'
 import { sshPublicKey } from '../machines/local'
 
@@ -224,6 +225,125 @@ describe('CloudMachines (docs/MACHINES.md)', () => {
   })
 })
 
+/** A fake fleet (fleet/src/core.ts) whose machine pairs with the admin hash it was given. */
+function managed(o: { allowed?: boolean; gh?: string | null; startPolls?: number } = {}) {
+  const t = setup({ healthAfter: 1 })
+  const calls: string[] = []
+  let admin: string | null = null
+  let fm: FleetMachine | null = null
+  let polls = 0
+  const KEY = 'pfk_fleet-key-0123456789abcdefghijklmnop'
+  const view = (state: FleetMachine['state']): FleetMachine => ({ id: 'm_1', state, host: '3-0-0-1.sslip.io', url: 'https://3-0-0-1.sslip.io', instanceType: 't4g.large', createdAt: 'x', error: null, wakeAt: null, sleepReason: null, usage: { month: '2026-11', hours: 1.5, limitHours: 200 }, idleMinutes: 20 })
+  const fleet: FleetClient = {
+    async enroll(gh) {
+      calls.push(`enroll ${gh}`)
+      return { key: KEY, login: 'lautaro', allowed: o.allowed ?? true }
+    },
+    async machine(key) {
+      calls.push(`machine ${key === KEY}`)
+      if (fm?.state === 'starting' && ++polls > (o.startPolls ?? 1)) fm = view('running')
+      return { login: 'lautaro', allowed: true, machine: fm }
+    },
+    async create(key, b) {
+      calls.push(`create ${key === KEY} ${b.workspaceName}`)
+      if (fm) throw new FleetRequestError(409, 'exists', 'You already have a cloud machine.')
+      admin = b.adminTokenSha256
+      fm = view('starting')
+      return fm
+    },
+    async wake(key) {
+      calls.push(`wake ${key === KEY}`)
+      fm = view('starting')
+      return fm
+    },
+    async remove(key) {
+      calls.push(`remove ${key === KEY}`)
+      fm = null
+    }
+  }
+  const base = t.deps.fetch!
+  t.deps.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith('/v1/pair/start')) {
+      const tok = String((init?.headers as Record<string, string>).authorization).replace(/^Bearer /, '')
+      if (createHash('sha256').update(tok).digest('hex') !== admin) return new Response('{}', { status: 401 })
+      return new Response(JSON.stringify({ code: 'K7QM-4XWD' }), { status: 201 })
+    }
+    return base(url, init)
+  }) as typeof fetch
+  t.deps.fleet = fleet
+  t.deps.ghToken = async () => (o.gh === undefined ? 'gho_mac_signin_0123456789' : o.gh)
+  return { ...t, fleet, fleetCalls: calls, KEY, setState: (s: FleetMachine['state']) => (fm = view(s)) }
+}
+
+describe('Principia Cloud, managed (docs/FLEET.md)', () => {
+  it('turns on with one click: GitHub sign-in once, the fleet makes it, this Mac pairs with the hash it sent', async () => {
+    const t = managed({ startPolls: 2 })
+    const m = new CloudMachines(t.deps)
+    expect(m.info()).toEqual({ managed: true, github: null })
+    await m.create({ provider: 'principia', bring: BRING })
+    const v = await settle(m, 'ready')
+    expect(v).toMatchObject({ provider: 'principia', serverId: 'm_1', url: 'https://3-0-0-1.sslip.io', power: 'awake', region: null })
+    expect(t.fleetCalls[0]).toBe('enroll gho_mac_signin_0123456789')
+    expect(t.fleetCalls).toContain('create true studio cloud')
+    expect(t.paired).toEqual([{ url: 'https://3-0-0-1.sslip.io', code: 'K7QM-4XWD' }])
+    expect(m.info().github).toBe('lautaro')
+    // the fleet key is on disk encrypted, never in a view; the GitHub token is nowhere
+    const file = fs.readFileSync(path.join(t.userData, MACHINE_FILE), 'utf8')
+    expect(file).not.toContain(t.KEY)
+    expect(file).not.toContain('gho_mac_signin')
+    expect(JSON.stringify(t.views)).not.toMatch(/pfk_|gho_|enc:/)
+  })
+
+  it('needs GitHub on this Mac, and says so when the account is not let in yet', async () => {
+    const a = managed({ gh: null })
+    const m1 = new CloudMachines(a.deps)
+    await m1.create({ provider: 'principia', bring: BRING })
+    expect((await settle(m1, 'failed')).error).toMatch(/Sign in to GitHub on this Mac first/)
+    const b = managed({ allowed: false })
+    const m2 = new CloudMachines(b.deps)
+    await m2.create({ provider: 'principia', bring: BRING })
+    expect((await settle(m2, 'failed')).error).toBe('Principia Cloud isn’t open for lautaro yet.')
+  })
+
+  it('is not offered without a fleet', async () => {
+    const t = setup()
+    const m = new CloudMachines(t.deps)
+    expect(m.info().managed).toBe(false)
+    await expect(m.create({ provider: 'principia', bring: BRING })).rejects.toThrow(/isn’t available/)
+  })
+
+  it('wakes a sleeping machine for use, once for many callers, and reports its power', async () => {
+    const t = managed()
+    const m = new CloudMachines(t.deps)
+    await m.create({ provider: 'principia', bring: BRING })
+    await settle(m, 'ready')
+    t.setState('sleeping')
+    expect((await m.refresh())!.power).toBe('asleep')
+    const [a, b] = await Promise.all([m.wakeForUse(), m.wakeForUse()])
+    expect([a, b]).toEqual([true, true])
+    expect(t.fleetCalls.filter((c) => c.startsWith('wake'))).toEqual(['wake true'])
+    expect(m.view()!.power).toBe('awake')
+    expect(m.view()!.usage).toEqual({ month: '2026-11', hours: 1.5, limitHours: 200 })
+  })
+
+  it('turn off deletes it at the fleet and disconnects this Mac', async () => {
+    const t = managed()
+    const m = new CloudMachines(t.deps)
+    await m.create({ provider: 'principia', bring: BRING })
+    await settle(m, 'ready')
+    await m.remove()
+    expect(t.fleetCalls).toContain('remove true')
+    expect(t.calls).toContain('unlink')
+    expect(m.view()).toBeNull()
+  })
+
+  it('never wakes anything that is not a ready managed machine', async () => {
+    const t = setup()
+    const m = new CloudMachines(t.deps)
+    expect(await m.wakeForUse()).toBe(false)
+  })
+})
+
 describe('provider APIs', () => {
   const recorder = (answers: Record<string, unknown>) => {
     const seen: { method: string; url: string; auth: string; body: any }[] = []
@@ -326,6 +446,19 @@ describe('the bootstrap script', () => {
   it('refuses values that would break out of the script', () => {
     expect(() => bootstrapScript({ domain: "x'; rm -rf / #", adminTokenSha256: 'ab'.repeat(32), image: 'i', sourceRef: 'r' })).toThrow(/Invalid domain/)
     expect(() => bootstrapScript({ domain: 'x', adminTokenSha256: 'nothex', image: 'i', sourceRef: 'r' })).toThrow(/hash/)
+  })
+
+  it('splits into prepare (the same everywhere, for a baked image) and configure (this machine, its heartbeat)', () => {
+    const prep = prepareScript({ image: 'x:1', sourceRef: 'main' })
+    expect(prep).not.toMatch(/ADMIN_SHA256|FLEET_TOKEN=|docker compose up/)
+    expect(prep).toContain('principia-heartbeat.timer')
+    const conf = configureScript({ domain: '3-0-0-1.sslip.io', adminTokenSha256: 'ab'.repeat(32), fleet: { url: 'https://fleet.example.com', machineToken: `pmt_${'x'.repeat(43)}` } })
+    expect(conf).toContain('FLEET_URL=https://fleet.example.com')
+    expect(conf).toContain('chmod 600 fleet.env')
+    expect(conf).toContain('systemctl enable --now principia-heartbeat.timer')
+    expect(configureScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32) })).not.toContain('fleet.env')
+    expect(() => configureScript({ domain: 'a', adminTokenSha256: 'ab'.repeat(32), fleet: { url: 'http://insecure', machineToken: 'pmt_x'.repeat(10) } })).toThrow(/fleet/)
+    expect(() => configureScript({ domain: 'a', adminTokenSha256: 'ab'.repeat(32), fleet: { url: 'https://f.example.com', machineToken: "x'; rm -rf /" } })).toThrow(/fleet/)
   })
 
   it('passes bash -n (and shellcheck when installed)', () => {

@@ -647,6 +647,9 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'cloud:machineCreate': [import('./machines').CreateMachineRequest, import('./machines').MachineView]
   'cloud:machineRetry': [V, import('./machines').MachineView]
   'cloud:machineDelete': [V, null]
+  // docs/FLEET.md: whether the managed cloud is offered here, and waking a sleeping one
+  'cloud:machineInfo': [V, import('./machines').MachineInfo]
+  'cloud:machineWake': [V, import('./machines').MachineView | null]
 }
 
 export interface NativeMenuItem {
@@ -911,7 +914,7 @@ export const INVOKE_CHANNELS = [
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
   'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
   'cloud:accounts', 'cloud:githubConnect', 'cloud:githubRemove', 'cloud:keyCloud', 'cloud:keysSync',
-  'cloud:machine', 'cloud:machineOptions', 'cloud:machineCreate', 'cloud:machineRetry', 'cloud:machineDelete',
+  'cloud:machine', 'cloud:machineOptions', 'cloud:machineCreate', 'cloud:machineRetry', 'cloud:machineDelete', 'cloud:machineInfo', 'cloud:machineWake',
   ...PLANS_CHANNELS,
   // CHAT-UI.md §3.2
   ...CHAT_CHANNELS,

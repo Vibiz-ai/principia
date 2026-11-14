@@ -169,6 +169,12 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
     emit('data:changed', { domain: 'schedules' })
     return r
   })
+  handle('cloud:machineInfo', () => cloud.machines?.info() ?? { managed: false, github: null })
+  handle('cloud:machineWake', async () => {
+    const m = machines()
+    await m.wakeForUse()
+    return m.refresh()
+  })
   // a machine that was being made when the app quit goes on
   cloud.machines?.resume()
 

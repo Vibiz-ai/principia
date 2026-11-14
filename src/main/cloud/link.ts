@@ -61,6 +61,8 @@ export interface CloudLinkDeps {
   cipher: Cipher
   emit(e: CloudDesktopEvent): void
   fetch?: typeof fetch
+  /** docs/FLEET.md: wakes a sleeping managed cloud when a change can't get through (CloudClient `wake`) */
+  wake?: () => Promise<boolean>
   now?: () => Date
   host?: () => { deviceName: string; platform: string }
   passport?: PassportSyncPort | null
@@ -201,7 +203,7 @@ export class CloudLink {
   client(): CloudClient {
     const t = this.token()
     if (!this.file || !t) throw new HiveError('conflict', 'Connect this Mac to a cloud first.')
-    return new CloudClient({ url: this.file.url, token: t, fetch: this.d.fetch })
+    return new CloudClient({ url: this.file.url, token: t, fetch: this.d.fetch, wake: this.d.wake })
   }
 
   /** Runs a cloud call and keeps the Online / Offline state honest. */

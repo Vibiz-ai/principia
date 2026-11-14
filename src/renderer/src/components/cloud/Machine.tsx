@@ -1,14 +1,17 @@
 /**
- * docs/MACHINES.md on the Cloud page. Not connected: "Make my cloud" (provider, token, region and size, what to sign
- * it in with) and then the live progress. Connected to a machine made here: a small card with its address, what still
- * needs you, and Delete machine. The provider token goes to main once and never comes back.
+ * docs/MACHINES.md and docs/FLEET.md on the Cloud page. Not connected: "Turn on cloud" (the managed cloud, one click),
+ * with "Use my own" for a provider token or a server; then the live progress. Connected to a machine made here: a
+ * small card with its address, whether it is awake, what still needs you, and Turn off / Delete. Tokens go to main
+ * once and never come back.
  */
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import {
   MACHINE_PHASES,
   MACHINE_PHASE_LABEL,
   MACHINE_PROVIDER_INFO,
+  FLEET_URL,
   type MachineBring,
+  type MachineInfo,
   type MachineOptions,
   type MachineProvider,
   type MachineView
@@ -39,12 +42,83 @@ export function useMachine(): MachineView | null | undefined {
   return m
 }
 
+/** Whether this build offers the managed cloud: the build's own answer first, main's (with any override) once it arrives. */
+export function useMachineInfo(): MachineInfo {
+  const [i, set] = useState<MachineInfo>({ managed: FLEET_URL !== null, github: null })
+  useEffect(() => {
+    let live = true
+    void hive.cloud.machineInfo().then(
+      (v) => live && set(v),
+      () => undefined
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+  return i
+}
+
+const DEFAULT_BRING: MachineBring = { github: true, keys: true, claude: true, codex: false }
+
+/**
+ * Not connected yet: the managed cloud as one button when this build has it, with everything else (your own
+ * provider, your own server, a connect link) under "Use my own". Without it, the form.
+ */
+export function GetCloud({ own }: { own?: ReactNode }): ReactElement {
+  const info = useMachineInfo()
+  const [mine, setMine] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (!info.managed)
+    return (
+      <>
+        <MakeCloud />
+        {own}
+      </>
+    )
+  const turnOn = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await hive.cloud.machineCreate({ provider: 'principia', bring: DEFAULT_BRING })
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <section className="cl-mini cl-make cl-turnon">
+        <h3 className="cl-mini__h">Run your agents in the cloud</h3>
+        <p className="cl-mini__p">Your chats and workflows keep going when this Mac sleeps, signed in to Claude and GitHub with your keys, and with git, gh, Python and build tools ready. It sleeps when nothing runs and wakes when you start something.</p>
+        {error && <p className="cl-error selectable">{error}</p>}
+        <div className="cl-row">
+          <Button variant="primary" disabled={busy} onClick={() => void turnOn()}>
+            {busy ? 'Turning On…' : 'Turn On Cloud'}
+          </Button>
+          <span className="cl-dim">About two minutes. Claude asks you to sign in once in your browser.</span>
+        </div>
+        <button type="button" className="cl-link cl-turnon__own" onClick={() => setMine(!mine)}>
+          {mine ? 'Hide' : 'Use my own server or provider'}
+        </button>
+      </section>
+      {mine && (
+        <>
+          <MakeCloud />
+          {own}
+        </>
+      )}
+    </>
+  )
+}
+
 const STEPS = MACHINE_PHASES.filter((p) => p !== 'failed' && p !== 'ready')
 const money = (m: { amount: number; currency: string } | null): string => (m ? `${m.currency === 'EUR' ? '€' : '$'}${m.amount % 1 ? m.amount.toFixed(2) : m.amount}/mo` : '')
 
 /** "Make my cloud": the form. */
 export function MakeCloud(): ReactElement {
-  const [provider, setProvider] = useState<MachineProvider>('hetzner')
+  const [provider, setProvider] = useState<Exclude<MachineProvider, 'principia'>>('hetzner')
   const [token, setToken] = useState('')
   const [opts, setOpts] = useState<MachineOptions | null>(null)
   const [region, setRegion] = useState('')
@@ -57,7 +131,7 @@ export function MakeCloud(): ReactElement {
   const info = MACHINE_PROVIDER_INFO[provider]
   const sizes = useMemo(() => (opts?.sizes ?? []).filter((s) => !region || !s.regions.length || s.regions.includes(region)), [opts, region])
 
-  const pick = (p: MachineProvider): void => {
+  const pick = (p: Exclude<MachineProvider, 'principia'>): void => {
     setProvider(p)
     setOpts(null)
     setError(null)
@@ -96,7 +170,7 @@ export function MakeCloud(): ReactElement {
     <section className="cl-mini cl-make">
       <h3 className="cl-mini__h">Make my cloud</h3>
       <p className="cl-mini__p">One machine of your own, set up for you: Principia Cloud with an https address, your agents’ CLIs, git, gh, Python and build tools. You sign in here once and every agent there is signed in.</p>
-      <Segmented<MachineProvider>
+      <Segmented<Exclude<MachineProvider, 'principia'>>
         className="cl-make__seg"
         value={provider}
         onChange={pick}
@@ -208,6 +282,22 @@ function BringRow({ label, hint, on, set }: { label: string; hint: string; on: b
 
 async function deleteMachine(m: MachineView): Promise<void> {
   const own = m.provider === 'ssh'
+  if (m.provider === 'principia') {
+    const off = await confirmNative({
+      message: 'Turn off your cloud?',
+      detail: 'Your cloud machine is deleted with everything on it: runs, logs and the accounts it was signed in with. Your Mac keeps all of its own. You can turn it on again anytime.',
+      confirmLabel: 'Turn Off Cloud',
+      destructive: true
+    }).catch(() => false)
+    if (!off) return
+    try {
+      await hive.cloud.machineDelete()
+      toast('Cloud turned off.')
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+    }
+    return
+  }
   const ok = await confirmNative({
     message: own ? 'Forget this server?' : `Delete ${m.name}?`,
     detail: own
@@ -231,14 +321,15 @@ export function MachineProgress({ m }: { m: MachineView }): ReactElement {
   const at = failed ? (m.failedAt ?? 'creating') : m.phase
   const steps = m.provider === 'ssh' ? STEPS.filter((p) => p !== 'creating' && p !== 'booting') : STEPS
   const idx = steps.indexOf(at as (typeof STEPS)[number])
+  const managed = m.provider === 'principia'
   return (
     <section className="cl-mini cl-make">
-      <h3 className="cl-mini__h">{failed ? 'Your cloud stopped while being made' : 'Making your cloud'}</h3>
+      <h3 className="cl-mini__h">{failed ? (managed ? 'Your cloud didn’t turn on' : 'Your cloud stopped while being made') : managed ? 'Turning on your cloud' : 'Making your cloud'}</h3>
       <p className="cl-mini__p">
         {MACHINE_PROVIDER_INFO[m.provider].label}
-        {m.size ? ` · ${m.size}` : ''}
+        {!managed && m.size ? ` · ${m.size}` : ''}
         {m.region ? ` · ${m.region}` : ''}
-        {m.ip ? ` · ${m.ip}` : ''}
+        {!managed && m.ip ? ` · ${m.ip}` : ''}
       </p>
       <ol className="cl-msteps">
         {steps.map((p, i) => {
@@ -260,7 +351,7 @@ export function MachineProgress({ m }: { m: MachineView }): ReactElement {
           </Button>
         )}
         <Button variant="ghost" onClick={() => void deleteMachine(m)}>
-          {m.provider === 'ssh' ? 'Forget Server' : failed ? 'Delete Machine' : 'Stop and Delete'}
+          {managed ? 'Cancel' : m.provider === 'ssh' ? 'Forget Server' : failed ? 'Delete Machine' : 'Stop and Delete'}
         </Button>
         {!failed && <span className="cl-dim">You can leave this page. It keeps going, also after a restart.</span>}
       </div>
@@ -268,8 +359,62 @@ export function MachineProgress({ m }: { m: MachineView }): ReactElement {
   )
 }
 
+const SLEEP_REASON: Record<string, string> = {
+  idle: 'nothing ran for a while',
+  limit: 'it used this month’s hours',
+  'no heartbeat': 'it stopped answering',
+  'stopped at AWS': 'it was stopped'
+}
+
+/** A managed machine: awake, asleep (and why, and when it wakes on its own), the hours this month, Wake. */
+function Power({ m }: { m: MachineView }): ReactElement | null {
+  const [waking, setWaking] = useState(false)
+  if (m.provider !== 'principia' || m.phase !== 'ready') return null
+  const p = waking ? 'waking' : (m.power ?? 'awake')
+  const wake = async (): Promise<void> => {
+    setWaking(true)
+    try {
+      await hive.cloud.machineWake()
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+    } finally {
+      setWaking(false)
+    }
+  }
+  const why = m.sleep?.reason ? (SLEEP_REASON[m.sleep.reason] ?? m.sleep.reason) : null
+  const at = m.sleep?.wakeAt ? new Date(m.sleep.wakeAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : null
+  return (
+    <div className="cl-power">
+      <div className="cl-acct">
+        <Tess kind={p === 'awake' ? 'ok' : p === 'waking' ? 'running' : 'q'} />
+        <div className="cl-ai">
+          <b>{p === 'awake' ? 'Awake' : p === 'waking' ? 'Waking up…' : 'Asleep'}</b>
+          <span>
+            {p === 'awake'
+              ? `Sleeps after ${m.sleep?.idleMinutes ?? 20} minutes with nothing running.`
+              : p === 'waking'
+                ? 'About a minute.'
+                : `${why ? `Since ${why}. ` : ''}Wakes when you start something${at ? `, and at ${at} for a schedule` : ''}.`}
+          </span>
+        </div>
+        {p === 'asleep' && (
+          <Button size="sm" variant="secondary" onClick={() => void wake()}>
+            Wake
+          </Button>
+        )}
+      </div>
+      {m.usage && (
+        <p className="cl-dim cl-make__notes">
+          {m.usage.hours} of {m.usage.limitHours} hours this month
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** Connected to a machine made here: where it is, what still needs you, Delete. */
 export function MachineCard({ m }: { m: MachineView }): ReactElement {
+  const managed = m.provider === 'principia'
   return (
     <section className="cl-card">
       <div className="cl-ctitle">
@@ -278,13 +423,14 @@ export function MachineCard({ m }: { m: MachineView }): ReactElement {
       <div className="cl-acct">
         <Tess kind={m.phase === 'ready' ? (m.notes.length ? 'needs' : 'ok') : m.phase === 'failed' ? 'fail' : 'running'} />
         <div className="cl-ai">
-          <b className="cl-mono selectable">{m.url?.replace(/^https:\/\//, '') ?? m.name}</b>
-          <span>{[m.size, m.region, m.ip].filter(Boolean).join(' · ') || MACHINE_PHASE_LABEL[m.phase]}</span>
+          <b className={managed ? undefined : 'cl-mono selectable'}>{managed ? 'Your cloud' : (m.url?.replace(/^https:\/\//, '') ?? m.name)}</b>
+          <span>{managed ? 'Run by Principia' : [m.size, m.region, m.ip].filter(Boolean).join(' · ') || MACHINE_PHASE_LABEL[m.phase]}</span>
         </div>
         <Button size="sm" variant="ghost" onClick={() => void deleteMachine(m)}>
-          {m.provider === 'ssh' ? 'Forget' : 'Delete'}
+          {managed ? 'Turn Off' : m.provider === 'ssh' ? 'Forget' : 'Delete'}
         </Button>
       </div>
+      <Power m={m} />
       {m.notes.map((n) => (
         <p key={n} className="cl-dim cl-make__notes">
           {n}

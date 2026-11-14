@@ -78,5 +78,7 @@ export const CLOUD_REQUEST_SCHEMAS = {
     })
     .strict(),
   'cloud:machineRetry': none,
-  'cloud:machineDelete': none
+  'cloud:machineDelete': none,
+  'cloud:machineInfo': none,
+  'cloud:machineWake': none
 } as const

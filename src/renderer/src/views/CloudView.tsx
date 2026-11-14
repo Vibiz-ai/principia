@@ -10,7 +10,7 @@ import { Loading, Toolbar } from '../components/ui'
 import { AccountsCard, startLogin } from '../components/cloud/Accounts'
 import { CompaniesCard, MoveSheet } from '../components/cloud/Companies'
 import { NotConnected } from '../components/cloud/Connect'
-import { MachineCard, MachineProgress, MakeCloud, useMachine } from '../components/cloud/Machine'
+import { GetCloud, MachineCard, MachineProgress, useMachine } from '../components/cloud/Machine'
 import { CloudHeader } from '../components/cloud/Header'
 import { NeedsYouCard } from '../components/cloud/NeedsYou'
 import { RunSheet, RunsCard } from '../components/cloud/Runs'
@@ -54,10 +54,9 @@ export function CloudView(): ReactElement {
             </div>
           ) : (
             <div className="cl-connect cl-connect--stack">
-              <MakeCloud />
+              <GetCloud own={<NotConnected compact />} />
             </div>
           )}
-          {!machine && <NotConnected compact />}
         </div>
       </div>
     )

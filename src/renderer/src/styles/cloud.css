@@ -196,3 +196,8 @@
 .cl-mstep--running, .cl-mstep--fail { color: var(--text-primary); font-weight: var(--weight-medium, 500); }
 .cl-mstep .cl-dim { font-weight: normal; margin-left: 4px; }
 @media (max-width: 560px) { .cl-make__grid { grid-template-columns: 1fr; } }
+
+/* docs/FLEET.md: Turn on cloud, and the managed machine's power */
+.cl-turnon .cl-row { margin-top: 4px; }
+.cl-turnon__own { align-self: flex-start; margin-top: 12px; font-size: 12px; }
+.cl-power { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }

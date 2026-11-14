@@ -1,0 +1,31 @@
+{
+  "name": "principia-fleet",
+  "private": true,
+  "type": "module",
+  "description": "Principia Cloud managed fleet: one machine per person on AWS, woken when needed, stopped when idle (docs/FLEET.md).",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --require-approval never",
+    "build-ami": "tsx scripts/build-ami.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1169.0",
+    "@aws-sdk/client-ec2": "^3.1169.0",
+    "@aws-sdk/client-ssm": "^3.1169.0",
+    "@aws-sdk/lib-dynamodb": "^3.1169.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cloudformation": "^3.1169.0",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^26.6.6",
+    "aws-cdk": "^2.1148.1",
+    "aws-cdk-lib": "^2.277.0",
+    "constructs": "^10.8.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

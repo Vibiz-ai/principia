@@ -62,4 +62,26 @@ describe('Cloud › Make my cloud', () => {
     expect(out).toContain('cl-tes--needs')
     expect(out).toContain('>Delete<')
   })
+
+  it('a managed machine: Your cloud, awake or asleep with why and when it wakes, its hours, Wake and Turn Off', async () => {
+    const { MachineCard } = await import('./Machine')
+    const base: MachineView = { ...M, provider: 'principia', phase: 'ready', detail: null, size: 't4g.large', region: null, usage: { month: '2026-11', hours: 12.5, limitHours: 200 }, sleep: { reason: null, wakeAt: null, idleMinutes: 20 } }
+    const awake = renderToStaticMarkup(createElement(MachineCard, { m: { ...base, power: 'awake' } }))
+    for (const s of ['Your cloud', 'Run by Principia', 'Awake', 'Sleeps after 20 minutes with nothing running.', '12.5 of 200 hours this month', '>Turn Off<']) expect(awake).toContain(s)
+    expect(awake).not.toContain('sslip.io')
+    const asleep = renderToStaticMarkup(createElement(MachineCard, { m: { ...base, power: 'asleep', sleep: { reason: 'idle', wakeAt: null, idleMinutes: 20 } } }))
+    expect(asleep).toContain('Asleep')
+    expect(asleep).toContain('Since nothing ran for a while. Wakes when you start something.')
+    expect(asleep).toContain('>Wake<')
+  })
+
+  it('managed progress hides the machine details', async () => {
+    const { MachineProgress } = await import('./Machine')
+    const out = renderToStaticMarkup(createElement(MachineProgress, { m: { ...M, provider: 'principia', size: 't4g.large', region: null, phase: 'booting' } }))
+    expect(out).toContain('Turning on your cloud')
+    expect(out).toContain('Principia Cloud')
+    expect(out).not.toContain('t4g.large')
+    expect(out).not.toContain('203.0.113.7')
+    expect(out).toContain('>Cancel<')
+  })
 })
