@@ -10,6 +10,10 @@ import type { WorkflowDraft } from '../../shared/types'
 import type { Hive } from '../hive'
 import { emit, handle } from '../ipc'
 import { readTranscript } from '../history/transcript'
+import { historyRoots } from '../history'
+import { searchSessions } from '../history/search'
+import { which } from '../engine/util'
+import { baseChildEnv } from '../loginEnv'
 
 export function registerAuthorHandlers(h: Hive): void {
   const broker = () => {
@@ -72,6 +76,11 @@ export function registerAuthorHandlers(h: Hive): void {
     const s = h.history.byId(id)
     if (!s || !h.history.isInsideRoot(s.path) || !fs.existsSync(s.path)) throw new HiveError('not_found', 'Conversation not found')
     return readTranscript(s, (t) => h.vault.redact(t))
+  })
+  handle('history:search', ({ query, limit }) => {
+    if (h.settings().claudeHistory === false) return { hits: [], scanned: 0, truncated: false }
+    const env = baseChildEnv()
+    return searchSessions({ roots: historyRoots({ ...env, HIVE_CLAUDE_DIRS: process.env.HIVE_CLAUDE_DIRS }), query, limit, rg: which('rg', env.PATH) })
   })
   handle('history:resume', ({ id, profileId, cols, rows, companyId }) => {
     if (!h.history || h.settings().claudeHistory === false) throw new HiveError('not_found', 'Claude history is off')

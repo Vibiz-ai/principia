@@ -59,7 +59,6 @@ import {
   multiCompany,
   openLiveItem,
   openTaskLive,
-  openPalette,
   departmentsOn,
   departmentContextMenu,
   openDepartment,
@@ -79,6 +78,10 @@ import { groupLive, workersLine, type LiveEntry } from '../lib/convWork'
 import { conversationOfRunTitle } from '../lib/conversations'
 import { liveRowView } from '../lib/liveRow'
 import { disclosureKeys } from './TeamNav'
+import { SessionSearch, openSessionSearch } from './SessionSearch'
+
+/** Orca-simple: the main list shows the work; Memory and Keys sit in the footer (still ⌘3 and ⌘4). */
+const TUCKED = new Set<DoorKey>(['knowledge', 'keys'])
 
 /** Drag payload for reordering repositories (Alt+arrows does the same from the keyboard). */
 export const REPO_DRAG_TYPE = 'application/x-principia-repository'
@@ -227,15 +230,11 @@ export function Sidebar(): React.JSX.Element {
   const inSession = view.name === 'session' && !view.missing && !view.missingRepoId
   const focusedSess = sessions.find((s) => s.id === focused)
   const current = navKeyOf(view)
-  // code companies (any repository) get REPOSITORIES; a shop, and a new user with no folders yet, never see it
-  // (design §2.1: 7 rows). ⌘O, ⌘K "repo", New ▾ and dropping a folder on the sidebar still add the first one.
-  // CHAT-UI.md §7: with a team, REPOSITORIES folds into conversations: "Claude in <repository>" is a destination of New
-  // conversation's To:, and repository sessions are rows in Chats › Claude (⌘O still adds a repository). Without a team
-  // (Personal, a code workspace) it stays: there it is the only way in.
+  // a new user with no folders yet never sees PROJECTS: ⌘O, ⌘K "repo", New ▾ and dropping a folder add the first one
   const company = active !== 'all' ? active : null
   const convs = useConversations(company && departments ? company : null)
-  const hasTeam = !!company && departments && liveSeats.some((a) => a.companyId === company && !a.archivedAt)
-  const showRepos = mode !== 'all' && repos.length > 0 && !hasTeam
+  // PROJECTS: the folders your agents work in, each with its sessions; the one you are in is a card
+  const showRepos = mode !== 'all' && repos.length > 0
 
   // ---------- pins and More (settings.sidebarNav, per company) ----------
   const prefs = prefsFor(navPrefs, active, multi)
@@ -484,7 +483,7 @@ export function Sidebar(): React.JSX.Element {
     const selected = inSession && focusedSess?.repoId === r.id
     const isRenaming = renaming?.kind === 'repo' && renaming.id === r.id
     return (
-      <div key={r.id}>
+      <div key={r.id} className={`side-proj ${selected ? 'is-focus' : ''}`}>
         <div
           className={`side-row side-row--repo ${selected ? 'is-selected-parent' : ''} ${!r.exists ? 'is-missing' : ''} ${draggedRepo === r.id ? 'is-dragging' : ''} ${repoDrop?.id === r.id ? `repo-drop--${repoDrop.placement}` : ''}`}
           draggable={!isRenaming}
@@ -613,6 +612,11 @@ export function Sidebar(): React.JSX.Element {
         />
       ) : (
       <div className={`side-menu ${chatsBack ? 'is-back' : ''}`}>
+      <button type="button" className="side-search side-search--top" onClick={openSessionSearch} title="Search everything you and Claude said in your sessions (⇧⌘F). ⌘K for pages and commands.">
+        <Icon name="search" size={14} />
+        <span className="side-search__text">Search</span>
+        <Kbd>⇧⌘F</Kbd>
+      </button>
       {company && (
         <button type="button" className="cx-side-new" data-chatux="new-conversation" onClick={() => openNewChat(company)} title="New chat (⌥⌘N): say what you need, Principia picks the agent">
           <Icon name="edit" size={14} />
@@ -620,13 +624,8 @@ export function Sidebar(): React.JSX.Element {
           <Kbd>⌥⌘N</Kbd>
         </button>
       )}
-      <button type="button" className="side-search" onClick={() => openPalette('all')} title="Search pages, agents, chats and commands (⌘K)">
-        <Icon name="search" size={14} />
-        <span className="side-search__text">Search or ask…</span>
-        <Kbd>⌘K</Kbd>
-      </button>
       <nav className="sidebar__nav sidebar__doors" aria-label="Main" ref={navEl}>
-        {PRIMARY.map((d) =>
+        {PRIMARY.filter((d) => !TUCKED.has(d.key)).map((d) =>
           navRow({
             key: d.key,
             label: d.label,
@@ -688,9 +687,9 @@ export function Sidebar(): React.JSX.Element {
           </section>
         )}
         {showRepos && (
-          <section className="side-sec" aria-label="Repositories">
+          <section className="side-sec" aria-label="Projects">
             <div className="sidebar__section">
-              <span>Repositories</span>
+              <span>Projects</span>
               <IconButton icon="plus" label={focusedCompany ? `Add Repository to ${focusedCompany.name}… (⌘O)` : 'Add Repository… (⌘O)'} onClick={() => void addRepos()} />
             </div>
             {repos.length > 10 && (
@@ -743,6 +742,22 @@ export function Sidebar(): React.JSX.Element {
         )}
       </div>
       <div className="sidebar__foot">
+        <div className="sidebar__tools" role="toolbar" aria-label="Memory and keys">
+          {PRIMARY.filter((d) => TUCKED.has(d.key)).map((d) => (
+            <button
+              key={d.key}
+              type="button"
+              className={`sidebar__tool ${current === d.key ? 'is-selected' : ''}`}
+              aria-current={current === d.key ? 'page' : undefined}
+              title={`${d.label}: ${d.desc} (${d.kbd})`}
+              onClick={() => void navigate(viewFor(d.key))}
+            >
+              <Icon name={d.icon} size={15} />
+              <span>{d.label}</span>
+              {doorBadge(d.key) && <span className="side-row__dot" aria-label={`${d.label} has something for you`} />}
+            </button>
+          ))}
+        </div>
         {navRow({
           key: 'settings',
           label: 'Settings',
@@ -759,6 +774,7 @@ export function Sidebar(): React.JSX.Element {
       )}
       <div className="sidebar__resizer" onMouseDown={startResize} />
       {customizing && <CustomizeSidebarSheet onClose={() => setCustomizing(false)} />}
+      <SessionSearch />
       {more && (
         <MorePopover
           anchor={more}

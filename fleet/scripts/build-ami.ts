@@ -64,15 +64,17 @@ async function main(): Promise<void> {
   const subnet = out.SubnetIds!.split(',')[0]!
   const base = (await ssm.send(new GetParameterCommand({ Name: BASE }))).Parameter!.Value!
   say(`base ${base}, ref ${ref}, image ${image}`)
+  // the markers go straight to the serial console: the script's own output goes through tee, which a power-off cuts
   const script = `${prepareScript({ image, sourceRef: ref })}
-echo "principia: image ready"
 # a clean first boot for every machine made from this image
 cloud-init clean --logs --machine-id || cloud-init clean --logs
 rm -f /etc/ssh/ssh_host_*
 : > /var/log/principia-bootstrap.log
 sync
+echo "principia: image ready" > /dev/console
+sleep 10
 poweroff
-`.replace('set -euo pipefail', `set -euo pipefail\ntrap 'echo "principia: build failed at line $LINENO"; sleep 5; poweroff' ERR`)
+`.replace('set -euo pipefail', `set -euo pipefail\ntrap 'echo "principia: build failed at line $LINENO" > /dev/console; sleep 10; poweroff' ERR`)
   const run = await ec2.send(
     new RunInstancesCommand({
       LaunchTemplate: { LaunchTemplateId: out.LaunchTemplateId!, Version: '$Latest' },

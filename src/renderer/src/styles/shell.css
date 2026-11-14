@@ -175,3 +175,36 @@
 .more-pop__foot { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .more-pop__customize { font-size: var(--text-xs); }
 /* CHAT-UI.md §8.4: the task a live row runs, after its agent's name, muted */
 .live-row__task { font-weight: 400; color: var(--text-secondary); }
+
+/* Orca-simple sidebar: Search on top, the project you're in as a card, Memory and Keys in the footer */
+.side-search--top { height: 34px; margin: 6px 8px 8px; border-color: transparent; background: var(--sidebar-hover); }
+.side-search--top:hover { background: var(--sidebar-hover); color: var(--text-primary); border-color: var(--border); }
+.side-proj { margin: 0 6px; border: 1px solid transparent; border-radius: var(--radius-md); transition: background var(--dur-fast), border-color var(--dur-fast); }
+.side-proj + .side-proj { margin-top: 2px; }
+.side-proj.is-focus { background: var(--sidebar-hover); border-color: var(--border-strong); padding: 2px 0 4px; margin: 4px 6px; }
+.side-proj.is-focus .side-row--repo .side-row__label { color: var(--text-primary); font-weight: var(--weight-medium); }
+.sidebar__tools { display: flex; gap: 2px; padding: 6px 8px 0; }
+.sidebar__tool { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; height: 28px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-tertiary); font: inherit; font-size: var(--text-sm); }
+.sidebar__tool:hover { background: var(--sidebar-hover); color: var(--text-secondary); }
+.sidebar__tool.is-selected { background: var(--sidebar-hover); color: var(--text-primary); }
+.sidebar__tool .side-row__dot { position: absolute; top: 5px; right: 8px; }
+
+/* Search in your sessions (⇧⌘F) */
+.sess-search { width: 680px; }
+.sess-search__busy { flex: none; font-size: var(--text-xs); color: var(--text-tertiary); }
+.sess-search__list { max-height: 440px; }
+.sess-hit { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: none; text-align: left; font: inherit; color: var(--text-secondary); }
+.sess-hit.is-sel { background: var(--sidebar-hover); }
+.sess-hit__l1 { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sess-hit__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-weight: var(--weight-medium); }
+.sess-hit__meta { flex: none; font-size: var(--text-xs); color: var(--text-tertiary); }
+.sess-hit__snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--text-sm); line-height: 1.45; }
+.sess-hit__snip mark { background: rgba(255, 196, 0, 0.22); color: var(--text-primary); border-radius: 2px; padding: 0 1px; }
+.sess-hit__who { margin-right: 6px; font-size: var(--text-xs); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
+.sess-hit__more { color: var(--text-tertiary); }
+.sess-search__foot { padding: 6px 14px 10px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.side-proj--chats { margin: 4px 4px; }
+.side-proj__head { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; color: var(--text-tertiary); font-size: var(--text-xs); }
+.side-proj__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-weight: var(--weight-medium); }
+.side-proj.is-focus .side-proj__name { color: var(--text-primary); }
+.side-proj__n { flex: none; }

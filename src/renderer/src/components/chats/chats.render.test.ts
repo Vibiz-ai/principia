@@ -57,7 +57,7 @@ describe('Chats switches the sidebar', () => {
     expect(html).toContain('aria-label="Back to the menu"')
     // CHAT-UI.md §7: the other doors stay one click away (the synthetic users lost their menu here)
     for (const d of ['Workflows (⌘2)', 'Keys (⌘4)', 'Cloud (⌘5)']) expect(html).toContain(`aria-label="${d}"`)
-    expect(html).toContain('placeholder="Search chats"')
+    expect(html).toContain('placeholder="Filter chats"')
     for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
     expect(html).toContain('>New chat<')
     expect(html).toContain('New chat in Acme (⌥⌘N)')
@@ -71,15 +71,17 @@ describe('Chats switches the sidebar', () => {
     expect(html).not.toContain('Search or ask…')
     expect(html).not.toContain('aria-label="Main"')
   })
-  it('anywhere else the sidebar is the menu, with New conversation on top', async () => {
+  it('anywhere else the sidebar is the menu: Search on top, New chat, the doors, Memory and Keys in the footer', async () => {
     const store = await import('../../state/store')
     store.setState({ view: { name: 'workflows' } })
     const { Sidebar } = await import('../../shell/Sidebar')
     const html = renderToStaticMarkup(createElement(Sidebar))
-    expect(html).toContain('Search or ask…')
+    expect(html).toContain('<span class="side-search__text">Search</span>')
     expect(html).not.toContain('Back to the menu')
-    expect(html.indexOf('>New chat<')).toBeGreaterThan(-1)
-    expect(html.indexOf('>New chat<')).toBeLessThan(html.indexOf('Search or ask…'))
+    expect(html.indexOf('>New chat<')).toBeGreaterThan(html.indexOf('side-search__text'))
+    // Memory and Keys are tucked into the footer, after the doors
+    expect(html.indexOf('<span>Memory</span>')).toBeGreaterThan(html.indexOf('>Cloud<'))
+    expect(html).not.toMatch(/side-row__label">Memory</)
   })
 })
 
@@ -270,5 +272,14 @@ describe('one list of chats (CHAT-UI.md §9)', () => {
     expect(html).not.toContain('cx-side-group')
     expect(html).not.toContain('data-chatux="group-more"')
     expect(html).toContain('Pricing ideas')
+  })
+})
+
+describe('Orca-simple Chats sidebar', () => {
+  it('pulls each project’s chats together where its newest chat is, loose chats stay in place', async () => {
+    const { groupByProject } = await import('./ChatsSidebar')
+    const s = (key: string, repoId: string | null) => ({ key, kind: 'session', session: { id: key, repoId }, companyId: 'co', live: false, at: '' }) as never
+    const out = groupByProject([s('a', 'shop'), s('b', null), s('c', 'site'), s('d', 'shop')])
+    expect(out.map((e) => (e.kind === 'row' ? e.row.key : `${e.repoId}:${e.rows.map((r) => r.key).join(',')}`))).toEqual(['shop:a,d', 'b', 'site:c'])
   })
 })

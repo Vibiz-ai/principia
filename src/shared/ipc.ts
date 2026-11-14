@@ -526,6 +526,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'worktrees:deleteBranches': [{ runId: Id; branches: { repoPath: string; name: string }[] }, RunBranch[]]
   'history:list': [HistoryListQuery | V, HistoryListResult]
   'history:get': [{ id: string }, ClaudeTranscript]
+  // the sidebar's Search: words inside your Claude sessions (main/history/search.ts)
+  'history:search': [{ query: string; limit?: number }, import('./authoring').SessionSearchResult]
   'history:resume': [{ id: string; profileId?: Id; cols: number; rows: number } & CompanyFilter, Session] // companyId: for a folder no repo owns
   // USAGE.md: the Usage page and the portfolio Activity canvas
   'usage:summary': [{ range: UsageRange; companyId?: Id }, UsageSummary]
@@ -899,7 +901,7 @@ export const INVOKE_CHANNELS = [
   'app:markSeen', 'schedules:skipNext',
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
   'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
-  'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
+  'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:search', 'history:resume',
   'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'usage:tokens', 'activity:open', 'activity:close',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
