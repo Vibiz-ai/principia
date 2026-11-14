@@ -16,12 +16,16 @@ import { PassportSync } from '../memory/openPassportSync'
 import { openPassportActions } from '../handlers/openPassport'
 import { CloudLink, type PassportSyncPort } from './link'
 import { AccountLogins, type LoginProc } from './logins'
+import { CloudAccountsSync } from './accounts'
+import { ghToken } from '../onboarding/github'
 import type { MoveDeps } from './move'
 
 export interface CloudWiring {
   link: CloudLink
   logins: AccountLogins
   move: MoveDeps
+  /** docs/ACCOUNTS.md: GitHub and the Shared keys marked "In the cloud" */
+  accounts: CloudAccountsSync
 }
 
 /** node-pty loads its native binding on import: load it at the first sign-in only (tests build a Hive without it). */
@@ -126,5 +130,18 @@ export function createCloud(h: Hive): CloudWiring {
     gitRemote,
     log
   }
-  return { link, logins, move }
+  const accounts = new CloudAccountsSync({
+    call: (f) => link.call(f),
+    linked: () => link.linked,
+    ghToken: () => ghToken(),
+    sharedKeyNames: () => h.vault.list().map((k) => k.name),
+    revealShared: (name) => h.vault.reveal(name),
+    cloudKeys: () => h.store.getSettings().cloudKeys ?? [],
+    setCloudKeys: (names) => {
+      const after = h.store.updateSettings({ cloudKeys: names })
+      emit('settings:changed', after)
+    },
+    log
+  })
+  return { link, logins, move, accounts }
 }

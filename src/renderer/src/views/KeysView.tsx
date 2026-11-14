@@ -13,6 +13,7 @@ import { companyLabel } from '../lib/companyModel'
 import { isWriteOnlyKey } from '@shared/linear'
 import { keyId, keySections, overriddenShared, type KeySection } from '../lib/scope'
 import { CompanyAvatar } from '../shell/CompanyRail'
+import { CloudKeySwitch, KeysAccounts, useCloudAccounts } from '../components/cloud/CloudAccess'
 import { attempt, companyName, enterCompany, navigate, toast, useStore } from '../state/store'
 
 /** COMPANY.md §4: where a key lives. null = Shared (every company's agents); an id = that company only. */
@@ -38,6 +39,8 @@ export function KeysView(): React.JSX.Element {
   const [drop, setDrop] = useState(false)
   const [sel, setSel] = useState<string | null>(null)
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // docs/ACCOUNTS.md: the accounts and Shared keys every cloud run signs in with
+  const cloud = useCloudAccounts()
   // new keys and .env imports go to the focused company; All mode (and a Personal-only user) adds Shared keys
   const home: Space = multi && scope ? scope : null
 
@@ -144,7 +147,7 @@ export function KeysView(): React.JSX.Element {
   if (vaultDown || (info && !info.safeStorageAvailable)) {
     return (
       <div className="view">
-        <Toolbar title="Keys & secrets" />
+        <Toolbar title="Keys" />
         <EmptyState icon="lock" text="macOS Keychain encryption is unavailable, so Principia won’t store keys.">
           <Button onClick={() => void attempt(() => hive.app.showItemInFolder({ path: '/System/Applications/Utilities/Keychain Access.app' }))}>Show Keychain Access</Button>
         </EmptyState>
@@ -194,6 +197,7 @@ export function KeysView(): React.JSX.Element {
         </span>
         <span className="td text-tertiary">{s.lastUsedAt ? <RelativeTime iso={s.lastUsedAt} /> : 'never'}</span>
         <span className="td td--actions td--always">
+          {section.companyId === null && cloud.view.linked && <CloudKeySwitch name={s.name} view={cloud.view} set={cloud.set} />}
           {!isWriteOnlyKey(s.name, s.companyId) && <>
             <IconButton icon="eye" label={shown ? 'Hide' : 'Reveal for 10 s'} onClick={(e) => (e.stopPropagation(), void reveal(s))} />
             <IconButton icon="copy" label="Copy (clears in 60 s)" onClick={(e) => (e.stopPropagation(), void copy(s))} />
@@ -246,7 +250,7 @@ export function KeysView(): React.JSX.Element {
       onDrop={(e) => void onDrop(e)}
     >
       <Toolbar
-        title="Keys & secrets"
+        title="Keys"
         sub={multi && scope ? <CompanyChip companyId={scope} always className="toolbar-company" /> : multi ? <span className="company-toolbar-meta">All companies · new keys here are Shared</span> : undefined}
       >
         {/* All companies: say where a key goes (Shared = every company); a client's own key is added from its section */}
@@ -258,7 +262,7 @@ export function KeysView(): React.JSX.Element {
         </Button>
       </Toolbar>
       <div className="keys-note">
-        <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys never leave this Mac. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s. A connection you let another company use (“Also use in…”) reaches its agents only through that service’s tools, never as a key in their environment.' : '.'}
+        <Icon name="lock" size={14} /> Encrypted with your macOS Keychain. Keys stay on this Mac unless you switch a Shared key to the cloud. Agents get them as environment variables{multi ? ': Shared keys plus their own company’s. A connection you let another company use (“Also use in…”) reaches its agents only through that service’s tools, never as a key in their environment.' : '.'}
       </div>
       {/* design §4.10: each page says what goes where (Diego picks Keys or AI providers on the first try) */}
       <div className="keys-note keys-note--where">
@@ -268,6 +272,7 @@ export function KeysView(): React.JSX.Element {
         </button>
         .
       </div>
+      <KeysAccounts view={cloud.view} set={cloud.set} />
       {error && !list ? (
         <ErrorState error={error} onRetry={load} />
       ) : !list ? (

@@ -15,6 +15,8 @@ export function registerSecretHandlers(h: Hive): void {
   const changed = (companyId?: string | null) => {
     emit('data:changed', { domain: 'secrets' })
     connectionsChanged(companyId ?? null)
+    // docs/ACCOUNTS.md: a Shared key kept in the cloud follows its change there (no-op when not linked or unmarked)
+    h.safe(() => h.cloud.accounts.keysChanged(), undefined)
   }
   // COMPANY.md §4: Shared = vault.ts `secrets`; companies = company_secrets, same Keychain-backed safeStorage key
   const keys = new KeyNamespaces(

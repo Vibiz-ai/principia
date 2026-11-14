@@ -48,7 +48,17 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
   const providers = () => call((c) => c.call<unknown>('providers')).then((x) => listOf<ProviderAccount>(x, 'providers'))
 
   handle('cloud:state', () => link.state())
-  handle('cloud:pair', (q) => link.pair(q))
+  handle('cloud:pair', async (q) => {
+    const s = await link.pair(q)
+    // a fresh link gets the keys this Mac keeps in the cloud right away (a failure retries on the next change); the
+    // sync never gets in the way of pairing
+    try {
+      cloud.accounts?.keysChanged()
+    } catch {
+      /* best effort */
+    }
+    return s
+  })
   handle('cloud:unlink', async () => {
     logins.cancel()
     const s = await link.unlink()
@@ -135,6 +145,14 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
     if (/^https:\/\//.test(r.authorizeUrl)) await shell.openExternal(r.authorizeUrl)
     return r
   })
+
+  // docs/ACCOUNTS.md: GitHub and Shared keys for every cloud run
+  const accounts = cloud.accounts
+  handle('cloud:accounts', () => accounts.view())
+  handle('cloud:githubConnect', (q) => accounts.connectGithub({ token: q?.token ?? null }))
+  handle('cloud:githubRemove', () => accounts.removeGithub())
+  handle('cloud:keyCloud', ({ name, on }) => accounts.setKey(name, on))
+  handle('cloud:keysSync', () => accounts.sync())
 
   // while linked: poll every 30 s and follow /v1/events (a revoked device stops itself)
   link.start()

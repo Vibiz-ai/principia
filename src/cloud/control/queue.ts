@@ -17,6 +17,7 @@ import { newId } from './db'
 import { ADAPTER_ACTION, ADAPTER_LABEL, type WorkflowDeps } from './deps'
 import { ApiError, badRequest, notFound } from './http'
 import { credentialRow, credentialStatus, type Providers } from './providers'
+import type { Accounts } from './accounts'
 import { SYNC_PAGE, encodeCursor, type Sync } from './sync'
 
 const DAY_MS = 86_400_000
@@ -47,7 +48,7 @@ export const askView = (a: AskRow): CloudAsk => ({
 const minutes = (r: Pick<RunRow, 'started_at' | 'ended_at'>, now: Date): number =>
   r.started_at ? Math.max(0, ((r.ended_at ? Date.parse(r.ended_at) : now.getTime()) - Date.parse(r.started_at)) / 60_000) : 0
 
-export interface QueueDeps { providers: Providers; companies: Companies; connections: Connections; sync: Sync }
+export interface QueueDeps { providers: Providers; companies: Companies; connections: Connections; sync: Sync; accounts: Accounts }
 
 export function createQueue(ctx: Ctx, deps: QueueDeps) {
   const runRow = (id: string) => ctx.db.get<RunRow>('SELECT * FROM cloud_runs WHERE id = ?', id)
@@ -185,7 +186,7 @@ export function createQueue(ctx: Ctx, deps: QueueDeps) {
         workflowFile: wf ? JSON.parse(wf.file) : null,
         timeoutMs: ctx.quotas().runTimeoutMinutes * 60_000,
         untrustedInputs: JSON.parse(r.untrusted),
-        materials: { providers, repos: deps.companies.repoMaterials(r.company_id), connections: conns.materials, passport: deps.companies.passportMaterial(r.company_id), secrets: deps.companies.secretMaterials(r.company_id) }
+        materials: { providers, repos: deps.companies.repoMaterials(r.company_id), connections: conns.materials, passport: deps.companies.passportMaterial(r.company_id), secrets: deps.accounts.secretMaterials(deps.companies.secretMaterials(r.company_id)) }
       }
       if (stopped || runRow(runId)?.status !== 'running') return // canceled (or shutting down) while materials were built
       ctx.runtime.startRun(req)

@@ -30,14 +30,14 @@ export function CloudView(): ReactElement {
   if (!state)
     return (
       <div className="view cl-view">
-        <Toolbar title="Cloud sync" />
+        <Toolbar title="Cloud" />
         <Loading />
       </div>
     )
   if (!state.linked)
     return (
       <div className="view cl-view">
-        <Toolbar title="Cloud sync" />
+        <Toolbar title="Cloud" />
         <div className="cl-scroll">
           <NotConnected />
         </div>

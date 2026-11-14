@@ -49,5 +49,11 @@ export const CLOUD_REQUEST_SCHEMAS = {
   'cloud:loginLink': z.union([z.object({ open: z.boolean().optional() }).strict(), none]),
   'cloud:pause': z.object({ paused: z.boolean() }).strict(),
   'cloud:pauseCompany': z.object({ companyId: id, paused: z.boolean() }).strict(),
-  'cloud:connectionAuthorize': z.object({ companyId: id, connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/) }).strict()
+  'cloud:connectionAuthorize': z.object({ companyId: id, connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/) }).strict(),
+  // docs/ACCOUNTS.md
+  'cloud:accounts': none,
+  'cloud:githubConnect': z.union([z.object({ token: z.string().trim().max(400).nullable().optional() }).strict(), none]),
+  'cloud:githubRemove': none,
+  'cloud:keyCloud': z.object({ name: z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'Key names look like ENV_NAMES').max(128), on: z.boolean() }).strict(),
+  'cloud:keysSync': none
 } as const

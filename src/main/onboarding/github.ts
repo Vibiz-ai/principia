@@ -139,6 +139,22 @@ export async function ghStatus(deps: GhDeps = {}): Promise<{ gh: GhStatus; login
   return m ? { gh: 'ok', login: m[1] } : { gh: 'ok' }
 }
 
+/**
+ * docs/ACCOUNTS.md: this Mac's own GitHub sign-in, to hand to the cloud once. `gh auth token` prints the token the
+ * gh CLI already holds (never logged, never shown); the login is read with `gh api user` for the cloud pane.
+ * Missing gh, signed out or a token that does not look like GitHub's answers null.
+ */
+export async function ghToken(deps: GhDeps = {}): Promise<{ token: string; login: string | null } | null> {
+  const exec = deps.exec ?? defaultGhExec
+  const env = ghEnv(deps.env)
+  const r = await exec('gh', ['auth', 'token', '--hostname', 'github.com'], { env, timeoutMs: GH_STATUS_TIMEOUT_MS, outputCap: 4096 }).promise
+  const token = r.code === 0 && !r.timedOut ? r.stdout.trim() : ''
+  if (!/^(?:gh[opusr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/.test(token)) return null
+  const u = await exec('gh', ['api', 'user', '--jq', '.login'], { env, timeoutMs: GH_STATUS_TIMEOUT_MS, outputCap: 1024 }).promise
+  const login = u.code === 0 && /^[A-Za-z0-9-]{1,39}$/.test(u.stdout.trim()) ? u.stdout.trim() : null
+  return { token, login }
+}
+
 // ---------- list ----------
 
 export const GH_LIST_TIMEOUT_MS = 15_000

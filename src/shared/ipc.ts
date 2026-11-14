@@ -635,6 +635,12 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'cloud:pauseCompany': [{ companyId: Id; paused: boolean }, CloudCompany]
   /** opens the provider's consent page in the browser; it calls back to the cloud */
   'cloud:connectionAuthorize': [{ companyId: Id; connectionId: string }, AuthorizeConnectionResponse]
+  // docs/ACCOUNTS.md: sign in once on this Mac, every cloud run is signed in. Values go up, never come back.
+  'cloud:accounts': [V, import('./cloud').CloudAccountsView]
+  'cloud:githubConnect': [{ token?: string | null } | V, import('./cloud').CloudAccountsView]
+  'cloud:githubRemove': [V, import('./cloud').CloudAccountsView]
+  'cloud:keyCloud': [{ name: string; on: boolean }, import('./cloud').CloudAccountsView]
+  'cloud:keysSync': [V, import('./cloud').CloudAccountsView]
 }
 
 export interface NativeMenuItem {
@@ -898,6 +904,7 @@ export const INVOKE_CHANNELS = [
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
   'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
+  'cloud:accounts', 'cloud:githubConnect', 'cloud:githubRemove', 'cloud:keyCloud', 'cloud:keysSync',
   ...PLANS_CHANNELS,
   // CHAT-UI.md §3.2
   ...CHAT_CHANNELS,

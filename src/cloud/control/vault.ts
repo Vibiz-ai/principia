@@ -9,6 +9,7 @@ export type VaultKind =
   | 'dek'
   | 'provider'
   | 'company-secret'
+  | 'workspace-secret'
   | 'repo-pat'
   | 'github-app-key'
   | 'connection-credentials'

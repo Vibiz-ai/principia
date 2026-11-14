@@ -93,9 +93,9 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
           ))}
         </nav>
       </div>
-      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New task in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
+      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New chat in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
         <Icon name="edit" size={14} />
-        <span>New task</span>
+        <span>New chat</span>
         <Kbd>⌥⌘N</Kbd>
       </button>
       <label className="side-chats__search">

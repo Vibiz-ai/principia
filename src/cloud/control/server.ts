@@ -26,6 +26,7 @@ import { createLogger, createRedactor } from './log'
 import { createPassportHost, type PassportHost } from './passportHost'
 import { isPassportPath, proxyToPassport } from './passportProxy'
 import { createProviders } from './providers'
+import { createAccounts } from './accounts'
 import { createQueue } from './queue'
 import { createSync, decodeCursor } from './sync'
 import { usageSummary } from './usage'
@@ -129,9 +130,10 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
   const host = config.passport ? createPassportHost(config.passport, config.fetch ?? fetch) : null
   const connections = createConnections(ctx)
   const providers = createProviders(ctx)
-  const companies = createCompanies(ctx, { host, connections, cancelCompanyRuns: (cid, reason) => queue.cancelCompanyRuns(cid, reason) })
+  const accounts = createAccounts(ctx)
+  const companies = createCompanies(ctx, { host, connections, accounts, cancelCompanyRuns: (cid, reason) => queue.cancelCompanyRuns(cid, reason) })
   const sync = createSync(ctx)
-  const queue = createQueue(ctx, { providers, companies, connections, sync })
+  const queue = createQueue(ctx, { providers, companies, connections, sync, accounts })
   ctx.runtime = o.createRuntime(queue.ports)
   const limiter = new PairLimiter(now)
   const timers: NodeJS.Timeout[] = []
@@ -318,6 +320,11 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       case 'secrets': return ok(companies.secrets(params.cid!))
       case 'secretPut': return ok(companies.putSecret(actor, params.cid!, params.name!, (await body()) as { value?: unknown }))
       case 'secretDelete': { companies.removeSecret(actor, params.cid!, params.name!); return ok({ ok: true }) }
+      case 'accounts': return ok(accounts.list())
+      case 'githubAccountPut': return ok(accounts.putGithub(actor, (await body()) as Record<string, unknown>))
+      case 'githubAccountDelete': { accounts.removeGithub(actor); return ok({ ok: true }) }
+      case 'sharedSecretPut': return ok(accounts.putSecret(actor, params.name!, (await body()) as { value?: unknown }))
+      case 'sharedSecretDelete': { accounts.removeSecret(actor, params.name!); return ok({ ok: true }) }
       case 'repos': return ok(companies.repos(params.cid!))
       case 'repoPut': return ok(companies.putRepo(actor, params.cid!, params.rid!, await body()))
       case 'repoSync': return ok(await companies.syncRepo(actor, params.cid!, params.rid!))
@@ -399,6 +406,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
     async start() {
       companies.primeSecrets()
       connections.primeSecrets()
+      accounts.primeSecrets()
       for (const r of db.all<{ id: string; ciphertext: string }>('SELECT id, ciphertext FROM credentials')) { try { vault.decrypt('provider', r.id, r.ciphertext) } catch { log.warn('a stored credential could not be decrypted', { credentialId: r.id }) } }
       queue.recover()
       await ctx.runtime.start()

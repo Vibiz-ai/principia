@@ -59,8 +59,8 @@ describe('Chats switches the sidebar', () => {
     for (const d of ['Workflows (⌘2)', 'Keys (⌘4)', 'Cloud (⌘5)']) expect(html).toContain(`aria-label="${d}"`)
     expect(html).toContain('placeholder="Search chats"')
     for (const f of ['Everything', 'Live only']) expect(html).toContain(`>${f}`)
-    expect(html).toContain('>New task<')
-    expect(html).toContain('New task in Acme (⌥⌘N)')
+    expect(html).toContain('>New chat<')
+    expect(html).toContain('New chat in Acme (⌥⌘N)')
     // a bot-like row: bust, name, role, its last line and the unread dot
     expect(html).toContain(`chats5-row__name">${NAME}</span>`)
     expect(html).not.toContain('chats5-row__role')
