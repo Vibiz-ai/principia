@@ -137,6 +137,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv): Promise<numb
   if (cmd === 'serve' && missing.length && env.PRINCIPIA_AUTO_INIT !== '0') {
     try { initSecrets(secretsDir(env), { owner: uid === 0 ? { uid: 0, gid: 0 } : null, only: missing }) } catch { /* read-only secrets mount: compose's init service owns them */ }
   }
+  // Passport is optional: an image built without the Open Passport sources (a source build, or a published image made
+  // without access to that repository) runs everything else and simply has no passport host
+  if (env.PRINCIPIA_PASSPORT === 'embedded' && !existsSync(join(env.PRINCIPIA_PASSPORT_SRC || '/opt/open-passport', 'packages/server/src/main.ts'))) {
+    process.stderr.write('principia-cloud: this image has no Open Passport host; starting without a passport.\n')
+    env = { ...env, PRINCIPIA_PASSPORT: '' }
+  }
   const loaded = loadConfig(env, { consoleDir: join(here, 'console') })
   const { config } = loaded
   const hint = connectHint(loaded, await onDesktop())
