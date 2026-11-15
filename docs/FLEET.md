@@ -129,8 +129,9 @@ machine and one address per person it is always used from the same place.
 
 ## 9. Not yet
 
-- **Passport.** A machine built from source has no embedded Open Passport, whose sources aren't public. The
-  published image (`ghcr.io/vibiz-ai/principia-cloud`) has it once the release workflow publishes it.
+- **Passport.** Optional, and off for now: Open Passport's repository is private, so the published image is built
+  without it unless the `OPEN_PASSPORT_TOKEN` secret is set (.github/workflows/cloud-images.yml). The cloud starts
+  without a passport host either way (`src/cloud/control/main.ts`).
 - **Billing.** Hours are counted and capped, not charged. Charging them (e.g. to Vibiz credits) reads `usage`.
 - **Updates to a running machine.** New machines use the newest image; existing ones keep theirs.
 - **One sandbox per run** on the machine (docs/MACHINES.md §5), and a custom domain instead of sslip.io.
