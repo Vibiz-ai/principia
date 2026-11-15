@@ -188,7 +188,7 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
     const key = `pfk_${p.random(32)}`
     const now = p.now().toISOString()
     const prev = await p.store.getUser(gh.id)
-    const u: UserRec = { id: gh.id, login: gh.login, allowed: ok, keyHash: sha256(key), createdAt: prev?.createdAt ?? now, lastSeenAt: now }
+    const u: UserRec = { id: gh.id, login: gh.login, allowed: ok, keyHash: sha256(key), createdAt: prev?.createdAt ?? now, lastSeenAt: now, ...(prev?.usage ? { usage: prev.usage } : {}) }
     await p.store.putUser(u, prev?.keyHash ?? null)
     p.log.info('fleet: enroll', { userId: u.id, login: u.login, allowed: ok })
     // the GitHub token is used for these two calls and never stored
@@ -203,11 +203,11 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
     const workspaceName = (typeof b.workspaceName === 'string' ? b.workspaceName : 'My cloud').replace(/[^\w .-]/g, '').slice(0, 80) || 'My cloud'
     const existing = await p.store.getMachine(u.id)
     if (existing && existing.state !== 'failed') throw new FleetError(409, 'exists', 'You already have a cloud machine.')
-    if (!existing) {
-      const live = (await p.store.listMachines()).filter((m) => m.state !== 'deleting').length
-      if (live >= p.config.maxMachines) throw new FleetError(503, 'full', 'Principia Cloud is full right now. Try again later.')
-    }
     const now = p.now()
+    // the monthly cap follows the person, not the machine: deleting and making one again doesn't reset it
+    const carried = u.usage && u.usage.month === monthOf(now) ? u.usage.awakeSeconds : 0
+    const used = existing ? (existing.month === monthOf(now) ? existing.awakeSeconds : 0) : carried
+    if (used >= p.config.maxHoursPerMonth * 3600) throw new FleetError(429, 'limit', `Your cloud used its ${p.config.maxHoursPerMonth} hours this month. It can start again on the 1st.`)
     const machineToken = `pmt_${p.random(32)}`
     let m: MachineRec
     if (existing) {
@@ -237,13 +237,15 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
         up: false,
         activity: null,
         month: monthOf(now),
-        awakeSeconds: 0,
+        awakeSeconds: carried,
         lastTickAt: null,
         error: null,
         sleepReason: null,
         rev: 0
       }
-      if (!(await p.store.putMachine(m, null))) throw new FleetError(409, 'exists', 'You already have a cloud machine.')
+      const r = await p.store.insertMachine(m, p.config.maxMachines)
+      if (r === 'exists') throw new FleetError(409, 'exists', 'You already have a cloud machine.')
+      if (r === 'full') throw new FleetError(503, 'full', 'Principia Cloud is full right now. Try again later.')
     }
     try {
       if (!m.allocationId) {
@@ -393,7 +395,16 @@ async function finishDelete(p: Ports, m: MachineRec, i: InstanceInfo | null | un
       return
     }
   }
-  await p.store.deleteMachine(m)
+  if (!(await p.store.deleteMachine(m))) return
+  // keep this month's awake time with the person (docs/FLEET.md §5)
+  const month = monthOf(p.now())
+  if (m.month === month && m.awakeSeconds > 0) {
+    const u = await p.store.getUser(m.userId)
+    if (u) {
+      const before = u.usage?.month === month ? u.usage.awakeSeconds : 0
+      await p.store.putUser({ ...u, usage: { month, awakeSeconds: Math.max(before, m.awakeSeconds) } }, u.keyHash)
+    }
+  }
   p.log.info('fleet: deleted', { machineId: m.id })
 }
 

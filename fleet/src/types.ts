@@ -25,6 +25,8 @@ export interface UserRec {
   keyHash: string
   createdAt: string
   lastSeenAt: string
+  /** awake time of machines this person deleted this month: a new machine starts from it, so delete + make doesn't reset the cap */
+  usage?: { month: string; awakeSeconds: number }
 }
 
 export interface MachineRec {
@@ -123,8 +125,14 @@ export interface Store {
   putUser(u: UserRec, oldKeyHash: string | null): Promise<void>
   getMachine(userId: string): Promise<MachineRec | null>
   userIdByMachineTokenHash(hash: string): Promise<string | null>
-  /** conditional on `expectedRev` (null: must not exist); false when someone else wrote first */
-  putMachine(m: MachineRec, expectedRev: number | null): Promise<boolean>
+  /** conditional on `expectedRev`; false when someone else wrote first */
+  putMachine(m: MachineRec, expectedRev: number): Promise<boolean>
+  /**
+   * A new machine, in one transaction with the fleet-wide count: 'full' when `maxMachines` are already counted,
+   * 'exists' when this person has one. Concurrent creates can never pass the cap together.
+   */
+  insertMachine(m: MachineRec, maxMachines: number): Promise<'ok' | 'exists' | 'full'>
+  /** conditional on its `rev`, and gives its slot in the fleet-wide count back */
   deleteMachine(m: MachineRec): Promise<boolean>
   listMachines(): Promise<MachineRec[]>
 }

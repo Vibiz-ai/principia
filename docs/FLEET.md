@@ -66,8 +66,8 @@ All of it is enforced in `fleet/src/core.ts` and tested in `fleet/test/core.test
 | Rule | Default | Setting |
 | --- | --- | --- |
 | One machine per person | – | – |
-| Machines across everyone | 25 | `-c maxMachines=` |
-| Awake hours per person per month (then no wake until the 1st) | 200 | `-c maxHoursPerMonth=` |
+| Machines across everyone (a counter changed in one transaction with each machine record, so concurrent creates can't pass it) | 25 | `-c maxMachines=` |
+| Awake hours per person per month (then no wake and no new machine until the 1st; deleting the machine keeps the month's hours with the person) | 200 | `-c maxHoursPerMonth=` |
 | Stop after nothing ran and nothing changed for | 20 min | `-c idleMinutes=` |
 | Stop a machine whose heartbeat is quiet for | 15 min | – |
 | Stop and mark failed: first boot not up after / a wake not up after | 20 / 8 min | – |

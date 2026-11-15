@@ -14,13 +14,27 @@ export class MemStore implements Store {
   }
   async getMachine(uid: string) { return structuredClone(this.machines.get(uid) ?? null) }
   async userIdByMachineTokenHash(h: string) { return [...this.machines.values()].find(m => m.machineTokenHash === h)?.userId ?? null }
-  async putMachine(m: MachineRec, expected: number | null) {
+  /** the fleet-wide count, as the table keeps it */
+  count = 0
+  async putMachine(m: MachineRec, expected: number) {
     const cur = this.machines.get(m.userId)
-    if (expected === null ? !!cur : cur?.rev !== expected) return false
+    if (cur?.rev !== expected) return false
     this.machines.set(m.userId, structuredClone(m))
     return true
   }
-  async deleteMachine(m: MachineRec) { return this.machines.delete(m.userId) }
+  async insertMachine(m: MachineRec, max: number) {
+    // atomic, like the DynamoDB transaction: no await between the check and the write
+    if (this.count >= max) return 'full' as const
+    if (this.machines.has(m.userId)) return 'exists' as const
+    this.count++
+    this.machines.set(m.userId, structuredClone(m))
+    return 'ok' as const
+  }
+  async deleteMachine(m: MachineRec) {
+    if (this.machines.get(m.userId)?.rev !== m.rev) return false
+    this.count--
+    return this.machines.delete(m.userId)
+  }
   async listMachines() { return [...this.machines.values()].map(m => structuredClone(m)) }
 }
 

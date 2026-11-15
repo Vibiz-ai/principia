@@ -17,7 +17,7 @@ const cipher = { available: () => true, encrypt: (s: string) => Buffer.from(`enc
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pmach-'))
 
 /** A fake provider and a fake cloud that only pairs with the token whose hash the user-data holds. */
-function setup(o: { linked?: string | null; boots?: number; healthAfter?: number; failCreate?: boolean; noKey?: boolean } = {}) {
+function setup(o: { linked?: string | null; boots?: number; healthAfter?: number; failCreate?: boolean; noKey?: boolean; createGate?: Promise<void> } = {}) {
   const userData = tmp()
   const views: (MachineView | null)[] = []
   const servers = new Map<string, { userData: string; polls: number; sshKeyId: string | null }>()
@@ -37,6 +37,7 @@ function setup(o: { linked?: string | null; boots?: number; healthAfter?: number
     async create(c) {
       calls.push(`create ${c.region} ${c.size}`)
       if (o.failCreate) throw new Error('Hetzner: server type cpx31 is unavailable in nbg1')
+      if (o.createGate) await o.createGate
       servers.set('42', { userData: c.userData, polls: 0, sshKeyId: c.sshKeyId })
       return { id: '42', ip: null }
     },
@@ -169,6 +170,21 @@ describe('CloudMachines (docs/MACHINES.md)', () => {
     expect(m.view()).toBeNull()
     expect(t.views.at(-1)).toBeNull()
     expect(fs.existsSync(path.join(t.userData, MACHINE_FILE))).toBe(false)
+  })
+
+  it('a delete while the provider is still making the server deletes that server when it arrives', async () => {
+    let open!: () => void
+    const t = setup({ createGate: new Promise<void>((r) => (open = r)) })
+    const m = new CloudMachines(t.deps)
+    await m.create({ provider: 'hetzner', token: PROVIDER_TOKEN, region: 'nbg1', size: 'cpx31', bring: { github: false, keys: false, claude: false, codex: false } })
+    for (let i = 0; i < 50 && !t.calls.includes('create nbg1 cpx31'); i++) await new Promise((r) => setTimeout(r, 0))
+    expect(await m.remove()).toBeNull()
+    expect(t.calls).not.toContain('delete 42')
+    open()
+    for (let i = 0; i < 50 && !t.calls.includes('delete 42'); i++) await new Promise((r) => setTimeout(r, 0))
+    expect(t.calls).toContain('delete 42')
+    expect(t.servers.size).toBe(0)
+    expect(m.view()).toBeNull()
   })
 
   it('a failure stops at its phase, says why, and retry picks up there', async () => {

@@ -102,6 +102,24 @@ describe('create', () => {
     const r = await (await signedIn(w, 'gho_friend_0123456789abcdefg')).as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })
     expect(r).toMatchObject({ status: 503, body: { error: 'full' } })
   })
+
+  it('concurrent creates can never pass the fleet-wide cap together', async () => {
+    const w = world({ maxMachines: 1, open: true })
+    const [a, b] = [await signedIn(w), await signedIn(w, 'gho_friend_0123456789abcdefg')]
+    const rs = await Promise.all([a.as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA }), b.as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })])
+    expect(rs.map((r) => r.status).sort()).toEqual([201, 503])
+    expect(w.store.machines.size).toBe(1)
+    expect(w.store.count).toBe(1)
+  })
+
+  it('a deleted machine gives its slot back', async () => {
+    const w = world({ maxMachines: 1, open: true })
+    const s = await upAndRunning(w)
+    await s.as('DELETE', '/v1/machine')
+    await reconcile(w.ports)
+    expect(w.store.count).toBe(0)
+    expect((await (await signedIn(w, 'gho_friend_0123456789abcdefg')).as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })).status).toBe(201)
+  })
 })
 
 describe('sleep and wake', () => {
@@ -210,6 +228,31 @@ describe('money', () => {
     expect(await s.as('POST', '/v1/machine/wake')).toMatchObject({ status: 429, body: { error: 'limit' } })
     w.clock.t = new Date('2026-12-01T00:10:00.000Z')
     expect((await s.as('POST', '/v1/machine/wake')).status).toBe(202)
+  })
+
+  it('deleting the machine and making a new one does not reset the month', async () => {
+    const w = world({ maxHoursPerMonth: 1 })
+    const s = await upAndRunning(w)
+    for (let i = 0; i < 13; i++) {
+      w.advance(5)
+      await beat(w, quiet(w, { busy: true }))
+      await reconcile(w.ports)
+    }
+    w.compute.settle()
+    await reconcile(w.ports)
+    expect((await s.as('DELETE', '/v1/machine')).status).toBe(202)
+    await reconcile(w.ports)
+    await reconcile(w.ports)
+    expect(w.store.machines.size).toBe(0)
+    expect(await s.as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })).toMatchObject({ status: 429, body: { error: 'limit' } })
+    // signing in again keeps it too
+    const again = await signedIn(w)
+    expect((await again.as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })).status).toBe(429)
+    // a new month starts from zero
+    w.clock.t = new Date('2026-12-01T00:10:00.000Z')
+    const c = await again.as('POST', '/v1/machine', { adminTokenSha256: ADMIN_SHA })
+    expect(c.status).toBe(201)
+    expect(c.body).toMatchObject({ usage: { hours: 0 } })
   })
 
   it('never bills a gap the reconciler didn’t see', async () => {

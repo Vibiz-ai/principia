@@ -294,7 +294,7 @@ export class CloudMachines {
       const f = this.file!
       switch (f.phase) {
         case 'creating':
-          await this.createServer(f)
+          await this.createServer(f, gen)
           break
         case 'booting':
           await (f.provider === 'principia' ? this.bootManaged(f, gen, t.managedBootMs, t.pollMs) : this.boot(f, gen, t.bootMs, t.pollMs))
@@ -314,9 +314,9 @@ export class CloudMachines {
     }
   }
 
-  private async createServer(f: MachineFile): Promise<void> {
+  private async createServer(f: MachineFile, gen: number): Promise<void> {
     if (f.provider === 'ssh') return this.update({ phase: 'installing' })
-    if (f.provider === 'principia') return this.createManaged(f)
+    if (f.provider === 'principia') return this.createManaged(f, gen)
     const token = this.secret(f.token)
     if (!token) throw new HiveError('vault_unavailable', 'The provider token could not be read on this Mac. Delete the machine and make a new one.')
     const api = this.d.api(f.provider, token)
@@ -332,6 +332,12 @@ export class CloudMachines {
     this.update({ detail: `${f.size} in ${f.region}` })
     const userData = this.script('auto', f.admin)
     const s = await api.create({ name: f.name, region: f.region!, size: f.size!, userData, sshKeyId })
+    // deleted while the provider was making it: remove() saw no server yet, so delete it here or it bills forever
+    if (!this.alive(gen)) {
+      this.d.log?.info('cloud machine: deleting a server made after its delete', { provider: f.provider })
+      await api.remove(s.id)
+      return
+    }
     this.update({ serverId: s.id, ip: s.ip, url: s.ip ? `https://${sslipHost(s.ip)}` : null, phase: 'booting', detail: null })
   }
 
@@ -368,7 +374,7 @@ export class CloudMachines {
     return e.key
   }
 
-  private async createManaged(f: MachineFile): Promise<void> {
+  private async createManaged(f: MachineFile, gen: number): Promise<void> {
     const key = await this.fleetKey(f)
     const admin = this.secret(f.admin)
     if (!admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
@@ -382,6 +388,11 @@ export class CloudMachines {
       const cur = (await this.fleet().machine(key)).machine
       if (!cur) throw e
       m = cur
+    }
+    // deleted while the fleet was making it: remove() may have reached the fleet before the machine existed
+    if (!this.alive(gen)) {
+      await this.fleet().remove(key).catch((e) => this.d.log?.warn('cloud machine: delete after cancel failed', { error: msg(e) }))
+      return
     }
     this.update({ serverId: m.id, url: m.url, ip: m.host ? m.host.replace(/\.sslip\.io$/, '').replace(/-/g, '.') : null, size: m.instanceType, phase: 'booting', detail: null, ...this.powerOf(m) })
   }

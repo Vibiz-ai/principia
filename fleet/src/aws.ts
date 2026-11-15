@@ -18,8 +18,8 @@ import {
   TerminateInstancesCommand,
   type Instance
 } from '@aws-sdk/client-ec2'
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb'
+import { ConditionalCheckFailedException, DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb'
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb'
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm'
 import { CapacityError, type AddressInfo, type Compute, type GitHub, type InstanceInfo, type MachineRec, type Store, type UserRec } from './types'
 
@@ -37,6 +37,9 @@ export const TAG_CREATED = 'principia-fleet:created'
  *   mtok#<sha256>        → userId, the machine's heartbeat token
  * The two indexes are only hints: core.ts checks every token against the record itself.
  */
+/** the fleet-wide machine count: changed only in the same transaction as a machine record (insertMachine, deleteMachine) */
+const COUNT_PK = 'fleet#machines'
+
 export function dynamoStore(table: string, client = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } })): Store {
   const get = async <T>(pk: string): Promise<T | null> => ((await client.send(new GetCommand({ TableName: table, Key: { pk }, ConsistentRead: true }))).Item as T | undefined) ?? null
   const strip = <T>(item: (T & { pk?: string }) | null): T | null => {
@@ -55,15 +58,15 @@ export function dynamoStore(table: string, client = DynamoDBDocumentClient.from(
     getMachine: async (uid) => strip(await get<MachineRec & { pk: string }>(`machine#${uid}`)),
     userIdByMachineTokenHash: async (h) => (await get<{ userId: string }>(`mtok#${h}`))?.userId ?? null,
     async putMachine(m, expectedRev) {
-      const prev = expectedRev === null ? null : await get<MachineRec>(`machine#${m.userId}`)
+      const prev = await get<MachineRec>(`machine#${m.userId}`)
       try {
         await client.send(
           new PutCommand({
             TableName: table,
             Item: { pk: `machine#${m.userId}`, ...m },
-            ...(expectedRev === null
-              ? { ConditionExpression: 'attribute_not_exists(pk)' }
-              : { ConditionExpression: '#rev = :rev', ExpressionAttributeNames: { '#rev': 'rev' }, ExpressionAttributeValues: { ':rev': expectedRev } })
+            ConditionExpression: '#rev = :rev',
+            ExpressionAttributeNames: { '#rev': 'rev' },
+            ExpressionAttributeValues: { ':rev': expectedRev }
           })
         )
       } catch (e) {
@@ -76,11 +79,48 @@ export function dynamoStore(table: string, client = DynamoDBDocumentClient.from(
       }
       return true
     },
+    async insertMachine(m, maxMachines) {
+      try {
+        await client.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Update: {
+                  TableName: table,
+                  Key: { pk: COUNT_PK },
+                  UpdateExpression: 'SET #n = if_not_exists(#n, :zero) + :one',
+                  ConditionExpression: 'attribute_not_exists(#n) OR #n < :max',
+                  ExpressionAttributeNames: { '#n': 'n' },
+                  ExpressionAttributeValues: { ':zero': 0, ':one': 1, ':max': maxMachines }
+                }
+              },
+              { Put: { TableName: table, Item: { pk: `machine#${m.userId}`, ...m }, ConditionExpression: 'attribute_not_exists(pk)' } }
+            ]
+          })
+        )
+      } catch (e) {
+        if (e instanceof TransactionCanceledException) {
+          const [count, machine] = e.CancellationReasons ?? []
+          if (machine?.Code === 'ConditionalCheckFailed') return 'exists'
+          if (count?.Code === 'ConditionalCheckFailed') return 'full'
+        }
+        throw e
+      }
+      await client.send(new PutCommand({ TableName: table, Item: { pk: `mtok#${m.machineTokenHash}`, userId: m.userId } }))
+      return 'ok'
+    },
     async deleteMachine(m) {
       try {
-        await client.send(new DeleteCommand({ TableName: table, Key: { pk: `machine#${m.userId}` }, ConditionExpression: '#rev = :rev', ExpressionAttributeNames: { '#rev': 'rev' }, ExpressionAttributeValues: { ':rev': m.rev } }))
+        await client.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              { Delete: { TableName: table, Key: { pk: `machine#${m.userId}` }, ConditionExpression: '#rev = :rev', ExpressionAttributeNames: { '#rev': 'rev' }, ExpressionAttributeValues: { ':rev': m.rev } } },
+              { Update: { TableName: table, Key: { pk: COUNT_PK }, UpdateExpression: 'SET #n = if_not_exists(#n, :one) - :one', ExpressionAttributeNames: { '#n': 'n' }, ExpressionAttributeValues: { ':one': 1 } } }
+            ]
+          })
+        )
       } catch (e) {
-        if (e instanceof ConditionalCheckFailedException) return false
+        if (e instanceof TransactionCanceledException && e.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') return false
         throw e
       }
       await client.send(new DeleteCommand({ TableName: table, Key: { pk: `mtok#${m.machineTokenHash}` } }))

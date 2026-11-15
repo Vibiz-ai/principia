@@ -2072,7 +2072,7 @@ export function discardOnboarding(): void {
  * Ready step (§2 S8): both buttons land in the new company. Start now → its Home; "I'll review first" → its Board.
  * The draft is done with: cleared.
  */
-export async function finishOnboarding(companyId: Id, landing: 'home' | 'board'): Promise<void> {
+export async function finishOnboarding(companyId: Id, _landing: 'home' | 'board'): Promise<void> {
   const first = state.onboarding?.mode === 'first' || state.onboardingDraft?.mode === 'first'
   cancelOnboardingPlan()
   clearOnboardingDraft()
