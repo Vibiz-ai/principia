@@ -111,8 +111,10 @@ export function checkCsrf(p: Principal, req: IncomingMessage): void {
 /** The admin bearer is valid only for POST /v1/pair/start. Without PRINCIPIA_ADMIN_TOKEN the route answers 403. */
 export function checkAdmin(ctx: Ctx, req: IncomingMessage): Actor {
   const tok = bearer(req)
-  if (!ctx.config.adminToken) throw new ApiError('forbidden', 'Pairing over the API is off. Run `principia-cloud pair` on the server.')
-  if (!tok || !safeEqual(tok, ctx.config.adminToken)) throw new ApiError('unauthorized', 'A valid admin token is required.')
+  const { adminToken, adminTokenSha256 } = ctx.config
+  if (!adminToken && !adminTokenSha256) throw new ApiError('forbidden', 'Pairing over the API is off. Run `principia-cloud pair` on the server.')
+  const valid = !!tok && ((!!adminToken && safeEqual(tok, adminToken)) || (!!adminTokenSha256 && tok.length >= 32 && safeEqual(sha256(tok), adminTokenSha256)))
+  if (!valid) throw new ApiError('unauthorized', 'A valid admin token is required.')
   return { kind: 'admin', id: null, name: 'admin token' }
 }
 

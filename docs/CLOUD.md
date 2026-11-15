@@ -609,6 +609,9 @@ docs and never suggests sharing an account.
 
 ### 12.1 Self-host (v1)
 
+From the app, one click: **Make my cloud** creates a server at Hetzner or DigitalOcean (or installs on yours over
+SSH), pairs this Mac and signs it in. See docs/MACHINES.md. By hand:
+
 Three ways in, all ending with a connect link:
 
 - **One button (Render).** `render.yaml` at the repository root: one web service from

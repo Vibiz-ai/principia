@@ -526,6 +526,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'worktrees:deleteBranches': [{ runId: Id; branches: { repoPath: string; name: string }[] }, RunBranch[]]
   'history:list': [HistoryListQuery | V, HistoryListResult]
   'history:get': [{ id: string }, ClaudeTranscript]
+  // the sidebar's Search: words inside your Claude sessions (main/history/search.ts)
+  'history:search': [{ query: string; limit?: number }, import('./authoring').SessionSearchResult]
   'history:resume': [{ id: string; profileId?: Id; cols: number; rows: number } & CompanyFilter, Session] // companyId: for a folder no repo owns
   // USAGE.md: the Usage page and the portfolio Activity canvas
   'usage:summary': [{ range: UsageRange; companyId?: Id }, UsageSummary]
@@ -635,6 +637,21 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'cloud:pauseCompany': [{ companyId: Id; paused: boolean }, CloudCompany]
   /** opens the provider's consent page in the browser; it calls back to the cloud */
   'cloud:connectionAuthorize': [{ companyId: Id; connectionId: string }, AuthorizeConnectionResponse]
+  // docs/ACCOUNTS.md: sign in once on this Mac, every cloud run is signed in. Values go up, never come back.
+  'cloud:accounts': [V, import('./cloud').CloudAccountsView]
+  'cloud:githubConnect': [{ token?: string | null } | V, import('./cloud').CloudAccountsView]
+  'cloud:githubRemove': [V, import('./cloud').CloudAccountsView]
+  'cloud:keyCloud': [{ name: string; on: boolean }, import('./cloud').CloudAccountsView]
+  'cloud:keysSync': [V, import('./cloud').CloudAccountsView]
+  // docs/MACHINES.md: a cloud machine made from this Mac (the provider token stays in main)
+  'cloud:machine': [V, import('./machines').MachineView | null]
+  'cloud:machineOptions': [{ provider: 'hetzner' | 'digitalocean'; token: string }, import('./machines').MachineOptions]
+  'cloud:machineCreate': [import('./machines').CreateMachineRequest, import('./machines').MachineView]
+  'cloud:machineRetry': [V, import('./machines').MachineView]
+  'cloud:machineDelete': [V, null]
+  // docs/FLEET.md: whether the managed cloud is offered here, and waking a sleeping one
+  'cloud:machineInfo': [V, import('./machines').MachineInfo]
+  'cloud:machineWake': [V, import('./machines').MachineView | null]
 }
 
 export interface NativeMenuItem {
@@ -741,7 +758,7 @@ export type UiCommand =
   | { kind: 'openSlackDraft'; draftId: Id } // Slack draft notification click (SLACK.md §8.3)
   | { kind: 'openLink'; url: string } // a principia:// link from the OS (shared/deepLink.ts; checked by main, navigates only)
 /** The app menu's View items. team, board, chats and knowledge are the five doors (⌘2-⌘5); the rest stay as aliases. */
-export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'settings' | 'memory' | 'agents'
+export type View = 'home' | 'team' | 'board' | 'chats' | 'knowledge' | 'chat' | 'canvas' | 'workflows' | 'schedules' | 'artifacts' | 'keys' | 'cloud' | 'settings' | 'memory' | 'agents'
 
 export interface SessionCreateRequest {
   /**
@@ -884,7 +901,7 @@ export const INVOKE_CHANNELS = [
   'app:markSeen', 'schedules:skipNext',
   'runs:retryAt', 'sessions:retry', 'processes:leftovers', 'processes:stop',
   'author:list', 'author:get', 'author:decide', 'author:grants', 'author:revokeRun', 'chatCompany:list', 'chatCompany:decide', 'chatCompany:open', 'worktrees:list',
-  'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:resume',
+  'worktrees:remove', 'worktrees:branches', 'worktrees:deleteBranches', 'history:list', 'history:get', 'history:search', 'history:resume',
   'usage:summary', 'usage:disk', 'usage:cleanupList', 'usage:cleanup', 'usage:tokens', 'activity:open', 'activity:close',
   'slack:status', 'slack:manifest', 'slack:connect', 'slack:test', 'slack:retry', 'slack:disconnect', 'slack:channels',
   'slack:join', 'slack:joinAll', 'slack:markRead', 'slack:users', 'slack:messages', 'slack:thread', 'slack:search',
@@ -898,6 +915,8 @@ export const INVOKE_CHANNELS = [
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
   'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
+  'cloud:accounts', 'cloud:githubConnect', 'cloud:githubRemove', 'cloud:keyCloud', 'cloud:keysSync',
+  'cloud:machine', 'cloud:machineOptions', 'cloud:machineCreate', 'cloud:machineRetry', 'cloud:machineDelete', 'cloud:machineInfo', 'cloud:machineWake',
   ...PLANS_CHANNELS,
   // CHAT-UI.md §3.2
   ...CHAT_CHANNELS,

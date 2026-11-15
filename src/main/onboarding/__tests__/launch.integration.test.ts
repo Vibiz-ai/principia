@@ -128,6 +128,9 @@ function makeWorld(): World {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'principia-launch-')))
   const db = openDatabase(path.join(dir, 'hive.db'))
   const store = new Store(db)
+  // main/simplify.ts: a launch never turns departments on any more, so the team steps below run on an install that
+  // still has them on (the code is kept); 'the flags step never turns departments on' covers a fresh install
+  store.updateSettings({ experimental: { departments: true } })
   const company = new CompanyStore(store, { companiesRoot: path.join(dir, 'companies') })
   const vault = new Vault(db, fakeCipher())
   const secrets = new CompanySecrets(db, fakeCipher())
@@ -255,6 +258,18 @@ const journalText = () => JSON.stringify((w.db.prepare(`SELECT key, value FROM m
 
 // ---------- 1. happy path ----------
 
+d('launch: the retired team setup (main/simplify.ts)', () => {
+  it('the flags step never turns departments on: a fresh install gets companies and the vault, and no team', async () => {
+    w.store.updateSettings({ experimental: { departments: false } })
+    const r = await w.svc.launch({ draftId: 'draft_fresh', input: launchInput() })
+    expect(r.status).toBe('done')
+    expect(w.store.getSettings().experimental).toMatchObject({ companies: true, vault: true, departments: false })
+    const inv = inventory(r.companyId!)
+    expect(inv.departments).toHaveLength(0)
+    expect(inv.agents).toHaveLength(0)
+  })
+})
+
 d('launch: happy path', () => {
   it('creates the plan in the new company only, key in its namespace, schedules off, agents manual', async () => {
     const before = personalState()
@@ -329,7 +344,7 @@ d('launch: happy path', () => {
     // flags turned on (consent), and the previous ones kept for Discard
     expect(w.store.getSettings().experimental).toMatchObject({ companies: true, departments: true, vault: true })
     const j = w.journal.get(r.journalId)!
-    expect(j.prevFlags).toMatchObject({ companies: false, departments: false, vault: false })
+    expect(j.prevFlags).toMatchObject({ companies: false, departments: true, vault: false })
     expect(w.store.getMeta(`${LAUNCH_INPUT_PREFIX}${r.journalId}`)).toBeNull()
 
     // passport notes written to the new company only
@@ -684,7 +699,7 @@ d('launch: discard', () => {
     expect(fs.existsSync(w.repoDir)).toBe(true)
     expect(fs.existsSync(w.personalRepo.path)).toBe(true)
     // flags restored, autopilot off, Personal untouched
-    expect(w.store.getSettings().experimental).toMatchObject({ companies: false, departments: false, vault: false })
+    expect(w.store.getSettings().experimental).toMatchObject({ companies: false, departments: true, vault: false })
     expect(w.company.boardSettings(companyId).autopilot).toBe(false)
     expect(personalState()).toBe(before)
     expect(w.journal.get(r.journalId)!.status).toBe('discarded')

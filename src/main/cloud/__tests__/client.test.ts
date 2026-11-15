@@ -32,6 +32,28 @@ describe('CloudClient.call', () => {
     expect(e).toMatchObject({ code: 'forbidden', cloudCode: 'unauthorized' })
     expect(e.message).toMatch(/no longer connected/)
   })
+  it('a change to a sleeping managed cloud wakes it and goes through once it answers; reads never wake it (docs/FLEET.md)', async () => {
+    let asleep = true
+    let wakes = 0
+    const f = (async (url: string, init?: RequestInit) => {
+      if (asleep) throw new TypeError('fetch failed')
+      return fetch(url.replace('http://sleepy.invalid', cloud.url), init)
+    }) as typeof fetch
+    const wake = async () => {
+      wakes++
+      asleep = false
+      return true
+    }
+    const read = await new CloudClient({ url: 'http://sleepy.invalid', token: DEVICE_TOKEN, fetch: f, wake }).call('summary').catch((x: unknown) => x as CloudRequestError)
+    expect(read).toMatchObject({ cloudCode: 'network' })
+    expect(wakes).toBe(0)
+    await new CloudClient({ url: 'http://sleepy.invalid', token: DEVICE_TOKEN, fetch: f, wake }).call('companyPut', { params: { cid: 'co_w' }, body: { name: 'W', slug: 'w', passportBundle: 'UEs=' } })
+    expect(wakes).toBe(1)
+    // a wake that doesn't come up leaves the original error
+    asleep = true
+    const e = await new CloudClient({ url: 'http://sleepy.invalid', token: DEVICE_TOKEN, fetch: f, wake: async () => false }).call('companyPut', { params: { cid: 'co_w' }, body: { name: 'W', slug: 'w', passportBundle: 'UEs=' } }).catch((x: unknown) => x as CloudRequestError)
+    expect(e).toMatchObject({ cloudCode: 'network' })
+  })
   it('an unreachable cloud says so, and names the URL but no token', async () => {
     const e = await new CloudClient({ url: 'http://127.0.0.1:1', token: DEVICE_TOKEN }).call('summary').then(() => null as unknown as CloudRequestError, (x: unknown) => x as CloudRequestError)
     expect(e).toMatchObject({ cloudCode: 'network' })

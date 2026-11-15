@@ -13,6 +13,7 @@ import type { Connections } from './connections'
 import { ApiError, badRequest, notFound, notInV1 } from './http'
 import { DESKTOP_SCOPES, OWNER_SCOPES, RUNTIME_SCOPES, toProposal, type PassportHost } from './passportHost'
 import { credentialRow, credentialStatus } from './providers'
+import { GITHUB_ENV, type Accounts } from './accounts'
 import { computeReadiness } from './readiness'
 import type { WorkflowDeps } from './deps'
 
@@ -51,6 +52,8 @@ const repoSchema = z.object({
 export interface CompanyDeps {
   host: PassportHost | null
   connections: Connections
+  /** docs/ACCOUNTS.md: the workspace GitHub account and shared keys */
+  accounts: Accounts
   /** cancels queued and running runs of a company (pause, delete) */
   cancelCompanyRuns(cid: string, reason: string): Promise<void>
 }
@@ -94,7 +97,12 @@ export function createCompanies(ctx: Ctx, deps: CompanyDeps) {
       workflows: wfs.map(w => ({ id: w.id, name: w.name, problems: JSON.parse(w.problems) as string[], deps: JSON.parse(w.deps) as WorkflowDeps })),
       providers,
       providerDetails: Object.fromEntries(CLOUD_ADAPTERS.map(a => [a, rows[a]?.detail ? ctx.redact(rows[a]!.detail!) : null])),
-      secretNames: ctx.db.all<{ name: string }>('SELECT name FROM company_secrets WHERE company_id = ?', r.id).map(s => s.name),
+      // a shared key, or the GitHub account's GH_TOKEN / GITHUB_TOKEN, satisfies a workflow too (docs/ACCOUNTS.md)
+      secretNames: [...new Set([
+        ...ctx.db.all<{ name: string }>('SELECT name FROM company_secrets WHERE company_id = ?', r.id).map(s => s.name),
+        ...deps.accounts.secretNames(),
+        ...(deps.accounts.list().github ? GITHUB_ENV : [])
+      ])],
       connections: deps.connections.rows(r.id).filter(c => c.enabled).map(c => ({ id: c.id, name: c.name, authentication: c.authentication, authStatus: c.authStatus })),
       repos: ctx.db.all<RepoRow>('SELECT * FROM repos WHERE company_id = ?', r.id).map(x => ({ id: x.id, name: x.name, url: x.url, status: x.status, detail: x.detail, lastSyncOk: x.last_sync_ok === null ? null : !!x.last_sync_ok })),
       passport: { configured: !!deps.host, hostUp, passportId: r.passport_id }
@@ -337,8 +345,10 @@ export function createCompanies(ctx: Ctx, deps: CompanyDeps) {
   function repoView(r: RepoRow): CloudRepo {
     return { id: r.id, name: r.name, url: r.url, branch: r.branch, credentialKind: r.credential_kind as CloudRepo['credentialKind'], syncedAt: r.synced_at, status: r.status as CloudRepo['status'], detail: r.detail }
   }
+  /** a repo's own token, else the workspace GitHub account's (docs/ACCOUNTS.md), else none (public) */
   function repoMaterial(r: RepoRow): RepoMaterial {
-    return { id: r.id, name: r.name, url: r.url, branch: r.branch, token: r.credential_ct ? ctx.vault.decrypt('repo-pat', `${r.company_id}/${r.id}`, r.credential_ct) : null }
+    const own = r.credential_ct ? ctx.vault.decrypt('repo-pat', `${r.company_id}/${r.id}`, r.credential_ct) : null
+    return { id: r.id, name: r.name, url: r.url, branch: r.branch, token: own ?? deps.accounts.githubToken(false) }
   }
 }
 export type Companies = ReturnType<typeof createCompanies>

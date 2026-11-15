@@ -6,6 +6,9 @@
  * who is in them, what they are about), Everything / Live only, then one list of chats, newest activity first
  * (CHAT-UI.md §9); quiet ones fold under "N older". Right-click › Close takes a chat off the list (PR-59); "N closed" at the bottom keeps them one click
  * away.
+ *
+ * Orca-simple: Search (inside every Claude session, ⇧⌘F) leads; chats in a project are grouped under it, newest
+ * project first, and the project you're working in is a card, so the focus is obvious at a glance.
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChatsFilter } from '../../state/store'
@@ -19,6 +22,38 @@ import { useTaskChannels } from '../../state/conversations'
 import { pausedChatsLine } from '../../state/desk'
 import { PRIMARY, viewFor } from '../../lib/nav'
 import { CHATS_FILTERS, ChatRow, filterRows, lastChat, rowRank, splitClosed, useChatRows, type ChatRowModel } from './ChatList'
+import { openSessionSearch } from '../../shell/SessionSearch'
+
+/** The project (repository) a chat runs in, or null for a chat with no folder. */
+export function projectOf(r: ChatRowModel): string | null {
+  if (r.kind === 'session') return r.session.repoId ?? null
+  if (r.kind === 'agent') return r.chat?.repoId ?? null
+  return null
+}
+
+/**
+ * Rows in list order, with each project's chats pulled together where its newest chat is. Pure.
+ * Returns loose rows and project groups interleaved, so the newest work stays on top either way.
+ */
+export function groupByProject(rows: readonly ChatRowModel[]): ({ kind: 'row'; row: ChatRowModel } | { kind: 'project'; repoId: string; rows: ChatRowModel[] })[] {
+  const out: ({ kind: 'row'; row: ChatRowModel } | { kind: 'project'; repoId: string; rows: ChatRowModel[] })[] = []
+  const groups = new Map<string, ChatRowModel[]>()
+  for (const r of rows) {
+    const p = projectOf(r)
+    if (!p) {
+      out.push({ kind: 'row', row: r })
+      continue
+    }
+    const g = groups.get(p)
+    if (g) g.push(r)
+    else {
+      const list = [r]
+      groups.set(p, list)
+      out.push({ kind: 'project', repoId: p, rows: list })
+    }
+  }
+  return out
+}
 
 export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Element {
   useTick()
@@ -79,6 +114,23 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
     return () => window.removeEventListener('keydown', key)
   }, [onBack])
   const where = company?.name ?? 'any company'
+  const repos = useStore((s) => s.repos)
+  const project = (g: { repoId: string; rows: ChatRowModel[] }): React.JSX.Element => {
+    const focus = g.rows.some((r) => r.key === cur)
+    const live = g.rows.filter((r) => r.live).length
+    const name = repos.find((x) => x.id === g.repoId)?.name ?? 'Project'
+    return (
+      <div key={`p:${g.repoId}`} role="group" aria-label={name} className={`side-proj side-proj--chats ${focus ? 'is-focus' : ''}`}>
+        <div className="side-proj__head">
+          <Icon name="folder" size={13} />
+          <span className="side-proj__name">{name}</span>
+          <span className="side-proj__n">{live > 0 ? `${live} working` : `${g.rows.length} ${g.rows.length === 1 ? 'chat' : 'chats'}`}</span>
+        </div>
+        {g.rows.map(row)}
+      </div>
+    )
+  }
+  const list = (rs: ChatRowModel[]): React.JSX.Element[] => (searching ? rs.map(row) : groupByProject(rs).map((e) => (e.kind === 'row' ? row(e.row) : project(e))))
   return (
     <div className="side-chats" aria-label="Chats">
       <div className="side-chats__head">
@@ -93,18 +145,23 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
           ))}
         </nav>
       </div>
-      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New task in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
+      <button type="button" className="side-search side-search--top" onClick={openSessionSearch} title="Search everything you and Claude said in your sessions (⇧⌘F)">
+        <Icon name="search" size={14} />
+        <span className="side-search__text">Search</span>
+        <Kbd>⇧⌘F</Kbd>
+      </button>
+      <button type="button" className="cx-side-new" data-chatux="new-conversation" aria-current={pane ? 'page' : undefined} onClick={() => openNewChat(scope)} title={company ? `New chat in ${company.name} (⌥⌘N)` : 'New chat (⌥⌘N)'}>
         <Icon name="edit" size={14} />
-        <span>New task</span>
+        <span>New chat</span>
         <Kbd>⌥⌘N</Kbd>
       </button>
       <label className="side-chats__search">
         <Icon name="search" size={13} />
         <input
           className="side-chats__input"
-          placeholder="Search chats"
+          placeholder="Filter chats"
           value={query}
-          aria-label="Search chats"
+          aria-label="Filter chats"
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
@@ -160,13 +217,13 @@ export function ChatsSidebar({ onBack }: { onBack: () => void }): React.JSX.Elem
                   : 'No chats yet. Ask Claude or Codex anything.'}
           </div>
         )}
-        {recent.map(row)}
+        {list(recent)}
         {older.length > 0 && (
           <div role="group" aria-label="Older" data-group="older">
             <button type="button" className="side-chats__more" data-chatux="older-more" aria-expanded={showOlder} title={`Nothing new in ${OLDER_DAYS} days`} onClick={() => setShowOlder((x) => !x)}>
               {showOlder ? 'Hide older' : `${older.length} older`}
             </button>
-            {showOlder && older.map(row)}
+            {showOlder && list(older)}
           </div>
         )}
         {!searching && filter !== 'live' && split.closed.length > 0 && (

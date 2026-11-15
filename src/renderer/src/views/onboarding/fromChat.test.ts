@@ -110,7 +110,7 @@ describe('confirm', () => {
   })
 
   it('an open setup blocks it (nothing decided); a half-done one is replaced only after a yes', async () => {
-    m.openNewCompany()
+    m.openOnboarding('new')
     expect(await f.confirmChatCard(P(), edits)).toBe(false)
     expect(decided).toEqual([])
     // close it with answers in it: saved, resumable

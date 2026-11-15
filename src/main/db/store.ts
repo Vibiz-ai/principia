@@ -118,7 +118,9 @@ export const DEFAULT_SETTINGS: Settings = {
   openChatsAs: 'auto',
   // Five doors step 5: dismissed one-time notices, and the first week waiting on Home (UI state)
   notices: {},
-  firstWeek: {}
+  firstWeek: {},
+  // docs/ACCOUNTS.md: Shared keys kept in the cloud (main writes it; settings:update refuses it)
+  cloudKeys: []
 }
 const SETTINGS_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 // departments and plans stay absent (= off) so settings:get keeps its three-flag shape until the feature is enabled
@@ -218,6 +220,7 @@ export class Store {
     s.sidebarNav = s.sidebarNav && typeof s.sidebarNav === 'object' && !Array.isArray(s.sidebarNav) ? { ...s.sidebarNav } : {}
     s.notices = s.notices && typeof s.notices === 'object' && !Array.isArray(s.notices) ? { ...s.notices } : {}
     s.firstWeek = s.firstWeek && typeof s.firstWeek === 'object' && !Array.isArray(s.firstWeek) ? { ...s.firstWeek } : {}
+    s.cloudKeys = Array.isArray(s.cloudKeys) ? s.cloudKeys.filter((n): n is string => typeof n === 'string') : []
     return s
   }
   updateSettings(patch: Partial<Settings>): Settings {

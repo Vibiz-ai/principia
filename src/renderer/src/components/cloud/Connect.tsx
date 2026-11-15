@@ -26,7 +26,8 @@ export function ArchCloud({ width = 150 }: { width?: number }): ReactElement {
   )
 }
 
-export function NotConnected(): ReactElement {
+/** `compact`: under "Make my cloud" (docs/MACHINES.md), for a cloud you already have. */
+export function NotConnected({ compact = false }: { compact?: boolean } = {}): ReactElement {
   const encryption = useCloud((s) => s.state?.encryption !== false)
   const [link, setLink] = useState('')
   const [manual, setManual] = useState(false)
@@ -47,11 +48,17 @@ export function NotConnected(): ReactElement {
     }
   }
   return (
-    <div className="cl-connect">
+    <div className={`cl-connect ${compact ? 'cl-connect--more' : ''}`}>
       <div className="cl-mini">
-        <ArchCloud />
-        <h3 className="cl-mini__h">Keep your agents working while your Mac sleeps</h3>
-        <p className="cl-mini__p">Schedules, connectors and your Passport keep running in your cloud. You answer from your phone.</p>
+        {compact ? (
+          <h3 className="cl-mini__h">Already have a cloud?</h3>
+        ) : (
+          <>
+            <ArchCloud />
+            <h3 className="cl-mini__h">Keep your agents working while your Mac sleeps</h3>
+            <p className="cl-mini__p">Schedules, connectors and your Passport keep running in your cloud. You answer from your phone.</p>
+          </>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -89,7 +96,7 @@ export function NotConnected(): ReactElement {
           </div>
         </form>
         <div className="cl-start">
-          <p className="cl-dim cl-mini__gap">No cloud yet? One button gives you an always-on cloud with its own https address. Its log shows your connect link.</p>
+          <p className="cl-dim cl-mini__gap">{compact ? 'Or deploy one yourself. Its log shows your connect link.' : 'No cloud yet? One button gives you an always-on cloud with its own https address. Its log shows your connect link.'}</p>
           <div className="cl-row">
             <Button onClick={() => void hive.app.openExternal({ url: RENDER_DEPLOY_URL })}>Deploy on Render</Button>
             <button type="button" className="cl-link" onClick={() => void hive.app.openExternal({ url: CLOUD_SETUP_URL })}>
@@ -98,7 +105,7 @@ export function NotConnected(): ReactElement {
           </div>
           <p className="cl-dim">Or on an always-on machine you own (one file, no clone):</p>
           <pre className="cl-pre selectable">{COMPOSE_COMMANDS}</pre>
-          <p className="cl-dim">Managed Principia Cloud is coming. Self-hosting is free forever.</p>
+          <p className="cl-dim">Self-hosting is free forever.</p>
         </div>
       </div>
     </div>

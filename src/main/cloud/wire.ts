@@ -4,6 +4,8 @@
  * vault, gateway, git) and Mac-side account linking through node-pty. Built lazily by `Hive.cloud`.
  */
 import { execFile } from 'node:child_process'
+import dns from 'node:dns/promises'
+import os from 'node:os'
 import { app, safeStorage } from 'electron'
 import type { CloudAdapter, ProviderTestResponse, PutProviderCredentialRequest } from '../../shared/cloud'
 import type { Id } from '../../shared/types'
@@ -16,12 +18,26 @@ import { PassportSync } from '../memory/openPassportSync'
 import { openPassportActions } from '../handlers/openPassport'
 import { CloudLink, type PassportSyncPort } from './link'
 import { AccountLogins, type LoginProc } from './logins'
+import { CloudAccountsSync } from './accounts'
+import { CloudLoginVault } from './loginVault'
+import { ghToken } from '../onboarding/github'
 import type { MoveDeps } from './move'
+import { CloudMachines } from './machines'
+import { runSsh, sshPublicKey } from './machines/local'
+import { digitalocean, hetzner } from './machines/providers'
+import { fleetClient } from './machines/fleet'
+import { FLEET_URL } from '../../shared/machines'
 
 export interface CloudWiring {
   link: CloudLink
   logins: AccountLogins
   move: MoveDeps
+  /** docs/ACCOUNTS.md: GitHub and the Shared keys marked "In the cloud" */
+  accounts: CloudAccountsSync
+  /** docs/MACHINES.md: the cloud machine made from this Mac */
+  machines: CloudMachines
+  /** docs/FLEET.md §9: every cloud sign-in, kept encrypted on this Mac so a new machine is signed in by itself */
+  loginVault: CloudLoginVault
 }
 
 /** node-pty loads its native binding on import: load it at the first sign-in only (tests build a Hive without it). */
@@ -76,9 +92,12 @@ export function createCloud(h: Hive): CloudWiring {
     released: (ids) => {
       for (const id of ids) h.safe(() => h.engine.scheduler.upsert(id), undefined)
     },
-    log
+    log,
+    // a sleeping managed cloud wakes when a change can't get through (docs/FLEET.md)
+    wake: (): Promise<boolean> => machines.wakeForUse()
   })
 
+  const loginVault = new CloudLoginVault({ userData, cipher })
   const logins = new AccountLogins({
     spawn: (file, args, opts): LoginProc => {
       // wide columns: the token is printed on one line and never wrapped
@@ -98,6 +117,7 @@ export function createCloud(h: Hive): CloudWiring {
     upload: async (adapter, kind, value) => {
       const body: PutProviderCredentialRequest = { kind, value }
       await link.call((c) => c.call('providerPut', { params: { adapter }, body }))
+      loginVault.save(adapter, kind, value)
     },
     test: (adapter: CloudAdapter) => link.call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: {} })),
     report: (s) => link.setLogin(s)
@@ -126,5 +146,73 @@ export function createCloud(h: Hive): CloudWiring {
     gitRemote,
     log
   }
-  return { link, logins, move }
+  const accounts = new CloudAccountsSync({
+    call: (f) => link.call(f),
+    linked: () => link.linked,
+    ghToken: () => ghToken(),
+    sharedKeyNames: () => h.vault.list().map((k) => k.name),
+    revealShared: (name) => h.vault.reveal(name),
+    cloudKeys: () => h.store.getSettings().cloudKeys ?? [],
+    setCloudKeys: (names) => {
+      const after = h.store.updateSettings({ cloudKeys: names })
+      emit('settings:changed', after)
+    },
+    log
+  })
+  const machines: CloudMachines = new CloudMachines({
+    userData,
+    cipher,
+    emit: (machine) => emit('cloud', { kind: 'machine', machine }),
+    api: (provider, token) => (provider === 'hetzner' ? hetzner(token) : digitalocean(token)),
+    fleet: fleetUrl() ? fleetClient(fleetUrl()!) : null,
+    ghToken: async () => (await ghToken())?.token ?? null,
+    sshPublicKey,
+    runSsh: (t, script, line) => runSsh(t, script, line, baseChildEnv()),
+    resolve: async (host) => (await dns.lookup(host, { family: 4 })).address,
+    pair: async (url, code) => {
+      await link.pair({ url, code })
+    },
+    linkedUrl: () => (link.linked ? link.state().url : null),
+    unlink: async () => {
+      logins.cancel()
+      await link.unlink()
+    },
+    bring: {
+      keys: async () => void (await accounts.sync()),
+      github: async () => void (await accounts.connectGithub({})),
+      saved: (adapter) => loginVault.has(adapter),
+      login: async (adapter) => {
+        // signed in before: the saved sign-in goes up and is tested; the browser opens only if it no longer works
+        const saved = loginVault.get(adapter)
+        if (saved) {
+          try {
+            await link.call((c) => c.call('providerPut', { params: { adapter }, body: { kind: saved.kind, value: saved.value } }))
+            const t = await link.call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: {} }))
+            if (t.ok) return { ok: true, detail: null }
+            log.warn('cloud: a saved sign-in no longer works', { adapter })
+            loginVault.forget(adapter)
+          } catch (e) {
+            log.warn('cloud: saved sign-in not restored', { adapter, error: e instanceof Error ? e.message : String(e) })
+          }
+        }
+        const s = await logins.start(adapter)
+        return { ok: s.phase === 'done', detail: s.message }
+      }
+    },
+    version: app.getVersion(),
+    // dev and self-builders: another image, or another ref of the public source to build from
+    image: process.env.PRINCIPIA_CLOUD_IMAGE || undefined,
+    sourceRef: process.env.PRINCIPIA_CLOUD_REF || undefined,
+    hostName: os.hostname().replace(/\.local$/, '').slice(0, 40),
+    log
+  })
+  machines.watch()
+  return { link, logins, move, accounts, machines, loginVault }
 }
+
+/** The managed fleet's address: PRINCIPIA_FLEET_URL (development, self-hosted fleets) or the build's own. */
+function fleetUrl(): string | null {
+  const v = process.env.PRINCIPIA_FLEET_URL?.trim()
+  return v && /^https:\/\//.test(v) ? v : FLEET_URL
+}
+

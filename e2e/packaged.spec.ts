@@ -72,15 +72,12 @@ test('the window opens from the packaged app', async () => {
   expect(page.url()).toMatch(/^file:\/\//)
 })
 
-test('Home renders', async () => {
-  // a fresh data folder opens the first-run flow; "I'll explore on my own" goes to Home
-  await expect(page.locator('.shell--onboarding')).toBeVisible()
-  await page.getByText("I'll explore on my own").click()
+test('Chats renders', async () => {
+  // the simplified app opens straight to Chats: no first-run flow (docs: Chats, Workflows, Cloud, More)
   await expect(page.locator('.shell--onboarding')).toHaveCount(0)
   await expect(page.locator('.sidebar')).toBeVisible()
-  await expect(page.locator('main.main .home')).toBeVisible()
-  await expect(page).toHaveTitle(/Home/)
-  expect((await page.evaluate(() => window.hive.settings.get())).onboardingDone).toBe(true)
+  await expect(page.locator('main.main')).toContainText('Chats')
+  await expect(page).toHaveTitle(/Chats/)
 })
 
 test('the database opens and a company can be created', async () => {
@@ -94,8 +91,6 @@ test('the database opens and a company can be created', async () => {
   const listed = await page.evaluate(() => window.hive.company.list())
   expect(listed.map((c) => c.name)).toContain('Smoke Test Co')
   expect(existsSync(join(scratch, 'userData', 'hive.db'))).toBe(true)
-  // read back through the UI: Home lists the new company
-  await expect(page.locator('main.main')).toContainText('Smoke Test Co')
 })
 
 test('a shell terminal spawns and echoes', async () => {

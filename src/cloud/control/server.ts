@@ -26,6 +26,8 @@ import { createLogger, createRedactor } from './log'
 import { createPassportHost, type PassportHost } from './passportHost'
 import { isPassportPath, proxyToPassport } from './passportProxy'
 import { createProviders } from './providers'
+import { createAccounts } from './accounts'
+import { activitySnapshot, writeActivity } from './activity'
 import { createQueue } from './queue'
 import { createSync, decodeCursor } from './sync'
 import { usageSummary } from './usage'
@@ -44,6 +46,8 @@ export interface ControlAppOptions {
   heartbeatMs?: number
   /** dispatcher tick (default 5 s); 0 disables timers (tests) */
   tickMs?: number
+  /** docs/MACHINES.md §6: how often <dataDir>/activity.json is written (default 30 s; 0 never) */
+  activityMs?: number
 }
 
 type Policy = 'open' | 'device' | 'any' | 'pair' | 'session'
@@ -129,9 +133,10 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
   const host = config.passport ? createPassportHost(config.passport, config.fetch ?? fetch) : null
   const connections = createConnections(ctx)
   const providers = createProviders(ctx)
-  const companies = createCompanies(ctx, { host, connections, cancelCompanyRuns: (cid, reason) => queue.cancelCompanyRuns(cid, reason) })
+  const accounts = createAccounts(ctx)
+  const companies = createCompanies(ctx, { host, connections, accounts, cancelCompanyRuns: (cid, reason) => queue.cancelCompanyRuns(cid, reason) })
   const sync = createSync(ctx)
-  const queue = createQueue(ctx, { providers, companies, connections, sync })
+  const queue = createQueue(ctx, { providers, companies, connections, sync, accounts })
   ctx.runtime = o.createRuntime(queue.ports)
   const limiter = new PairLimiter(now)
   const timers: NodeJS.Timeout[] = []
@@ -318,6 +323,11 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       case 'secrets': return ok(companies.secrets(params.cid!))
       case 'secretPut': return ok(companies.putSecret(actor, params.cid!, params.name!, (await body()) as { value?: unknown }))
       case 'secretDelete': { companies.removeSecret(actor, params.cid!, params.name!); return ok({ ok: true }) }
+      case 'accounts': return ok(accounts.list())
+      case 'githubAccountPut': return ok(accounts.putGithub(actor, (await body()) as Record<string, unknown>))
+      case 'githubAccountDelete': { accounts.removeGithub(actor); return ok({ ok: true }) }
+      case 'sharedSecretPut': return ok(accounts.putSecret(actor, params.name!, (await body()) as { value?: unknown }))
+      case 'sharedSecretDelete': { accounts.removeSecret(actor, params.name!); return ok({ ok: true }) }
       case 'repos': return ok(companies.repos(params.cid!))
       case 'repoPut': return ok(companies.putRepo(actor, params.cid!, params.rid!, await body()))
       case 'repoSync': return ok(await companies.syncRepo(actor, params.cid!, params.rid!))
@@ -365,6 +375,8 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const started = Date.now()
+    // a change from a device or the console keeps a managed machine awake (activity.ts); reads don't
+    if (req.method && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') lastChangeAt = now().toISOString()
     let url: URL
     try { url = new URL(req.url ?? '/', 'http://control.local') } catch { url = new URL('http://control.local/') }
     try {
@@ -386,6 +398,14 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
   }
 
   let httpServer: Server | null = null
+  let lastChangeAt: string | null = null
+  const reportActivity = (): void => {
+    try {
+      writeActivity(config.dataDir, activitySnapshot(ctx, lastChangeAt))
+    } catch (e) {
+      log.warn('activity.json not written', { error: (e as Error).message })
+    }
+  }
   return {
     ctx, handle, connectLink, ports: queue.ports, queue, host,
     server() {
@@ -399,6 +419,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
     async start() {
       companies.primeSecrets()
       connections.primeSecrets()
+      accounts.primeSecrets()
       for (const r of db.all<{ id: string; ciphertext: string }>('SELECT id, ciphertext FROM credentials')) { try { vault.decrypt('provider', r.id, r.ciphertext) } catch { log.warn('a stored credential could not be decrypted', { credentialId: r.id }) } }
       queue.recover()
       await ctx.runtime.start()
@@ -423,6 +444,13 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
           db.run('DELETE FROM oauth_state WHERE expires_at < ?', cutoff)
         }, 3_600_000))
         for (const t of timers) t.unref()
+      }
+      const every = o.activityMs ?? (tick > 0 ? 30_000 : 0)
+      if (every > 0) {
+        reportActivity()
+        const t = setInterval(reportActivity, every)
+        t.unref()
+        timers.push(t)
       }
       queue.kick()
     },

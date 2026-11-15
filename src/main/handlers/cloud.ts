@@ -48,7 +48,17 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
   const providers = () => call((c) => c.call<unknown>('providers')).then((x) => listOf<ProviderAccount>(x, 'providers'))
 
   handle('cloud:state', () => link.state())
-  handle('cloud:pair', (q) => link.pair(q))
+  handle('cloud:pair', async (q) => {
+    const s = await link.pair(q)
+    // a fresh link gets the keys this Mac keeps in the cloud right away (a failure retries on the next change); the
+    // sync never gets in the way of pairing
+    try {
+      cloud.accounts?.keysChanged()
+    } catch {
+      /* best effort */
+    }
+    return s
+  })
   handle('cloud:unlink', async () => {
     logins.cancel()
     const s = await link.unlink()
@@ -60,10 +70,13 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
   handle('cloud:providers', () => providers())
   handle('cloud:providerPut', async ({ adapter, kind, value }) => {
     await call((c) => c.call('providerPut', { params: { adapter }, body: { kind, value } }))
+    // kept on this Mac too, so a new cloud machine is signed in without asking again (docs/FLEET.md §9)
+    cloud.loginVault?.save(adapter, kind, value)
     return providers()
   })
   handle('cloud:providerDelete', async ({ adapter }) => {
     await call((c) => c.call('providerDelete', { params: { adapter } }))
+    cloud.loginVault?.forget(adapter)
     return providers()
   })
   handle('cloud:providerTest', ({ adapter, live }) => call((c) => c.call<ProviderTestResponse>('providerTest', { params: { adapter }, body: live ? { live: true } : {} })))
@@ -135,6 +148,38 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
     if (/^https:\/\//.test(r.authorizeUrl)) await shell.openExternal(r.authorizeUrl)
     return r
   })
+
+  // docs/ACCOUNTS.md: GitHub and Shared keys for every cloud run
+  const accounts = cloud.accounts
+  handle('cloud:accounts', () => accounts.view())
+  handle('cloud:githubConnect', (q) => accounts.connectGithub({ token: q?.token ?? null }))
+  handle('cloud:githubRemove', () => accounts.removeGithub())
+  handle('cloud:keyCloud', ({ name, on }) => accounts.setKey(name, on))
+  handle('cloud:keysSync', () => accounts.sync())
+
+  // docs/MACHINES.md: make the cloud from here
+  const machines = () => {
+    if (!cloud.machines) throw new HiveError('not_implemented', 'Making a cloud is not available here.')
+    return cloud.machines
+  }
+  handle('cloud:machine', () => cloud.machines?.view() ?? null)
+  handle('cloud:machineOptions', ({ provider, token }) => machines().options(provider, token))
+  handle('cloud:machineCreate', (q) => machines().create(q))
+  handle('cloud:machineRetry', () => machines().retry())
+  handle('cloud:machineDelete', async () => {
+    logins.cancel()
+    const r = await machines().remove()
+    emit('data:changed', { domain: 'schedules' })
+    return r
+  })
+  handle('cloud:machineInfo', () => cloud.machines?.info() ?? { managed: false, github: null })
+  handle('cloud:machineWake', async () => {
+    const m = machines()
+    await m.wakeForUse()
+    return m.refresh()
+  })
+  // a machine that was being made when the app quit goes on
+  cloud.machines?.resume()
 
   // while linked: poll every 30 s and follow /v1/events (a revoked device stops itself)
   link.start()

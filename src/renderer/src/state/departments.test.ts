@@ -165,14 +165,14 @@ describe('Pause all agents', () => {
 })
 
 describe('department views', () => {
-  it('open inside their company', async () => {
+  it('enter their company, and land on Chats now that department and agent pages are retired', async () => {
     m.setState({ settings: flags(true, true) })
     m.openDepartment({ id: 'dep_dev', companyId: 'co_a' })
     await tick()
     expect(m.getState().activeCompanyId).toBe('co_a')
-    expect(m.getState().view).toMatchObject({ name: 'department', id: 'dep_dev' })
+    expect(m.getState().view).toMatchObject({ name: 'chats' })
     m.openAgentSeat({ id: 'agt_1', companyId: 'co_a' })
     await tick()
-    expect(m.getState().view).toEqual({ name: 'agentSeat', id: 'agt_1' })
+    expect(m.getState().view).toMatchObject({ name: 'chats' })
   })
 })

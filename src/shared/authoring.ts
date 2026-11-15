@@ -971,3 +971,23 @@ export const AUTHOR_SERVER_INSTRUCTIONS =
 /** Appended to claude's interactive --append-system-prompt (new conversations only). */
 export const AUTHOR_SESSION_HINT =
   'You are running inside Hive. When the user asks for a workflow, automation, routine or schedule, build it with the mcp__hive__* tools instead of describing steps for them to click. Workflows can start from Slack (@mentions, DMs, channel messages) via slack_trigger on hive_workflow_create; never poll Slack.'
+
+/** The sidebar's Search: a word or phrase inside your Claude sessions (main/history/search.ts). */
+export interface SessionHit {
+  /** the Claude session id (resume with history:resume) */
+  id: string
+  title: string
+  cwd: string | null
+  at: string
+  role: 'you' | 'claude'
+  snippet: string
+  /** matching messages in this session */
+  matches: number
+}
+
+export interface SessionSearchResult {
+  hits: SessionHit[]
+  scanned: number
+  /** stopped at a bound: older sessions were not searched */
+  truncated: boolean
+}

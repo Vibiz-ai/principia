@@ -149,8 +149,7 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     expect(palette.toLowerCase()).toContain('ledgerline')
     const surface = async (name: string): Promise<string> => renderToStaticMarkup(await surfaces.find(([n]) => n === name)![1]())
     // Home lists the company's own review in Needs you, with Approve in place; Chats lists its own agent thread
-    // step 4: Settings shows this company's own team and its own Instagram account, nobody else's
-    expect((await surface('Settings › team')).toLowerCase()).toContain('ledgerline writer')
+    // step 4: Settings shows this company's own Instagram account, nobody else's (Team & autonomy is retired)
     expect(await surface('Settings › Connections (Instagram sheet open)')).toContain('@ledgerlineshop')
     const home = await surface('Home')
     expect(home).toContain('1 finished · ready for review')
@@ -165,9 +164,8 @@ describe('A1: inside one company, the shell renders nothing of another', () => {
     store.setState({ view: { name: 'chats', filter: 'live' } })
     expect(renderToStaticMarkup(await surfaces[0]![1]())).toContain('data-chatux="task-row"')
     store.setState({ view: { name: 'home' } })
-    // step 5: the first week lists this company's own agent with its first task, and the Autopilot switch names it
+    // step 5: the first week lists this company's own agent with its first task (Autopilot is retired)
     expect((await surface('Home › first week')).toLowerCase()).toContain('ledgerline writer')
-    expect(await surface('Automations › Autopilot')).toContain('Auto-start for Ledgerly App')
     // step 5 QA (A2): the rail's hover label agrees with the badge: finished work is not in it (CHAT-UI.md §10)
     const hover = await surface('Rail hover label')
     expect(hover).not.toContain('ledgerline homepage copy')
@@ -196,7 +194,7 @@ describe('A1 for asks: Home’s Ask box, the desk and ⌘K route only inside the
 })
 
 describe('A2: every count agrees', () => {
-  it('rail badge = sidebar Home badge = status bar = useNeeds; Team dot = LIVE = status bar working', async () => {
+  it('rail badge = sidebar Chats badge = status bar = useNeeds; LIVE = status bar working', async () => {
     const store = await import('../state/store')
     const { truthOf } = await import('../state/live')
     const { needsIn, workingIn } = await import('../lib/liveTruth')
@@ -215,7 +213,8 @@ describe('A2: every count agrees', () => {
       expect(bar).toContain(`${needs} needs you`)
       const side = renderToStaticMarkup(await surfaces[0]![1]())
       expect(side).toMatch(new RegExp(`aria-label="${needs} [^"]*you`))
-      expect(side).toContain(`aria-label="${working} working"`)
+      // the Chats door shows what needs you first; LIVE still says how many are working
+      expect(side).toContain(`${working} working`)
     }
     expect(workingIn(truthOf(store.getState()), 'co_personal').count).toBe(0)
   })

@@ -63,6 +63,11 @@ export interface CloudClientOptions {
   token?: string | null
   fetch?: typeof fetch
   timeoutMs?: number
+  /**
+   * docs/FLEET.md: a managed cloud sleeps when idle. A change (any call that isn't a read) that can't get through
+   * asks this to wake it, and is sent once more when it resolves true. Reads and the event stream never wake it.
+   */
+  wake?: () => Promise<boolean>
 }
 
 export interface CallOptions {
@@ -77,11 +82,13 @@ export class CloudClient {
   private token: string | null
   private f: typeof fetch
   private timeoutMs: number
+  private wake: (() => Promise<boolean>) | null
   constructor(o: CloudClientOptions) {
     this.url = o.url.replace(/\/+$/, '')
     this.token = o.token ?? null
     this.f = o.fetch ?? fetch
     this.timeoutMs = o.timeoutMs ?? CLOUD_TIMEOUT_MS
+    this.wake = o.wake ?? null
   }
 
   /** `/v1/runs/x?tail=200` from a route name, params and query. */
@@ -97,6 +104,17 @@ export class CloudClient {
 
   /** One JSON call. Throws CloudRequestError (network, timeout or the server's CloudError). 204 resolves undefined. */
   async call<T>(route: CloudRouteName, o: CallOptions = {}): Promise<T> {
+    try {
+      return await this.once<T>(route, o)
+    } catch (e) {
+      const asleep = e instanceof CloudRequestError && (e.cloudCode === 'network' || e.cloudCode === 'timeout')
+      if (!asleep || !this.wake || routeMethod(route) === 'GET') throw e
+      if (!(await this.wake().catch(() => false))) throw e
+      return this.once<T>(route, o)
+    }
+  }
+
+  private async once<T>(route: CloudRouteName, o: CallOptions): Promise<T> {
     const method = routeMethod(route)
     const hasBody = o.body !== undefined && method !== 'GET'
     let res: Response

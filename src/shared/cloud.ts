@@ -324,6 +324,42 @@ export interface CloudSecretMeta {
   lastUsedAt: ISODate | null
 }
 
+// ---------- workspace accounts and shared keys (docs/ACCOUNTS.md) ----------
+
+/**
+ * The GitHub account the whole cloud uses: repos without a token of their own clone and push with it, and agents get
+ * it as GH_TOKEN for `gh`. Write-only like every credential; only the login name and dates come back.
+ */
+export interface CloudGithubAccount {
+  login: string | null
+  createdAt: ISODate
+  lastUsedAt: ISODate | null
+}
+/** GET /v1/accounts: what the cloud is signed in to beyond the model accounts, and the keys every company shares. */
+export interface CloudAccounts {
+  github: CloudGithubAccount | null
+  /** shared keys (every company's runs get them; a company key of the same name wins) */
+  secrets: CloudSecretMeta[]
+}
+export interface PutGithubAccountRequest {
+  token: string
+  /** the account's login, read on the Mac (`gh api user`), shown in the cloud pane */
+  login?: string | null
+}
+/** The token shapes GitHub issues: gh CLI / OAuth (gho_), classic (ghp_), user-to-server (ghu_), fine-grained (github_pat_). */
+export const GITHUB_TOKEN_RE = /^(?:gh[opusr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/
+export const isGithubToken = (v: string): boolean => GITHUB_TOKEN_RE.test(v.trim())
+
+/** The Keys page's cloud column (desktop IPC cloud:accounts). `linked: false` = no cloud yet, everything else empty. */
+export interface CloudAccountsView {
+  linked: boolean
+  github: CloudGithubAccount | null
+  /** Shared key names the cloud holds */
+  inCloud: string[]
+  /** Shared key names this Mac keeps in the cloud (settings.cloudKeys) */
+  cloudKeys: string[]
+}
+
 export type RepoCredential =
   | { kind: 'github_pat'; value: string } // fine-grained PAT, write-only
   | { kind: 'github_app'; installationId: number } // the workspace's GitHub App (PUT /v1/github/app)
@@ -515,6 +551,8 @@ export type CloudEvent =
   | { kind: 'ask'; ask: CloudAsk }
   | { kind: 'forum'; companyId: Id; channelId: Id; messageId: Id }
   | { kind: 'provider'; account: ProviderAccount }
+  /** the GitHub account or the shared keys changed (GET /v1/accounts again) */
+  | { kind: 'accounts' }
   | { kind: 'workspace'; workspace: CloudWorkspace }
 
 // ---------- Forum in the cloud (CLOUD.md §7.6) ----------
@@ -608,6 +646,11 @@ export const CLOUD_ROUTES = {
   secrets: 'GET /v1/companies/:cid/secrets',
   secretPut: 'PUT /v1/companies/:cid/secrets/:name',
   secretDelete: 'DELETE /v1/companies/:cid/secrets/:name',
+  accounts: 'GET /v1/accounts',
+  githubAccountPut: 'PUT /v1/accounts/github',
+  githubAccountDelete: 'DELETE /v1/accounts/github',
+  sharedSecretPut: 'PUT /v1/secrets/:name',
+  sharedSecretDelete: 'DELETE /v1/secrets/:name',
   githubApp: 'GET /v1/github/app',
   githubAppPut: 'PUT /v1/github/app',
   repos: 'GET /v1/companies/:cid/repos',

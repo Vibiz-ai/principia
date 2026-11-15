@@ -490,7 +490,8 @@ export class LaunchService {
   private stepFlags(j: StoredJournal, prep: Prepared): 'ok' | 'n/a' {
     if (!prep.input.enableFlags) return 'n/a'
     const cur: ExperimentalFlags = this.d.settings().experimental ?? {}
-    if (cur.companies && cur.departments && cur.vault) return j.prevFlags ? 'ok' : 'n/a'
+    // agents are picked automatically now: a launch turns on companies and the vault, never departments (main/simplify.ts)
+    if (cur.companies && cur.vault) return j.prevFlags ? 'ok' : 'n/a'
     if (!j.prevFlags) {
       // recorded before the change, so Discard can always restore them
       // explicit booleans: restoring merges flag by flag, so an absent flag would stay on
@@ -498,7 +499,7 @@ export class LaunchService {
       stepOf(j, 'flags').created.push({ kind: 'flags', id: 'experimental' })
       this.d.journal.save(j)
     }
-    this.d.updateSettings({ experimental: { ...cur, companies: true, departments: true, vault: true } as ExperimentalFlags })
+    this.d.updateSettings({ experimental: { ...cur, companies: true, vault: true } as ExperimentalFlags })
     return 'ok'
   }
 

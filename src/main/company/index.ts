@@ -935,6 +935,11 @@ export class CompanyStore {
     })()
     return this.boardSettings(companyId)
   }
+  /** The profile a task with no agent runs on: the founder's default agent (Settings › AI providers), else Claude. */
+  automaticProfileId(): string | null {
+    const preferred=this.store.getSettings().defaultAdapter ?? 'claude'
+    return this.store.defaultProfileFor(preferred)?.id ?? this.store.defaultProfileFor('claude')?.id ?? null
+  }
   boardSettings(companyId: string): BoardSettings {
     this.passport(companyId)
     const data=this.companyJson(companyId)
@@ -1001,7 +1006,8 @@ export class CompanyStore {
         this.scope.assertSameCompany(task.companyId,{workflowId:agent.refId})
         target={kind:'workflow',workflowId:agent.refId,inputs:{task_identifier:task.identifier,task_title:this.redact(task.title),task_description:this.redact(task.description)}}
       } else {
-        selected=profileId ?? (agent?.kind==='profile' ? agent.refId : null) ?? task.assigneeProfileId
+        // agents are picked automatically (main/simplify.ts): a task nobody was assigned runs on the default agent
+        selected=profileId ?? (agent?.kind==='profile' ? agent.refId : null) ?? task.assigneeProfileId ?? (agent ? null : this.automaticProfileId())
         const profile=selected ? this.store.getProfile(selected) : null
         if(!profile) fail(agent ? `${agent.name} has no AI tool to work with. Choose one on the agent's page.` : 'Assign an agent first')
         if(profile!.adapter==='shell') fail('Choose Claude, Codex, Cursor, or Gemini to work on this task')

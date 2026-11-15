@@ -960,6 +960,7 @@ export const REQUEST_SCHEMAS = {
     limit: z.number().int().min(1).max(500).optional()
   }),
   'history:get': z.object({ id: z.string().regex(/^[0-9a-zA-Z-]{8,64}$/, 'invalid session id') }),
+  'history:search': z.object({ query: z.string().max(200), limit: z.number().int().min(1).max(100).optional() }).strict(),
   'history:resume': z.object({
     id: z.string().regex(/^[0-9a-zA-Z-]{8,64}$/, 'invalid session id'),
     profileId: id.optional(),

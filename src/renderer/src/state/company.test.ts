@@ -54,14 +54,14 @@ describe('company focus', () => {
     expect(m.multiCompany()).toBe(true)
   })
 
-  it('enterCompany sets the scope, persists it, goes Home and clears the back stack', async () => {
+  it('enterCompany sets the scope, persists it, goes to Chats and clears the back stack', async () => {
     await m.navigate({ name: 'workflows' })
     await m.navigate({ name: 'keys' })
     const before = m.getState().scopeNonce
     expect(await m.enterCompany('co_b')).toBe(true)
     expect(m.getState().activeCompanyId).toBe('co_b')
     expect(m.scopeCompanyId()).toBe('co_b')
-    expect(m.getState().view).toEqual({ name: 'home' })
+    expect(m.getState().view).toEqual({ name: 'chats' })
     expect(m.getState().scopeNonce).toBe(before + 1)
     expect(settingsUpdates).toContainEqual({ activeCompanyId: 'co_b' })
     // nothing to go back to from the previous company
@@ -71,51 +71,51 @@ describe('company focus', () => {
     expect(m.getState().view).toEqual({ name: 'chats', filter: 'live' })
   })
 
-  it('switching back to a company opens the screen it was left on, not Home', async () => {
+  it('switching back to a company opens the screen it was left on, not Chats', async () => {
     await m.enterCompany('co_a')
     await m.navigate({ name: 'chats', chat: 'session:s_1' })
     await m.enterCompany('co_b')
     // Beta was never left on anything: Home
-    expect(m.getState().view).toEqual({ name: 'home' })
-    await m.navigate({ name: 'forum', channelId: 'ch_1' })
+    expect(m.getState().view).toEqual({ name: 'chats' })
+    await m.navigate({ name: 'workflows' })
     await m.enterCompany('co_a')
     expect(m.getState().view).toEqual({ name: 'chats', chat: 'session:s_1' })
     await m.enterCompany('co_b')
-    expect(m.getState().view).toEqual({ name: 'forum', channelId: 'ch_1' })
+    expect(m.getState().view).toEqual({ name: 'workflows' })
     // the rail's ⌃N and All keep it too
     m.enterCompanySlot(1)
     await Promise.resolve()
     expect(m.getState().view).toEqual({ name: 'chats', chat: 'session:s_1' })
   })
 
-  it('clicking the company you are in still goes Home; an explicit view still wins', async () => {
+  it('clicking the company you are in still goes to Chats; an explicit view still wins', async () => {
     await m.enterCompany('co_a')
     await m.navigate({ name: 'workflows' })
     await m.enterCompany('co_a')
-    expect(m.getState().view).toEqual({ name: 'home' })
+    expect(m.getState().view).toEqual({ name: 'chats' })
     await m.navigate({ name: 'workflows' })
-    await m.enterCompany('co_b', { view: { name: 'tasks' } })
-    expect(m.getState().view).toEqual({ name: 'tasks' })
+    await m.enterCompany('co_b', { view: { name: 'keys' } })
+    expect(m.getState().view).toEqual({ name: 'keys' })
     await m.enterCompany('co_a')
     expect(m.getState().view).toEqual({ name: 'workflows' })
   })
 
   it('coming back does not replay a one-shot ask (quick add, create sheet)', async () => {
     await m.enterCompany('co_a')
-    await m.navigate({ name: 'tasks', departmentId: 'd_1', quick: { title: 'x', nonce: 1 } })
+    await m.navigate({ name: 'schedules', seed: { workflowId: 'wf_1' } })
     await m.enterCompany('co_b')
     await m.enterCompany('co_a')
-    expect(m.getState().view).toEqual({ name: 'tasks', departmentId: 'd_1' })
+    expect(m.getState().view).toEqual({ name: 'schedules' })
   })
 
-  it('an agent desk removed since lands on Home', async () => {
+  it('an agent desk removed since lands on Chats', async () => {
     m.setState({ companyAgents: [{ id: 'ag_1', archivedAt: null } as never], departments: [] })
     await m.enterCompany('co_a')
     await m.navigate({ name: 'agentSeat', id: 'ag_1' })
     await m.enterCompany('co_b')
     m.setState({ companyAgents: [] })
     await m.enterCompany('co_a')
-    expect(m.getState().view).toEqual({ name: 'home' })
+    expect(m.getState().view).toEqual({ name: 'chats' })
   })
 
   it('⌃N picks the Nth company in rail order, ⌃0 picks All', async () => {

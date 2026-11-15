@@ -84,6 +84,30 @@ describe('runAskpass: a run\'s repo tokens reach git, each only for its own repo
     expect(JSON.stringify(env)).not.toContain(REPO_TOKEN)
   })
 
+  it('with the workspace GitHub account, any other github.com prompt gets it; repo tokens still win in their repos', () => {
+    const root = tmp()
+    const home = join(root, 'home')
+    const repo = join(root, 'co', 'quest')
+    for (const d of [home, repo]) mkdirSync(d, { recursive: true })
+    const GH = 'gho_WORKSPACEgithubTOKEN0123456789abcdef'
+    const env = runAskpass(home, [{ dir: repo, token: REPO_TOKEN }], GH)
+    const ask = (cwd: string, prompt: string): string | null => {
+      try {
+        return execFileSync(env.GIT_ASKPASS!, [prompt], { cwd }).toString().trim()
+      } catch {
+        return null
+      }
+    }
+    expect(ask(repo, "Password for 'https://x-access-token@github.com': ")).toBe(REPO_TOKEN)
+    expect(ask(join(root, 'co'), "Password for 'https://x-access-token@github.com': ")).toBe(GH)
+    expect(ask(join(root, 'co'), "Password for 'https://x-access-token@gitlab.com': ")).toBeNull()
+    expect(readFileSync(env.GIT_ASKPASS!, 'utf8')).not.toContain(GH)
+    // without repos, the account alone still makes an askpass
+    expect(ask(root, "Password for 'https://x-access-token@github.com': ")).toBe(GH)
+    const only = runAskpass(join(root, 'home2'), [], GH)
+    expect(execFileSync(only.GIT_ASKPASS!, ["Password for 'https://github.com': "], { cwd: root }).toString().trim()).toBe(GH)
+  })
+
   it('git itself picks the token up from inside the repo (credential fill, no helper)', () => {
     const root = tmp()
     const repo = join(root, 'quest')

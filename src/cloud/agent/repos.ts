@@ -47,8 +47,10 @@ export function askpassScript(tokenFile: string): string {
  * The run's own GIT_ASKPASS (CLOUD.md §7.4): agents push branches with the repo's token, read from 0600 files in the
  * run home (deleted with it). The script answers for the repository git runs in (git starts its helpers from the
  * work tree's top folder), so each repo gets its own token and a folder outside them gets none. Never argv, never env.
+ * `github` (docs/ACCOUNTS.md, the workspace GitHub account): anywhere else, a github.com prompt gets that token, so an
+ * agent can clone, fetch and push any repository the account reaches, not only the company's registered repos.
  */
-export function runAskpass(home: string, repos: { dir: string; token: string }[]): Record<string, string> {
+export function runAskpass(home: string, repos: { dir: string; token: string }[], github: string | null = null): Record<string, string> {
   const dir = join(home, '.git-askpass')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
@@ -61,10 +63,16 @@ export function runAskpass(home: string, repos: { dir: string; token: string }[]
       writeFileSync(file, r.token, { mode: 0o600 })
       cases.push(`  ${q(r.dir.replace(/\/+$/, ''))}/*) cat ${q(file)}; exit 0 ;;`)
     })
+  let fallback = ''
+  if (github) {
+    const file = join(dir, 'github.token')
+    writeFileSync(file, github, { mode: 0o600 })
+    fallback = `case "$1" in\n  *github.com*) cat ${q(file)}; exit 0 ;;\nesac\n`
+  }
   const script = join(dir, 'askpass.sh')
   writeFileSync(
     script,
-    `#!/bin/sh\ncase "$1" in\n  *[Uu]sername*) printf '%s\\n' x-access-token; exit 0 ;;\nesac\nhere="$(pwd -P)/"\ncase "$here" in\n${cases.join('\n')}\nesac\nexit 1\n`,
+    `#!/bin/sh\ncase "$1" in\n  *[Uu]sername*) printf '%s\\n' x-access-token; exit 0 ;;\nesac\nhere="$(pwd -P)/"\ncase "$here" in\n${cases.join('\n')}\nesac\n${fallback}exit 1\n`,
     { mode: 0o700 }
   )
   return { GIT_ASKPASS: script, GIT_TERMINAL_PROMPT: '0' }

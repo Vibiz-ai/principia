@@ -664,6 +664,11 @@ export interface Settings {
    * its Home: the onboarding journal and the schedules the Ready step ticked. Removed once answered. UI state only.
    */
   firstWeek?: Record<Id, { journalId: string; scheduleRefs: string[] }>
+  /**
+   * docs/ACCOUNTS.md: the Shared keys this Mac keeps in its cloud ("In the cloud" on the Keys page). Written by main
+   * (cloud:keyCloud), never by settings:update.
+   */
+  cloudKeys?: string[]
 }
 export type TrackTasks = 'off' | 'auto' | 'always'
 /** A More item's place in the sidebar: always in PINNED, in PINNED only while it has something for you, or in More. */
@@ -886,3 +891,5 @@ export type CloudDesktopEvent =
   | { kind: 'state'; state: CloudLinkState }
   | { kind: 'changes'; runs: number; asks: number }
   | { kind: 'event'; event: import('./cloud').CloudEvent }
+  /** docs/MACHINES.md: the cloud machine this Mac is making or made (null: none) */
+  | { kind: 'machine'; machine: import('./machines').MachineView | null }

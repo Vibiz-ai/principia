@@ -8,8 +8,6 @@ import { Icon } from '../components/Icon'
 import { IconButton, Segmented, Sheet } from '../components/ui'
 import { customizeRows, movePin, PRIMARY, prefsFor, resetVisibility, setVisibility, type MoreKey } from '../lib/nav'
 import { activeCompany, companyName, multiCompany, updateSidebarPrefs, useStore } from '../state/store'
-import { plansEnabled } from '@shared/plans'
-import { departmentsOn } from '../state/store'
 
 export const CUSTOMIZE_EVENT = 'hive:customizeSidebar'
 export function openCustomizeSidebar(): void {
@@ -26,9 +24,8 @@ export function CustomizeSidebarSheet({ onClose }: { onClose: () => void }): Rea
   const navPrefs = useStore((s) => s.settings?.sidebarNav)
   const active = useStore((s) => activeCompany(s))
   const multi = useStore((s) => multiCompany(s))
-  const plansOn = useStore((s) => plansEnabled(s.settings?.experimental) && departmentsOn(s))
   const prefs = prefsFor(navPrefs, active, multi)
-  const available = (k: MoreKey): boolean => (k === 'plans' ? plansOn : true)
+  const available = (_k: MoreKey): boolean => true
   const rows = customizeRows(prefs, available)
   const pinned = rows.filter((r) => r.visibility === 'always').map((r) => r.key)
   const where = !multi ? 'your sidebar' : active === 'all' ? 'All companies' : companyName(active)
@@ -54,7 +51,7 @@ export function CustomizeSidebarSheet({ onClose }: { onClose: () => void }): Rea
               <Icon name={r.icon} />
               <span className="cust__text">
                 <span className="cust__label">{r.label}</span>
-                <span className="cust__desc">{r.key === 'forum' ? 'When active: shows while a thread needs you' : r.desc}</span>
+                <span className="cust__desc">{r.desc}</span>
               </span>
               {i >= 0 && (
                 <span className="cust__order">

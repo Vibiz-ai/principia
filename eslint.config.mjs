@@ -10,6 +10,8 @@ export default defineConfig(
   {
     ignores: [
       'node_modules/**',
+      'fleet/node_modules/**',
+      'fleet/cdk.out/**',
       'out/**',
       'out-*/**',
       'release/**',

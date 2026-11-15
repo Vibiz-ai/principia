@@ -118,6 +118,11 @@ const MIGRATIONS: string[] = [
   // the runtime keeps no log file of its own (CLOUD.md §9). Capped per run by the queue; swept with run_steps.
   `CREATE TABLE run_logs (
     run_id TEXT NOT NULL, n INTEGER NOT NULL, step_id TEXT NOT NULL, line TEXT NOT NULL, PRIMARY KEY (run_id, n)
+  );`,
+  // 3: docs/ACCOUNTS.md: keys every company shares (the desktop's Shared keys marked "In the cloud"). A company key of
+  // the same name wins. The workspace GitHub account lives in `credentials` (adapter 'github', company_id NULL).
+  `CREATE TABLE workspace_secrets (
+    name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used_at TEXT
   );`
 ]
 

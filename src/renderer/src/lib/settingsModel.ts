@@ -15,14 +15,15 @@ export interface SectionDef<T extends string> {
   label: string
 }
 
-/** This company's sections. Personal has no Team & autonomy or Danger zone; Repositories only where there is code. */
+/**
+ * This company's sections. Keys and Cloud are doors of their own now and Team & autonomy is gone (agents are picked
+ * automatically); Personal has no Danger zone; Repositories only where there is code.
+ */
 export function companySections(o: { personal: boolean; code: boolean }): SectionDef<CompanySection>[] {
   return [
     { id: 'company', label: 'General' },
-    ...(o.personal ? [] : [{ id: 'team' as const, label: 'Team & autonomy' }]),
     { id: 'connections', label: 'Connections' },
     ...(o.code || o.personal ? [{ id: 'repos' as const, label: 'Repositories' }] : []),
-    { id: 'keys', label: 'Keys & secrets' },
     ...(o.personal ? [] : [{ id: 'danger' as const, label: 'Danger zone' }])
   ]
 }
@@ -30,7 +31,6 @@ export const APP_SECTIONS: SectionDef<AppSection>[] = [
   { id: 'general', label: 'General' },
   { id: 'providers', label: 'AI providers' },
   { id: 'notifications', label: 'Notifications' },
-  { id: 'cloud', label: 'Cloud sync' },
   { id: 'phone', label: 'Phone' },
   { id: 'storage', label: 'Storage' },
   { id: 'experimental', label: 'Experimental' },

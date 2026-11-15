@@ -11,6 +11,11 @@ export interface ControlConfig {
   publicUrl: string
   /** PRINCIPIA_ADMIN_TOKEN (32+ chars) or null: POST /v1/pair/start then needs a device token */
   adminToken: string | null
+  /**
+   * PRINCIPIA_ADMIN_TOKEN_SHA256 (64 hex): the same bearer, but only its hash is configured. A machine the app creates
+   * (docs/MACHINES.md) gets this one, so its user-data and metadata hold nothing that pairs.
+   */
+  adminTokenSha256?: string | null
   workspaceName: string
   consoleDir: string
   dataDir: string

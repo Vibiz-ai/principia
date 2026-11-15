@@ -137,3 +137,12 @@ describe('connect link, pair page and console CSP', () => {
     } finally { await h.close() }
   })
 })
+
+describe('PRINCIPIA_ADMIN_TOKEN_SHA256 (docs/MACHINES.md)', () => {
+  it('takes 64 hex characters, lowercased, and refuses anything else', () => {
+    const base = { PRINCIPIA_MASTER_KEY: 'b'.repeat(64), PRINCIPIA_SECRETS_DIR: mkdtempSync(join(tmpdir(), 'psec-')) }
+    expect(loadConfig({ ...base, PRINCIPIA_ADMIN_TOKEN_SHA256: 'AB'.repeat(32) }, { consoleDir: '/c' }).config.adminTokenSha256).toBe('ab'.repeat(32))
+    expect(loadConfig(base, { consoleDir: '/c' }).config.adminTokenSha256).toBeNull()
+    expect(() => loadConfig({ ...base, PRINCIPIA_ADMIN_TOKEN_SHA256: 'not-a-hash' }, { consoleDir: '/c' })).toThrow(/64 hex/)
+  })
+})

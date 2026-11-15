@@ -169,3 +169,35 @@
 .cl-menu__note { padding: 6px 10px 2px; color: var(--text-tertiary); font-size: var(--text-sm); }
 .cl-start { margin-top: 6px; }
 .cl-start .cl-row { margin: 8px 0 12px; }
+
+/* ---------- docs/ACCOUNTS.md: accounts and "In the cloud" on the Keys page ---------- */
+.keys-accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; padding: 4px 20px 12px; background: transparent; }
+.keys-accounts .cl-card { margin: 0; }
+.cl-ghmark { width: 22px; height: 22px; border-radius: var(--radius-sm); display: inline-grid; place-items: center; flex: none; font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+.key-cloud { display: inline-flex; align-items: center; margin-right: 6px; }
+
+/* docs/MACHINES.md: Make my cloud, its progress and the machine card */
+.cl-connect--stack { padding-bottom: 0; }
+.cl-connect--more { padding-top: 16px; }
+.cl-connect--stack .cl-mini > .cl-card { margin-top: 12px; }
+.cl-make__seg { margin: 14px 0 6px; }
+.cl-make__note { margin-bottom: 14px; }
+.cl-make__tok { display: flex; gap: 8px; }
+.cl-make__tok .input { flex: 1; min-width: 0; }
+.cl-make__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.cl-make__grid > p { grid-column: 1 / -1; margin: -2px 0 8px; }
+.cl-make__bring { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.cl-make__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.cl-make__row > div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.cl-make__notes { margin-top: 8px; }
+.cl-msteps { list-style: none; margin: 14px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cl-mstep { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.cl-mstep--q { color: var(--text-tertiary); }
+.cl-mstep--running, .cl-mstep--fail { color: var(--text-primary); font-weight: var(--weight-medium, 500); }
+.cl-mstep .cl-dim { font-weight: normal; margin-left: 4px; }
+@media (max-width: 560px) { .cl-make__grid { grid-template-columns: 1fr; } }
+
+/* docs/FLEET.md: Turn on cloud, and the managed machine's power */
+.cl-turnon .cl-row { margin-top: 4px; }
+.cl-turnon__own { align-self: flex-start; margin-top: 12px; font-size: 12px; }
+.cl-power { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }

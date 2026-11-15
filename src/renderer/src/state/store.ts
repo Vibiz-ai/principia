@@ -236,7 +236,7 @@ export interface State {
 const initial: State = {
   ready: false,
   bootError: null,
-  view: { name: 'home' },
+  view: { name: 'chats' },
   info: null,
   settings: null,
   providers: [],
@@ -417,7 +417,7 @@ export async function navigate(target: NavTarget, opts: { back?: boolean } = {})
 
 const backStack: ViewState[] = []
 /** "‹ Back" in nested views (Run, Editor): previous in-memory view, else the fallback. */
-export function goBack(fallback: ViewState = { name: 'home' }): void {
+export function goBack(fallback: ViewState = { name: 'chats' }): void {
   let prev = backStack.pop()
   while (prev && prev.name === state.view.name) prev = backStack.pop()
   void navigate(prev ?? fallback, { back: true })
@@ -425,11 +425,17 @@ export function goBack(fallback: ViewState = { name: 'home' }): void {
 
 export function goView(v: View): void {
   switch (v) {
-    case 'team':
-    case 'board':
     case 'chats':
     case 'knowledge':
+    case 'keys':
+    case 'cloud':
       void navigate(viewFor(v))
+      return
+    case 'home':
+    case 'team':
+    case 'board':
+      // the old Home, Team and Board doors land on Chats
+      void navigate(viewFor('chats'))
       return
     case 'chat':
       void openChat(false)
@@ -1072,7 +1078,7 @@ export function removeFromGrid(id: Id): void {
     const focusedSession = s.focusedSession === id ? (grid[grid.length - 1] ?? null) : s.focusedSession
     return { grid, focusedSession }
   })
-  if (state.grid.length === 0 && state.view.name === 'session') void navigate({ name: 'home' })
+  if (state.grid.length === 0 && state.view.name === 'session') void navigate({ name: 'chats' })
 }
 
 export async function closeFocused(): Promise<void> {
@@ -1593,7 +1599,7 @@ function rememberScreen(scope: ActiveCompany, view: ViewState): void {
 /** Where switching to `id` lands: the screen it was left on, else Home. */
 export function lastScreen(id: ActiveCompany): ViewState {
   const kept = lastScreens.get(id) ?? keptScreen(loadJson<unknown>(lastScreenKey(id), null))
-  return kept && screenStillThere(kept, { agents: state.companyAgents, departments: state.departments }) ? kept : { name: 'home' }
+  return kept && screenStillThere(kept, { agents: state.companyAgents, departments: state.departments }) ? kept : { name: 'chats' }
 }
 
 /**
@@ -1603,7 +1609,7 @@ export function lastScreen(id: ActiveCompany): ViewState {
  */
 export async function enterCompany(id: ActiveCompany, opts: { view?: NavTarget } = {}): Promise<boolean> {
   const switching = state.activeCompanyId !== id
-  const view = resolveView(opts.view ?? (switching ? lastScreen(id) : { name: 'home' }))
+  const view = resolveView(opts.view ?? (switching ? lastScreen(id) : { name: 'chats' }))
   if (!(await passLeaveGuard(view))) return false
   if (switching) rememberScreen(state.activeCompanyId, state.view)
   setScope(id)
@@ -1683,9 +1689,12 @@ export function toggleCompanyExpanded(id: Id, open?: boolean): void {
   void hive.settings.update({ expandedCompanies }).catch(() => undefined)
 }
 
-/** Every "+ New company" entry point (rail, menus, palette, Sidebar, PortfolioView, Board): the onboarding flow (§1). */
+/**
+ * Every "+ New company" entry point (rail, menus, palette): the name-and-colour sheet. The team-building onboarding is
+ * retired with the per-agent setup (main/simplify.ts); agents are picked automatically.
+ */
 export function openNewCompany(): void {
-  openOnboarding('new')
+  openQuickCompany()
 }
 /** The old name-and-colour sheet ("Quick create"). Closes the flow first, keeping its draft. */
 export function openQuickCompany(): void {
@@ -1837,8 +1846,7 @@ export async function assignRepoToCompany(repo: Repo, companyId: Id): Promise<bo
 
 // ---------- onboarding (ONBOARDING.md §1, §3, §9) ----------
 const draftSaver = createDraftSaver(saveJson)
-/** The first-run flow opens on its own at most once per session (§1). */
-let firstRunOffered = false
+
 
 /** Departments already on: the plan may use them without the consent switch. */
 function onboardingFlagsOn(s: State = state): boolean {
@@ -2048,7 +2056,7 @@ export async function skipOnboarding(): Promise<void> {
   cancelOnboardingPlan()
   clearOnboardingDraft()
   setState({ onboarding: null })
-  void navigate({ name: 'home' })
+  void navigate({ name: 'chats' })
   await updateSettings({ onboardingDone: true })
 }
 
@@ -2064,7 +2072,7 @@ export function discardOnboarding(): void {
  * Ready step (§2 S8): both buttons land in the new company. Start now → its Home; "I'll review first" → its Board.
  * The draft is done with: cleared.
  */
-export async function finishOnboarding(companyId: Id, landing: 'home' | 'board'): Promise<void> {
+export async function finishOnboarding(companyId: Id, _landing: 'home' | 'board'): Promise<void> {
   const first = state.onboarding?.mode === 'first' || state.onboardingDraft?.mode === 'first'
   cancelOnboardingPlan()
   clearOnboardingDraft()
@@ -2077,7 +2085,7 @@ export async function finishOnboarding(companyId: Id, landing: 'home' | 'board')
   void refreshDepartments()
   // the finished launch journal is what the `launched` milestone reads (VOICE.md §7): fetch it now, not next boot
   void refreshOnboardingStatus()
-  await enterCompany(companyId, { view: landing === 'board' ? { name: 'tasks' } : { name: 'home' } })
+  await enterCompany(companyId, { view: { name: 'chats' } })
 }
 
 /**
@@ -2101,10 +2109,7 @@ export async function detectOnboarding(): Promise<void> {
     draftSaver.save(draft)
     return
   }
-  if (isFirstRun() && !firstRunOffered) {
-    firstRunOffered = true
-    openOnboarding('first')
-  }
+  // the first-run team setup is retired: a new install opens straight on Chats
 }
 
 /** The journal's recorded steps as the live list's events (pending steps are not shown yet). */

@@ -91,14 +91,17 @@ export function playbookOverview(h: Hive, companyId: string): AutopilotOverview 
   return autopilotOverview({ companyName: co.name, switchOn: !!board.autopilot, paused: c.isPaused(companyId), maxInFlight: board.maxInFlight, monthlyCap: co.monthlyCap ?? null, agents, tasks, schedules, playbooks, lately })
 }
 
+/**
+ * Autopilot is retired (main/simplify.ts): the playbooks service is no longer created, so nothing guards, wakes or
+ * starts runs for it. Reads answer empty so older screens and the phone keep working; changes are refused.
+ */
 export function registerPlaybookHandlers(h: Hive): void {
   const p = (): Playbooks => {
-    if (!h.playbooks) throw new HiveError('conflict', 'Playbooks are not available')
+    if (!h.playbooks) throw new HiveError('conflict', 'Autopilot is turned off in this version of Principia')
     return h.playbooks
   }
-  if (!h.playbooks) h.playbooks = h.safe(() => createPlaybooks(h), null)
-  handle('playbooks:list', ({ companyId }) => p().list(companyId))
-  handle('playbooks:summary', () => p().summary())
+  handle('playbooks:list', ({ companyId }) => (h.playbooks ? h.playbooks.list(companyId) : []))
+  handle('playbooks:summary', () => (h.playbooks ? h.playbooks.summary() : {}))
   handle('playbooks:overview', ({ companyId }) => playbookOverview(h, companyId))
   handle('playbooks:turnOn', ({ companyId, playbookId, level, raise, limits }) => p().turnOn(companyId, playbookId, { level, raise, limits: limits ?? undefined }))
   handle('playbooks:configure', ({ companyId, playbookId, level, raise, limits }) => p().configure(companyId, playbookId, { level, raise, limits: limits ?? undefined }))
