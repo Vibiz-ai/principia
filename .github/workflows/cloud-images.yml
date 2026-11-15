@@ -3,7 +3,8 @@
 # dispatch on the tag it created (a tag created with GITHUB_TOKEN fires no push event). By hand, dispatch it on a tag
 # (`gh workflow run cloud-images.yml --ref vX.Y.Z`); a dispatch on a branch does nothing. It pushes images only and
 # never deploys anything. The Open Passport host sources come from that repository as a named build context, pinned
-# to one reviewed commit (OPEN_PASSPORT_COMMIT below: bump it in a pull request to ship a newer Open Passport).
+# to one reviewed commit (OPEN_PASSPORT_COMMIT below: bump it in a pull request to ship a newer Open Passport). That
+# repository is private: the OPEN_PASSPORT_TOKEN secret (read-only, that repository only) lets BuildKit fetch it.
 # Publishing waits for approval in the `release` environment, like the macOS release; the image carries BuildKit
 # provenance and an SBOM, and a build-provenance attestation pushed to the registry
 # (verify: gh attestation verify oci://ghcr.io/vibiz-ai/principia-cloud:<version> -R Vibiz-ai/principia).
@@ -55,6 +56,16 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+      - name: Check the Open Passport token is set
+        env:
+          OPEN_PASSPORT_TOKEN: ${{ secrets.OPEN_PASSPORT_TOKEN }}
+        run: |
+          # Vibiz-ai/open-passport is private: GITHUB_TOKEN can't read another repository, so BuildKit needs a token
+          # that can (a fine-grained token with Contents: read on that one repository, in the `release` environment)
+          if [ -z "$OPEN_PASSPORT_TOKEN" ]; then
+            echo "::error::Set the OPEN_PASSPORT_TOKEN secret: a fine-grained token with read access to Vibiz-ai/open-passport only"
+            exit 1
+          fi
       - name: Check the Open Passport pin is a full commit SHA
         run: |
           if ! printf '%s' "$OPEN_PASSPORT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -68,6 +79,9 @@ jobs:
           file: cloud/Dockerfile
           platforms: linux/amd64,linux/arm64
           build-contexts: open-passport=https://github.com/Vibiz-ai/open-passport.git#${{ env.OPEN_PASSPORT_COMMIT }}
+          # BuildKit reads a private git context with this secret (it never lands in the image or its provenance)
+          secrets: |
+            GIT_AUTH_TOKEN.github.com=${{ secrets.OPEN_PASSPORT_TOKEN }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
