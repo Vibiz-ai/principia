@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/Vibiz-ai/principia/compare/v0.4.8...v0.4.9) (2026-11-15)
+
+
+### Features
+
+* simpler Principia, and Turn On Cloud ([#163](https://github.com/Vibiz-ai/principia/issues/163)) ([0d62da4](https://github.com/Vibiz-ai/principia/commit/0d62da47ac800f4e7639c77cc51d62e3fc47f5d6))
+
 ## [0.4.8](https://github.com/Vibiz-ai/principia/compare/v0.4.7...v0.4.8) (2026-11-05)
 
 

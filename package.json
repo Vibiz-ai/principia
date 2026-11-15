@@ -1,9 +1,9 @@
 {
   "name": "principia",
   "productName": "Principia",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
-  "description": "Run your company with agents, shared tools, memory and workflows \u2014 on your Mac or a self-hosted cloud runner.",
+  "description": "Run your company with agents, shared tools, memory and workflows — on your Mac or a self-hosted cloud runner.",
   "author": "Vibiz",
   "main": "./out/main/index.js",
   "scripts": {
