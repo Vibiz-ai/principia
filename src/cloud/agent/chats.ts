@@ -122,11 +122,16 @@ export class ChatProcs {
     const companyId = `chat_${spec.id}`.slice(0, 96)
     let cwd = sandbox.companyDir(companyId)
     if (spec.repo) {
-      this.setDetail(p, `Getting ${p.info.repo ?? 'the repository'} from GitHub…`)
-      const r = await this.d.syncRepo(companyId, spec.repo)
-      if (!r.ok) throw new Error(`The repository could not be cloned: ${r.detail ?? 'unknown error'}`)
-      cwd = join(cwd, repoFolderName(spec.repo))
-      if (!existsSync(cwd)) throw new Error('The repository folder is missing after the clone')
+      const dir = join(cwd, repoFolderName(spec.repo))
+      // cloned once: later processes of this chat keep its folder as the chat left it (its own commits, a branch
+      // that went another way than GitHub's); git fetch and merge are Claude's to do there
+      if (!existsSync(join(dir, '.git'))) {
+        this.setDetail(p, `Getting ${p.info.repo ?? 'the repository'} from GitHub…`)
+        const r = await this.d.syncRepo(companyId, spec.repo)
+        if (!r.ok) throw new Error(`The repository could not be cloned: ${r.detail ?? 'unknown error'}`)
+        if (!existsSync(dir)) throw new Error('The repository folder is missing after the clone')
+      }
+      cwd = dir
     }
     // stopped while the repository was cloning: it never starts
     if (this.procs.get(spec.id) !== p || p.ended) return

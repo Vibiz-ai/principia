@@ -23,7 +23,7 @@ function setup(o: { idleMs?: number; repoFails?: boolean; repoGate?: Promise<voi
       synced.push({ companyId, url: repo.url })
       if (o.repoGate) await o.repoGate
       if (o.repoFails) return { ok: false, detail: 'Repository not found' }
-      mkdirSync(join(sandbox.companyDir(companyId), repo.name), { recursive: true })
+      mkdirSync(join(sandbox.companyDir(companyId), repo.name, '.git'), { recursive: true })
       return { ok: true, detail: null }
     },
     redact: (s) => secrets.reduce((t, v) => t.split(v).join('[redacted]'), s),
@@ -162,5 +162,17 @@ describe('cloud chat processes (docs/CLOUD-CHATS.md)', () => {
     mkdirSync(join(dir, 'projects', '-workspace-chat'), { recursive: true })
     writeFileSync(join(dir, 'projects', '-workspace-chat', `${CONV}.jsonl`), '{}\n')
     expect(hasTranscript(dir, CONV)).toBe(true)
+  })
+
+  it('clones once: a later process of the same chat keeps its folder as it is', async () => {
+    const t = setup()
+    const repo = { id: 'chat', name: 'app', url: 'https://github.com/acme/app', branch: null, token: null }
+    await t.procs.start(spec({ repo }))
+    await until(() => t.procs.get('sess_1')!.state === 'running')
+    await t.procs.stop('sess_1')
+    await t.procs.start(spec({ repo, resume: true }))
+    await until(() => t.procs.get('sess_1')!.state === 'running')
+    expect(t.synced).toHaveLength(1)
+    await t.procs.stop('sess_1')
   })
 })
