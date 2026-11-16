@@ -733,7 +733,8 @@ export const CLOUD_ROUTES = {
   chats: 'GET /v1/chats',
   chatStart: 'POST /v1/chats/:id',
   chatStop: 'POST /v1/chats/:id/stop',
-  chatDelete: 'DELETE /v1/chats/:id'
+  chatDelete: 'DELETE /v1/chats/:id',
+  chatTranscript: 'GET /v1/chats/:id/transcript'
 } as const
 export type CloudRouteName = keyof typeof CLOUD_ROUTES
 

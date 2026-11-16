@@ -10,7 +10,7 @@
  * for IDLE_MS (so a forgotten chat never keeps a managed machine awake).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatProcInfo, ChatProcSpec, ChatSink, RepoMaterial } from '../contract'
 
@@ -86,6 +86,25 @@ export class ChatProcs {
   get(id: string): ChatProcInfo | null {
     const p = this.procs.get(id)
     return p ? { ...p.info } : null
+  }
+
+  /** Claude's transcript of this chat's conversation (the newest 24 MB), or null. */
+  transcript(id: string): string | null {
+    assertSafeId('chat', id)
+    const claudeDir = join(this.d.sandbox.runDir(`chat_${id}`.slice(0, 96)), 'home', '.claude')
+    try {
+      const root = join(claudeDir, 'projects')
+      for (const d of readdirSync(root)) {
+        const f = join(root, d, `${id}.jsonl`)
+        if (!existsSync(f)) continue
+        const text = readFileSync(f, 'utf8')
+        const max = 24 * 1024 * 1024
+        return text.length > max ? text.slice(text.indexOf('\n', text.length - max) + 1) : text
+      }
+    } catch {
+      return null
+    }
+    return null
   }
 
   /** preparing or running: keeps a managed machine awake (activity.ts) */

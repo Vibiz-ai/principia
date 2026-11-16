@@ -43,7 +43,8 @@ describe('cloud chat on the Mac (docs/CLOUD-CHATS.md)', () => {
     await h.call('PUT', '/v1/providers/claude/credential', { token: dev, body: { kind: 'claude_oauth_token', value: TOKEN } })
     const client = new CloudClient({ url: h.url, token: dev })
     const statuses: string[] = []
-    const spawn = cloudChildSpawn({ client: () => client, repoOf: async () => ({ url: 'https://github.com/acme/app', branch: 'main' }), backoffMs: () => 10 })
+    const saved: [string, string][] = []
+    const spawn = cloudChildSpawn({ client: () => client, repoOf: async () => ({ url: 'https://github.com/acme/app', branch: 'main' }), backoffMs: () => 10, transcriptQuietMs: 20, saveTranscript: (c, t) => saved.push([c, t]) })
     const child = spawn('claude', ['-p', '--input-format', 'stream-json', '--session-id', CONV, '--model', 'opus'], { cwd: '/Users/me/app', env: {} })
     child.onStatus?.((t) => statuses.push(t))
     let out = ''
@@ -60,6 +61,10 @@ describe('cloud chat on the Mac (docs/CLOUD-CHATS.md)', () => {
     h.rt.chats.write(CONV, 'two\n')
     await until(() => out.includes('two'))
     expect(out.match(/one/g)!.length).toBe(1)
+    // quiet output: this Mac keeps a copy of the conversation's history (it shows after a restart of the app)
+    await until(() => saved.length > 0)
+    expect(saved[0]![0]).toBe(CONV)
+    expect(saved[0]![1]).toContain('"type":"user"')
     child.kill('SIGTERM')
     await until(() => exit !== null)
     expect(exit).toEqual([null, 'SIGTERM'])

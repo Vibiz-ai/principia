@@ -287,7 +287,8 @@ class Runtime implements CloudRuntime {
     stop: (id) => this.started.chats.stop(id),
     remove: (id) => this.started.chats.remove(id),
     list: () => this.s?.chats.list() ?? [],
-    live: () => this.s?.chats.live() ?? 0
+    live: () => this.s?.chats.live() ?? 0,
+    transcript: (id) => this.s?.chats.transcript(id) ?? null
   }
 
   triggers: CloudRuntime['triggers'] = {

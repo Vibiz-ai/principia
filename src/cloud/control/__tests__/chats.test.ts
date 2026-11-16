@@ -92,4 +92,20 @@ describe('cloud chats (docs/CLOUD-CHATS.md)', () => {
     expect((await h.call('DELETE', '/v1/chats/s_1', { token: dev })).status).toBe(200)
     expect(h.rt.chats.live()).toBe(0)
   })
+
+  it('serves the transcript, and a frame over the limit closes that socket, never the cloud', async () => {
+    h = await startHarness()
+    const dev = await h.pair()
+    await h.call('PUT', '/v1/providers/claude/credential', { token: dev, body: { kind: 'claude_oauth_token', value: TOKEN } })
+    await h.call('POST', '/v1/chats/s_1', { token: dev, body: { conversationId: CONV } })
+    expect((await h.call('GET', '/v1/chats/s_1/transcript', { token: dev })).json.text).toContain('"type":"user"')
+    expect((await h.call('GET', '/v1/chats/s_nope/transcript', { token: dev })).json).toEqual({ text: null })
+    const a = socket(h.url, 's_1', 0, dev)
+    await a.opened
+    const closed = new Promise<number>((r) => a.ws.once('close', (c) => r(c)))
+    a.ws.on('error', () => undefined)
+    a.ws.send('x'.repeat(49 * 1024 * 1024))
+    expect(await closed).toBe(1009)
+    expect((await h.call('GET', '/v1/health')).status).toBe(200)
+  })
 })

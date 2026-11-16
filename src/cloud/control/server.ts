@@ -379,6 +379,10 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
         ctx.audit(actor, 'chat.start', null, params.id!, { repo: info.repo })
         return ok(info, 201)
       }
+      case 'chatTranscript': {
+        if (!CHAT_ID.test(params.id!)) throw badRequest('Invalid chat id.')
+        return ok({ text: ctx.runtime.chats.transcript(params.id!) })
+      }
       case 'chatStop': {
         await ctx.runtime.chats.stop(params.id!)
         return ok({ ok: true })

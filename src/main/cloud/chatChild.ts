@@ -24,6 +24,10 @@ export interface CloudChatDeps {
   setTimer?: (fn: () => void, ms: number) => unknown
   /** reconnect backoff (tests) */
   backoffMs?: (attempt: number) => number
+  /** the conversation's transcript from the cloud, kept on this Mac so its history shows after a restart */
+  saveTranscript?(conversationId: string, text: string): void
+  /** how long output must be quiet before the transcript is fetched (tests) */
+  transcriptQuietMs?: number
 }
 
 /** The choices in a chat argv (src/main/chat/chatArgs.ts toChatArgs), nothing else. */
@@ -177,6 +181,7 @@ class CloudChild extends EventEmitter implements ChildLike {
     const fresh = at < this.seen ? d.slice(this.seen - at) : d
     this.seen = end
     this.stdout.emit('data', fresh)
+    this.syncTranscriptSoon()
     const p = this.pendingExit
     if (p && this.seen >= p.out) this.ended(p.code, p.signal)
   }
@@ -204,8 +209,28 @@ class CloudChild extends EventEmitter implements ChildLike {
     this.ended(1, null)
   }
 
+  private quietTimer: NodeJS.Timeout | null = null
+  /** a turn's output went quiet: keep this Mac's copy of the history current */
+  private syncTranscriptSoon(): void {
+    if (!this.d.saveTranscript) return
+    if (this.quietTimer) clearTimeout(this.quietTimer)
+    this.quietTimer = setTimeout(() => void this.syncTranscript(), this.d.transcriptQuietMs ?? 4000)
+    this.quietTimer.unref?.()
+  }
+  private async syncTranscript(): Promise<void> {
+    if (!this.d.saveTranscript || !this.started) return
+    try {
+      const r = await this.d.client().call<{ text: string | null }>('chatTranscript', { params: { id: this.id }, timeoutMs: 30_000 })
+      if (r.text) this.d.saveTranscript(this.id, r.text)
+    } catch (e) {
+      this.d.log?.warn('cloud chat: transcript not saved', { id: this.id, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
   private ended(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.exited) return
+    if (this.quietTimer) clearTimeout(this.quietTimer)
+    void this.syncTranscript()
     this.exited = true
     const ws = this.ws
     this.ws = null

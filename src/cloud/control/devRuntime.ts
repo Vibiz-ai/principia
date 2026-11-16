@@ -68,7 +68,8 @@ export function createDevRuntime(ports: ControlPorts, opts: { autoComplete?: boo
     async stop(id) { chats.signal(id, 'SIGTERM') },
     async remove(id) { record('chats.remove', id); chats.signal(id, 'SIGTERM'); chatProcs.delete(id) },
     list: () => [...chatProcs.values()].map(c => ({ ...c.info })),
-    live: () => [...chatProcs.values()].filter(c => c.info.state !== 'exited').length
+    live: () => [...chatProcs.values()].filter(c => c.info.state !== 'exited').length,
+    transcript: (id) => chatProcs.has(id) ? `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } })}\n` : null
   }
   const rt: DevRuntime = {
     version: 'dev-0',

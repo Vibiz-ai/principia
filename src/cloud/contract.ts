@@ -157,6 +157,8 @@ export interface CloudChats {
   list(): ChatProcInfo[]
   /** preparing or running */
   live(): number
+  /** Claude's transcript of the conversation (JSONL), for the Mac to show its history; null when there is none */
+  transcript(id: string): string | null
 }
 
 // ---------- the runtime (package AI implements; control plane calls) ----------

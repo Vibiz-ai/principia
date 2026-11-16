@@ -21,8 +21,8 @@ const CONVERSATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const GITHUB_HTTPS = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?(\.git)?\/?$/
 const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
 const ATTACH = /^\/v1\/chats\/([A-Za-z0-9_-]{1,80})\/attach\/?$/
-/** stdin frames can carry an image (base64) in a user message */
-const MAX_FRAME = 24 * 1024 * 1024
+/** stdin frames can carry images (base64) in a user message: six of 5 MB is about 41 MB of base64 */
+const MAX_FRAME = 48 * 1024 * 1024
 
 export function chatStartSpec(id: string, b: Partial<CloudChatStart>, from: { provider: ProviderMaterial | null; githubToken: string | null; secrets: Record<string, string> }): ChatProcSpec {
   if (b.adapter !== undefined && b.adapter !== 'claude') throw badRequest('Only Claude chats run in the cloud for now.')
@@ -84,6 +84,8 @@ export function attachChatSockets(server: Server, o: { ctx: Ctx; onInput(): void
       ws.close(4404, 'No such chat')
       return
     }
+    // a frame over the limit (or any socket failure) closes this socket, never the cloud
+    ws.on('error', (e) => o.ctx.log.warn('cloud chat: socket error', { id, error: e.message }))
     ws.on('message', (raw) => {
       let f: CloudChatUp
       try {

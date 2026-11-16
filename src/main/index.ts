@@ -453,7 +453,7 @@ if (!app.requestSingleInstanceLock()) {
         try {
           const link = h.cloud.link
           if (!link.state().linked) return null
-          return cloudChildSpawn({ client: () => link.client(), log })
+          return cloudChildSpawn({ client: () => link.client(), log, saveTranscript: (conv, text) => h.chats?.saveCloudTranscript(conv, text) })
         } catch {
           return null
         }
@@ -468,6 +468,7 @@ if (!app.requestSingleInstanceLock()) {
         if (s.location !== 'cloud' || !s.agentSessionId) return
         // Restart removes the old row of a conversation that goes on in a new one: the cloud keeps it then
         if (store.listSessions('all').some((o) => o.id !== s.id && o.agentSessionId === s.agentSessionId)) return
+        h.chats?.forgetCloudTranscript(s.agentSessionId)
         try {
           void h.cloud.link.client().call('chatDelete', { params: { id: s.agentSessionId } }).catch((e: unknown) => log.warn('cloud chat: not deleted in the cloud', { error: String(e) }))
         } catch {

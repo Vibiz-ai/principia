@@ -159,8 +159,9 @@ export class ChatHub {
   spawn(file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }, host: PtyHostInfo | undefined, spawnPty: PtySpawn): PtyLike {
     if (host?.adapter === 'codex' && host.mode === 'chat' && this.codexSupported()) return this.spawnCodex(file, args, opts, host)
     const cloud = !!host && (host.cloud || (!!host.resumeId && this.cloudOfConversation(host.resumeId)))
-    if (cloud && (host!.adapter !== 'claude' || !this.supported())) throw new HiveError('conflict', 'Only Claude chats run in the cloud for now.')
-    if (!host || host.adapter !== 'claude' || !this.supported()) return spawnPty(file, args, opts)
+    // the cloud runs its own Claude: this Mac's CLI version doesn't decide whether the chat can run there
+    if (cloud && host!.adapter !== 'claude') throw new HiveError('conflict', 'Only Claude chats run in the cloud for now.')
+    if (!host || host.adapter !== 'claude' || (!cloud && !this.supported())) return spawnPty(file, args, opts)
     const id = host.sessionId
     let remote: ChildSpawn | null = null
     if (cloud) {
@@ -351,8 +352,26 @@ export class ChatHub {
   }
 
   /** Where Claude keeps a conversation's transcript (~/.claude/projects/<slug>/<id>.jsonl), or null. */
+  /** docs/CLOUD-CHATS.md: the copy of a cloud conversation's transcript this Mac keeps (it lives on that machine) */
+  private cloudTranscriptPath(conv: string): string {
+    return path.join(this.d.userData, 'cloud-transcripts', `${conv}.jsonl`)
+  }
+  saveCloudTranscript(conv: string, text: string): void {
+    if (!/^[A-Za-z0-9-]+$/.test(conv) || !text) return
+    const f = this.cloudTranscriptPath(conv)
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(`${f}.tmp`, text, { mode: 0o600 })
+    fs.renameSync(`${f}.tmp`, f)
+  }
+  /** a removed cloud conversation's copy goes too */
+  forgetCloudTranscript(conv: string): void {
+    if (/^[A-Za-z0-9-]+$/.test(conv)) fs.rmSync(this.cloudTranscriptPath(conv), { force: true })
+  }
+
   transcriptFile(conv: string): string | null {
     if (!/^[A-Za-z0-9-]+$/.test(conv)) return null
+    const cloudCopy = this.cloudTranscriptPath(conv)
+    if (fs.existsSync(cloudCopy)) return cloudCopy
     const projects = path.join(this.d.claudeDir(), 'projects')
     try {
       for (const dir of fs.readdirSync(projects)) {
