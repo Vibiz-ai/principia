@@ -309,7 +309,7 @@ export class ChatSession implements PtyLike {
       child = this.d.spawnChild(this.d.file, args, { cwd: this.d.cwd, env: this.d.env })
       // a cloud chat says what it is doing while it starts (waking the machine, cloning the repository)
       child.onStatus?.((text) => {
-        if (this.proc?.child === child && !this.ready) this.setTurn('starting', text)
+        if (this.proc?.child === child && !this.ready) this.setTurn('starting', text.replace(/…$/, '')) // the chat adds its own
       })
     } catch (e) {
       this.emit(this.reducer.notice(`Claude could not start: ${e instanceof Error ? e.message : String(e)}`, 'error', 'openTerminal'))
