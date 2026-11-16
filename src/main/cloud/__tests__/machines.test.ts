@@ -288,7 +288,7 @@ function managed(o: { allowed?: boolean; gh?: string | null; startPolls?: number
   }) as typeof fetch
   t.deps.fleet = fleet
   t.deps.ghToken = async () => (o.gh === undefined ? 'gho_mac_signin_0123456789' : o.gh)
-  return { ...t, fleet, fleetCalls: calls, KEY, setState: (s: FleetMachine['state']) => (fm = view(s)) }
+  return { ...t, fleet, fleetCalls: calls, KEY, setState: (s: FleetMachine['state'] | null) => (fm = s ? view(s) : null) }
 }
 
 describe('Principia Cloud, managed (docs/FLEET.md)', () => {
@@ -308,6 +308,25 @@ describe('Principia Cloud, managed (docs/FLEET.md)', () => {
     expect(file).not.toContain(t.KEY)
     expect(file).not.toContain('gho_mac_signin')
     expect(JSON.stringify(t.views)).not.toMatch(/pfk_|gho_|enc:/)
+  })
+
+  it('Turn On right after Turn Off waits for the old machine to go, then makes the new one', async () => {
+    const t = managed()
+    t.setState('deleting')
+    const machine = t.fleet.machine.bind(t.fleet)
+    let seen = 0
+    t.fleet.machine = async (key) => {
+      const r = await machine(key)
+      // the fleet's tick removes the old record after a few looks
+      if (r.machine?.state === 'deleting' && ++seen >= 3) t.setState(null)
+      return r
+    }
+    const m = new CloudMachines(t.deps)
+    await m.create({ provider: 'principia', bring: BRING })
+    const v = await settle(m, 'ready')
+    expect(v).toMatchObject({ serverId: 'm_1', power: 'awake' })
+    expect(t.fleetCalls.filter((c) => c.startsWith('create')).length).toBe(4)
+    expect(t.paired).toEqual([{ url: 'https://3-0-0-1.sslip.io', code: 'K7QM-4XWD' }])
   })
 
   it('needs GitHub on this Mac, and says so when the account is not let in yet', async () => {
