@@ -44,6 +44,7 @@ control plane (src/cloud/control/chats.ts) ──▶ runtime.chats (src/cloud/ag
 ## Not yet
 
 - Codex chats (Claude only for now).
+- A Mac without the Claude CLI installed can't start a cloud chat yet (the session's spec is still built by the local provider).
 - Files from the Mac (a dropped file, a pasted screenshot) in a cloud chat: New chat refuses them for now.
 - A cloud chat's history, read on the Mac, comes from the chat itself; Search over sessions covers this Mac's only.
 - The Mac's uncommitted changes don't go with it: the cloud starts from the branch on GitHub (pushed branches only),
