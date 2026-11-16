@@ -36,7 +36,10 @@ struct NewChatSheet: View {
     @State private var text = ""
     /// nil: Claude directly
     @State private var agentId: String?
+    /// docs/CLOUD-CHATS.md: Claude runs on the person's cloud machine (kept going with the Mac closed)
+    @AppStorage("newChatInCloud") private var inCloud = false
     @FocusState private var focused: Bool
+    private var cloudOffered: Bool { app.chats?.cloud == true && agentId == nil }
 
     private var team: [PhoneTeamMember] { app.chats?.team ?? [] }
     private var sending: Bool { app.busy.contains("newChat") }
@@ -52,12 +55,20 @@ struct NewChatSheet: View {
                         }
                     }
                 }
+                if cloudOffered {
+                    Picker("Runs", selection: $inCloud) {
+                        Text("On your Mac").tag(false)
+                        Label("In your cloud", systemImage: "cloud").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
+                }
                 Section {
                     TextField("What do you need?", text: $text, axis: .vertical)
                         .lineLimit(4...12)
                         .focused($focused)
                 } footer: {
-                    Text(agentId == nil ? "A new chat with Claude on your Mac." : "Goes into their chat on your Mac.")
+                    Text(agentId != nil ? "Goes into their chat on your Mac." : cloudOffered && inCloud ? "A new chat with Claude in your cloud. It keeps going with your Mac closed." : "A new chat with Claude on your Mac.")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -68,7 +79,7 @@ struct NewChatSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Send", systemImage: "arrow.up") {
-                        Task { if await app.newChat(text, agentId: agentId) { dismiss() } }
+                        Task { if await app.newChat(text, agentId: agentId, cloud: cloudOffered && inCloud) { dismiss() } }
                     }
                     .disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -116,6 +127,13 @@ struct ChatRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(r.title).fontWeight(.semibold).foregroundStyle(Theme.ink).lineLimit(1)
+                    if r.cloud == true {
+                        Label("CLOUD", systemImage: "cloud.fill").labelStyle(.titleAndIcon)
+                            .font(Theme.display(9, semibold: true)).tracking(1.4).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.blue.opacity(0.22)))
+                            .accessibilityLabel("Runs in your cloud")
+                    }
                     if r.live {
                         Text("LIVE").font(Theme.display(9, semibold: true)).tracking(1.8).foregroundStyle(Theme.ink)
                             .padding(.horizontal, 7).padding(.vertical, 2)
@@ -197,7 +215,8 @@ struct ConversationView: View {
         switch ref.kind {
         case .session:
             guard let s = app.session, s.ref.id == ref.id else { return "" }
-            if let r = app.replica { return r.turnWords }
+            let place = s.cloud == true ? "In your cloud · " : ""
+            if let r = app.replica { return place + r.turnWords }
             return s.terminal?.ended == true ? "Ended" : "In a terminal on your Mac"
         case .agent:
             return app.agent?.ref.id == ref.id ? app.agent?.status ?? "" : ""

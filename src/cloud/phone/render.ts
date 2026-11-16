@@ -291,6 +291,15 @@ function newChat(c: PhoneChats, v: View, a: Actions): VNode {
     team.length
       ? h('select', { class: 'chan', 'aria-label': 'To', on: { change: (e: Event) => a.draft('new:to', (e.target as HTMLSelectElement).value) } }, h('option', { value: '', selected: !to }, 'To: Claude'), ...team.map((m) => h('option', { value: m.id, selected: m.id === to }, `To: ${m.who.role ? `${m.who.name} · ${m.who.role}` : m.who.name}`)))
       : null,
+    // docs/CLOUD-CHATS.md: Claude can run on the person's cloud (it keeps going with the Mac closed)
+    c.cloud && !to
+      ? h(
+          'div',
+          { class: 'seg', role: 'radiogroup', 'aria-label': 'Where Claude runs' },
+          h('button', { type: 'button', role: 'radio', 'aria-checked': String(v.drafts['new:where'] !== 'cloud'), class: v.drafts['new:where'] !== 'cloud' ? 'on' : '', on: { click: () => a.draft('new:where', '') } }, 'On your Mac'),
+          h('button', { type: 'button', role: 'radio', 'aria-checked': String(v.drafts['new:where'] === 'cloud'), class: v.drafts['new:where'] === 'cloud' ? 'on' : '', on: { click: () => a.draft('new:where', 'cloud') } }, 'In your cloud')
+        )
+      : null,
     h('textarea', { class: 'inp', rows: '3', 'data-k': 'new', placeholder: 'What do you need?', on: { input: (e: Event) => a.draft('new', (e.target as HTMLTextAreaElement).value) } }),
     h('div', { class: 'opts' }, btn('Send', () => a.newChat(), { kind: 'primary', disabled: busy || !(v.drafts.new ?? '').trim(), small: true }), btn('Cancel', () => a.draft('new:open', ''), { kind: 'ghost', small: true }))
   )
@@ -300,7 +309,7 @@ function chatRow(r: PhoneChatRow, a: Actions, now: number): VNode {
     'button',
     { type: 'button', class: 'crow', on: { click: () => a.open(r.ref) } },
     face(r.who, 'sm'),
-    h('span', { class: 'row__t' }, h('span', { class: 'crow__h' }, h('b', null, r.title), r.live ? h('span', { class: 'livepill' }, 'Live') : null), r.line ? h('span', { class: 'row__s' }, r.line) : null),
+    h('span', { class: 'row__t' }, h('span', { class: 'crow__h' }, h('b', null, r.title), r.cloud ? h('span', { class: 'livepill cloudpill', title: 'Runs in your cloud' }, 'Cloud') : null, r.live ? h('span', { class: 'livepill' }, 'Live') : null), r.line ? h('span', { class: 'row__s' }, r.line) : null),
     h('span', { class: 'tm' }, ago(r.at, now))
   )
 }
@@ -309,7 +318,7 @@ export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
   const s = v.session
   if (!s) return loading()
   const t = s.terminal
-  const sub = v.replica ? turnWords(v.replica) : t?.ended ? 'Ended' : t ? 'In a terminal on your Mac' : ''
+  const sub = [s.cloud ? 'In your cloud' : null, v.replica ? turnWords(v.replica) : t?.ended ? 'Ended' : t ? 'In a terminal on your Mac' : ''].filter(Boolean).join(' · ')
   const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, s.title), h('span', { class: 'row__s' }, sub)))
   const lines = v.replica ? chatLines(v.replica.items) : []
   const q = v.replica?.snap.queue ?? []

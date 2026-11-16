@@ -59,7 +59,9 @@ export interface PhoneHost {
    * New chat with Claude directly: the desktop's sessions:create with a fixed request (this company, no folder, Claude,
    * the first message), so the phone never picks a folder, profile or pty of its own. Absent: Claude needs the Mac.
    */
-  newChat?(req: { companyId: Id; text: string; title: string }): Promise<Session>
+  newChat?(req: { companyId: Id; text: string; title: string; cloud?: boolean }): Promise<Session>
+  /** docs/CLOUD-CHATS.md: a cloud is linked, so a New chat can run there */
+  cloudReady?(): boolean
   /** masks the vault's secrets in text the phone reads (task titles, descriptions, reports); absent: the terminal's */
   redact?(text: string): string
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
@@ -81,7 +83,7 @@ const BODIES = {
   sendBack: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   answerTask: z.object({ text: text(REMOTE_LIMITS.answer) }).strict(),
   text: z.object({ text: text() }).strict(),
-  newChat: z.object({ text: text(), agentId: z.string().min(1).max(64).optional() }).strict(),
+  newChat: z.object({ text: text(), agentId: z.string().min(1).max(64).optional(), cloud: z.boolean().optional() }).strict(),
   /** a chat message: words, images, or both (phoneImages checks the images as the Mac's composer does) */
   send: z.object({ text: z.string().trim().max(REMOTE_LIMITS.text).default(''), images: z.array(image).max(100).default([]) }).strict(),
   stop: z.object({ sendNow: z.boolean().optional() }).strict(),
@@ -282,11 +284,11 @@ export class PhoneApi implements RemoteApi {
         return phoneNeeds(await this.load(), companyId)
       }
       case 'chats':
-        return phoneChats(d, companyId)
+        return { ...phoneChats(d, companyId), ...(this.h.cloudReady?.() ? { cloud: true } : {}) }
       case 'newChat': {
         const b = body('newChat', raw)
         if (b.agentId) return { sessionId: (await this.sendToAgent(d, this.agent(d, companyId, b.agentId), b.text)).sessionId }
-        return { sessionId: await this.startChat(companyId, b.text) }
+        return { sessionId: await this.startChat(companyId, b.text, b.cloud === true) }
       }
       case 'session':
         return this.sessionView(d, companyId, params.sessionId)
@@ -413,7 +415,7 @@ export class PhoneApi implements RemoteApi {
     const code = reposOf(d.repos, companyId).length > 0
     // an agent's chat speaks in the agent's name and face, not the AI tool's
     const agent = s.companyAgentId ? d.companyAgents.find((a) => a.id === s.companyAgentId && a.companyId === companyId) : undefined
-    const view = { ref: { kind: 'session' as const, id: s.id }, title: s.title, who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null } }
+    const view = { ref: { kind: 'session' as const, id: s.id }, title: s.title, who: (agent ? whoResolver(d)(agent) : null) ?? { name: providerName(s.adapter), role: '', bust: null }, ...(s.location === 'cloud' ? { cloud: true } : {}) }
     if (chat) return { ...view, chat: await this.withDesk(d, s, agent, chat), terminal: null }
     const activity = root ? plainActivity(root.activity, { code }) : null
     const ended = s.status === 'exited'
@@ -522,12 +524,12 @@ export class PhoneApi implements RemoteApi {
   }
 
   /** New chat with Claude directly, as the Mac's New conversation does it (To: Claude directly). */
-  private async startChat(companyId: Id, text: string): Promise<Id> {
+  private async startChat(companyId: Id, text: string, cloud = false): Promise<Id> {
     if (!this.h.newChat) throw new HttpError(409, 'Start this one on your Mac')
     if (this.sending) throw new HttpError(409, 'Still sending the last one')
     this.sending = true
     try {
-      return (await this.h.newChat({ companyId, text, title: taskTitleFor(text).slice(0, 80) })).id
+      return (await this.h.newChat({ companyId, text, title: taskTitleFor(text).slice(0, 80), ...(cloud ? { cloud: true } : {}) })).id
     } finally {
       this.sending = false
     }

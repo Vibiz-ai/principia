@@ -421,12 +421,16 @@ export interface PhoneChatRow {
   at: string
   /** one line: what it is doing now, or what was said last */
   line: string | null
+  /** docs/CLOUD-CHATS.md: its Claude runs on the person's cloud machine (absent: on the Mac) */
+  cloud?: boolean
 }
 export interface PhoneChats {
   companyId: Id
   rows: PhoneChatRow[]
   /** who a New chat can be with (the company's agents); empty: Claude only */
   team: { id: Id; who: PhoneWho }[]
+  /** docs/CLOUD-CHATS.md: a New chat can run in the person's cloud (POST newChat with cloud: true) */
+  cloud?: boolean
 }
 
 export interface PhoneSession {
@@ -440,6 +444,8 @@ export interface PhoneSession {
   chat: ChatSnapshot | null
   /** a terminal session: its live line, and what the phone may do with it */
   terminal: PhoneTerminal | null
+  /** docs/CLOUD-CHATS.md: its Claude runs on the person's cloud machine */
+  cloud?: boolean
 }
 export interface PhoneTerminal {
   activity: string | null

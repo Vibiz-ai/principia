@@ -18,7 +18,7 @@ import { fileKeep, findCloudflared } from './tunnel'
 
 const allowed = new Set<string>(PHONE_CHANNELS)
 
-export function createRemote(o: { mainDir: string; envPath: () => string | undefined; dataDir: string; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined; terminal?: PhoneTerminalHost }): RemoteService {
+export function createRemote(o: { cloudReady?: () => boolean; mainDir: string; envPath: () => string | undefined; dataDir: string; siteSetting?: () => string | null | undefined; db?: DB | null; autoStartSetting?: () => boolean | null | undefined; terminal?: PhoneTerminalHost }): RemoteService {
   const host: PhoneHost = {
     invoke: <C extends PhoneChannel>(channel: C, req: InvokeReq<C>): Promise<InvokeRes<C>> => {
       // defense in depth: the type already limits the list
@@ -27,7 +27,8 @@ export function createRemote(o: { mainDir: string; envPath: () => string | undef
     },
     onEvent: (fn) => onEmit(fn),
     // the Mac's New conversation › Claude directly (TeamComposer): no folder, Claude, the first message
-    newChat: ({ companyId, text, title }) => invokeLocal('sessions:create', { companyId, adapter: 'claude', repoId: null, cols: 120, rows: 32, initialPrompt: text, title }),
+    newChat: ({ companyId, text, title, cloud }) => invokeLocal('sessions:create', { companyId, adapter: 'claude', repoId: null, cols: 120, rows: 32, initialPrompt: text, title, ...(cloud ? { location: 'cloud' as const } : {}) }),
+    ...(o.cloudReady ? { cloudReady: o.cloudReady } : {}),
     ...(o.terminal ? { terminal: o.terminal, redact: (t: string) => o.terminal!.redact(t) } : {}),
     log
   }

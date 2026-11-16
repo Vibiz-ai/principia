@@ -931,6 +931,8 @@ export interface StartOpts {
   title?: string
   /** false: create it without opening its terminal (a company with no code reads it in Chats) */
   focus?: boolean
+  /** docs/CLOUD-CHATS.md: its Claude runs on the person's cloud machine */
+  location?: 'cloud'
 }
 
 /** The company a new session is stamped with (sent to main, which validates it against the repo). */
@@ -978,7 +980,8 @@ export async function startSession(o: StartOpts): Promise<Session | undefined> {
       cols: state.lastTermSize.cols,
       rows: state.lastTermSize.rows,
       ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
-      ...(o.title ? { title: o.title } : {})
+      ...(o.title ? { title: o.title } : {}),
+      ...(o.location === 'cloud' ? { location: 'cloud' as const } : {})
     })
     upsertSession(sess)
     if (o.repoId) void updateSettings({ lastRepoId: o.repoId })

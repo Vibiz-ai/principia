@@ -336,7 +336,15 @@ if (!app.requestSingleInstanceLock()) {
         redact: (t) => h.vault.redact(t),
         log
       })
-      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, dataDir: app.getPath('userData'), siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart, terminal })
+      h.remote = createRemote({
+        cloudReady: () => {
+          try {
+            return h.cloud.link.state().linked
+          } catch {
+            return false
+          }
+        },
+        mainDir: __dirname, envPath: () => baseChildEnv().PATH, dataDir: app.getPath('userData'), siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart, terminal })
       // RA8: paired phones find this Mac again after a restart (when the founder wants it, by default once one is paired)
       void h.remote.autoStartIfWanted().catch((e) => log.warn('phone did not start at launch', { e: String(e) }))
     } catch (e) {

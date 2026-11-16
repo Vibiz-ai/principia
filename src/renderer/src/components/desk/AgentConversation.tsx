@@ -4,6 +4,7 @@
  * Claude › Chat), and the ONE right panel (AgentPanel) holds who it is and what it has, collapsible with one click.
  * Direct chats (Claude or Codex, no agent) use the same layout with the session's panel.
  */
+import { CloudMark, isCloudChat } from '../cloud/CloudMark'
 import { useRef } from 'react'
 import type { CompanyAgent } from '@shared/company'
 import type { Session } from '@shared/types'
@@ -82,9 +83,10 @@ export function SessionConversation({ session: s, children }: { session: Session
               <Icon name={s.repoId ? 'branch' : s.departmentId ? 'department' : 'chat'} size={13} />
             </span>
             <span className="convo-title__name">{name}</span>
+            {isCloudChat(s) && <CloudMark />}
           </span>
         }
-        sub={<span className="convo-title__sub">{custom ? s.title : sessionTitle(s)}{place && s.repoId ? ` · ${place}` : ''}</span>}
+        sub={<span className="convo-title__sub">{custom ? s.title : sessionTitle(s)}{place && s.repoId ? ` · ${place}` : ''}{isCloudChat(s) ? ' · runs in your cloud' : ''}</span>}
       >
         <ChatModeToggle session={s} focused />
         <BrowserToggle companyId={s.companyId} scope={paneScope(s.id)} />

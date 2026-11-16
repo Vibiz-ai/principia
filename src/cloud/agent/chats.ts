@@ -46,7 +46,7 @@ const MODES = new Set(['default', 'acceptEdits', 'plan', 'auto'])
 export function chatArgv(s: Pick<ChatProcSpec, 'conversationId' | 'resume' | 'model' | 'permissionMode' | 'bypass' | 'systemPrompt'>): string[] {
   const a = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages']
   a.push(s.resume ? '--resume' : '--session-id', s.conversationId)
-  if (s.model && /^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,79}$/.test(s.model) && s.model !== 'default') a.push('--model', s.model)
+  if (s.model && /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,79}$/.test(s.model) && s.model !== 'default') a.push('--model', s.model)
   if (s.bypass) a.push('--dangerously-skip-permissions')
   else {
     a.push('--permission-mode', s.permissionMode && MODES.has(s.permissionMode) ? s.permissionMode : 'default')

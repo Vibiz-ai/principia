@@ -9,6 +9,7 @@
  * The CHAT, DEPARTMENTS, FORUM channel, NEEDS YOU and OTHER COMPANIES sections and the All-mode company trees are
  * gone: their contents live behind the doors (Chats, Team, Forum in More, Home, the rail).
  */
+import { CloudMark, isCloudChat } from '../components/cloud/CloudMark'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Id, Repo, Session } from '@shared/types'
 import type { AgentNode } from '@shared/live'
@@ -454,6 +455,7 @@ export function Sidebar(): React.JSX.Element {
             {dupLabel.has(s.id) && <span className="side-row__adapter"> · {startedHint(s.startedAt)}</span>}
           </span>
         )}
+        {isCloudChat(s) && <CloudMark compact />}
         {s.status === 'running' && stalled.sessions.has(s.id) && (
           <span className="stalled-badge stalled-badge--side" title="No output for a while. Principia never stops it on its own.">
             Stalled?

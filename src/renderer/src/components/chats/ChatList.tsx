@@ -12,6 +12,7 @@
  * CHAT-UI.md §8.6: a task filed from a conversation is that conversation's subagent: its row says "2 tasks working",
  * "1 needs you" or "VO-16 finished · unread" and sorts first; an agent's own chat is live only while it answers there.
  */
+import { CloudMark, isCloudChat } from '../cloud/CloudMark'
 import { useMemo, useState } from 'react'
 import { trackedBy, type CompanyAgent, type CompanyTask } from '@shared/company'
 import type { Id, Session } from '@shared/types'
@@ -331,6 +332,7 @@ function SessionChatRow({ row, selected, onPick, onClose }: { row: Extract<ChatR
       <span className="chats5-row__body">
         <span className="chats5-row__top">
           <span className="chats5-row__name">{title}</span>
+          {isCloudChat(s) && <CloudMark />}
           <span className="chats5-row__age">{age(lastActivity(row))}</span>
         </span>
         <span className="chats5-row__last">
