@@ -301,7 +301,11 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
           ctx.audit(actor, 'workspace.quotas', null, ctx.workspaceId, Object.fromEntries(Object.entries(p.data.quotas).map(([k, v]) => [k, v ?? null])))
           queue.kick()
         }
-        if (p.data.paused !== undefined && p.data.paused !== ctx.workspace().paused) await queue.setPaused(actor, p.data.paused)
+        if (p.data.paused !== undefined && p.data.paused !== ctx.workspace().paused) {
+          await queue.setPaused(actor, p.data.paused)
+          // the kill switch stops cloud chats too (docs/CLOUD-CHATS.md): their processes end, their history stays
+          if (p.data.paused) await Promise.all(ctx.runtime.chats.list().filter(c => c.state !== 'exited').map(c => ctx.runtime.chats.stop(c.id)))
+        }
         else if (p.data.name || p.data.quotas) events.emit({ kind: 'workspace', workspace: ctx.workspace() })
         return ok(ctx.workspace())
       }
@@ -374,6 +378,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       case 'chats': return ok(ctx.runtime.chats.list())
       case 'chatStart': {
         if (!CHAT_ID.test(params.id!)) throw badRequest('Invalid chat id.')
+        if (ctx.workspace().paused) throw new ApiError('conflict', 'Your cloud is paused. Resume it on the Cloud page to run chats there.')
         const spec = chatStartSpec(params.id!, (await body()) as Partial<CloudChatStart>, { provider: providers.material('claude'), githubToken: accounts.githubToken(), secrets: accounts.secretMaterials({}) })
         const info = await ctx.runtime.chats.start(spec)
         ctx.audit(actor, 'chat.start', null, params.id!, { repo: info.repo })
