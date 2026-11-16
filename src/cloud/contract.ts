@@ -93,6 +93,72 @@ export interface RuntimeRunRequest {
   materials: RunMaterials
 }
 
+// ---------- cloud chats (docs/CLOUD-CHATS.md): a Mac chat's CLI process, run here ----------
+
+export type ChatProcState = 'preparing' | 'running' | 'exited'
+
+export interface ChatProcInfo {
+  id: string
+  state: ChatProcState
+  /** what it is doing while preparing ("Getting vibiz-app from GitHub…") */
+  detail: string | null
+  startedAt: string
+  endedAt: string | null
+  exitCode: number | null
+  signal: string | null
+  /** why it could not start, or how it ended badly (redacted) */
+  error: string | null
+  /** the repository it works in (owner/name), null for a plain folder */
+  repo: string | null
+  /** characters of output so far: an attach asks for everything after its own count */
+  out: number
+}
+
+export interface ChatProcSpec {
+  /** the Mac's session id (a folder name) */
+  id: string
+  conversationId: string
+  /** the conversation exists already: --resume instead of --session-id */
+  resume: boolean
+  model: string | null
+  permissionMode: string | null
+  /** --dangerously-skip-permissions */
+  bypass: boolean
+  systemPrompt: string | null
+  /** the project's GitHub repository, cloned into the chat's folder */
+  repo: RepoMaterial | null
+  provider: ProviderMaterial | null
+  /** GH_TOKEN / GITHUB_TOKEN and other workspace keys */
+  secrets: Record<string, string>
+  /** the workspace GitHub token, for git push from the chat (askpass) */
+  githubToken: string | null
+}
+
+export interface ChatSink {
+  /** output from `at` (the offset of the chunk's first character) */
+  out(chunk: string, at: number): void
+  /** stderr (redacted) */
+  err(text: string): void
+  /** preparing → running → exited */
+  state(info: ChatProcInfo): void
+}
+
+export interface CloudChats {
+  /** starts (or restarts) the chat's process; returns at once in 'preparing' */
+  start(spec: ChatProcSpec): Promise<ChatProcInfo>
+  /** follows it from output offset `from`; null for an unknown chat */
+  attach(id: string, from: number, sink: ChatSink): (() => void) | null
+  write(id: string, data: string): boolean
+  end(id: string): void
+  signal(id: string, sig: NodeJS.Signals): boolean
+  stop(id: string): Promise<void>
+  /** stops it and removes its folder and home */
+  remove(id: string): Promise<void>
+  list(): ChatProcInfo[]
+  /** preparing or running */
+  live(): number
+}
+
 // ---------- the runtime (package AI implements; control plane calls) ----------
 
 export interface CloudRuntime {
@@ -102,6 +168,9 @@ export interface CloudRuntime {
   /** cancels running runs as 'canceled' with reason 'shutdown', closes gateways and the Forum db */
   close(): Promise<void>
   health(): { status: 'ok' | 'degraded' | 'down'; detail: string | null }
+
+  /** docs/CLOUD-CHATS.md: Mac chats whose CLI runs here */
+  readonly chats: CloudChats
 
   /** idempotent: company folders under the workspace, the cloud Forum's company (members from seats in the workflow files later) */
   ensureCompany(c: { workspaceId: Id; companyId: Id; name: string; slug: string }): Promise<void>

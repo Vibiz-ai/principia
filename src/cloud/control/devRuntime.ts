@@ -4,7 +4,7 @@
  */
 import type { Id } from '../../shared/types'
 import type { CloudRunStep } from '../../shared/cloud'
-import type { CloudRuntime, ControlPorts, RepoMaterial, RuntimeRunRequest } from '../contract'
+import type { ChatProcInfo, ChatSink, CloudRuntime, ControlPorts, RepoMaterial, RuntimeRunRequest } from '../contract'
 import { adapterOfProfile } from './deps'
 
 export interface DevRuntime extends CloudRuntime {
@@ -33,10 +33,47 @@ export function createDevRuntime(ports: ControlPorts, opts: { autoComplete?: boo
     const s = shapes.get(runId) ?? { nodeId: null, title: 'Step', adapter: 'shell' as const }
     return { id: `${runId}_s1`, nodeId: s.nodeId, title: s.title, adapter: s.adapter, status, startedAt: new Date().toISOString(), endedAt: status === 'running' ? null : new Date().toISOString(), usage: null }
   }
+  // cloud chats: an echo process (each stdin line comes back as {"type":"echo","line":…}) that runs at once
+  const chatProcs = new Map<string, { info: ChatProcInfo; buf: string; sinks: Set<ChatSink> }>()
+  const chatOut = (c: { info: ChatProcInfo; buf: string; sinks: Set<ChatSink> }, d: string) => {
+    const at = c.info.out; c.buf += d; c.info.out += d.length
+    for (const s of c.sinks) s.out(d, at)
+  }
+  const chatState = (c: { info: ChatProcInfo; sinks: Set<ChatSink> }) => { for (const s of c.sinks) s.state({ ...c.info }) }
+  const chats: CloudRuntime['chats'] = {
+    async start(spec) {
+      record('chats.start', { ...spec, provider: spec.provider ? { ...spec.provider, value: '<secret>' } : null })
+      const prev = chatProcs.get(spec.id)
+      const c = { info: { id: spec.id, state: 'running' as const, detail: null, startedAt: new Date().toISOString(), endedAt: null, exitCode: null, signal: null, error: null, repo: null, out: 0 }, buf: '', sinks: prev?.sinks ?? new Set<ChatSink>() }
+      chatProcs.set(spec.id, c); chatState(c)
+      return { ...c.info }
+    },
+    attach(id, from, sink) {
+      const c = chatProcs.get(id); if (!c) return null
+      sink.state({ ...c.info })
+      if (from < c.info.out) sink.out(c.buf.slice(from), from)
+      c.sinks.add(sink)
+      return () => { c.sinks.delete(sink) }
+    },
+    write(id, data) {
+      const c = chatProcs.get(id); if (!c || c.info.state === 'exited') return false
+      for (const line of data.split('\n').filter(Boolean)) chatOut(c, JSON.stringify({ type: 'echo', line }) + '\n')
+      return true
+    },
+    end(id) { record('chats.end', id) },
+    signal(id, sig) {
+      const c = chatProcs.get(id); if (!c || c.info.state === 'exited') return false
+      c.info = { ...c.info, state: 'exited', signal: sig, endedAt: new Date().toISOString() }; chatState(c); return true
+    },
+    async stop(id) { chats.signal(id, 'SIGTERM') },
+    async remove(id) { record('chats.remove', id); chats.signal(id, 'SIGTERM'); chatProcs.delete(id) },
+    list: () => [...chatProcs.values()].map(c => ({ ...c.info })),
+    live: () => [...chatProcs.values()].filter(c => c.info.state !== 'exited').length
+  }
   const rt: DevRuntime = {
     version: 'dev-0',
     sandbox: 'process',
-    started, calls, running,
+    started, calls, running, chats,
     async start() { record('start') },
     async close() { record('close'); for (const id of [...running]) { running.delete(id); ports.runStatus(id, 'canceled', 'shutdown') } },
     health: () => ({ status: 'ok', detail: null }),

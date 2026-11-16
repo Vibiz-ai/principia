@@ -10,7 +10,7 @@ import { extname, join, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import {
   CLOUD_API_VERSION, CLOUD_LIMITS, CLOUD_ROUTES, NOT_IN_V1_ROUTES, SESSION_TTL_MS, formatConnectLink,
-  type CloudEvent, type CloudRouteName, type CloudRunTrigger, type MeResponse, type WorkspaceSummary
+  type CloudChatStart, type CloudEvent, type CloudRouteName, type CloudRunTrigger, type MeResponse, type WorkspaceSummary
 } from '../../shared/cloud'
 import type { CloudRuntime, ControlPorts } from '../contract'
 import {
@@ -28,6 +28,7 @@ import { isPassportPath, proxyToPassport } from './passportProxy'
 import { createProviders } from './providers'
 import { createAccounts } from './accounts'
 import { activitySnapshot, writeActivity } from './activity'
+import { attachChatSockets, chatStartSpec, CHAT_ID } from './chats'
 import { createQueue } from './queue'
 import { createSync, decodeCursor } from './sync'
 import { usageSummary } from './usage'
@@ -369,6 +370,25 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       }
       case 'audit': return ok(auditEntries(db, { companyId: q.get('companyId'), limit: Math.min(500, Math.max(1, Number(q.get('limit') ?? 100) || 100)) }))
       case 'summary': return ok(await summary())
+      // docs/CLOUD-CHATS.md
+      case 'chats': return ok(ctx.runtime.chats.list())
+      case 'chatStart': {
+        if (!CHAT_ID.test(params.id!)) throw badRequest('Invalid chat id.')
+        const spec = chatStartSpec(params.id!, (await body()) as Partial<CloudChatStart>, { provider: providers.material('claude'), githubToken: accounts.githubToken(), secrets: accounts.secretMaterials({}) })
+        const info = await ctx.runtime.chats.start(spec)
+        ctx.audit(actor, 'chat.start', null, params.id!, { repo: info.repo })
+        return ok(info, 201)
+      }
+      case 'chatStop': {
+        await ctx.runtime.chats.stop(params.id!)
+        return ok({ ok: true })
+      }
+      case 'chatDelete': {
+        if (!CHAT_ID.test(params.id!)) throw badRequest('Invalid chat id.')
+        await ctx.runtime.chats.remove(params.id!)
+        ctx.audit(actor, 'chat.delete', null, params.id!, {})
+        return ok({ ok: true })
+      }
       default: throw notFound()
     }
   }
@@ -398,10 +418,11 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
   }
 
   let httpServer: Server | null = null
+  let chatSockets: { close(): void } | null = null
   let lastChangeAt: string | null = null
   const reportActivity = (): void => {
     try {
-      writeActivity(config.dataDir, activitySnapshot(ctx, lastChangeAt))
+      writeActivity(config.dataDir, activitySnapshot(ctx, lastChangeAt, ctx.runtime.chats.live()))
     } catch (e) {
       log.warn('activity.json not written', { error: (e as Error).message })
     }
@@ -413,6 +434,8 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
         httpServer = createServer((req, res) => void handle(req, res))
         httpServer.headersTimeout = 15_000
         httpServer.requestTimeout = 120_000
+        // docs/CLOUD-CHATS.md: the chat's stdin/stdout, for a paired Mac only
+        chatSockets = attachChatSockets(httpServer, { ctx, onInput: () => { lastChangeAt = now().toISOString() } })
       }
       return httpServer
     },
@@ -458,6 +481,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       queue.stop()
       for (const t of timers) clearInterval(t)
       for (const s of streams) s.end()
+      chatSockets?.close()
       if (httpServer) await new Promise<void>(r => { httpServer!.close(() => r()); httpServer!.closeAllConnections() })
       try { await ctx.runtime.close() } catch (e) { log.warn('runtime.close failed', { error: (e as Error).message }) }
       db.close()

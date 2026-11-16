@@ -616,6 +616,47 @@ export interface WorkspaceSummary {
   usage24h: { runs: number; runMinutes: number }
 }
 
+// ---------- cloud chats (docs/CLOUD-CHATS.md) ----------
+
+/** POST /v1/chats/:id — the conversation's choices; the cloud builds the argv itself (no paths, no flags from the Mac). */
+export interface CloudChatStart {
+  adapter: 'claude'
+  conversationId: string
+  resume: boolean
+  model: string | null
+  permissionMode: string | null
+  bypass: boolean
+  systemPrompt: string | null
+  /** the project's GitHub repository (https), cloned into the chat's folder; null: an empty folder */
+  repoUrl: string | null
+  /** a branch that exists on GitHub; null: the default branch */
+  branch: string | null
+}
+
+export interface CloudChatInfo {
+  id: string
+  state: 'preparing' | 'running' | 'exited'
+  detail: string | null
+  startedAt: string
+  endedAt: string | null
+  exitCode: number | null
+  signal: string | null
+  error: string | null
+  repo: string | null
+  out: number
+}
+
+/** The attach socket's frames. Cloud → Mac: */
+export type CloudChatDown =
+  | { t: 'state'; info: CloudChatInfo }
+  | { t: 'out'; at: number; d: string }
+  | { t: 'err'; d: string }
+/** Mac → cloud: stdin text, close stdin, or a signal to the process group. */
+export type CloudChatUp = { t: 'in'; d: string } | { t: 'end' } | { t: 'signal'; sig: 'SIGINT' | 'SIGTERM' | 'SIGKILL' }
+
+/** The attach socket's path: `?from=<output offset>` replays what the Mac has not seen. */
+export const cloudChatAttachPath = (id: string, from: number): string => `/v1/chats/${encodeURIComponent(id)}/attach?from=${Math.max(0, Math.floor(from))}`
+
 // ---------- routes (CLOUD.md §6). `:x` are path params. ----------
 
 export const CLOUD_ROUTES = {
@@ -687,7 +728,12 @@ export const CLOUD_ROUTES = {
   events: 'GET /v1/events',
   usage: 'GET /v1/usage',
   audit: 'GET /v1/audit',
-  summary: 'GET /v1/summary'
+  summary: 'GET /v1/summary',
+  // docs/CLOUD-CHATS.md: a Mac chat whose CLI runs here (its I/O: the WebSocket /v1/chats/:id/attach)
+  chats: 'GET /v1/chats',
+  chatStart: 'POST /v1/chats/:id',
+  chatStop: 'POST /v1/chats/:id/stop',
+  chatDelete: 'DELETE /v1/chats/:id'
 } as const
 export type CloudRouteName = keyof typeof CLOUD_ROUTES
 

@@ -33,10 +33,11 @@ export interface Activity {
 
 const later = (a: string | null, b: string | null): string | null => (!a ? b : !b ? a : a > b ? a : b)
 
-export function activitySnapshot(ctx: Pick<Ctx, 'db' | 'now' | 'workspace'>, lastChangeAt: string | null): Activity {
+export function activitySnapshot(ctx: Pick<Ctx, 'db' | 'now' | 'workspace'>, lastChangeAt: string | null, liveChats = 0): Activity {
   const now = ctx.now()
   const count = (status: string) => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM cloud_runs WHERE status = ?', status)?.n ?? 0
-  const running = count('running')
+  // a cloud chat with its process alive counts as running: the machine never sleeps under it
+  const running = count('running') + liveChats
   const queued = count('queued')
   const needsInput = count('needs_input')
   const runs = ctx.db.get<{ c: string | null; e: string | null }>('SELECT MAX(created_at) AS c, MAX(ended_at) AS e FROM cloud_runs')
