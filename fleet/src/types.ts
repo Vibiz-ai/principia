@@ -176,6 +176,11 @@ export interface Ports {
   userData(o: { host: string; adminTokenSha256: string; workspaceName: string; machineToken: string }): string
   now(): Date
   random(bytes: number): string
+  /**
+   * docs/FLEET.md §10: the Principia Cloud image every machine should run (a published ghcr.io tag). A machine's
+   * heartbeat gets it back and the machine moves to it when nothing runs. null: leave machines as they are.
+   */
+  cloudImage?(): Promise<string | null>
   log: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void }
 }
 

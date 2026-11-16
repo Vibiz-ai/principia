@@ -133,5 +133,15 @@ machine and one address per person it is always used from the same place.
   without it unless the `OPEN_PASSPORT_TOKEN` secret is set (.github/workflows/cloud-images.yml). The cloud starts
   without a passport host either way (`src/cloud/control/main.ts`).
 - **Billing.** Hours are counted and capped, not charged. Charging them (e.g. to Vibiz credits) reads `usage`.
-- **Updates to a running machine.** New machines use the newest image; existing ones keep theirs.
 - **One sandbox per run** on the machine (docs/MACHINES.md §5), and a custom domain instead of sslip.io.
+
+## 10. Updates
+
+`scripts/build-ami.ts --image ghcr.io/vibiz-ai/principia-cloud:<version>` bakes new machines with that image and,
+when it was pulled (not built from source), writes it to `/principia-fleet/cloud-image`. Every heartbeat is answered
+with that image (`{ ok, image }`). A machine running something else pulls it and restarts its container, only while
+nothing runs, queues or waits (`activity.json`); its data volume, chats and sign-ins stay. Only a published
+`ghcr.io/vibiz-ai/principia-cloud:<tag>` is ever accepted, on both sides.
+
+Machines made before this heartbeat existed can't update themselves: *Turn Off* and *Turn On* once (their sign-ins
+come back from the Mac, §8).

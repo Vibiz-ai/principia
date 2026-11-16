@@ -32,6 +32,9 @@ const arg = (k: string, d: string): string => {
 }
 const STACK = 'PrincipiaFleet'
 const AMI_PARAMETER = '/principia-fleet/ami-id'
+/** docs/FLEET.md §10: machines move to this published image by themselves (their heartbeat reads it) */
+const IMAGE_PARAMETER = '/principia-fleet/cloud-image'
+const PUBLISHED = /^ghcr\.io\/vibiz-ai\/principia-cloud:[0-9A-Za-z._-]{1,64}$/
 const BASE = '/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id'
 const ref = arg('ref', 'main')
 const image = arg('image', 'ghcr.io/vibiz-ai/principia-cloud:latest')
@@ -129,6 +132,11 @@ poweroff
     }
     await ssm.send(new PutParameterCommand({ Name: AMI_PARAMETER, Value: amiId, Type: 'String', Overwrite: true, DataType: 'aws:ec2:image' }))
     say(`${AMI_PARAMETER} = ${amiId}`)
+    // the image was pulled (not built from source): running machines move to it too
+    if (PUBLISHED.test(image) && !image.endsWith(':latest') && !text.includes('is not published')) {
+      await ssm.send(new PutParameterCommand({ Name: IMAGE_PARAMETER, Value: image, Type: 'String', Overwrite: true }))
+      say(`${IMAGE_PARAMETER} = ${image}`)
+    }
 
     // older images cost their snapshots every month
     const all = await ec2.send(new DescribeImagesCommand({ Owners: ['self'], Filters: [{ Name: 'tag:principia-fleet', Values: ['image'] }] }))
