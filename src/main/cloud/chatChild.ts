@@ -84,6 +84,8 @@ class CloudChild extends EventEmitter implements ChildLike {
   private killed: NodeJS.Signals | null = null
   private attempts = 0
   private statusCb: ((t: string) => void) | null = null
+  /** it ended in the cloud, but output before that hasn't arrived yet: the exit waits for it */
+  private pendingExit: { out: number; code: number | null; signal: NodeJS.Signals | null } | null = null
 
   constructor(
     private d: CloudChatDeps,
@@ -175,13 +177,23 @@ class CloudChild extends EventEmitter implements ChildLike {
     const fresh = at < this.seen ? d.slice(this.seen - at) : d
     this.seen = end
     this.stdout.emit('data', fresh)
+    const p = this.pendingExit
+    if (p && this.seen >= p.out) this.ended(p.code, p.signal)
   }
 
   private onState(info: CloudChatInfo): void {
     if (info.state === 'preparing' && info.detail) this.status(info.detail)
     if (info.state === 'exited') {
       if (info.error) this.stderr.emit('data', `${info.error}\n`)
-      this.ended(info.exitCode, (info.signal as NodeJS.Signals | null) ?? null)
+      const signal = (info.signal as NodeJS.Signals | null) ?? null
+      // every character it wrote reaches the chat before "it ended" (the answer given while this Mac was away)
+      if (info.out > this.seen) {
+        this.pendingExit = { out: info.out, code: info.exitCode, signal }
+        const set = this.d.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms).unref())
+        set(() => this.ended(info.exitCode, signal), 5000)
+        return
+      }
+      this.ended(info.exitCode, signal)
     }
   }
 

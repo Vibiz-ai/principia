@@ -227,6 +227,33 @@ d('SessionManager', () => {
     expect(r.agentSessionId).toBe('uuid-new')
   })
 
+  it('docs/CLOUD-CHATS.md: a cloud chat is made there, and Restart resumes it there although this Mac has no transcript', async () => {
+    const hosts: unknown[] = []
+    const removed: string[] = []
+    const m = new SessionManager({
+      ...deps,
+      spawnPty: (file, args, opts, host) => {
+        hosts.push(host)
+        return new FakePty(file, args, opts)
+      },
+      onRemoved: (x) => removed.push(`${x.location ?? 'mac'}:${x.agentSessionId}`)
+    })
+    const s = m.create({ adapter: 'claude', cols: 80, rows: 24, location: 'cloud' })
+    expect(s.location).toBe('cloud')
+    expect(store.getSession(s.id)!.location).toBe('cloud')
+    expect(hosts.at(-1)).toMatchObject({ cloud: true })
+    await m.kill(s.id)
+    convExists = false
+    const r = m.restart(s.id)
+    expect(lastSpawnOpts!.resumeAgentSessionId).toBe('uuid-new')
+    expect(r.location).toBe('cloud')
+    expect(hosts.at(-1)).toMatchObject({ cloud: true, resumeId: 'uuid-new' })
+    // removing it cleans the cloud's copy (the conversation id is its key there)
+    await m.kill(r.id)
+    m.remove(s.id)
+    expect(removed).toEqual(['cloud:uuid-new'])
+  })
+
   it('restart keeps the previous scrollback above a "— restarted —" divider', async () => {
     const s = mgr.create({ adapter: 'claude', cols: 80, rows: 24 })
     FakePty.last.emit('hello from the first run\r\n')

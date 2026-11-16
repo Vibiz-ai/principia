@@ -66,7 +66,7 @@ describe('cloud chats (docs/CLOUD-CHATS.md)', () => {
     await b.opened
     await until(() => out(b.frames).includes('two'))
     expect(out(b.frames)).not.toContain('one')
-    expect(b.frames[0]).toMatchObject({ t: 'state', info: { state: 'running' } })
+    expect(b.frames.find((f) => f.t === 'state')).toMatchObject({ t: 'state', info: { state: 'running' } })
     b.ws.send(JSON.stringify({ t: 'signal', sig: 'SIGTERM' }))
     await until(() => b.frames.some((f) => f.t === 'state' && f.info.state === 'exited'))
     b.ws.close()

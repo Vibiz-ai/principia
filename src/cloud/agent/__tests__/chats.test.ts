@@ -1,15 +1,15 @@
-import { mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ChatProcInfo, ChatProcSpec } from '../../contract'
-import { ChatProcs, chatArgv } from '../chats'
+import { ChatProcs, chatArgv, hasTranscript } from '../chats'
 import { ProcessSandbox } from '../sandbox'
 import { FAKE_BINS, tmp } from './fakes'
 
 const CONV = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const TOKEN = 'sk-ant-oat01-SECRET-' + 'y'.repeat(40)
 
-function setup(o: { idleMs?: number; repoFails?: boolean } = {}) {
+function setup(o: { idleMs?: number; repoFails?: boolean; repoGate?: Promise<void> } = {}) {
   const dir = tmp()
   const sandbox = new ProcessSandbox({ runtimeDir: join(dir, 'runtime'), workspaceDir: join(dir, 'ws'), agentUser: null })
   const synced: { companyId: string; url: string }[] = []
@@ -21,6 +21,7 @@ function setup(o: { idleMs?: number; repoFails?: boolean } = {}) {
     codexBin: FAKE_BINS.codex,
     async syncRepo(companyId, repo) {
       synced.push({ companyId, url: repo.url })
+      if (o.repoGate) await o.repoGate
       if (o.repoFails) return { ok: false, detail: 'Repository not found' }
       mkdirSync(join(sandbox.companyDir(companyId), repo.name), { recursive: true })
       return { ok: true, detail: null }
@@ -132,6 +133,34 @@ describe('cloud chat processes (docs/CLOUD-CHATS.md)', () => {
     expect(t.procs.get('sess_1')).toBeNull()
     expect(existsSync(join(t.dir, 'ws', 'chat_sess_1'))).toBe(false)
     expect(existsSync(join(t.dir, 'runtime', 'runs', 'chat_sess_1', 'home'))).toBe(false)
-    void readFileSync
+  })
+
+  it('stopped while the repository clones: the CLI never starts', async () => {
+    let open!: () => void
+    const t = setup({ repoGate: new Promise<void>((r) => (open = r)) })
+    await t.procs.start(spec({ repo: { id: 'chat', name: 'app', url: 'https://github.com/acme/app', branch: null, token: null } }))
+    t.procs.signal('sess_1', 'SIGTERM')
+    open()
+    await new Promise((r) => setTimeout(r, 200))
+    expect(t.procs.get('sess_1')).toMatchObject({ state: 'exited', out: 0 })
+    expect(t.procs.live()).toBe(0)
+  })
+
+  it('a Mac that comes back after the end gets the answer before "exited"', async () => {
+    const t = setup()
+    await t.procs.start(spec())
+    t.procs.write('sess_1', user('hello'))
+    await until(() => t.procs.get('sess_1')!.state === 'exited')
+    const order: string[] = []
+    t.procs.attach('sess_1', 0, { out: () => order.push('out'), err: () => undefined, state: (i) => order.push(i.state) })
+    expect(order).toEqual(['out', 'exited'])
+  })
+
+  it('resumes only a conversation this machine has', () => {
+    const dir = tmp()
+    expect(hasTranscript(dir, CONV)).toBe(false)
+    mkdirSync(join(dir, 'projects', '-workspace-chat'), { recursive: true })
+    writeFileSync(join(dir, 'projects', '-workspace-chat', `${CONV}.jsonl`), '{}\n')
+    expect(hasTranscript(dir, CONV)).toBe(true)
   })
 })

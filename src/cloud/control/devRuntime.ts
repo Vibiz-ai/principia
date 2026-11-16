@@ -50,8 +50,8 @@ export function createDevRuntime(ports: ControlPorts, opts: { autoComplete?: boo
     },
     attach(id, from, sink) {
       const c = chatProcs.get(id); if (!c) return null
-      sink.state({ ...c.info })
       if (from < c.info.out) sink.out(c.buf.slice(from), from)
+      sink.state({ ...c.info })
       c.sinks.add(sink)
       return () => { c.sinks.delete(sink) }
     },

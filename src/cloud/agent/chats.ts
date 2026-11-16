@@ -10,7 +10,7 @@
  * for IDLE_MS (so a forgotten chat never keeps a managed machine awake).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatProcInfo, ChatProcSpec, ChatSink, RepoMaterial } from '../contract'
 
@@ -128,7 +128,8 @@ export class ChatProcs {
       cwd = join(cwd, repoFolderName(spec.repo))
       if (!existsSync(cwd)) throw new Error('The repository folder is missing after the clone')
     }
-    if (this.procs.get(spec.id) !== p) return
+    // stopped while the repository was cloning: it never starts
+    if (this.procs.get(spec.id) !== p || p.ended) return
     this.setDetail(p, 'Signing in…')
     const box = sandbox.prepare(`chat_${spec.id}`.slice(0, 96))
     const mat = materializeProviders(box, spec.provider ? [spec.provider] : [], ['claude'], { codex: this.d.codexBin })
@@ -138,9 +139,11 @@ export class ChatProcs {
     const env = { ...sandbox.baseEnv(), ...overlay }
     await mat.before(env)
     sandbox.handOver(box)
-    if (this.procs.get(spec.id) !== p) return
+    if (this.procs.get(spec.id) !== p || p.ended) return
+    // the conversation's history decides, not the Mac: it resumes what this machine has, and starts what it hasn't
+    const resume = hasTranscript(box.claudeDir, spec.conversationId)
     const user = sandbox.spawnUser()
-    const child = spawn(this.d.bin, chatArgv(spec), { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true, ...(user ? { uid: user.uid, gid: user.gid } : {}) })
+    const child = spawn(this.d.bin, chatArgv({ ...spec, resume }), { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true, ...(user ? { uid: user.uid, gid: user.gid } : {}) })
     p.child = child
     child.stdout!.setEncoding('utf8')
     child.stderr!.setEncoding('utf8')
@@ -151,7 +154,8 @@ export class ChatProcs {
     })
     child.stdin!.on('error', () => undefined)
     child.on('error', (e) => this.fail(p, e.message))
-    child.on('exit', (code, signal) => this.ended(p, code, signal))
+    // 'close', not 'exit': every byte of stdout is in before the chat says it ended
+    child.on('close', (code, signal) => this.ended(p, code, signal))
     p.info.state = 'running'
     p.info.detail = null
     this.d.log.info('cloud chat: started', { id: spec.id, repo: p.info.repo })
@@ -225,9 +229,10 @@ export class ChatProcs {
   attach(id: string, from: number, sink: ChatSink): (() => void) | null {
     const p = this.procs.get(id)
     if (!p) return null
-    sink.state({ ...p.info })
+    // the output first: a chat that ended while the Mac was away still delivers its answer before "exited"
     const start = Math.max(from, p.base)
     if (start < p.info.out) sink.out(p.buf.slice(start - p.base), start)
+    sink.state({ ...p.info })
     p.sinks.add(sink)
     this.touch(p)
     return () => {
@@ -303,6 +308,16 @@ export class ChatProcs {
 
   async close(): Promise<void> {
     await Promise.all([...this.procs.keys()].map((id) => this.stop(id)))
+  }
+}
+
+/** Claude keeps a conversation as `<CLAUDE_CONFIG_DIR>/projects/<folder>/<id>.jsonl`. */
+export function hasTranscript(claudeDir: string, conversationId: string): boolean {
+  try {
+    const root = join(claudeDir, 'projects')
+    return readdirSync(root).some((d) => existsSync(join(root, d, `${conversationId}.jsonl`)))
+  } catch {
+    return false
   }
 }
 

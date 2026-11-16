@@ -817,7 +817,9 @@ export class SessionManager {
     // Nothing typed before exit = Claude never wrote the conversation; --resume would fail with "No conversation
     // found". Start fresh under the same id instead so later restarts keep resuming the same conversation.
     const conv = s.agentSessionId
-    const resumable = !!conv && (this.d.conversationExists?.(s.adapter, conv) ?? true)
+    // docs/CLOUD-CHATS.md: a cloud chat's history is on its machine, not here; the cloud resumes it when it has it
+    const cloud = s.location === 'cloud'
+    const resumable = !!conv && (cloud || (this.d.conversationExists?.(s.adapter, conv) ?? true))
     // AGENT CHAT: the agent's chat comes back as itself (its brief rebuilt from the seat, same conversation)
     if (s.companyAgentId) {
       const a = this.d.agentChat?.(s.companyAgentId)
@@ -854,7 +856,8 @@ export class SessionManager {
       memory: this.d.memory?.lastMode(id) ?? 'off',
       resumeAgentSessionId: resumable ? conv : null,
       freshAgentSessionId: resumable ? null : conv,
-      priorScrollback: this.readLogTail(id, SESSION_TAIL_CHARS)
+      priorScrollback: this.readLogTail(id, SESSION_TAIL_CHARS),
+      ...(cloud ? { location: 'cloud' as const } : {})
     })
   }
 
