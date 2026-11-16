@@ -188,6 +188,11 @@ export function TeamComposer({
       await attaching.settled()
       const t = latest.current.trim()
       if (inCloud) {
+        // a dropped file or a pasted screenshot is an @path on this Mac: the cloud machine can't open it
+        if (/(^|\s)@"?\//.test(t)) {
+          toast('Files from this Mac can’t go to a cloud chat yet. Remove them, or send this to This Mac.', 'error')
+          return
+        }
         // the cloud runs Claude itself: a chat there (in the repository's clone when one is picked)
         const s = await startSession({ repoId: to.kind === 'repo' ? to.id : null, forceNew: true, companyId, adapter: 'claude', initialPrompt: t, title: taskTitleFor(t).slice(0, 80), focus: false, location: 'cloud' })
         if (s) {

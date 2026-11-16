@@ -466,6 +466,8 @@ if (!app.requestSingleInstanceLock()) {
       // docs/CLOUD-CHATS.md: a deleted cloud chat's folder and history leave the cloud too
       onRemoved: (s) => {
         if (s.location !== 'cloud' || !s.agentSessionId) return
+        // Restart removes the old row of a conversation that goes on in a new one: the cloud keeps it then
+        if (store.listSessions('all').some((o) => o.id !== s.id && o.agentSessionId === s.agentSessionId)) return
         try {
           void h.cloud.link.client().call('chatDelete', { params: { id: s.agentSessionId } }).catch((e: unknown) => log.warn('cloud chat: not deleted in the cloud', { error: String(e) }))
         } catch {

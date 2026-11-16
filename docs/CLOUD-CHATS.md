@@ -44,6 +44,7 @@ control plane (src/cloud/control/chats.ts) ──▶ runtime.chats (src/cloud/ag
 ## Not yet
 
 - Codex chats (Claude only for now).
+- Files from the Mac (a dropped file, a pasted screenshot) in a cloud chat: New chat refuses them for now.
 - A cloud chat's history, read on the Mac, comes from the chat itself; Search over sessions covers this Mac's only.
 - The Mac's uncommitted changes don't go with it: the cloud starts from the branch on GitHub (pushed branches only),
   else the default branch.
