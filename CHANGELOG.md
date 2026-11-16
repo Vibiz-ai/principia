@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.10](https://github.com/Vibiz-ai/principia/compare/v0.4.9...v0.4.10) (2026-11-16)
+
+
+### Features
+
+* cloud chats — run a chat on your cloud machine, marked Cloud on Mac and iPhone ([#170](https://github.com/Vibiz-ai/principia/issues/170)) ([9a0bdc2](https://github.com/Vibiz-ai/principia/commit/9a0bdc24bce6cc0d9155b83df927babb55752ae5))
+
+
+### Bug Fixes
+
+* **cloud:** publish the cloud image without Passport; Passport is optional ([#166](https://github.com/Vibiz-ai/principia/issues/166)) ([98fea5e](https://github.com/Vibiz-ai/principia/commit/98fea5ebcb400d5d2f312331fb4f69d8c21c6420))
+
 ## [0.4.9](https://github.com/Vibiz-ai/principia/compare/v0.4.8...v0.4.9) (2026-11-15)
 
 
