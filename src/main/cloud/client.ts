@@ -9,6 +9,8 @@ import type { HiveErrorCode } from '../../shared/types'
 import { routeMethod, routePath, type CloudError, type CloudErrorCode, type CloudEvent, type CloudRouteName } from '../../shared/cloud'
 
 export const CLOUD_TIMEOUT_MS = 15_000
+/** what a read says while the managed cloud sleeps */
+export const ASLEEP = 'Your cloud is asleep. It wakes when you start something there.'
 /** company create carries the passport bundle (up to 20 MB) */
 export const CLOUD_BUNDLE_TIMEOUT_MS = 120_000
 
@@ -69,6 +71,8 @@ export interface CloudClientOptions {
    * asks this to wake it, and is sent once more when it resolves true. Reads and the event stream never wake it.
    */
   wake?: () => Promise<boolean>
+  /** docs/FLEET.md: the managed cloud is asleep (reads fail at once, changes still wake it) */
+  asleep?: () => boolean
 }
 
 export interface CallOptions {
@@ -84,12 +88,14 @@ export class CloudClient {
   private f: typeof fetch
   private timeoutMs: number
   private wake: (() => Promise<boolean>) | null
+  private asleep: (() => boolean) | null
   constructor(o: CloudClientOptions) {
     this.url = o.url.replace(/\/+$/, '')
     this.token = o.token ?? null
     this.f = o.fetch ?? fetch
     this.timeoutMs = o.timeoutMs ?? CLOUD_TIMEOUT_MS
     this.wake = o.wake ?? null
+    this.asleep = o.asleep ?? null
   }
 
   /**
@@ -114,6 +120,8 @@ export class CloudClient {
 
   /** One JSON call. Throws CloudRequestError (network, timeout or the server's CloudError). 204 resolves undefined. */
   async call<T>(route: CloudRouteName, o: CallOptions = {}): Promise<T> {
+    // a read never wakes a sleeping managed cloud: answer at once instead of waiting out the timeout
+    if (routeMethod(route) === 'GET' && this.asleep?.()) throw new HiveError('conflict', ASLEEP)
     try {
       return await this.once<T>(route, o)
     } catch (e) {
