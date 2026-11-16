@@ -34,6 +34,7 @@ import { newestFirst, unseenNeeds, workLine, workOf, workRank } from '../../lib/
 import { isClosed } from '../../lib/closedChats'
 import { useIsCode } from '../desk/Desk'
 import { closeChat, markTaskSeen, navigate, startSession, toast, useStore } from '../../state/store'
+import { useCloudChats } from '../../state/cloud'
 import { hive, nativeMenu } from '../../lib/hive'
 import { dropMentions, useFileDrop, usePendingAttachments, withMentions } from '../../lib/dropFiles'
 import { TASK_ASK_REPLY_EVENT, TaskCard, TaskCardRef, TaskDock, useDockPrefs, useDockView, useStripItems, WorkingStrip, type TaskAskReply } from './TaskCard'
@@ -136,6 +137,24 @@ export function TeamComposer({
   }, [JSON.stringify(initialTo)])
   const [menu, setMenu] = useState(false)
   const [busy, setBusy] = useState(false)
+  // docs/CLOUD-CHATS.md: where Claude runs (offered once a cloud is linked; the last choice is remembered)
+  const cloudReady = useCloudChats()
+  const [where, setWhereRaw] = useState<'mac' | 'cloud'>(() => {
+    try {
+      return localStorage.getItem('principia.newChatWhere') === 'cloud' ? 'cloud' : 'mac'
+    } catch {
+      return 'mac'
+    }
+  })
+  const setWhere = (w: 'mac' | 'cloud'): void => {
+    setWhereRaw(w)
+    try {
+      localStorage.setItem('principia.newChatWhere', w)
+    } catch {
+      /* private window: not remembered */
+    }
+  }
+  const inCloud = cloudReady && where === 'cloud' && to.kind !== 'agent'
   const ref = useRef<HTMLTextAreaElement>(null)
   useAutoGrow(ref, text)
   useEffect(() => {
@@ -157,7 +176,9 @@ export function TeamComposer({
   const solo = route?.by === 'mention' && route.agents.length === 1 ? route.agents[0]! : null
   const repoName = (id: Id): string => repos.find((r) => r.id === id)?.name ?? 'the repository'
   const toLabel = to.kind === 'agent' ? (picked?.name ?? 'Someone') : to.kind === 'claude' ? 'Claude' : `Claude in ${repoName(to.id)}`
-  const line = to.kind === 'repo' ? `→ A Claude Code session in ${repoName(to.id)} (its terminal opens)` : solo ? `${route?.unknown ? `No ${route.unknown} here · ` : ''}→ A chat with ${solo.name}` : routeLine(text, route)
+  const line = inCloud
+    ? `→ A Claude chat in your cloud${to.kind === 'repo' ? `, in ${repoName(to.id)} from GitHub` : ''}`
+    : to.kind === 'repo' ? `→ A Claude Code session in ${repoName(to.id)} (its terminal opens)` : solo ? `${route?.unknown ? `No ${route.unknown} here · ` : ''}→ A chat with ${solo.name}` : routeLine(text, route)
 
   const send = async (): Promise<void> => {
     if (!text.trim() || busy) return
@@ -166,6 +187,20 @@ export function TeamComposer({
       // a screenshot pasted just before Send is still being saved: wait, so its @path goes with the message
       await attaching.settled()
       const t = latest.current.trim()
+      if (inCloud) {
+        // a dropped file or a pasted screenshot is an @path on this Mac: the cloud machine can't open it
+        if (/(^|\s)@"?\//.test(t)) {
+          toast('Files from this Mac can’t go to a cloud chat yet. Remove them, or send this to This Mac.', 'error')
+          return
+        }
+        // the cloud runs Claude itself: a chat there (in the repository's clone when one is picked)
+        const s = await startSession({ repoId: to.kind === 'repo' ? to.id : null, forceNew: true, companyId, adapter: 'claude', initialPrompt: t, title: taskTitleFor(t).slice(0, 80), focus: false, location: 'cloud' })
+        if (s) {
+          setText('')
+          void navigate({ name: 'chats', filter: 'all', chat: `session:${s.id}` })
+        }
+        return
+      }
       if (solo) {
         if (await sendToAgent(solo.id, t)) {
           setText('')
@@ -258,6 +293,16 @@ export function TeamComposer({
             {line}
           </button>
           <span className="flex1" />
+          {cloudReady && to.kind !== 'agent' && (
+            <div className="cx-where" role="radiogroup" aria-label="Where Claude runs">
+              <button type="button" role="radio" aria-checked={where === 'mac'} className={`cx-where__opt ${where === 'mac' ? 'is-on' : ''}`} onClick={() => setWhere('mac')} title="Claude runs on this Mac">
+                This Mac
+              </button>
+              <button type="button" role="radio" aria-checked={where === 'cloud'} className={`cx-where__opt ${where === 'cloud' ? 'is-on' : ''}`} onClick={() => setWhere('cloud')} title="Claude runs on your cloud machine: it keeps going with this Mac closed">
+                <Icon name="cloud" size={12} /> Cloud
+              </button>
+            </div>
+          )}
           <Button type="submit" size="sm" variant="primary" icon="send" data-chatux="composer-send" disabled={busy || !text.trim()} title="Send (↵)" aria-label="Send" />
         </div>
       </form>

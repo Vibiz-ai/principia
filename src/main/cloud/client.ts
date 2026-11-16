@@ -3,6 +3,7 @@
  * device token as a Bearer, a 15 s timeout, CloudError -> HiveError mapping, and an SSE reader for /v1/events with
  * reconnect and backoff. Nothing here logs a token, a request body or a response body.
  */
+import WebSocket from 'ws'
 import { HiveError } from '../../shared/errors'
 import type { HiveErrorCode } from '../../shared/types'
 import { routeMethod, routePath, type CloudError, type CloudErrorCode, type CloudEvent, type CloudRouteName } from '../../shared/cloud'
@@ -89,6 +90,15 @@ export class CloudClient {
     this.f = o.fetch ?? fetch
     this.timeoutMs = o.timeoutMs ?? CLOUD_TIMEOUT_MS
     this.wake = o.wake ?? null
+  }
+
+  /**
+   * docs/CLOUD-CHATS.md: a WebSocket to `path` on this cloud with the device token (the `ws` package: the global
+   * WebSocket can't send an Authorization header).
+   */
+  socket(path: string): WebSocket {
+    const url = `${this.url.replace(/^http/, 'ws')}${path}`
+    return new WebSocket(url, { headers: this.token ? { authorization: `Bearer ${this.token}` } : {}, handshakeTimeout: 20_000, followRedirects: false, maxPayload: 64 * 1024 * 1024 })
   }
 
   /** `/v1/runs/x?tail=200` from a route name, params and query. */

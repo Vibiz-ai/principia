@@ -793,3 +793,7 @@ button.pane__footer-item:hover { background: var(--row-hover); color: var(--text
 .dl-link, .dgm-md a.dl-link { display: inline-flex; align-items: center; gap: 5px; margin: 1px 2px; padding: 1px 8px; border: 1px solid rgba(255, 255, 255, 0.42); border-radius: 999px; color: var(--text-primary); background: rgba(255, 255, 255, 0.03); text-decoration: none; font-size: 0.95em; line-height: 1.5; cursor: pointer; white-space: nowrap; }
 .dl-link:hover, .dl-link:focus-visible { border-color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.07); }
 .dl-link__arrow { color: var(--text-tertiary); }
+
+/* docs/CLOUD-CHATS.md: a chat whose Claude runs on the person's cloud */
+.cloud-mark { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 16px; padding: 0 6px; margin-left: 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; }
+.cloud-mark--compact { padding: 0 4px; margin-left: 4px; }

@@ -35,6 +35,8 @@ export interface PtyHostInfo {
   mode?: ChatMode | null
   /** the conversation this spawn resumes (Restart): its last mode wins */
   resumeId?: string | null
+  /** docs/CLOUD-CHATS.md: the CLI runs on the person's cloud (a resumed cloud conversation stays there) */
+  cloud?: boolean
 }
 
 export interface ChatHubDeps {
@@ -58,6 +60,8 @@ export interface ChatHubDeps {
   /** ~/.claude (CLAUDE_CONFIG_DIR aware) */
   claudeDir(): string
   spawnChild?: ChildSpawn
+  /** docs/CLOUD-CHATS.md: the spawner whose process runs in the linked cloud; null when no cloud is linked */
+  cloudSpawn?(sessionId: Id): ChildSpawn | null
   log?: { warn(m: string, meta?: Record<string, unknown>): void; info?(m: string, meta?: Record<string, unknown>): void }
   idleMs?: number
 }
@@ -66,6 +70,8 @@ interface IndexRow {
   mode: ChatMode
   conv: string | null
   cwd: string
+  /** the conversation lives in the cloud (docs/CLOUD-CHATS.md) */
+  cloud?: boolean
   at: string
 }
 
@@ -126,9 +132,19 @@ export class ChatHub {
   }
   private remember(id: Id, row: Partial<IndexRow>): void {
     const cur = this.index[id]
-    this.index[id] = { mode: row.mode ?? cur?.mode ?? 'terminal', conv: row.conv !== undefined ? row.conv : (cur?.conv ?? null), cwd: row.cwd ?? cur?.cwd ?? '', at: new Date().toISOString() }
+    const cloud = row.cloud ?? cur?.cloud
+    this.index[id] = { mode: row.mode ?? cur?.mode ?? 'terminal', conv: row.conv !== undefined ? row.conv : (cur?.conv ?? null), cwd: row.cwd ?? cur?.cwd ?? '', at: new Date().toISOString(), ...(cloud ? { cloud: true } : {}) }
     this.saveIndex()
   }
+  /** A conversation that ran in the cloud is resumed there (its history is on that machine). */
+  cloudOfConversation(conv: string): boolean {
+    return Object.values(this.index).some((r) => r.conv === conv && r.cloud)
+  }
+  /** docs/CLOUD-CHATS.md: this session's CLI runs in the cloud */
+  isCloud(id: Id): boolean {
+    return !!this.index[id]?.cloud
+  }
+
   /** The last mode used for a conversation (Restart resumes it as it was). */
   private modeOfConversation(conv: string): ChatMode | null {
     let best: IndexRow | null = null
@@ -142,9 +158,18 @@ export class ChatHub {
    */
   spawn(file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }, host: PtyHostInfo | undefined, spawnPty: PtySpawn): PtyLike {
     if (host?.adapter === 'codex' && host.mode === 'chat' && this.codexSupported()) return this.spawnCodex(file, args, opts, host)
-    if (!host || host.adapter !== 'claude' || !this.supported()) return spawnPty(file, args, opts)
+    const cloud = !!host && (host.cloud || (!!host.resumeId && this.cloudOfConversation(host.resumeId)))
+    // the cloud runs its own Claude: this Mac's CLI version doesn't decide whether the chat can run there
+    if (cloud && host!.adapter !== 'claude') throw new HiveError('conflict', 'Only Claude chats run in the cloud for now.')
+    if (!host || host.adapter !== 'claude' || (!cloud && !this.supported())) return spawnPty(file, args, opts)
     const id = host.sessionId
-    const mode = host.mode ?? (host.resumeId ? this.modeOfConversation(host.resumeId) : null) ?? resolveChatMode(this.d.openChatsAs(), host)
+    let remote: ChildSpawn | null = null
+    if (cloud) {
+      remote = this.d.cloudSpawn?.(id) ?? null
+      if (!remote) throw new HiveError('conflict', 'Turn on your cloud first: Cloud › Turn On Cloud.')
+    }
+    // a cloud chat is always a chat: the conversation lives on that machine, there is no terminal for it here
+    const mode = cloud ? 'chat' : (host.mode ?? (host.resumeId ? this.modeOfConversation(host.resumeId) : null) ?? resolveChatMode(this.d.openChatsAs(), host))
     const s = new ChatSession({
       sessionId: id,
       file,
@@ -155,9 +180,10 @@ export class ChatHub {
       rows: opts.rows,
       mode,
       spawnPty,
-      spawnChild: this.d.spawnChild ?? defaultChildSpawn,
+      spawnChild: remote ?? this.d.spawnChild ?? defaultChildSpawn,
       killGroup: this.d.killGroup,
       registerPid: (pid) => this.d.registerPid?.(id, pid),
+      cloud,
       emit: (ops) => this.queueOps(id, ops),
       asks: {
         open: (e) => this.d.asks?.(id)?.open(e),
@@ -180,7 +206,7 @@ export class ChatHub {
       ...(this.d.idleMs ? { idleMs: this.d.idleMs } : {})
     })
     this.sessions.set(id, s)
-    this.remember(id, { mode, conv: s.conversationId, cwd: opts.cwd })
+    this.remember(id, { mode, conv: s.conversationId, cwd: opts.cwd, ...(cloud ? { cloud: true } : {}) })
     s.onExit(() => {
       this.flush(id)
       this.sessions.delete(id)
@@ -326,8 +352,26 @@ export class ChatHub {
   }
 
   /** Where Claude keeps a conversation's transcript (~/.claude/projects/<slug>/<id>.jsonl), or null. */
+  /** docs/CLOUD-CHATS.md: the copy of a cloud conversation's transcript this Mac keeps (it lives on that machine) */
+  private cloudTranscriptPath(conv: string): string {
+    return path.join(this.d.userData, 'cloud-transcripts', `${conv}.jsonl`)
+  }
+  saveCloudTranscript(conv: string, text: string): void {
+    if (!/^[A-Za-z0-9-]+$/.test(conv) || !text) return
+    const f = this.cloudTranscriptPath(conv)
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(`${f}.tmp`, text, { mode: 0o600 })
+    fs.renameSync(`${f}.tmp`, f)
+  }
+  /** a removed cloud conversation's copy goes too */
+  forgetCloudTranscript(conv: string): void {
+    if (/^[A-Za-z0-9-]+$/.test(conv)) fs.rmSync(this.cloudTranscriptPath(conv), { force: true })
+  }
+
   transcriptFile(conv: string): string | null {
     if (!/^[A-Za-z0-9-]+$/.test(conv)) return null
+    const cloudCopy = this.cloudTranscriptPath(conv)
+    if (fs.existsSync(cloudCopy)) return cloudCopy
     const projects = path.join(this.d.claudeDir(), 'projects')
     try {
       for (const dir of fs.readdirSync(projects)) {

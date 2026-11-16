@@ -13,6 +13,8 @@ export interface ChildLike {
   on(ev: 'exit', cb: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
   on(ev: 'error', cb: (e: Error) => void): unknown
   kill(signal?: NodeJS.Signals): boolean
+  /** docs/CLOUD-CHATS.md: a remote child reports what it does before the CLI runs ("Waking your cloud…") */
+  onStatus?(cb: (text: string) => void): void
 }
 export type ChildSpawn = (file: string, args: string[], opts: { cwd: string; env: Record<string, string> }) => ChildLike
 

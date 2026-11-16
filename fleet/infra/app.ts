@@ -22,6 +22,8 @@ import type { Construct } from 'constructs'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '../..')
 export const AMI_PARAMETER = '/principia-fleet/ami-id'
+/** docs/FLEET.md §10: the Principia Cloud image machines move to (written by scripts/build-ami.ts --image) */
+export const IMAGE_PARAMETER = '/principia-fleet/cloud-image'
 export const STACK = 'PrincipiaFleet'
 
 class FleetStack extends cdk.Stack {
@@ -60,6 +62,7 @@ class FleetStack extends cdk.Stack {
       FLEET_LAUNCH_TEMPLATE_ID: template.ref,
       FLEET_SUBNET_IDS: vpc.publicSubnets.map((s) => s.subnetId).join(','),
       FLEET_AMI_PARAMETER: AMI_PARAMETER,
+      FLEET_IMAGE_PARAMETER: IMAGE_PARAMETER,
       FLEET_ALLOW_USERS: ctx('allowUsers'),
       FLEET_ALLOW_ORGS: ctx('allowOrgs'),
       FLEET_OPEN: ctx('open', 'false'),
@@ -91,7 +94,7 @@ class FleetStack extends cdk.Stack {
     for (const f of [apiFn, tickFn]) {
       table.grantReadWriteData(f)
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ['ec2:DescribeInstances', 'ec2:DescribeAddresses'], resources: ['*'] }))
-      f.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [this.formatArn({ service: 'ssm', resource: 'parameter', resourceName: AMI_PARAMETER.slice(1) })] }))
+      f.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [AMI_PARAMETER, IMAGE_PARAMETER].map((n) => this.formatArn({ service: 'ssm', resource: 'parameter', resourceName: n.slice(1) })) }))
       // making: only with the fleet's tag, only through the fleet's template
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ['ec2:AllocateAddress'], resources: ['*'], conditions: { StringEquals: { [`aws:RequestTag/principia-fleet`]: 'address' } } }))
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ['ec2:RunInstances'], resources: [`arn:${this.partition}:ec2:${this.region}:${this.account}:instance/*`], conditions: { StringEquals: { [`aws:RequestTag/principia-fleet`]: 'machine' } } }))

@@ -286,3 +286,8 @@ body[data-phase='pair'] .toast, body[data-phase='out'] .toast { bottom: calc(24p
 .tdock .tcard { margin: 0; }
 .tdock__more { font-size: 12px; color: var(--faint); }
 .tref { display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 22px; font-size: 12px; color: var(--faint); }
+/* docs/CLOUD-CHATS.md */
+.cloudpill { margin-left: 6px; color: #9fd0ff; border-color: rgba(159, 208, 255, .35); }
+.seg { display: flex; gap: 4px; padding: 3px; border: 1px solid rgba(195, 203, 206, .2); border-radius: 999px; align-self: flex-start; }
+.seg button { font: inherit; font-size: 13px; padding: 5px 12px; border: 0; border-radius: 999px; background: none; color: var(--silver); }
+.seg button.on { background: rgba(159, 208, 255, .14); color: #cfe7ff; }

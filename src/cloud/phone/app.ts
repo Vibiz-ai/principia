@@ -506,7 +506,7 @@ const actions: Actions = {
     const agentId = st.drafts['new:to'] || undefined
     if (!text) return
     void busy('newChat', async () => {
-      const out = await api.call<{ sessionId: string }>('newChat', { params: cid(), body: { text, ...(agentId ? { agentId } : {}) } })
+      const out = await api.call<{ sessionId: string }>('newChat', { params: cid(), body: { text, ...(agentId ? { agentId } : {}), ...(!agentId && st.drafts['new:where'] === 'cloud' && st.chats?.cloud ? { cloud: true } : {}) } })
       delete st.drafts.new
       delete st.drafts['new:to']
       delete st.drafts['new:open']

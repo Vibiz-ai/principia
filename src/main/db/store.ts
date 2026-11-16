@@ -429,7 +429,7 @@ export class Store {
   /** COMPANY.md §3: stamped with the launcher's companyId, else the repo's company, else Personal. */
   insertSession(s: SessionInsert): void {
     // optional columns only when set (an older schema without them still inserts plain sessions)
-    const opt: [col: string, key: 'departmentId' | 'companyAgentId'][] = [['department_id', 'departmentId'], ['company_agent_id', 'companyAgentId']]
+    const opt: [col: string, key: 'departmentId' | 'companyAgentId' | 'location'][] = [['department_id', 'departmentId'], ['company_agent_id', 'companyAgentId'], ['location', 'location']]
     const used = opt.filter(([, k]) => !!s[k])
     this.db
       .prepare(
@@ -438,7 +438,7 @@ export class Store {
          VALUES (@id, @title, @profileId, @adapter, @repoId, @cwd, @status, @pid, @cols, @rows, @exitCode, @startedAt,
           @endedAt, @artifactsDir, @logPath, @fromRunId, @agentSessionId, COALESCE(@companyId, ${REPO_COMPANY('@repoId')})${used.map(([, k]) => `, @${k}`).join('')})`
       )
-      .run((({ departmentId, companyAgentId, ...rest }) => ({ ...rest, companyId: s.companyId ?? null, ...(departmentId ? { departmentId } : {}), ...(companyAgentId ? { companyAgentId } : {}) }))(s))
+      .run((({ departmentId, companyAgentId, location, ...rest }) => ({ ...rest, companyId: s.companyId ?? null, ...(departmentId ? { departmentId } : {}), ...(companyAgentId ? { companyAgentId } : {}), ...(location ? { location } : {}) }))(s))
   }
   updateSession(id: Id, patch: Partial<Omit<Session, 'id'>>): Session {
     const { set, params } = buildPatch(patch as Record<string, unknown>, {

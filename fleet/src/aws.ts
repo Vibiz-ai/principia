@@ -302,6 +302,29 @@ export function ec2Compute(o: Ec2Options): Compute {
 
 // ---------------------------------------------------------------- GitHub
 
+// ---------------------------------------------------------------- the image machines run (docs/FLEET.md §10)
+
+/** Only a published Principia Cloud tag: a machine runs exactly this, so nothing else may come through here. */
+export const CLOUD_IMAGE = /^ghcr\.io\/vibiz-ai\/principia-cloud:[0-9A-Za-z._-]{1,64}$/
+
+/** The SSM parameter, read at most once a minute; null when it isn't set (machines stay as they are). */
+export function cloudImageParam(name: string, ssm = new SSMClient({}), ttlMs = 60_000): () => Promise<string | null> {
+  let cache: { at: number; value: string | null } | null = null
+  return async () => {
+    if (!name) return null
+    if (cache && Date.now() - cache.at < ttlMs) return cache.value
+    let value: string | null = null
+    try {
+      const v = (await ssm.send(new GetParameterCommand({ Name: name }))).Parameter?.Value ?? ''
+      value = CLOUD_IMAGE.test(v) ? v : null
+    } catch {
+      value = null
+    }
+    cache = { at: Date.now(), value }
+    return value
+  }
+}
+
 export function githubApi(f: typeof fetch = fetch): GitHub {
   const get = async <T>(path: string, token: string): Promise<T> => {
     const res = await f(`https://api.github.com${path}`, {

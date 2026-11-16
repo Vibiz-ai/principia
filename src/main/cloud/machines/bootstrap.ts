@@ -56,7 +56,7 @@ export DEBIAN_FRONTEND=noninteractive
  * Ubuntu image, standard library only. A failed post is retried at the next tick; the fleet decides about sleep.
  */
 const HEARTBEAT_PY = `#!/usr/bin/env python3
-import json, os, subprocess, urllib.request
+import datetime, json, os, re, subprocess, time, urllib.request
 env = {}
 for line in open('/opt/principia/fleet.env'):
     if '=' in line:
@@ -79,7 +79,44 @@ uptime = int(float(open('/proc/uptime').read().split()[0]))
 body = json.dumps({'activity': activity, 'up': up, 'uptimeSec': uptime}).encode()
 req = urllib.request.Request(env['FLEET_URL'].rstrip('/') + '/v1/heartbeat', data=body, method='POST',
     headers={'authorization': 'Bearer ' + env['FLEET_TOKEN'], 'content-type': 'application/json'})
-urllib.request.urlopen(req, timeout=20).read()
+resp = urllib.request.urlopen(req, timeout=20).read()
+# docs/FLEET.md §10: the fleet names the version this machine should run; it moves there only while nothing runs
+# (the data volume, its chats and its sign-ins stay), and only to a published Principia Cloud tag
+try:
+    want = json.loads(resp).get('image')
+except Exception:
+    want = None
+if isinstance(want, str) and re.fullmatch(r'ghcr\\.io/vibiz-ai/principia-cloud:[0-9A-Za-z._-]{1,64}', want):
+    envp = '/opt/principia/.env'
+    lines = [l.rstrip('\\n') for l in open(envp)] if os.path.exists(envp) else []
+    cur = next((l.split('=', 1)[1] for l in lines if l.startswith('PRINCIPIA_IMAGE=')), '')
+    idle = not activity or (not activity.get('busy') and not activity.get('running') and not activity.get('queued'))
+    if cur != want and idle:
+        pulled = subprocess.run(['docker', 'pull', want], capture_output=True, timeout=900).returncode == 0
+        # the pull can take minutes: only a fresh, idle snapshot (written in the last 90 s, nothing running, queued,
+        # waiting or changed in the last 2 minutes) lets the container be replaced; else the next heartbeat tries again
+        fresh = None
+        try:
+            with open(os.path.join(mount, 'activity.json')) as f:
+                fresh = json.load(f)
+        except Exception:
+            fresh = None
+        def age(iso):
+            try:
+                return time.time() - datetime.datetime.fromisoformat(iso.replace('Z', '+00:00')).timestamp()
+            except Exception:
+                return 1e9
+        still_idle = bool(fresh) and age(fresh.get('at') or '') < 90 and not fresh.get('busy') and not fresh.get('running') \\
+            and not fresh.get('queued') and not fresh.get('needsInput') and age(fresh.get('lastActivityAt') or '') > 120
+        if pulled and (still_idle or not up):
+            keep = [l for l in lines if l and not l.startswith('PRINCIPIA_IMAGE=')]
+            with open(envp + '.tmp', 'w') as f:
+                f.write('\\n'.join(keep + ['PRINCIPIA_IMAGE=' + want]) + '\\n')
+            os.replace(envp + '.tmp', envp)
+            with open('/opt/principia/install-kind', 'w') as f:
+                f.write('published\\n')
+            subprocess.run(['docker', 'compose', '--project-directory', '/opt/principia', 'up', '-d'], capture_output=True, timeout=600)
+            print('principia: now running ' + want)
 `
 
 /** Steps 1, 2 and the image: nothing about this machine, nothing secret. */

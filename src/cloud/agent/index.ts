@@ -19,6 +19,7 @@ import { CloudRuntimeError, notInV1 } from './errors'
 import { PassportClient } from './passport'
 import { cliVersions, testProvider, type Bins, CLI_LABEL } from './providers/test'
 import { Redactor } from './redact'
+import { ChatProcs } from './chats'
 import { syncRepo } from './repos'
 import { ProcessSandbox } from './sandbox'
 import { ScheduleLoop } from './triggers'
@@ -43,6 +44,7 @@ interface Started {
   gateways: CompanyGateways
   host: EngineHost
   loop: ScheduleLoop
+  chats: ChatProcs
 }
 
 class Runtime implements CloudRuntime {
@@ -127,7 +129,18 @@ class Runtime implements CloudRuntime {
         now: this.now,
         log: this.ports.log
       })
-      this.s = { db, sandbox, forum, gateways, host, loop }
+      const chats = new ChatProcs({
+        sandbox,
+        bin: this.bins.claude,
+        git: this.bins.git,
+        codexBin: this.bins.codex,
+        syncRepo: (companyId, repo) => this.syncRepo(companyId, repo),
+        redact,
+        addSecret: (v) => this.redactor.add(v),
+        log: this.ports.log,
+        now: this.now
+      })
+      this.s = { db, sandbox, forum, gateways, host, loop, chats }
       this.failed = null
       loop.start()
       void this.cliVersionsCached().catch(() => {})
@@ -144,6 +157,7 @@ class Runtime implements CloudRuntime {
     this.s = null
     this.failed = 'The agent runtime is stopped'
     s.loop.stop()
+    await s.chats.close()
     await s.host.shutdown()
     await s.gateways.close()
     await s.forum.shutdown()
@@ -261,6 +275,20 @@ class Runtime implements CloudRuntime {
     post: () => {
       throw notInV1('The cloud Forum')
     }
+  }
+
+  // docs/CLOUD-CHATS.md: Mac chats whose CLI runs here
+  chats: CloudRuntime['chats'] = {
+    start: (spec) => this.started.chats.start(spec),
+    attach: (id, from, sink) => this.started.chats.attach(id, from, sink),
+    write: (id, data) => this.started.chats.write(id, data),
+    end: (id) => this.started.chats.end(id),
+    signal: (id, sig) => this.started.chats.signal(id, sig),
+    stop: (id) => this.started.chats.stop(id),
+    remove: (id) => this.started.chats.remove(id),
+    list: () => this.s?.chats.list() ?? [],
+    live: () => this.s?.chats.live() ?? 0,
+    transcript: (id) => this.s?.chats.transcript(id) ?? null
   }
 
   triggers: CloudRuntime['triggers'] = {

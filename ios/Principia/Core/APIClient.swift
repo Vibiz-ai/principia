@@ -211,9 +211,11 @@ final class APIClient: @unchecked Sendable {
     func notNeeded(_ co: String, taskId: String) async throws -> PhoneNeeds { try await call(.cancelTask(co, taskId: taskId), body: [:]) }
     func chats(_ co: String) async throws -> PhoneChats { try await call(.chats(co)) }
     /// New chat: with the agent when one is picked (its own chat), else Claude directly; the session it opened
-    func newChat(_ co: String, text: String, agentId: String? = nil) async throws -> String {
+    func newChat(_ co: String, text: String, agentId: String? = nil, cloud: Bool = false) async throws -> String {
         var body: [String: Any] = ["text": text]
         if let agentId { body["agentId"] = agentId }
+        // docs/CLOUD-CHATS.md: Claude runs on the person's cloud machine
+        if cloud && agentId == nil { body["cloud"] = true }
         let r: NewChat = try await call(.newChat(co), body: body)
         return r.sessionId
     }

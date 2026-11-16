@@ -557,7 +557,8 @@ export const REQUEST_SCHEMAS = {
     title: z.string().max(200).optional(),
     memory: memoryMode.optional(),
     departmentId: id.optional(),
-    initialPrompt: z.string().trim().min(1).max(8000).optional()
+    initialPrompt: z.string().trim().min(1).max(8000).optional(),
+    location: z.literal('cloud').optional()
   }),
   'sessions:attach': z.object({ id }),
   'sessions:kill': z.object({ id }),

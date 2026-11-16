@@ -5,7 +5,7 @@
 import { randomBytes } from 'node:crypto'
 import type { LambdaFunctionURLEvent, LambdaFunctionURLResult } from 'aws-lambda'
 import { configureScript } from '../../src/main/cloud/machines/bootstrap'
-import { dynamoStore, ec2Compute, githubApi } from './aws'
+import { cloudImageParam, dynamoStore, ec2Compute, githubApi } from './aws'
 import { api, reconcile } from './core'
 import type { FleetConfig, Ports } from './types'
 
@@ -31,6 +31,7 @@ function base(): Omit<Ports, 'config' | 'userData'> {
     store: dynamoStore(env('FLEET_TABLE')),
     compute: ec2Compute({ launchTemplateId: env('FLEET_LAUNCH_TEMPLATE_ID'), subnetIds: list('FLEET_SUBNET_IDS'), amiParameter: env('FLEET_AMI_PARAMETER') }),
     github: githubApi(),
+    cloudImage: cloudImageParam(process.env.FLEET_IMAGE_PARAMETER || ''),
     now: () => new Date(),
     random: (n) => randomBytes(n).toString('base64url'),
     log

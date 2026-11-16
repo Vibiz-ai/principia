@@ -122,6 +122,19 @@ describe('create', () => {
   })
 })
 
+describe('updates (docs/FLEET.md §10)', () => {
+  it('a heartbeat is answered with the image every machine should run, when one is set', async () => {
+    const w = world()
+    await upAndRunning(w)
+    expect((await beat(w, quiet(w))).body).toEqual({ ok: true })
+    w.ports.cloudImage = async () => 'ghcr.io/vibiz-ai/principia-cloud:0.4.11'
+    expect((await beat(w, quiet(w))).body).toEqual({ ok: true, image: 'ghcr.io/vibiz-ai/principia-cloud:0.4.11' })
+    // a broken parameter never breaks the heartbeat
+    w.ports.cloudImage = async () => { throw new Error('ssm down') }
+    expect((await beat(w, quiet(w))).body).toEqual({ ok: true })
+  })
+})
+
 describe('sleep and wake', () => {
   it('stops after the idle time, never while busy, and wakes when asked', async () => {
     const w = world()

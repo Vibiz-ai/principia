@@ -323,7 +323,7 @@ export function phoneChats(d: PhoneData, companyId: Id): PhoneChats {
     if (replaced(s)) continue
     const root = agentsBySession.get(s.id)
     const live = liveSessions.has(s.id)
-    rows.push({ key: `session:${s.id}`, ref: { kind: 'session', id: s.id }, title: s.title, who: { name: providerName(s.adapter), role: '', bust: null }, live, at: s.endedAt ?? root?.updatedAt ?? s.startedAt, line: live ? (activity.get(s.id) ?? 'Working') : root ? saidPreview(root, 140) : s.status === 'exited' ? 'Ended' : null })
+    rows.push({ key: `session:${s.id}`, ref: { kind: 'session', id: s.id }, title: s.title, who: { name: providerName(s.adapter), role: '', bust: null }, live, at: s.endedAt ?? root?.updatedAt ?? s.startedAt, line: live ? (activity.get(s.id) ?? 'Working') : root ? saidPreview(root, 140) : s.status === 'exited' ? 'Ended' : null, ...(s.location === 'cloud' ? { cloud: true } : {}) })
     covered.add(s.id)
   }
   rows.sort((a, b) => Number(b.live) - Number(a.live) || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))

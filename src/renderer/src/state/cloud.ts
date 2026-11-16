@@ -117,6 +117,11 @@ export function useCloudBadge(): number {
   useEffect(() => ensureCloud(), [])
   return useCloud((s) => (s.state?.linked ? openAsks(s.asks).length || s.state.openAsks : 0) + (s.state?.linked ? pendingFacts(s.summary) : 0))
 }
+/** docs/CLOUD-CHATS.md: a cloud is linked, so a new chat can run there (a sleeping one wakes for it). */
+export function useCloudChats(): boolean {
+  useEffect(() => ensureCloud(), [])
+  return useCloud((s) => !!s.state?.linked)
+}
 /** Company ids in the cloud and schedule ids placed there (the cloud marks). */
 export function useCloudPlacement(): { companies: string[]; schedules: string[] } {
   useEffect(() => ensureCloud(), [])

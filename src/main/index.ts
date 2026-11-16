@@ -41,6 +41,7 @@ import { LiveStore } from './db/liveStore'
 import { createLiveBridge, resolveHookScript, sweepLiveDirs } from './live/bridge'
 import { SessionLiveHub } from './live/sessionLive'
 import { chatLink, createChatHub } from './chat/wire'
+import { cloudChildSpawn } from './cloud/chatChild'
 import { AgentChats } from './chat/agentChat'
 import { createRemote } from './remote/wire'
 import { terminalHost } from './remote/terminalHost'
@@ -335,7 +336,15 @@ if (!app.requestSingleInstanceLock()) {
         redact: (t) => h.vault.redact(t),
         log
       })
-      h.remote = createRemote({ mainDir: __dirname, envPath: () => baseChildEnv().PATH, dataDir: app.getPath('userData'), siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart, terminal })
+      h.remote = createRemote({
+        cloudReady: () => {
+          try {
+            return h.cloud.link.state().linked
+          } catch {
+            return false
+          }
+        },
+        mainDir: __dirname, envPath: () => baseChildEnv().PATH, dataDir: app.getPath('userData'), siteSetting: () => h.settings().phoneSiteUrl, db: h.db, autoStartSetting: () => h.settings().phoneAutoStart, terminal })
       // RA8: paired phones find this Mac again after a restart (when the founder wants it, by default once one is paired)
       void h.remote.autoStartIfWanted().catch((e) => log.warn('phone did not start at launch', { e: String(e) }))
     } catch (e) {
@@ -428,6 +437,8 @@ if (!app.requestSingleInstanceLock()) {
       emit: (sessionId, seq, ops) => emit('chat:ops', { sessionId, seq, ops }),
       redact: (t) => vault.redact(t),
       killGroup: (pid, sig) => {
+        // a cloud chat's process has no local pid (0): -0 would be this app's own group
+        if (!(pid > 0)) return false
         try {
           process.kill(-pid, sig)
           return true
@@ -436,11 +447,34 @@ if (!app.requestSingleInstanceLock()) {
         }
       },
       log,
-      baseEnv: () => baseChildEnv()
+      baseEnv: () => baseChildEnv(),
+      // docs/CLOUD-CHATS.md: a chat whose Claude runs on the linked cloud
+      cloudSpawn: () => {
+        try {
+          const link = h.cloud.link
+          if (!link.state().linked) return null
+          return cloudChildSpawn({ client: () => link.client(), log, saveTranscript: (conv, text) => h.chats?.saveCloudTranscript(conv, text) })
+        } catch {
+          return null
+        }
+      }
     })
     const plainPty = (file: string, args: string[], opts: { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }) => pty.spawn(file, args, opts)
     h.sessions = new SessionManager({
       store,
+      cloudConversation: (conv) => h.chats?.cloudOfConversation(conv) ?? false,
+      // docs/CLOUD-CHATS.md: a deleted cloud chat's folder and history leave the cloud too
+      onRemoved: (s) => {
+        if (s.location !== 'cloud' || !s.agentSessionId) return
+        // Restart removes the old row of a conversation that goes on in a new one: the cloud keeps it then
+        if (store.listSessions('all').some((o) => o.id !== s.id && o.agentSessionId === s.agentSessionId)) return
+        h.chats?.forgetCloudTranscript(s.agentSessionId)
+        try {
+          void h.cloud.link.client().call('chatDelete', { params: { id: s.agentSessionId } }).catch((e: unknown) => log.warn('cloud chat: not deleted in the cloud', { error: String(e) }))
+        } catch {
+          /* no cloud linked any more: nothing to clean there */
+        }
+      },
       paths,
       spawnPty: (file, args, opts, host) => (h.chats ? h.chats.spawn(file, args, opts, host, plainPty) : plainPty(file, args, opts)),
       interactiveSpawn: (profile, opts) => h.engine.providers.interactiveSpawn(profile, opts),

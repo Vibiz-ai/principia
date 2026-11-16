@@ -166,6 +166,8 @@ struct PhoneChatRow: Codable, Hashable, Identifiable, Sendable {
     var live: Bool
     var at: String
     var line: String?
+    /// its Claude runs on the person's cloud machine (docs/CLOUD-CHATS.md); absent: on the Mac
+    var cloud: Bool?
     var id: String { key }
 }
 
@@ -174,6 +176,8 @@ struct PhoneChats: Codable, Sendable {
     var rows: [PhoneChatRow]
     /// who a New chat can be with (the company's agents); absent from an older Mac: Claude only
     var team: [PhoneTeamMember]?
+    /// a New chat can run in the person's cloud (docs/CLOUD-CHATS.md)
+    var cloud: Bool?
 }
 
 struct PhoneTeamMember: Codable, Hashable, Identifiable, Sendable {
@@ -236,6 +240,8 @@ struct PhoneSession: Codable, Sendable {
     var who: PhoneWho?
     var chat: ChatSnapshot?
     var terminal: Terminal?
+    /// its Claude runs on the person's cloud machine (docs/CLOUD-CHATS.md)
+    var cloud: Bool?
 }
 
 struct PhoneThreadItem: Codable, Hashable, Identifiable, Sendable {

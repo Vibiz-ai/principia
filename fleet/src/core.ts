@@ -332,7 +332,9 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
       if (m.state === 'starting' && up) Object.assign(patch, { state: 'running', error: null })
       try {
         await save(p, m, patch)
-        return json(200, { ok: true })
+        // the version this machine should run: it updates itself while idle (docs/FLEET.md §10)
+        const image = await (p.cloudImage?.() ?? Promise.resolve(null)).catch(() => null)
+        return json(200, { ok: true, ...(image ? { image } : {}) })
       } catch (e) {
         if (!(e instanceof Conflict)) throw e
       }

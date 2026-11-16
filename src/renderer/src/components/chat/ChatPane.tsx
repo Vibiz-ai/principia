@@ -337,7 +337,8 @@ export function toggleChatMode(id: string, mode: 'chat' | 'terminal', turn: stri
 /** Chat | Terminal segmented control for the pane header. ⌃` flips the focused pane. */
 export function ChatModeToggle({ session: s, focused = false }: { session: Session; focused?: boolean }): React.JSX.Element | null {
   const v = useChat(s.id)
-  const on = s.adapter === 'claude' && v.available && s.status === 'running'
+  // a cloud chat has no terminal on this Mac (docs/CLOUD-CHATS.md)
+  const on = s.adapter === 'claude' && v.available && s.status === 'running' && s.location !== 'cloud'
   useEffect(() => {
     if (!on || !focused) return
     const key = (e: KeyboardEvent): void => {

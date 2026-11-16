@@ -48,6 +48,10 @@ export type PtySpawn = (
 
 export interface SessionDeps {
   store: Store
+  /** docs/CLOUD-CHATS.md: this conversation ran in the cloud (a Restart resumes it there) */
+  cloudConversation?(conversationId: string): boolean
+  /** a session row was deleted (Remove, or the 7-day prune) */
+  onRemoved?(s: Session): void
   paths: { artifactsRoot: string; sessionLogsDir: string; scratchDir: string; userData: string }
   spawnPty: PtySpawn
   interactiveSpawn(profile: AgentProfile, opts: InteractiveSpawnOptions): SpawnSpec
@@ -425,17 +429,21 @@ export class SessionManager {
     const cols = clamp(req.cols, 20, 500, 120)
     const rows = clamp(req.rows, 5, 300, 32)
     let pty: PtyLike
+    const cloud = req.location === 'cloud' || (!!req.resumeAgentSessionId && !!this.d.cloudConversation?.(req.resumeAgentSessionId))
     try {
       pty = this.d.spawnPty(spec.file, spec.args, { name: 'xterm-256color', cols, rows, cwd, env }, {
         sessionId: id,
         adapter: profile.adapter,
         codeWork: !!repoId || guarded,
         resumeId: req.resumeAgentSessionId ?? null,
-        mode: req.companyAgentId ? 'chat' : (req.mode ?? null)
+        mode: req.companyAgentId ? 'chat' : (req.mode ?? null),
+        ...(cloud ? { cloud: true } : {})
       })
     } catch (e) {
       if (memory) this.d.memory?.release(memory.grantId)
       channel?.close()
+      // a sentence for the person ("Turn on your cloud first…") stays as it is
+      if (e instanceof HiveError) throw e
       throw new HiveError('internal', `Could not start ${spec.file}: ${e instanceof Error ? e.message : String(e)}`)
     }
     try {
@@ -468,7 +476,8 @@ export class SessionManager {
       agentSessionId: spec.agentSessionId ?? req.resumeAgentSessionId ?? null,
       ...(companyId ? { companyId } : {}),
       ...(department ? { departmentId: department.id } : {}),
-      ...(req.companyAgentId ? { companyAgentId: req.companyAgentId } : {})
+      ...(req.companyAgentId ? { companyAgentId: req.companyAgentId } : {}),
+      ...(cloud ? { location: 'cloud' as const } : {})
     }
     this.d.store.insertSession({ ...session, logPath })
     if (repoId) this.d.store.updateSettings({ lastRepoId: repoId })
@@ -749,6 +758,7 @@ export class SessionManager {
     this.d.store.deleteSession(id)
     if (logPath) fs.rmSync(logPath, { force: true })
     removeDirIfEmpty(s.artifactsDir)
+    this.d.onRemoved?.(s)
   }
 
   /** Portable context for a fresh conversation in another harness; source session stays intact. */
@@ -807,7 +817,9 @@ export class SessionManager {
     // Nothing typed before exit = Claude never wrote the conversation; --resume would fail with "No conversation
     // found". Start fresh under the same id instead so later restarts keep resuming the same conversation.
     const conv = s.agentSessionId
-    const resumable = !!conv && (this.d.conversationExists?.(s.adapter, conv) ?? true)
+    // docs/CLOUD-CHATS.md: a cloud chat's history is on its machine, not here; the cloud resumes it when it has it
+    const cloud = s.location === 'cloud'
+    const resumable = !!conv && (cloud || (this.d.conversationExists?.(s.adapter, conv) ?? true))
     // AGENT CHAT: the agent's chat comes back as itself (its brief rebuilt from the seat, same conversation)
     if (s.companyAgentId) {
       const a = this.d.agentChat?.(s.companyAgentId)
@@ -844,7 +856,8 @@ export class SessionManager {
       memory: this.d.memory?.lastMode(id) ?? 'off',
       resumeAgentSessionId: resumable ? conv : null,
       freshAgentSessionId: resumable ? null : conv,
-      priorScrollback: this.readLogTail(id, SESSION_TAIL_CHARS)
+      priorScrollback: this.readLogTail(id, SESSION_TAIL_CHARS),
+      ...(cloud ? { location: 'cloud' as const } : {})
     })
   }
 
@@ -878,9 +891,11 @@ export class SessionManager {
     const before = new Date(Date.now() - days * 86400_000).toISOString()
     const stale = this.d.store.staleSessions(before)
     for (const s of stale) {
+      const row = this.d.onRemoved ? this.d.store.getSession(s.id) : null
       this.d.store.deleteSession(s.id)
       fs.rmSync(s.logPath, { force: true })
       removeDirIfEmpty(s.artifactsDir)
+      if (row) this.d.onRemoved?.(row)
     }
     return stale.length
   }
