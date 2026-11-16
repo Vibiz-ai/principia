@@ -85,4 +85,16 @@ describe('cloud chat on the Mac (docs/CLOUD-CHATS.md)', () => {
     expect(code).toBe(1)
     expect(err).toMatch(/Claude is not signed in on your cloud/)
   })
+
+  it('a cloud from before cloud chats (no such route) says to Turn Off and On', async () => {
+    const f = (async () => new Response(JSON.stringify({ error: 'not_found', message: 'Not found.' }), { status: 404 })) as typeof fetch
+    const spawn = cloudChildSpawn({ client: () => new CloudClient({ url: 'http://old.invalid', token: 'pdt_x', fetch: f }), repoOf: async () => null })
+    const child = spawn('claude', ['--session-id', CONV], { cwd: '/tmp', env: {} })
+    let err = ''
+    child.stderr!.on('data', (d) => (err += String(d)))
+    let code: number | null | undefined
+    child.on('exit', (c) => (code = c))
+    await until(() => code !== undefined)
+    expect(err).toMatch(/older version without cloud chats.*Turn Off and then Turn On/)
+  })
 })

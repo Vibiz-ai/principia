@@ -69,9 +69,18 @@ export class VaultWatcher {
     this.stopped = false
     const every = this.opts.rescanMs ?? 60_000
     if (every > 0 && !this.rescanTimer) {
-      this.rescanTimer = setInterval(() => this.rescanNow(), every)
+      this.rescanTimer = setInterval(() => {
+        // a watcher that failed (EMFILE: macOS rebuilds one FSEvents stream for every watcher, so one fd spike kills
+        // them all) comes back here instead of staying off until the app restarts
+        if (!this.watcher && !this.stopped) this.arm(true)
+        this.rescanNow()
+      }, every)
       this.rescanTimer.unref?.()
     }
+    return this.arm(false)
+  }
+
+  private arm(quiet: boolean): boolean {
     if (this.watcher) return true
     try {
       this.watcher = fs.watch(this.root, { recursive: true, persistent: false }, (_type, filename) => this.onEvent(filename ? String(filename) : null))
@@ -82,7 +91,7 @@ export class VaultWatcher {
       })
       return true
     } catch (e) {
-      this.opts.onError?.(e)
+      if (!quiet) this.opts.onError?.(e)
       this.watcher = null
       return false
     }
