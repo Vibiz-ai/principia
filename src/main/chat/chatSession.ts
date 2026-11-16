@@ -70,6 +70,12 @@ export interface ChatSessionDeps {
   /** the chat's first user message (a default session title becomes it: chats can be found again) */
   onTitle?(text: string): void
   log?: { warn(m: string, meta?: Record<string, unknown>): void }
+  /**
+   * docs/CLOUD-CHATS.md: the CLI runs on the person's cloud (spawnChild reaches it). Chat only (no local terminal: the
+   * conversation lives there), a longer first answer (the machine may wake, the repository is cloned), and its steps
+   * shown while it starts.
+   */
+  cloud?: boolean
   idleMs?: number
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => unknown
@@ -297,10 +303,14 @@ export class ChatSession implements PtyLike {
     const { args } = toChatArgs(base)
     this.ready = false
     this.stopping = false
-    this.setTurn('starting', 'Starting Claude')
-    let child
+    this.setTurn('starting', this.d.cloud ? 'Starting in your cloud' : 'Starting Claude')
+    let child: ReturnType<ChatSessionDeps['spawnChild']>
     try {
       child = this.d.spawnChild(this.d.file, args, { cwd: this.d.cwd, env: this.d.env })
+      // a cloud chat says what it is doing while it starts (waking the machine, cloning the repository)
+      child.onStatus?.((text) => {
+        if (this.proc?.child === child && !this.ready) this.setTurn('starting', text)
+      })
     } catch (e) {
       this.emit(this.reducer.notice(`Claude could not start: ${e instanceof Error ? e.message : String(e)}`, 'error', 'openTerminal'))
       this.setTurn('error', null)
@@ -315,7 +325,7 @@ export class ChatSession implements PtyLike {
     this.proc = proc
     this.lastPid = proc.pid || this.lastPid
     if (proc.pid) this.d.registerPid?.(proc.pid)
-    void proc.request('initialize', {}, 60_000).then(
+    void proc.request('initialize', {}, this.d.cloud ? 10 * 60_000 : 60_000).then(
       (r) => this.onInitialized(proc, r),
       (e) => {
         if (this.proc !== proc || proc.exited) return
@@ -782,6 +792,7 @@ export class ChatSession implements PtyLike {
 
   async toTerminal(force = false): Promise<void> {
     if (this.ended) throw new HiveError('conflict', 'This chat has ended')
+    if (this.d.cloud) throw new HiveError('conflict', 'This chat runs in your cloud: it has no terminal on this Mac.')
     if (this.mode === 'terminal') return
     if ((this.turn === 'working' || this.turn === 'needs') && !force) throw new HiveError('conflict', 'Claude is working. Stop it and open the terminal?')
     this.clearIdle()

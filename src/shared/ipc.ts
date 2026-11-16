@@ -782,6 +782,8 @@ export interface SessionCreateRequest {
    */
   departmentId?: Id  /** Five doors C7: "New chat" with a first message (a company with no code reads the chat as a conversation). */
   initialPrompt?: string
+  /** docs/CLOUD-CHATS.md: run its Claude on the person's cloud machine (a chat, in the project's GitHub repository) */
+  location?: 'cloud'
 }
 export interface RunListQuery {
   status?: RunStatus[]

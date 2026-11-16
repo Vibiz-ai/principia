@@ -662,6 +662,8 @@ export const COMPANY_ADDED_COLUMNS: [table: string, column: string, ddl: string]
   ['sessions', 'department_id', 'TEXT'],
   // AGENT CHAT: the company agent whose standing chat this session is (NULL = not one)
   ['sessions', 'company_agent_id', 'TEXT'],
+  // docs/CLOUD-CHATS.md: 'cloud' when the chat's CLI runs on the person's cloud
+  ['sessions', 'location', 'TEXT'],
   ['workflows', 'department_id', 'TEXT'],
   ['schedules', 'department_id', 'TEXT'],
   ['slack_triggers', 'department_id', 'TEXT'],

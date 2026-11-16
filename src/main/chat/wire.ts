@@ -13,7 +13,7 @@ import { ChatHub, type ChatHubDeps } from './chatHub'
 import { ChatTaskNotes } from './taskNotes'
 import { chatTitle, isDefaultTitle } from '../../shared/chatTitle'
 
-export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' | 'redact' | 'killGroup' | 'log'> & { baseEnv(): Record<string, string | undefined> }): ChatHub {
+export function createChatHub(h: Hive, o: Pick<ChatHubDeps, 'userData' | 'emit' | 'redact' | 'killGroup' | 'log' | 'cloudSpawn'> & { baseEnv(): Record<string, string | undefined> }): ChatHub {
   const hub = new ChatHub({
     ...o,
     openChatsAs: () => h.store.getSettings().openChatsAs ?? 'auto',

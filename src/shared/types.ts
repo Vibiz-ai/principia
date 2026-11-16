@@ -155,6 +155,8 @@ export interface Session extends CompanyStamped {
   companyAgentId?: Id | null
   /** DEPARTMENTS.md: the board task this session is a run of ("Open as session", a lease). Absent / null = not one. */
   taskId?: Id | null
+  /** docs/CLOUD-CHATS.md: 'cloud' when its Claude runs on the person's cloud machine. Absent / null = on this Mac. */
+  location?: 'cloud' | null
 }
 
 // ---------- workflows ----------
