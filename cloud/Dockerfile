@@ -10,7 +10,7 @@
 # Dependabot proposes digest bumps), and the agent CLIs install with `npm ci` from cloud/agent-clis/package-lock.json,
 # so every package is pinned by hash. Bump them deliberately and record them in cloud/README.md.
 
-FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/principia
 COPY package.json package-lock.json ./
@@ -22,7 +22,7 @@ RUN npx vite build --config vite.cloud.config.ts \
  && npx vite build --config vite.console.config.ts \
  && npm prune --omit=dev --ignore-scripts
 
-FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 # What agents reach for in a run (docs/MACHINES.md §4): git and gh (signed in through GH_TOKEN and the run's askpass),
 # search and JSON tools, Python, a compiler toolchain for native modules, and the usual archive and network tools.
 RUN apt-get update && apt-get install -y --no-install-recommends \
