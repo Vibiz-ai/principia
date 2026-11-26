@@ -528,6 +528,8 @@ describe('a server without systemd, and the hint to look at it', () => {
     const prep = prepareScript({ image: 'x:1', sourceRef: 'main' })
     expect(prep).toContain('[ -d /run/systemd/system ] || SYSTEMD=')
     expect(prep).toContain('service docker start')
+    // an init script that fails (a container's ulimit) falls back to dockerd itself
+    expect(prep).toContain('nohup dockerd >>/var/log/dockerd.log 2>&1 &')
     // the units are written only under systemd; the DROP rule is inserted directly otherwise
     expect(prep.indexOf('if [ -n "$SYSTEMD" ]; then\ncat > /etc/systemd/system/principia-metadata-block.service')).toBeGreaterThan(0)
   })
@@ -563,9 +565,26 @@ describe('the one-line install (cloud/install.sh, docs/MACHINES.md §7)', () => 
     expect(() => installScript('main; rm -rf /')).toThrow(/version/)
   })
 
-  it('configure without an admin hash writes none; with one it writes it', () => {
+  it('configure without an admin hash writes none; with one it writes it, one-time (PRINCIPIA_ADMIN_TOKEN_ONCE)', () => {
     expect(configureScript({ domain: 'a.sslip.io', adminTokenSha256: null })).toContain("ADMIN_SHA256=''")
-    expect(configureScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32) })).toContain('${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256}')
+    const c = configureScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32) })
+    expect(c).toContain('${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256}')
+    expect(c).toContain('${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_ONCE=1}')
+  })
+
+  it('keeps the links out of the 0600 log, judges keys by the sudo user, and does not give up on a hiccup', () => {
+    // the log exists 0600 before the first write to it, in both scripts
+    for (const t of [text, bootstrapScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32), image: 'x:1', sourceRef: 'main' })]) expect(t.indexOf('chmod 600 /var/log/principia-bootstrap.log')).toBeLessThan(t.indexOf('exec > >(tee -a /var/log/principia-bootstrap.log)'))
+    expect(text).toContain('(umask 077; touch /var/log/principia-bootstrap.log)')
+    // links go to fd 3, the terminal saved before the tee
+    expect(text.indexOf('exec 3>&1')).toBeLessThan(text.indexOf('exec > >(tee'))
+    expect(text).toMatch(/show\(\) \{\n {2}\{[\s\S]*?\n {2}\} >&3\n\}/)
+    expect(text).not.toMatch(/echo "[^"]*\$(LINK|PHONE)/)
+    expect(text).toContain('KEYHOME="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)"')
+    expect(text).not.toContain('/root/.ssh/authorized_keys "')
+    expect(text).toContain('case "$RC" in 0|2) break ;; esac')
+    // no iptables permission (a container without NET_ADMIN) warns instead of stopping the install
+    expect(text).toContain('|| echo "principia: warning: could not block the metadata service')
   })
 
   it('passes bash -n (and shellcheck when installed)', () => {

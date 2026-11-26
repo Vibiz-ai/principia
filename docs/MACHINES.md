@@ -48,8 +48,10 @@ machine, which the managed fleet bakes into its machine image) and `configureScr
 admin hash, and on a managed machine its heartbeat, then `docker compose up`).
 
 1. SSH keys only: password and keyboard-interactive login off, root password locked. Docker comes from
-   get.docker.com. On a server without systemd (a container, LXC or WSL) Docker starts from its init script and the
-   step 2 rule is inserted once instead of by a unit; it does not come back by itself after a reboot.
+   get.docker.com. On a server without systemd (a container, LXC or WSL) Docker starts from its init script (or
+   `dockerd` directly when that script fails) and the step 2 rule is inserted once instead of by a unit; it does not
+   come back by itself after a reboot. Where iptables is not allowed (no `NET_ADMIN`), step 2 warns instead of
+   stopping the install. The log `/var/log/principia-bootstrap.log` is created 0600 before anything is written to it.
 2. Containers can't reach `169.254.169.254`. A systemd unit adds a `DOCKER-USER` DROP rule after every Docker start.
    That address is the provider's metadata service, which serves the user-data and, at some providers, credentials.
 3. `/opt/principia/` holds `compose.yml`, `Caddyfile`, `.env` and `principia.env` (0600). Principia Cloud runs in one
@@ -69,9 +71,11 @@ build from) in the app's environment.
 read it from the metadata service. So the master key is generated on the server, and the admin token that pairs
 this Mac appears there only as its SHA-256 (`PRINCIPIA_ADMIN_TOKEN_SHA256`, checked in `control/auth.ts`). The token
 itself exists only on this Mac, encrypted with safeStorage, until it has been used once. The server enforces the
-"once" too: when a device pairs, that hash is recorded as spent (`meta.admin_sha256_used`) and `POST /v1/pair/start`
-answers 403 to it from then on (a lost answer before the pairing completes can still be retried). A new install
-writes a new hash. The metadata block in step 2 is a second layer.
+"once" too, on machines the app makes (`configureScript` writes `PRINCIPIA_ADMIN_TOKEN_ONCE=1` next to the hash): the
+device a pairing creates is remembered (`meta.admin_sha256_pending`), and when that device makes its first
+authenticated call the hash is spent (`meta.admin_sha256_used`); `POST /v1/pair/start` answers 403 to it from then on.
+Until then *Try Again* still pairs, so a pairing whose answer was lost is never stuck. Without the flag (a self-hoster's
+own `PRINCIPIA_ADMIN_TOKEN_SHA256`) the hash keeps pairing devices as before. A new install writes a new hash. The metadata block in step 2 is a second layer.
 
 **Your accounts arrive the same way as on any cloud.** A machine made here is an ordinary self-hosted cloud. The
 accounts follow docs/ACCOUNTS.md exactly: values go up once, are encrypted with the cloud's master key, and never
@@ -151,11 +155,13 @@ What it does, in order:
 1. Checks it is root on Ubuntu or Debian, installs `curl`, `iproute2`, `iptables` and `qrencode`, and opens 80 and
    443 when `ufw` is on.
 2. `prepareScript` and `configureScript` of §2, unchanged, with two differences: there is no admin hash (no Mac made
-   it), and password SSH login is turned off only when root or the `sudo` user already has an `authorized_keys`, so
-   nobody who logs in with a password is locked out.
+   it), and password SSH login is turned off only when the user who ran `sudo` (root when there is none) already has
+   an `authorized_keys`, so nobody who logs in with a password is locked out.
 3. Waits for `https://<domain>/v1/health` (the certificate), then runs `principia-cloud pair` in the container and
-   prints the **connect link** with its **QR code**. On the Mac: Principia › Cloud › paste it.
-4. Waits up to 10 minutes for that pairing (`principia-cloud phone-link` exits 3 until a device is paired), then
+   prints the **connect link** with its **QR code**. On the Mac: Principia › Cloud › paste it. The links go to the
+   terminal only (a copy of stdout kept before the log's `tee`), never into the log.
+4. Waits up to 10 minutes for that pairing (`principia-cloud phone-link` exits 3 until a device is paired; any other
+   failure of `docker compose exec` is retried too), then
    prints a one-time **phone link** (the console sign-in of `POST /v1/login-links`, 10 minutes) with its QR code.
    An image older than `phone-link` falls back to "Workspace › Open on your phone" on the Mac.
 

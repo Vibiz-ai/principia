@@ -46,6 +46,9 @@ export const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 const HEADER = `#!/bin/bash
 # Principia Cloud machine (docs/MACHINES.md). Made by Principia.
 set -euo pipefail
+# the log is root's only (0600) before anything is written to it
+(umask 077; touch /var/log/principia-bootstrap.log)
+chmod 600 /var/log/principia-bootstrap.log
 exec > >(tee -a /var/log/principia-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
 `
@@ -133,7 +136,9 @@ SOURCE_REF=${shq(i.sourceRef)}
 # 1. keys only, and Docker
 ${o.keysOnlyIfKeyed ? `# (only when root or the sudo user already logs in with a key: turning passwords off would lock out the others)
 KEYED=
-for k in /root/.ssh/authorized_keys "$(getent passwd "\${SUDO_USER:-root}" | cut -d: -f6)/.ssh/authorized_keys"; do if [ -s "$k" ]; then KEYED=1; fi; done
+# the user who ran sudo is the one who would be locked out, so it is that user's keys that count (else root's)
+KEYHOME="$(getent passwd "\${SUDO_USER:-root}" | cut -d: -f6)"
+if [ -s "\${KEYHOME:-/nonexistent}/.ssh/authorized_keys" ]; then KEYED=1; fi
 [ -n "$KEYED" ] || echo "principia: this server has no SSH key yet, so password login stays on. Add a key, then turn passwords off."
 if [ -n "$KEYED" ] && [ -d /etc/ssh/sshd_config.d ]; then` : 'if [ -d /etc/ssh/sshd_config.d ]; then'}
   printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\nPermitRootLogin prohibit-password\\n' > /etc/ssh/sshd_config.d/10-principia.conf
@@ -150,14 +155,16 @@ if [ -n "$SYSTEMD" ]; then
   systemctl enable --now docker
 else
   echo "principia: no systemd, starting Docker with its init script (it will not restart on reboot by itself)"
-  docker info >/dev/null 2>&1 || service docker start
-  for n in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  docker info >/dev/null 2>&1 || service docker start || echo "principia: Docker's init script failed, starting dockerd directly"
+  docker info >/dev/null 2>&1 || pgrep -x dockerd >/dev/null || { nohup dockerd >>/var/log/dockerd.log 2>&1 & }
+  for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
 fi
 docker info >/dev/null 2>&1 || { echo "principia: Docker did not start"; exit 1; }
 
 # 2. no container reaches the metadata service
 if [ -z "$SYSTEMD" ]; then
-  iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+  iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP \
+    || echo "principia: warning: could not block the metadata service for containers (no iptables permission here)"
 fi
 if [ -n "$SYSTEMD" ]; then
 cat > /etc/systemd/system/principia-metadata-block.service <<'UNIT'
@@ -173,7 +180,8 @@ ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/
 WantedBy=docker.service multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now principia-metadata-block.service
+systemctl enable --now principia-metadata-block.service \
+  || echo "principia: warning: could not block the metadata service for containers (see systemctl status principia-metadata-block)"
 fi
 
 # 3. the image and the stack (started by configure)
@@ -310,6 +318,7 @@ PASSPORT=embedded
 cat > principia.env <<ENV
 PRINCIPIA_PUBLIC_URL=https://$DOMAIN
 \${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256}
+\${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_ONCE=1}
 PRINCIPIA_WORKSPACE_NAME=$WORKSPACE_NAME
 PRINCIPIA_PASSPORT=$PASSPORT
 PRINCIPIA_DATA_DIR=/data
@@ -361,9 +370,13 @@ export function installScript(version: string): string {
 set -euo pipefail
 
 principia_install() {
+[ "$(id -u)" = 0 ] || { echo "principia: run it as root (… | sudo bash)"; exit 1; }
+# the log is root's only (0600) before anything is written to it
+(umask 077; touch /var/log/principia-bootstrap.log)
+chmod 600 /var/log/principia-bootstrap.log
+exec 3>&1 # the terminal, for the links
 exec > >(tee -a /var/log/principia-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
-[ "$(id -u)" = 0 ] || { echo "principia: run it as root (… | sudo bash)"; exit 1; }
 # shellcheck source=/dev/null
 OS="$(. /etc/os-release 2>/dev/null; echo "\${ID:-} \${ID_LIKE:-}")"
 case " $OS " in *' ubuntu '*|*' debian '*) ;; *) echo "principia: this installer is for Ubuntu and Debian (found: $OS)"; exit 1 ;; esac
@@ -389,12 +402,15 @@ if [ -z "$UP" ]; then
   echo "  Look: cd /opt/principia && docker compose logs caddy principia"
   exit 1
 fi
+# the links open the cloud: they go to the terminal only (fd 3), never into the log
 show() {
-  echo
-  echo "  $1"
-  echo "  $2"
-  echo
-  qrencode -t ANSIUTF8 -m 2 "$2" 2>/dev/null || true
+  {
+    echo
+    echo "  $1"
+    echo "  $2"
+    echo
+    qrencode -t ANSIUTF8 -m 2 "$2" 2>/dev/null || true
+  } >&3
 }
 LINK="$(docker compose exec -T principia principia-cloud pair | sed -n 's/^Connect link: \\([^ ]*\\).*/\\1/p')"
 show "On your Mac: Principia › Cloud › paste this connect link (10 minutes, once)" "$LINK"
@@ -403,7 +419,8 @@ PHONE=
 for _ in $(seq 1 120); do
   RC=0
   PHONE="$(docker compose exec -T principia principia-cloud phone-link 2>/dev/null)" || RC=$?
-  [ "$RC" = 3 ] || break
+  # 0: here it is; 2: an image without phone-link; anything else (3: not paired yet, a hiccup of exec): try again
+  case "$RC" in 0|2) break ;; esac
   sleep 5
 done
 PHONE="$(printf '%s' "$PHONE" | sed -n 's/^Phone link: \\([^ ]*\\).*/\\1/p')"

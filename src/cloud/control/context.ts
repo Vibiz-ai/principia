@@ -16,6 +16,11 @@ export interface ControlConfig {
    * (docs/MACHINES.md) gets this one, so its user-data and metadata hold nothing that pairs.
    */
   adminTokenSha256?: string | null
+  /**
+   * PRINCIPIA_ADMIN_TOKEN_ONCE=1 (machines the app makes, docs/MACHINES.md §3): the hashed token pairs one device. It is
+   * spent once that device makes its first authenticated call, so a pairing whose answer was lost can be retried.
+   */
+  adminTokenOnce?: boolean
   workspaceName: string
   consoleDir: string
   dataDir: string
