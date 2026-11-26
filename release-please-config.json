@@ -8,6 +8,7 @@
       "release-type": "node",
       "package-name": "principia",
       "changelog-path": "CHANGELOG.md",
+      "extra-files": ["cloud/install.sh"],
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "draft": true,

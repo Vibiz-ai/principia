@@ -12,7 +12,7 @@
  *  4. The published image for this app version; when it cannot be pulled, it builds the image from the public source
  *     at the same version (without the embedded passport, whose sources are not public yet).
  *
- * It is two halves (docs/MACHINES.md §6): `prepareScript` (1, 2 and the image: the same on every machine, so a managed
+ * It is two halves (docs/FLEET.md §4): `prepareScript` (1, 2 and the image: the same on every machine, so a managed
  * fleet bakes it into its machine image once) and `configureScript` (this machine's address, admin hash and, on a
  * managed machine, its heartbeat to the fleet). `bootstrapScript` is both, for Hetzner, DigitalOcean and SSH.
  */
@@ -28,8 +28,8 @@ export interface PrepareInput {
 export interface ConfigureInput {
   /** <ip>.sslip.io, your own domain pointing at the machine, or 'auto' (the script finds its public IPv4) */
   domain: string
-  /** SHA-256 hex of the one-time admin token this Mac pairs with */
-  adminTokenSha256: string
+  /** SHA-256 hex of the one-time admin token this Mac pairs with; null on a one-line install (it prints a connect link) */
+  adminTokenSha256: string | null
   workspaceName?: string
   /** a managed machine: where its heartbeat goes, and the token that lets it report (and nothing else) */
   fleet?: { url: string; machineToken: string } | null
@@ -51,7 +51,7 @@ export DEBIAN_FRONTEND=noninteractive
 `
 
 /**
- * The managed machine's heartbeat (docs/MACHINES.md §6): every 2 minutes, as root on the host, it reads the control
+ * The managed machine's heartbeat (docs/FLEET.md §6): every 2 minutes, as root on the host, it reads the control
  * plane's activity.json from the data volume and posts it to the fleet with this machine's token. Python 3 from the
  * Ubuntu image, standard library only. A failed post is retried at the next tick; the fleet decides about sleep.
  */
@@ -120,7 +120,7 @@ if isinstance(want, str) and re.fullmatch(r'ghcr\\.io/vibiz-ai/principia-cloud:[
 `
 
 /** Steps 1, 2 and the image: nothing about this machine, nothing secret. */
-export function prepareScript(i: PrepareInput, o: { header?: boolean } = {}): string {
+export function prepareScript(i: PrepareInput, o: { header?: boolean; keysOnlyIfKeyed?: boolean } = {}): string {
   for (const [k, v] of Object.entries({ image: i.image, sourceRef: i.sourceRef, sourceRepo: i.sourceRepo ?? 'x' })) {
     if (!SAFE.test(v)) throw new Error(`Invalid ${k}`)
   }
@@ -131,17 +131,35 @@ SOURCE_REPO=${shq(repo)}
 SOURCE_REF=${shq(i.sourceRef)}
 
 # 1. keys only, and Docker
-if [ -d /etc/ssh/sshd_config.d ]; then
+${o.keysOnlyIfKeyed ? `# (only when root or the sudo user already logs in with a key: turning passwords off would lock out the others)
+KEYED=
+for k in /root/.ssh/authorized_keys "$(getent passwd "\${SUDO_USER:-root}" | cut -d: -f6)/.ssh/authorized_keys"; do if [ -s "$k" ]; then KEYED=1; fi; done
+[ -n "$KEYED" ] || echo "principia: this server has no SSH key yet, so password login stays on. Add a key, then turn passwords off."
+if [ -n "$KEYED" ] && [ -d /etc/ssh/sshd_config.d ]; then` : 'if [ -d /etc/ssh/sshd_config.d ]; then'}
   printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\nPermitRootLogin prohibit-password\\n' > /etc/ssh/sshd_config.d/10-principia.conf
   systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 fi
-passwd -l root >/dev/null 2>&1 || true
+${o.keysOnlyIfKeyed ? '[ -z "$KEYED" ] || ' : ''}passwd -l root >/dev/null 2>&1 || true
 if ! command -v docker >/dev/null 2>&1; then
   for n in 1 2 3 4 5; do curl -fsSL https://get.docker.com | sh && break; echo "principia: docker install failed, retry $n"; sleep 10; done
 fi
-systemctl enable --now docker
+# a server without systemd (a container, LXC or WSL host): Docker's SysV script, and the rules applied once
+SYSTEMD=1
+[ -d /run/systemd/system ] || SYSTEMD=
+if [ -n "$SYSTEMD" ]; then
+  systemctl enable --now docker
+else
+  echo "principia: no systemd, starting Docker with its init script (it will not restart on reboot by itself)"
+  docker info >/dev/null 2>&1 || service docker start
+  for n in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+fi
+docker info >/dev/null 2>&1 || { echo "principia: Docker did not start"; exit 1; }
 
 # 2. no container reaches the metadata service
+if [ -z "$SYSTEMD" ]; then
+  iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+fi
+if [ -n "$SYSTEMD" ]; then
 cat > /etc/systemd/system/principia-metadata-block.service <<'UNIT'
 [Unit]
 Description=Keep containers away from the cloud metadata service (Principia)
@@ -156,6 +174,7 @@ WantedBy=docker.service multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now principia-metadata-block.service
+fi
 
 # 3. the image and the stack (started by configure)
 mkdir -p /opt/principia
@@ -226,6 +245,7 @@ COMPOSE
 cat > /usr/local/sbin/principia-heartbeat <<'PY'
 ${HEARTBEAT_PY}PY
 chmod 755 /usr/local/sbin/principia-heartbeat
+if [ -n "$SYSTEMD" ]; then
 cat > /etc/systemd/system/principia-heartbeat.service <<'UNIT'
 [Unit]
 Description=Report this machine's activity to the Principia fleet
@@ -247,14 +267,15 @@ AccuracySec=10s
 WantedBy=timers.target
 UNIT
 systemctl daemon-reload
+fi
 echo "principia: prepared $(date -u +%FT%TZ)"
 `
 }
 
 /** This machine: its address, the admin hash, the fleet heartbeat (managed), then the stack starts. */
-export function configureScript(i: ConfigureInput, o: { header?: boolean } = {}): string {
+export function configureScript(i: ConfigureInput, o: { header?: boolean; domainFromEnv?: boolean } = {}): string {
   if (!SAFE.test(i.domain)) throw new Error('Invalid domain')
-  if (!/^[0-9a-f]{64}$/.test(i.adminTokenSha256)) throw new Error('Invalid admin token hash')
+  if (i.adminTokenSha256 !== null && !/^[0-9a-f]{64}$/.test(i.adminTokenSha256)) throw new Error('Invalid admin token hash')
   if (i.fleet && (!/^https:\/\/[A-Za-z0-9.-]+(:\d+)?(\/[A-Za-z0-9._/-]*)?$/.test(i.fleet.url) || !TOKEN.test(i.fleet.machineToken))) throw new Error('Invalid fleet')
   const name = (i.workspaceName ?? 'Principia Cloud').replace(/[^\w .-]/g, '').slice(0, 80) || 'Principia Cloud'
   const fleet = i.fleet
@@ -271,8 +292,10 @@ systemctl enable --now principia-heartbeat.timer
 `
     : ''
   return `${o.header === false ? '' : HEADER}echo "principia: configure $(date -u +%FT%TZ)"
-DOMAIN=${shq(i.domain)}
-ADMIN_SHA256=${shq(i.adminTokenSha256)}
+${o.domainFromEnv ? `# your own domain (pointing at this server), else ${i.domain}
+DOMAIN="\${PRINCIPIA_DOMAIN:-${i.domain}}"
+case "$DOMAIN" in ''|*[!A-Za-z0-9.-]*) echo "principia: PRINCIPIA_DOMAIN is not a domain name"; exit 1 ;; esac` : `DOMAIN=${shq(i.domain)}`}
+ADMIN_SHA256=${shq(i.adminTokenSha256 ?? '')}
 WORKSPACE_NAME=${shq(name)}
 # auto: the machine's own public IPv4 (the provider gives it after the script was written)
 if [ "$DOMAIN" = auto ]; then
@@ -286,7 +309,7 @@ PASSPORT=embedded
 [ "$(cat install-kind 2>/dev/null)" = source ] && PASSPORT=
 cat > principia.env <<ENV
 PRINCIPIA_PUBLIC_URL=https://$DOMAIN
-PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256
+\${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256}
 PRINCIPIA_WORKSPACE_NAME=$WORKSPACE_NAME
 PRINCIPIA_PASSPORT=$PASSPORT
 PRINCIPIA_DATA_DIR=/data
@@ -309,4 +332,89 @@ echo "principia: up at https://$DOMAIN $(date -u +%FT%TZ)"
 /** Both halves, for a machine that installs itself (Hetzner, DigitalOcean, your own server). */
 export function bootstrapScript(i: BootstrapInput): string {
   return `${prepareScript(i)}\n${configureScript(i, { header: false })}`
+}
+
+/** The published image of a Principia version, and the tag its source is at. */
+export const releaseInputs = (version: string): PrepareInput => ({ image: `ghcr.io/vibiz-ai/principia-cloud:${version}`, sourceRef: `v${version}` })
+
+/**
+ * docs/MACHINES.md §7: the one-line install on your own Ubuntu or Debian server,
+ *   curl -fsSL https://raw.githubusercontent.com/Vibiz-ai/principia/main/cloud/install.sh | sudo bash
+ * The same two halves as every machine (prepare, configure), with no admin hash: instead it prints a connect link and
+ * its QR code, waits for your Mac, then prints a one-time phone link. Everything runs inside one function that is
+ * called with stdin from /dev/null, so nothing it runs can read the rest of the script from the curl pipe.
+ * cloud/install.sh is this text (scripts/install-sh.mjs writes it; a test keeps it in sync). release-please bumps the
+ * version between its markers.
+ */
+export function installScript(version: string): string {
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid version')
+  const prepare = prepareScript(releaseInputs(version), { header: false, keysOnlyIfKeyed: true }).replace(/^(IMAGE=.*\n(?:.*\n)?SOURCE_REF=.*\n)/m, '# x-release-please-start-version\n$1# x-release-please-end\n')
+  if (!prepare.includes('x-release-please-end')) throw new Error('prepareScript changed: put the release markers around IMAGE and SOURCE_REF')
+  const configure = configureScript({ domain: 'auto', adminTokenSha256: null }, { header: false, domainFromEnv: true })
+  return `#!/bin/bash
+# Principia Cloud on your own server (docs/MACHINES.md §7). Ubuntu 22.04+ or Debian 12+, a public IPv4, ports 80
+# and 443 open. Run as root:
+#   curl -fsSL https://raw.githubusercontent.com/Vibiz-ai/principia/main/cloud/install.sh | sudo bash
+# Your own domain instead of <ip>.sslip.io (its A record pointing here):
+#   curl -fsSL … | sudo PRINCIPIA_DOMAIN=cloud.example.com bash
+# Generated from src/main/cloud/machines/bootstrap.ts by scripts/install-sh.mjs. Do not edit by hand.
+set -euo pipefail
+
+principia_install() {
+exec > >(tee -a /var/log/principia-bootstrap.log) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+[ "$(id -u)" = 0 ] || { echo "principia: run it as root (… | sudo bash)"; exit 1; }
+# shellcheck source=/dev/null
+OS="$(. /etc/os-release 2>/dev/null; echo "\${ID:-} \${ID_LIKE:-}")"
+case " $OS " in *' ubuntu '*|*' debian '*) ;; *) echo "principia: this installer is for Ubuntu and Debian (found: $OS)"; exit 1 ;; esac
+apt-get update -q
+apt-get install -yq curl ca-certificates iproute2 iptables qrencode
+# a host firewall that is on lets the certificate and the cloud through
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then ufw allow 80/tcp; ufw allow 443/tcp; fi
+
+${prepare}
+${configure}
+# reachable over https, then the links
+URL="https://$DOMAIN"
+K=
+case "$DOMAIN" in localhost|*.localhost) K=-k ;; esac
+echo "principia: waiting for $URL (its https certificate can take a minute)"
+UP=
+for _ in $(seq 1 60); do
+  if curl -fsS $K --max-time 10 "$URL/v1/health" >/dev/null 2>&1; then UP=1; break; fi
+  sleep 5
+done
+if [ -z "$UP" ]; then
+  echo "principia: $URL does not answer yet. Ports 80 and 443 must be open to the internet (at your provider too) for its certificate."
+  echo "  Look: cd /opt/principia && docker compose logs caddy principia"
+  exit 1
+fi
+show() {
+  echo
+  echo "  $1"
+  echo "  $2"
+  echo
+  qrencode -t ANSIUTF8 -m 2 "$2" 2>/dev/null || true
+}
+LINK="$(docker compose exec -T principia principia-cloud pair | sed -n 's/^Connect link: \\([^ ]*\\).*/\\1/p')"
+show "On your Mac: Principia › Cloud › paste this connect link (10 minutes, once)" "$LINK"
+echo "principia: waiting for your Mac (a new link: cd /opt/principia && docker compose exec principia principia-cloud pair)"
+PHONE=
+for _ in $(seq 1 120); do
+  RC=0
+  PHONE="$(docker compose exec -T principia principia-cloud phone-link 2>/dev/null)" || RC=$?
+  [ "$RC" = 3 ] || break
+  sleep 5
+done
+PHONE="$(printf '%s' "$PHONE" | sed -n 's/^Phone link: \\([^ ]*\\).*/\\1/p')"
+if [ -n "$PHONE" ]; then
+  show "Your Mac is connected. On your phone: scan this, or open the link (10 minutes, once)" "$PHONE"
+else
+  echo "principia: no Mac connected yet. When it is: Principia › Cloud › Workspace › Open on your phone."
+fi
+echo "principia: installed $(date -u +%FT%TZ). Log: /var/log/principia-bootstrap.log"
+}
+
+principia_install "$@" </dev/null
+`
 }

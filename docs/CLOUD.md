@@ -612,7 +612,9 @@ docs and never suggests sharing an account.
 From the app, one click: **Make my cloud** creates a server at Hetzner or DigitalOcean (or installs on yours over
 SSH), pairs this Mac and signs it in. See docs/MACHINES.md. By hand:
 
-Three ways in, all ending with a connect link:
+Three ways in, all ending with a connect link (a fourth, one line on your own Ubuntu or Debian server with https and
+QR codes, is `curl -fsSL https://raw.githubusercontent.com/Vibiz-ai/principia/main/cloud/install.sh | sudo bash`,
+docs/MACHINES.md §7):
 
 - **One button (Render).** `render.yaml` at the repository root: one web service from
   `ghcr.io/vibiz-ai/principia-cloud:latest`, a 10 GB disk at `/data`, `PRINCIPIA_PASSPORT=embedded`, and

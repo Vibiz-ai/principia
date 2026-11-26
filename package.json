@@ -38,6 +38,8 @@
     "cloud:build": "vite build --config vite.cloud.config.ts",
     "cloud:console:build": "vite build --config vite.console.config.ts",
     "cloud:control:start": "node out-cloud/control.mjs",
+    "cloud:install-sh": "node scripts/install-sh.mjs",
+    "cloud:install-sh:check": "node scripts/install-sh.mjs --check",
     "cloud:control:smoke": "node cloud/control.smoke.mjs",
     "cloud:isolation:smoke": "node cloud/isolation.smoke.mjs",
     "release:test": "node --test scripts/readme.test.mjs scripts/prepare-public-release.test.mjs scripts/release-target.test.mjs scripts/release-assets.test.mjs scripts/update-info.test.mjs scripts/mac-sign.test.mjs",

@@ -100,6 +100,13 @@ export interface MachineDeps {
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
+/** The command that shows the install log: as the user Principia connected with (sudo when not root), on its port. */
+export const lookHint = (ssh: { user: string; port: number } | null, ip: string): string => {
+  const user = ssh?.user ?? 'root'
+  const port = ssh && ssh.port !== 22 ? ` -p ${ssh.port}` : ''
+  return `ssh${port} ${user}@${ip} ${user === 'root' ? '' : 'sudo '}tail -50 /var/log/principia-bootstrap.log`
+}
+
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export class CloudMachines {
@@ -535,7 +542,7 @@ export class CloudMachines {
       const managed = f.provider === 'principia'
       this.update({ detail: managed ? 'Getting its https certificate…' : min < 1 ? 'Installing Docker and Principia Cloud…' : `Installing… ${min} min (a first install takes 3 to 10 minutes)` })
       if (Date.now() - started > timeoutMs) {
-        const hint = this.file?.ip && !managed ? ` To look: ssh root@${this.file.ip} tail -50 /var/log/principia-bootstrap.log` : ''
+        const hint = this.file?.ip && !managed ? ` To look: ${lookHint(this.file.ssh, this.file.ip)}` : ''
         throw new HiveError('internal', `Principia Cloud did not answer at ${url} after ${Math.round(timeoutMs / 60_000)} minutes.${hint}`)
       }
       await this.sleep(pollMs)

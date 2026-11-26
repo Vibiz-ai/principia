@@ -68,6 +68,7 @@ export function completePairing(ctx: Ctx, limiter: PairLimiter, ip: string, body
   const id = newId('dev_')
   ctx.db.run('INSERT INTO devices (id, workspace_id, name, platform, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, ctx.workspaceId, name, platform, sha256(token), now, now)
   ctx.audit({ kind: 'device', id, name }, 'device.pair', null, id, { platform })
+  if (ctx.config.adminTokenSha256) ctx.db.run("INSERT INTO meta (key, value) VALUES ('admin_sha256_used', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", ctx.config.adminTokenSha256)
   return { deviceToken: token, device: deviceOf(ctx.db.get<DeviceRow>('SELECT * FROM devices WHERE id = ?', id)!, id), workspace: ctx.workspace() }
 }
 
@@ -108,17 +109,21 @@ export function checkCsrf(p: Principal, req: IncomingMessage): void {
   if (typeof h !== 'string' || !safeEqual(h, p.session.csrf)) throw new ApiError('forbidden', 'Missing or wrong CSRF header. Reload the console.')
 }
 
-/** The admin bearer is valid only for POST /v1/pair/start. Without PRINCIPIA_ADMIN_TOKEN the route answers 403. */
+/** The admin bearer is valid only for POST /v1/pair/start. Without PRINCIPIA_ADMIN_TOKEN(_SHA256) the route answers 403. */
 export function checkAdmin(ctx: Ctx, req: IncomingMessage): Actor {
   const tok = bearer(req)
   const { adminToken, adminTokenSha256 } = ctx.config
   if (!adminToken && !adminTokenSha256) throw new ApiError('forbidden', 'Pairing over the API is off. Run `principia-cloud pair` on the server.')
-  const valid = !!tok && ((!!adminToken && safeEqual(tok, adminToken)) || (!!adminTokenSha256 && tok.length >= 32 && safeEqual(sha256(tok), adminTokenSha256)))
-  if (!valid) throw new ApiError('unauthorized', 'A valid admin token is required.')
+  const plain = !!tok && !!adminToken && safeEqual(tok, adminToken)
+  const hashed = !plain && !!tok && !!adminTokenSha256 && tok.length >= 32 && safeEqual(sha256(tok), adminTokenSha256)
+  if (!plain && !hashed) throw new ApiError('unauthorized', 'A valid admin token is required.')
+  // docs/MACHINES.md §3: the hashed token is the app's one-time token for a machine it made. It pairs one device; after
+  // that it opens nothing, so a copy found later (a log, a backup of the Mac) is worthless. A new install writes a new hash.
+  if (hashed && adminHashUsed(ctx) === adminTokenSha256) throw new ApiError('forbidden', 'This cloud is already paired. Run `principia-cloud pair` on the server for another device.')
   return { kind: 'admin', id: null, name: 'admin token' }
 }
 
-export function createLoginLink(ctx: Ctx, deviceId: string): LoginLinkResponse {
+export function createLoginLink(ctx: Pick<Ctx, 'db' | 'now' | 'workspaceId'> & { config: Pick<Ctx['config'], 'publicUrl'> }, deviceId: string): LoginLinkResponse {
   const token = mintToken(CLOUD_TOKEN_PREFIX.loginLink)
   const now = ctx.now()
   const expiresAt = new Date(now.getTime() + LOGIN_LINK_TTL_MS).toISOString()
@@ -156,5 +161,8 @@ export function revokeDevice(ctx: Ctx, id: string): boolean {
   if (ok) ctx.db.run('UPDATE sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL', ctx.now().toISOString(), id)
   return ok
 }
+
+/** The PRINCIPIA_ADMIN_TOKEN_SHA256 that was configured when a device last paired (that hash is spent). */
+const adminHashUsed = (ctx: Pick<Ctx, 'db'>): string | null => ctx.db.get<{ value: string }>("SELECT value FROM meta WHERE key = 'admin_sha256_used'")?.value ?? null
 
 export const anyDevicePaired = (ctx: Pick<Ctx, 'db'>): boolean => !!ctx.db.get('SELECT id FROM devices WHERE revoked_at IS NULL LIMIT 1')

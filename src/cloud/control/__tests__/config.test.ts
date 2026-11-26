@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -144,5 +144,28 @@ describe('PRINCIPIA_ADMIN_TOKEN_SHA256 (docs/MACHINES.md)', () => {
     expect(loadConfig({ ...base, PRINCIPIA_ADMIN_TOKEN_SHA256: 'AB'.repeat(32) }, { consoleDir: '/c' }).config.adminTokenSha256).toBe('ab'.repeat(32))
     expect(loadConfig(base, { consoleDir: '/c' }).config.adminTokenSha256).toBeNull()
     expect(() => loadConfig({ ...base, PRINCIPIA_ADMIN_TOKEN_SHA256: 'not-a-hash' }, { consoleDir: '/c' })).toThrow(/64 hex/)
+  })
+})
+
+describe('principia-cloud phone-link (docs/MACHINES.md §7, install.sh)', () => {
+  it('waits for a paired device (exit 3), then prints a one-time console link for it', async () => {
+    const { main } = await import('../main')
+    const { openControlDb } = await import('../db')
+    const data = mkdtempSync(join(tmpdir(), 'pdata-'))
+    const env = { PRINCIPIA_DATA_DIR: data, PRINCIPIA_WORKSPACE: join(data, 'ws'), PRINCIPIA_SECRETS_DIR: join(data, 'secrets'), PRINCIPIA_MASTER_KEY: 'c'.repeat(64), PRINCIPIA_PUBLIC_URL: 'https://203-0-113-7.sslip.io' }
+    const out: string[] = []
+    const w = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out.push(String(s)); return true })
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      expect(await main(['phone-link'], env)).toBe(3)
+      expect(await main(['pair'], env)).toBe(0)
+      const db = openControlDb(join(data, 'control.db'))
+      const ws = db.get<{ id: string }>('SELECT id FROM workspace LIMIT 1')!
+      db.run('INSERT INTO devices (id, workspace_id, name, platform, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 'dev_1', ws.id, 'Mac', 'darwin', 'h', '2026-11-26T00:00:00Z', null)
+      db.close()
+      expect(await main(['phone-link'], env)).toBe(0)
+    } finally { w.mockRestore(); e.mockRestore() }
+    expect(out.join('')).toMatch(/Connect link: https:\/\/203-0-113-7\.sslip\.io\/pair#/)
+    expect(out.join('')).toMatch(/Phone link: https:\/\/203-0-113-7\.sslip\.io\/console\/login\?t=pll_/)
   })
 })

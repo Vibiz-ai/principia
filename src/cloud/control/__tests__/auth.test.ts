@@ -31,6 +31,28 @@ describe('pairing (CLOUD.md §5)', () => {
     } finally { await h.close() }
   })
 
+  it('the hashed admin token pairs the first device only (one-time, docs/MACHINES.md §3)', async () => {
+    const { createHash } = await import('node:crypto')
+    const h = await startHarness({ config: { adminToken: null, adminTokenSha256: createHash('sha256').update(ADMIN).digest('hex') } })
+    try {
+      const s = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect(s.status).toBe(201)
+      // not used yet: a retry after a lost answer still works
+      expect((await h.call('POST', '/v1/pair/start', { token: ADMIN })).status).toBe(201)
+      expect((await h.call('POST', '/v1/pair/complete', { body: { code: s.json.code, deviceName: 'Mac', platform: 'darwin-arm64' } })).status).toBe(201)
+      const again = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect(again.status).toBe(403)
+      expect(again.json.message).toContain('principia-cloud pair')
+    } finally { await h.close() }
+    // the plain PRINCIPIA_ADMIN_TOKEN (scripts) is not one-time
+    const plain = await startHarness()
+    try {
+      const s = await plain.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect((await plain.call('POST', '/v1/pair/complete', { body: { code: s.json.code, deviceName: 'Mac', platform: 'darwin-arm64' } })).status).toBe(201)
+      expect((await plain.call('POST', '/v1/pair/start', { token: ADMIN })).status).toBe(201)
+    } finally { await plain.close() }
+  })
+
   it('codes expire after 10 minutes', async () => {
     let t = Date.parse('2026-10-21T09:00:00Z')
     const h = await startHarness({ now: () => new Date(t) })
