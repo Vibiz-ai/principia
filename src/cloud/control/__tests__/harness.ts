@@ -22,7 +22,7 @@ export interface Harness {
   close(): Promise<void>
 }
 
-export async function startHarness(o: { chats?: CloudChats; config?: Partial<ControlConfig>; autoComplete?: boolean; now?: () => Date; masterKey?: Buffer; dir?: string; heartbeatMs?: number } = {}): Promise<Harness> {
+export async function startHarness(o: { chats?: CloudChats; config?: Partial<ControlConfig>; autoComplete?: boolean; now?: () => Date; masterKey?: Buffer; dir?: string; heartbeatMs?: number; phoneTools?: Parameters<typeof createControlApp>[0]['phoneTools'] } = {}): Promise<Harness> {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), 'pcloud-'))
   const masterKey = o.masterKey ?? randomBytes(32)
   const logs: string[] = []
@@ -31,7 +31,7 @@ export async function startHarness(o: { chats?: CloudChats; config?: Partial<Con
     publicUrl: 'http://127.0.0.1:1', adminToken: ADMIN, workspaceName: 'Test cloud', consoleDir: join(dir, 'console'), dataDir: dir, workspaceDir: join(dir, 'ws'),
     logRetentionDays: 30, connectorAllowPrivate: [], passport: null, ...o.config
   }
-  const app = createControlApp({ config, masterKey, createRuntime: ports => { rt = createFakeRuntime(ports, { autoComplete: o.autoComplete }); if (o.chats) Object.assign(rt, { chats: o.chats }); return rt }, logWrite: l => logs.push(l), tickMs: 0, now: o.now, heartbeatMs: o.heartbeatMs })
+  const app = createControlApp({ config, masterKey, createRuntime: ports => { rt = createFakeRuntime(ports, { autoComplete: o.autoComplete }); if (o.chats) Object.assign(rt, { chats: o.chats }); return rt }, logWrite: l => logs.push(l), tickMs: 0, now: o.now, heartbeatMs: o.heartbeatMs, phoneTools: o.phoneTools })
   await app.start()
   const server = app.server()
   await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()))

@@ -11,6 +11,7 @@ import type { IncomingMessage, Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { CloudChatDown, CloudChatStart, CloudChatUp } from '../../shared/cloud'
+import { PHONE_SHELL_PATH } from '../../shared/remote'
 import type { ChatProcSpec, ProviderMaterial } from '../contract'
 import { authenticate } from './auth'
 import type { Ctx } from './context'
@@ -57,8 +58,8 @@ export function attachChatSockets(server: Server, o: { ctx: Ctx; onInput(): void
     } catch {
       return refuse(socket, '400 Bad Request')
     }
-    // the phone's live socket is phoneApi.ts's
-    if (url.pathname === '/api/live') return
+    // the phone's live socket, its shell and a preview's sockets are phoneApi.ts's
+    if (url.pathname === '/api/live' || url.pathname === PHONE_SHELL_PATH || url.pathname.startsWith('/preview/')) return
     const m = ATTACH.exec(url.pathname)
     if (!m) return refuse(socket, '404 Not Found')
     const who = authenticate(o.ctx, req)

@@ -12,7 +12,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatProcInfo, ChatProcSpec, ChatSink, RepoMaterial } from '../contract'
+import type { ChatProcInfo, ChatProcSpec, ChatSink, ChatWorkspace, RepoMaterial } from '../contract'
 
 export type { ChatProcInfo, ChatProcSpec, ChatSink }
 import { materializeProviders } from './providers/materialize'
@@ -105,6 +105,31 @@ export class ChatProcs {
       return null
     }
     return null
+  }
+
+  /**
+   * docs/CLOUD-PHONE.md: the chat's folder, and the environment its processes get (the phone's files and terminal):
+   * the same HOME, CLI homes and git askpass the chat has, the workspace keys, never Claude's sign-in.
+   */
+  workspace(id: string, keys: { secrets: Record<string, string>; githubToken: string | null } = { secrets: {}, githubToken: null }): ChatWorkspace | null {
+    assertSafeId('chat', id)
+    const { sandbox } = this.d
+    const companyId = `chat_${id}`.slice(0, 96)
+    if (!existsSync(join(sandbox.workspaceDir, companyId))) return null
+    const root = sandbox.companyDir(companyId)
+    let cwd = root
+    try {
+      const repo = readdirSync(root, { withFileTypes: true }).find((e) => e.isDirectory() && existsSync(join(root, e.name, '.git')))
+      if (repo) cwd = join(root, repo.name)
+    } catch {
+      /* an empty folder */
+    }
+    const box = sandbox.prepare(companyId)
+    if (keys.githubToken) this.d.addSecret(keys.githubToken)
+    const overlay = sandbox.runEnv(box, {}, keys.secrets)
+    Object.assign(overlay, runAskpass(box.home, keys.githubToken && cwd !== root ? [{ dir: cwd, token: keys.githubToken }] : [], keys.githubToken))
+    sandbox.handOver(box)
+    return { root, cwd, env: { ...sandbox.baseEnv(), ...overlay }, user: sandbox.spawnUser() }
   }
 
   /** preparing or running: keeps a managed machine awake (activity.ts) */

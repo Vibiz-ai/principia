@@ -4,7 +4,7 @@ import type { ChatItem, ChatSnapshot } from '../../shared/chat'
 import { EMPTY_CHAT_META } from '../../shared/chat'
 import type { PhoneNeeds, PhoneNow, PhoneRoomMember, PhoneTaskCard, PhoneTaskDetail, PhoneTaskRow, PhoneTasks } from '../../shared/remote'
 import { findAll, textOf, type VNode } from '../console/dom'
-import { ago, placeMessage, ChatLoad, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
+import { ago, diffLines, parentPath, sizeWords, statusWord, placeMessage, ChatLoad, ChatReplica, chatLines, chatMessageAction, terminalComposer, deviceName, headline, insertMention, mentionAt, mentionMatches, pairCode, parseRoute, routeHash } from './model'
 import { renderAgent, renderChats, renderNeeds, renderNow, renderRoom, renderSession, renderTasks, type Actions, type View } from './render'
 
 const T = '2026-10-25T10:00:00.000Z'
@@ -390,5 +390,45 @@ describe('opening a chat while it streams (PQ-02, PQ-06)', () => {
     gate.go()
     await done
     expect(fetches).toBe(2)
+  })
+})
+
+describe("a cloud chat's folder (docs/CLOUD-PHONE.md)", () => {
+  const D = ['diff --git a/src/a.ts b/src/a.ts', 'index 1..2 100644', '--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1,2 +1,2 @@', ' keep', '-old', '+new', 'diff --git a/b.png b/b.png', 'new file mode 100644', 'Binary files /dev/null and b/b.png differ', ''].join('\n')
+  it('reads a diff as lines to color, each file by its path', () => {
+    expect(diffLines(D).map((l) => `${l.k}:${l.text}`)).toEqual(['file:src/a.ts', 'hunk:@@ -1,2 +1,2 @@', 'ctx: keep', 'del:-old', 'add:+new', 'file:b.png', 'meta:new file mode 100644', 'meta:Binary files /dev/null and b/b.png differ'])
+    expect(diffLines(D, 3).at(-1)).toMatchObject({ k: 'meta', text: expect.stringContaining('more lines') })
+    expect(statusWord('??')).toBe('new')
+    expect(statusWord(' M')).toBe('changed')
+    expect(statusWord('D ')).toBe('deleted')
+    expect(sizeWords(2048)).toBe('2.0 KB')
+    expect(parentPath('src/app')).toBe('src')
+    expect(parentPath('src')).toBe('')
+  })
+  it('shows Files, Changes and Terminal on a cloud chat only, and each pane in plain words', () => {
+    const tools = { pane: 'chat' as const, dir: null, file: null, changes: null, ports: null, portsOpen: false, shell: { text: '', state: 'connecting' as const }, error: null }
+    const session = { ref: { kind: 'session' as const, id: 'se_1' }, title: 'Chat', who: null, chat: snap(), terminal: null, cloud: true }
+    const base = { ...baseView(), host: 'cloud' as const, session, replica: new ChatReplica(snap()), tools }
+    expect(btns(renderSession(base, noop))).toEqual(expect.arrayContaining(['Chat', 'Files', 'Changes', 'Terminal', 'Preview']))
+    // the Mac's chats: none of it
+    expect(btns(renderSession({ ...base, host: 'mac' }, noop))).not.toContain('Files')
+    const files = renderSession({ ...base, tools: { ...tools, pane: 'files', dir: { path: 'src', entries: [{ name: 'lib', kind: 'dir', size: null }, { name: 'a.ts', kind: 'file', size: 10 }, { name: 'away', kind: 'link', size: null }], more: 0 } } }, noop)
+    expect(textOf(files)).toContain('a.ts')
+    expect(findAll(files, (n) => n.tag === 'button' && textOf(n).includes('away'))[0]!.attrs.disabled).toBe('')
+    const file = renderSession({ ...base, tools: { ...tools, pane: 'files', file: { path: 'src/a.ts', size: 10, text: '<b>x</b>', truncated: false } } }, noop)
+    expect(findAll(file, (n) => n.tag === 'pre').map(textOf)).toEqual(['<b>x</b>'])
+    const changes = renderSession({ ...base, tools: { ...tools, pane: 'changes', changes: { repo: 'app', branch: 'feat/x', base: 'origin/main', status: [{ code: ' M', path: 'src/a.ts' }], diff: D, diffTruncated: false, commits: [{ sha: 'abc1234', subject: 'add it' }], branchDiff: D, branchDiffTruncated: true, ahead: 2 } } }, noop)
+    const words = textOf(changes)
+    expect(words).toContain('On feat/x · 2 not pushed')
+    expect(words).toContain('1 commit since origin/main')
+    expect(words).toContain('too long for a phone')
+    expect(findAll(changes, (n) => String(n.attrs.class ?? '').includes('dl--add')).length).toBe(2)
+    expect(textOf(renderSession({ ...base, tools: { ...tools, pane: 'changes', changes: { repo: null, branch: null, base: null, status: [], diff: '', diffTruncated: false, commits: [], branchDiff: '', branchDiffTruncated: false, ahead: null } } }, noop))).toContain('no git repository')
+    const shell = renderSession({ ...base, tools: { ...tools, pane: 'shell', shell: { text: 'ls output README.md', state: 'on' } } }, noop)
+    expect(btns(shell)).toContain('Ctrl-C')
+    expect(textOf(shell)).toContain('README.md')
+    expect(btns(renderSession({ ...base, tools: { ...tools, pane: 'shell', shell: { text: '', state: 'ended' } } }, noop))).toContain('Start again')
+    const ports = renderSession({ ...base, tools: { ...tools, portsOpen: true, ports: { known: true, ports: [{ port: 5173, chat: true, address: 'loopback' }, { port: 8080, chat: false, address: 'all' }] } } }, noop)
+    expect(btns(ports)).toEqual(expect.arrayContaining(['5173 · this chat', '8080', 'Open']))
   })
 })

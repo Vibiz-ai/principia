@@ -3,7 +3,8 @@
  * each user message replays a recorded turn (src/main/chat/__fixtures__/probe-new.jsonl). That turn asks to run Bash
  * (can_use_tool) and waits for the answer, as the CLI does, before it finishes.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatProcInfo, ChatProcSpec, ChatSink, CloudChats } from '../../contract'
 
@@ -17,9 +18,12 @@ export interface FakeClaude extends CloudChats {
   /** user messages each chat got, in order */
   said: Map<string, string[]>
   transcripts: Map<string, string>
+  /** where each chat's folder is (`<dir>/chat_<id>`, made when it starts) */
+  dir: string
 }
 
-export function fakeClaudeChats(): FakeClaude {
+export function fakeClaudeChats(o: { dir?: string } = {}): FakeClaude {
+  const dir = realpathSync(o.dir ?? mkdtempSync(join(tmpdir(), 'pcloud-chats-')))
   const procs = new Map<string, Proc>()
   const said = new Map<string, string[]>()
   const transcripts = new Map<string, string>()
@@ -68,9 +72,10 @@ export function fakeClaudeChats(): FakeClaude {
     }
   }
   const chats: FakeClaude = {
-    specs, said, transcripts,
+    specs, said, transcripts, dir,
     async start(spec) {
       specs.push(spec)
+      mkdirSync(join(dir, `chat_${spec.id}`), { recursive: true })
       const prev = procs.get(spec.id)
       const p: Proc = { info: { id: spec.id, state: 'running', detail: null, startedAt: new Date().toISOString(), endedAt: null, exitCode: null, signal: null, error: null, repo: spec.repo ? spec.repo.url.replace('https://github.com/', '') : null, out: 0 }, buf: '', sinks: prev?.sinks ?? new Set(), spec, waiting: null, inbuf: '' }
       procs.set(spec.id, p)
@@ -109,7 +114,13 @@ export function fakeClaudeChats(): FakeClaude {
     async remove(id) { chats.signal(id, 'SIGTERM'); procs.delete(id); transcripts.delete(id) },
     list: () => [...procs.values()].map((p) => ({ ...p.info })),
     live: () => [...procs.values()].filter((p) => p.info.state !== 'exited').length,
-    transcript: (id) => transcripts.get(id) ?? null
+    transcript: (id) => transcripts.get(id) ?? null,
+    workspace(id, keys) {
+      const root = join(dir, `chat_${id}`)
+      if (!existsSync(root)) return null
+      const repo = join(root, 'app')
+      return { root, cwd: existsSync(join(repo, '.git')) ? repo : root, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8', ...(keys?.githubToken ? { GH_TOKEN: keys.githubToken } : {}) }, user: null }
+    }
   }
   return chats
 }
