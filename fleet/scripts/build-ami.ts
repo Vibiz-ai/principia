@@ -108,7 +108,7 @@ poweroff
     const done = (t: string): boolean => t.includes('principia: image ready') || t.includes('principia: prepared')
     // the console log reaches the API minutes late: wait for one of the two markers before deciding
     let text = ''
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 30; i++) {
       text = await consoleText(id)
       if (done(text) || text.includes('principia: build failed')) break
       await sleep(30_000)

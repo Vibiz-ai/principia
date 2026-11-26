@@ -54,6 +54,21 @@ describe('CloudClient.call', () => {
     const e = await new CloudClient({ url: 'http://sleepy.invalid', token: DEVICE_TOKEN, fetch: f, wake: async () => false }).call('companyPut', { params: { cid: 'co_w' }, body: { name: 'W', slug: 'w', passportBundle: 'UEs=' } }).catch((x: unknown) => x as CloudRequestError)
     expect(e).toMatchObject({ cloudCode: 'network' })
   })
+  it('while the managed cloud is known to be asleep, a read answers at once (no 15 s wait); a change still wakes it', async () => {
+    let fetched = 0
+    const f = (async (url: string, init?: RequestInit) => {
+      fetched++
+      return fetch(url.replace('http://sleepy.invalid', cloud.url), init)
+    }) as typeof fetch
+    let wakes = 0
+    const c = new CloudClient({ url: 'http://sleepy.invalid', token: DEVICE_TOKEN, fetch: f, asleep: () => wakes === 0, wake: async () => (wakes++, true) })
+    const t = Date.now()
+    await expect(c.call('summary')).rejects.toThrow(/asleep/)
+    expect(Date.now() - t).toBeLessThan(100)
+    expect(fetched).toBe(0)
+    await c.call('companyPut', { params: { cid: 'co_w' }, body: { name: 'W', slug: 'w', passportBundle: 'UEs=' } })
+    expect(fetched).toBe(1)
+  })
   it('an unreachable cloud says so, and names the URL but no token', async () => {
     const e = await new CloudClient({ url: 'http://127.0.0.1:1', token: DEVICE_TOKEN }).call('summary').then(() => null as unknown as CloudRequestError, (x: unknown) => x as CloudRequestError)
     expect(e).toMatchObject({ cloudCode: 'network' })

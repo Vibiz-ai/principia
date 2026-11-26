@@ -94,7 +94,8 @@ export function createCloud(h: Hive): CloudWiring {
     },
     log,
     // a sleeping managed cloud wakes when a change can't get through (docs/FLEET.md)
-    wake: (): Promise<boolean> => machines.wakeForUse()
+    wake: (): Promise<boolean> => machines.wakeForUse(),
+    asleep: (): boolean => machines.view()?.power === 'asleep'
   })
 
   const loginVault = new CloudLoginVault({ userData, cipher })

@@ -379,15 +379,24 @@ export class CloudMachines {
     const admin = this.secret(f.admin)
     if (!admin) throw new HiveError('conflict', 'This machine can no longer pair this Mac. Delete it and make a new one.')
     this.update({ detail: 'Making your machine…' })
-    let m: FleetMachine
-    try {
-      m = await this.fleet().create(key, { adminTokenSha256: sha256(admin), workspaceName: `${this.d.hostName ?? 'My'} cloud` })
-    } catch (e) {
-      // made already (the app quit half way): carry on with it
-      if (!(e instanceof FleetRequestError && e.fleetCode === 'exists')) throw e
-      const cur = (await this.fleet().machine(key)).machine
-      if (!cur) throw e
-      m = cur
+    let m: FleetMachine | null = null
+    // Turn On right after Turn Off: the old machine takes a minute or two to go, then this one is made
+    const until = Date.now() + 10 * 60_000
+    while (!m) {
+      try {
+        m = await this.fleet().create(key, { adminTokenSha256: sha256(admin), workspaceName: `${this.d.hostName ?? 'My'} cloud` })
+      } catch (e) {
+        // made already (the app quit half way): carry on with it
+        if (!(e instanceof FleetRequestError && e.fleetCode === 'exists')) throw e
+        const cur = (await this.fleet().machine(key)).machine
+        if (cur && cur.state !== 'deleting') m = cur
+        else {
+          if (!this.alive(gen)) return
+          if (Date.now() > until) throw new HiveError('internal', 'Your old machine is still being removed. Try again in a few minutes.')
+          this.update({ detail: 'Removing your old machine…' })
+          await this.sleep(5_000)
+        }
+      }
     }
     // deleted while the fleet was making it: remove() may have reached the fleet before the machine existed
     if (!this.alive(gen)) {

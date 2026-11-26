@@ -68,6 +68,9 @@ export async function gitRepoOf(cwd: string): Promise<{ url: string; branch: str
   return { url, branch }
 }
 
+/** what a cloud too old for cloud chats gets (docs/FLEET.md §10: machines made before self-update) */
+export const OLD_CLOUD = 'Your cloud runs an older version without cloud chats. On the Cloud page, Turn Off and then Turn On: it comes back on the new version, signed in.'
+
 class Pipe extends EventEmitter {
   setEncoding(): this {
     return this
@@ -132,7 +135,9 @@ class CloudChild extends EventEmitter implements ChildLike {
       this.onState(info)
       this.connect()
     } catch (e) {
-      this.fail(e instanceof Error ? e.message : String(e))
+      // a cloud from before cloud chats has no such route: say what to do, not "Not found."
+      const old = (e as { code?: string; cloudCode?: string }).code === 'not_found' || (e as { cloudCode?: string }).cloudCode === 'not_found'
+      this.fail(old ? OLD_CLOUD : e instanceof Error ? e.message : String(e))
     }
   }
 
