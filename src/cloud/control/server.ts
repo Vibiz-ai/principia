@@ -50,7 +50,7 @@ export interface ControlAppOptions {
   heartbeatMs?: number
   /** dispatcher tick (default 5 s); 0 disables timers (tests) */
   tickMs?: number
-  /** docs/MACHINES.md §6: how often <dataDir>/activity.json is written (default 30 s; 0 never) */
+  /** docs/FLEET.md §6: how often <dataDir>/activity.json is written (default 30 s; 0 never) */
   activityMs?: number
 }
 

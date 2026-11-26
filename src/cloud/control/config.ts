@@ -28,6 +28,8 @@ PRINCIPIA_SECRETS_DIR=
 PRINCIPIA_ADMIN_TOKEN=
 # Optional: the SHA-256 (hex) of an admin token instead of the token itself (machines Principia creates use this).
 PRINCIPIA_ADMIN_TOKEN_SHA256=
+# 1: that hashed token pairs one device only (machines Principia creates set it). Unset: it keeps pairing devices.
+PRINCIPIA_ADMIN_TOKEN_ONCE=
 PRINCIPIA_WORKSPACE_NAME=
 # Days of run step history kept (default 30).
 PRINCIPIA_LOG_RETENTION_DAYS=
@@ -161,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { consoleDir: strin
       publicUrl,
       adminToken,
       adminTokenSha256,
+      adminTokenOnce: env.PRINCIPIA_ADMIN_TOKEN_ONCE === '1',
       workspaceName: (env.PRINCIPIA_WORKSPACE_NAME || 'Principia Cloud').slice(0, 120),
       consoleDir: resolve(env.PRINCIPIA_CONSOLE_DIR || defaults.consoleDir),
       fleetUrl: /^https:\/\/[A-Za-z0-9.-]+\/?$/.test(env.PRINCIPIA_FLEET_URL ?? '') ? env.PRINCIPIA_FLEET_URL!.replace(/\/+$/, '') : null,

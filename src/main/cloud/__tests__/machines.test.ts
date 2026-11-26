@@ -6,8 +6,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { MachineView } from '../../../shared/machines'
 import { isPrivateIpv4, sslipHost } from '../../../shared/machines'
-import { CloudMachines, MACHINE_FILE, type MachineDeps } from '../machines'
-import { bootstrapScript, configureScript, prepareScript } from '../machines/bootstrap'
+import { CloudMachines, MACHINE_FILE, lookHint, type MachineDeps } from '../machines'
+import { bootstrapScript, configureScript, installScript, prepareScript, releaseInputs } from '../machines/bootstrap'
 import { FleetRequestError, type FleetClient, type FleetMachine } from '../machines/fleet'
 import { digitalocean, hetzner, pickDefaultSize, type MachineApi } from '../machines/providers'
 import { sshPublicKey } from '../machines/local'
@@ -524,6 +524,83 @@ describe('the bootstrap script', () => {
       hasShellcheck = false
     }
     if (hasShellcheck) execFileSync('shellcheck', ['-s', 'bash', f])
+  })
+})
+
+describe('a server without systemd, and the hint to look at it', () => {
+  it('starts Docker with its init script and applies the metadata rule once when systemd is not running', () => {
+    const prep = prepareScript({ image: 'x:1', sourceRef: 'main' })
+    expect(prep).toContain('[ -d /run/systemd/system ] || SYSTEMD=')
+    expect(prep).toContain('service docker start')
+    // an init script that fails (a container's ulimit) falls back to dockerd itself
+    expect(prep).toContain('nohup dockerd >>/var/log/dockerd.log 2>&1 &')
+    // the units are written only under systemd; the DROP rule is inserted directly otherwise
+    expect(prep.indexOf('if [ -n "$SYSTEMD" ]; then\ncat > /etc/systemd/system/principia-metadata-block.service')).toBeGreaterThan(0)
+  })
+
+  it('names the user and port it connected with', () => {
+    expect(lookHint({ user: 'root', port: 22 }, '203.0.113.7')).toBe('ssh root@203.0.113.7 tail -50 /var/log/principia-bootstrap.log')
+    expect(lookHint({ user: 'ubuntu', port: 2222 }, '203.0.113.7')).toBe('ssh -p 2222 ubuntu@203.0.113.7 sudo tail -50 /var/log/principia-bootstrap.log')
+    expect(lookHint(null, '203.0.113.7')).toContain('root@203.0.113.7')
+  })
+})
+
+describe('the one-line install (cloud/install.sh, docs/MACHINES.md §7)', () => {
+  const version = (JSON.parse(fs.readFileSync(path.join(__dirname, '../../../../package.json'), 'utf8')) as { version: string }).version
+  const text = installScript(version)
+
+  it('is exactly what bootstrap.ts makes at the app version (npm run cloud:install-sh rewrites it)', () => {
+    expect(fs.readFileSync(path.join(__dirname, '../../../../cloud/install.sh'), 'utf8')).toBe(text)
+  })
+
+  it('reuses prepare and configure, with no admin hash, and prints the links', () => {
+    expect(text).toContain(prepareScript(releaseInputs(version), { header: false, keysOnlyIfKeyed: true }).split('\n').slice(-3).join('\n'))
+    expect(text).toContain(`IMAGE='ghcr.io/vibiz-ai/principia-cloud:${version}'`)
+    expect(text).toMatch(/# x-release-please-start-version\nIMAGE=.*\nSOURCE_REPO=.*\nSOURCE_REF='v.*'\n# x-release-please-end/)
+    expect(text).toContain("ADMIN_SHA256=''")
+    expect(text).toContain('DOMAIN="${PRINCIPIA_DOMAIN:-auto}"')
+    expect(text).toContain('principia-cloud pair')
+    expect(text).toContain('principia-cloud phone-link')
+    expect(text).toContain('qrencode -t ANSIUTF8')
+    // the whole script is parsed before it runs, and nothing it runs reads the curl pipe
+    expect(text.trimEnd().endsWith('principia_install "$@" </dev/null')).toBe(true)
+    // password login stays on when nobody logs in with a key yet
+    expect(text).toContain('if [ -n "$KEYED" ] && [ -d /etc/ssh/sshd_config.d ]; then')
+    expect(() => installScript('main; rm -rf /')).toThrow(/version/)
+  })
+
+  it('configure without an admin hash writes none; with one it writes it, one-time (PRINCIPIA_ADMIN_TOKEN_ONCE)', () => {
+    expect(configureScript({ domain: 'a.sslip.io', adminTokenSha256: null })).toContain("ADMIN_SHA256=''")
+    const c = configureScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32) })
+    expect(c).toContain('${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_SHA256=$ADMIN_SHA256}')
+    expect(c).toContain('${ADMIN_SHA256:+PRINCIPIA_ADMIN_TOKEN_ONCE=1}')
+  })
+
+  it('keeps the links out of the 0600 log, judges keys by the sudo user, and does not give up on a hiccup', () => {
+    // the log exists 0600 before the first write to it, in both scripts
+    for (const t of [text, bootstrapScript({ domain: 'a.sslip.io', adminTokenSha256: 'ab'.repeat(32), image: 'x:1', sourceRef: 'main' })]) expect(t.indexOf('chmod 600 /var/log/principia-bootstrap.log')).toBeLessThan(t.indexOf('exec > >(tee -a /var/log/principia-bootstrap.log)'))
+    expect(text).toContain('(umask 077; touch /var/log/principia-bootstrap.log)')
+    // links go to fd 3, the terminal saved before the tee
+    expect(text.indexOf('exec 3>&1')).toBeLessThan(text.indexOf('exec > >(tee'))
+    expect(text).toMatch(/show\(\) \{\n {2}\{[\s\S]*?\n {2}\} >&3\n\}/)
+    expect(text).not.toMatch(/echo "[^"]*\$(LINK|PHONE)/)
+    expect(text).toContain('KEYHOME="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)"')
+    expect(text).not.toContain('/root/.ssh/authorized_keys "')
+    expect(text).toContain('case "$RC" in 0|2) break ;; esac')
+    // no iptables permission (a container without NET_ADMIN) warns instead of stopping the install
+    expect(text).toContain('|| echo "principia: warning: could not block the metadata service')
+  })
+
+  it('passes bash -n (and shellcheck when installed)', () => {
+    const f = path.join(tmp(), 'install.sh')
+    fs.writeFileSync(f, text)
+    execFileSync('bash', ['-n', f])
+    try {
+      execFileSync('shellcheck', ['--version'], { stdio: 'ignore' })
+    } catch {
+      return
+    }
+    execFileSync('shellcheck', ['-s', 'bash', f])
   })
 })
 

@@ -12,7 +12,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { formatConnectLink } from '../../shared/cloud'
 import { createCloudRuntime } from '../agent/index'
-import { mintPairingCode } from './auth'
+import { createLoginLink, mintPairingCode } from './auth'
 import { ENV_TEMPLATE, initSecrets, loadConfig, secretsDir, type LoadedConfig } from './config'
 import { openControlDb } from './db'
 import { createDevRuntime } from './devRuntime'
@@ -155,7 +155,20 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv): Promise<numb
     } finally { db.close() }
     return 0
   }
-  if (cmd !== 'serve') { process.stderr.write(`Unknown command ${cmd}. Use serve, init, pair or print-env-template.\n`); return 2 }
+  // docs/MACHINES.md §7 (install.sh): a one-time sign-in link for the phone console, on behalf of the device paired
+  // last. Exit 3 while no device is paired yet, so the installer can wait for the Mac.
+  if (cmd === 'phone-link') {
+    const db = openControlDb(join(config.dataDir, 'control.db'))
+    try {
+      const ws = ensureWorkspace(db, loaded.masterKey, config.workspaceName, new Date())
+      const dev = db.get<{ id: string }>('SELECT id FROM devices WHERE workspace_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1', ws.id)
+      if (!dev) { process.stderr.write('No device is paired yet. Connect your Mac first.\n'); return 3 }
+      const l = createLoginLink({ db, now: () => new Date(), workspaceId: ws.id, config: { publicUrl: config.publicUrl } }, dev.id)
+      process.stdout.write(`Phone link: ${l.url} (10 min, once)\n`)
+    } finally { db.close() }
+    return 0
+  }
+  if (cmd !== 'serve') { process.stderr.write(`Unknown command ${cmd}. Use serve, init, pair, phone-link or print-env-template.\n`); return 2 }
 
   const agentUser = agentUserFor(env, uid)
   if (agentUser) {

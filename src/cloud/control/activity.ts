@@ -1,5 +1,5 @@
 /**
- * docs/MACHINES.md §6: what a managed machine needs to know to sleep safely. Every 30 s the control plane writes
+ * docs/FLEET.md §6: what a managed machine needs to know to sleep safely. Every 30 s the control plane writes
  * `<dataDir>/activity.json`; the host's heartbeat (outside the container) reads it and reports it to the fleet, which
  * stops the machine after a quiet spell and starts it again before the next schedule.
  *

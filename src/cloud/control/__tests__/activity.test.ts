@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { ACTIVITY_FILE, activitySnapshot, writeActivity } from '../activity'
 import { startHarness, workflowFile } from './harness'
 
-describe('activity.json (docs/MACHINES.md §6)', () => {
+describe('activity.json (docs/FLEET.md §6)', () => {
   it('counts busy runs, the last change and the next cloud schedule of an unpaused company', async () => {
     let t = new Date('2026-11-14T08:00:00.000Z')
     const h = await startHarness({ now: () => t })

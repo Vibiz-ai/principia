@@ -31,6 +31,42 @@ describe('pairing (CLOUD.md §5)', () => {
     } finally { await h.close() }
   })
 
+  it('with PRINCIPIA_ADMIN_TOKEN_ONCE the hashed token pairs one device, spent when that device is first seen (docs/MACHINES.md §3)', async () => {
+    const { createHash } = await import('node:crypto')
+    const h = await startHarness({ config: { adminToken: null, adminTokenSha256: createHash('sha256').update(ADMIN).digest('hex'), adminTokenOnce: true } })
+    try {
+      const s = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect(s.status).toBe(201)
+      const lost = await h.call('POST', '/v1/pair/complete', { body: { code: s.json.code, deviceName: 'Mac', platform: 'darwin-arm64' } })
+      expect(lost.status).toBe(201)
+      // the answer was lost (the Mac never used that device token): Try Again still pairs
+      const s2 = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect(s2.status).toBe(201)
+      const done = await h.call('POST', '/v1/pair/complete', { body: { code: s2.json.code, deviceName: 'Mac', platform: 'darwin-arm64' } })
+      expect(done.status).toBe(201)
+      // the earlier, orphaned device being seen does not spend it; the one paired last does
+      expect((await h.call('GET', '/v1/me', { token: lost.json.deviceToken })).status).toBe(200)
+      expect((await h.call('POST', '/v1/pair/start', { token: ADMIN })).status).toBe(201)
+      expect((await h.call('GET', '/v1/me', { token: done.json.deviceToken })).status).toBe(200)
+      const again = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+      expect(again.status).toBe(403)
+      expect(again.json.message).toContain('principia-cloud pair')
+    } finally { await h.close() }
+  })
+
+  it('without PRINCIPIA_ADMIN_TOKEN_ONCE a hashed (or plain) admin token keeps pairing devices (self-hosters)', async () => {
+    const { createHash } = await import('node:crypto')
+    for (const config of [{ adminToken: null, adminTokenSha256: createHash('sha256').update(ADMIN).digest('hex') }, {}]) {
+      const h = await startHarness({ config })
+      try {
+        const s = await h.call('POST', '/v1/pair/start', { token: ADMIN })
+        const d = await h.call('POST', '/v1/pair/complete', { body: { code: s.json.code, deviceName: 'Mac', platform: 'darwin-arm64' } })
+        expect((await h.call('GET', '/v1/me', { token: d.json.deviceToken })).status).toBe(200)
+        expect((await h.call('POST', '/v1/pair/start', { token: ADMIN })).status).toBe(201)
+      } finally { await h.close() }
+    }
+  })
+
   it('codes expire after 10 minutes', async () => {
     let t = Date.parse('2026-10-21T09:00:00Z')
     const h = await startHarness({ now: () => new Date(t) })

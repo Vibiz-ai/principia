@@ -68,6 +68,8 @@ export function completePairing(ctx: Ctx, limiter: PairLimiter, ip: string, body
   const id = newId('dev_')
   ctx.db.run('INSERT INTO devices (id, workspace_id, name, platform, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, ctx.workspaceId, name, platform, sha256(token), now, now)
   ctx.audit({ kind: 'device', id, name }, 'device.pair', null, id, { platform })
+  // a one-time hash is spent only when this device is first seen (authenticate): a lost answer can still be retried
+  if (ctx.config.adminTokenSha256 && ctx.config.adminTokenOnce) setMeta(ctx, 'admin_sha256_pending', `${ctx.config.adminTokenSha256} ${id}`)
   return { deviceToken: token, device: deviceOf(ctx.db.get<DeviceRow>('SELECT * FROM devices WHERE id = ?', id)!, id), workspace: ctx.workspace() }
 }
 
@@ -91,6 +93,10 @@ export function authenticate(ctx: Ctx, req: IncomingMessage): Principal | null {
       ctx.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', now.toISOString(), r.id)
       r.last_seen_at = now.toISOString()
     }
+    if (ctx.config.adminTokenOnce && ctx.config.adminTokenSha256 && getMeta(ctx, 'admin_sha256_pending') === `${ctx.config.adminTokenSha256} ${r.id}`) {
+      setMeta(ctx, 'admin_sha256_used', ctx.config.adminTokenSha256)
+      ctx.db.run("DELETE FROM meta WHERE key = 'admin_sha256_pending'")
+    }
     return { kind: 'device', device: deviceOf(r, r.id), actor: { kind: 'device', id: r.id, name: r.name } }
   }
   const c = cookie(req, SESSION_COOKIE)
@@ -108,17 +114,21 @@ export function checkCsrf(p: Principal, req: IncomingMessage): void {
   if (typeof h !== 'string' || !safeEqual(h, p.session.csrf)) throw new ApiError('forbidden', 'Missing or wrong CSRF header. Reload the console.')
 }
 
-/** The admin bearer is valid only for POST /v1/pair/start. Without PRINCIPIA_ADMIN_TOKEN the route answers 403. */
+/** The admin bearer is valid only for POST /v1/pair/start. Without PRINCIPIA_ADMIN_TOKEN(_SHA256) the route answers 403. */
 export function checkAdmin(ctx: Ctx, req: IncomingMessage): Actor {
   const tok = bearer(req)
   const { adminToken, adminTokenSha256 } = ctx.config
   if (!adminToken && !adminTokenSha256) throw new ApiError('forbidden', 'Pairing over the API is off. Run `principia-cloud pair` on the server.')
-  const valid = !!tok && ((!!adminToken && safeEqual(tok, adminToken)) || (!!adminTokenSha256 && tok.length >= 32 && safeEqual(sha256(tok), adminTokenSha256)))
-  if (!valid) throw new ApiError('unauthorized', 'A valid admin token is required.')
+  const plain = !!tok && !!adminToken && safeEqual(tok, adminToken)
+  const hashed = !plain && !!tok && !!adminTokenSha256 && tok.length >= 32 && safeEqual(sha256(tok), adminTokenSha256)
+  if (!plain && !hashed) throw new ApiError('unauthorized', 'A valid admin token is required.')
+  // docs/MACHINES.md §3: on a machine the app made (PRINCIPIA_ADMIN_TOKEN_ONCE=1) the hashed token pairs one device;
+  // once that device has been seen it opens nothing, so a copy found later is worthless. A new install writes a new hash.
+  if (hashed && ctx.config.adminTokenOnce && getMeta(ctx, 'admin_sha256_used') === adminTokenSha256) throw new ApiError('forbidden', 'This cloud is already paired. Run `principia-cloud pair` on the server for another device.')
   return { kind: 'admin', id: null, name: 'admin token' }
 }
 
-export function createLoginLink(ctx: Ctx, deviceId: string): LoginLinkResponse {
+export function createLoginLink(ctx: Pick<Ctx, 'db' | 'now' | 'workspaceId'> & { config: Pick<Ctx['config'], 'publicUrl'> }, deviceId: string): LoginLinkResponse {
   const token = mintToken(CLOUD_TOKEN_PREFIX.loginLink)
   const now = ctx.now()
   const expiresAt = new Date(now.getTime() + LOGIN_LINK_TTL_MS).toISOString()
@@ -155,6 +165,11 @@ export function revokeDevice(ctx: Ctx, id: string): boolean {
   const ok = ctx.db.run('UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL', ctx.now().toISOString(), id) > 0
   if (ok) ctx.db.run('UPDATE sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL', ctx.now().toISOString(), id)
   return ok
+}
+
+const getMeta = (ctx: Pick<Ctx, 'db'>, key: string): string | null => ctx.db.get<{ value: string }>('SELECT value FROM meta WHERE key = ?', key)?.value ?? null
+const setMeta = (ctx: Pick<Ctx, 'db'>, key: string, value: string): void => {
+  ctx.db.run('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value)
 }
 
 export const anyDevicePaired = (ctx: Pick<Ctx, 'db'>): boolean => !!ctx.db.get('SELECT id FROM devices WHERE revoked_at IS NULL LIMIT 1')
