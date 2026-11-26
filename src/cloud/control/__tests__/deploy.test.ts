@@ -82,7 +82,7 @@ describe('compose: one file, pulled images, nothing else on disk', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'cloud/agent-clis/package.json'), 'utf8')) as { dependencies: Record<string, string> }
     const lock = JSON.parse(readFileSync(join(root, 'cloud/agent-clis/package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string; link?: boolean }> }
     const readme = readFileSync(join(root, 'cloud/README.md'), 'utf8')
-    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@anthropic-ai/claude-code', '@google/gemini-cli', '@openai/codex'])
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@anthropic-ai/claude-code', '@google/gemini-cli', '@openai/codex', '@vibiz/cli', 'pnpm'])
     for (const [name, version] of Object.entries(pkg.dependencies)) {
       expect(version).toMatch(/^\d+\.\d+\.\d+$/) // exact, never a range
       expect(lock.packages[`node_modules/${name}`]?.version).toBe(version)

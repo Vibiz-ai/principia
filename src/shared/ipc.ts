@@ -633,6 +633,8 @@ export interface InvokeMap extends PlansInvokeMap, ChatInvokeMap, RemoteInvokeMa
   'cloud:revokeDevice': [{ id: Id }, CloudDevice[]]
   /** a fresh one-time console login link (open: also opens it in the browser) */
   'cloud:loginLink': [{ open?: boolean } | V, LoginLinkResponse]
+  /** docs/CLOUD-PHONE.md: a one-time link that pairs a phone with the cloud itself (no Mac needed after that) */
+  'cloud:phoneLink': [V, { link: string; expiresAt: string }]
   'cloud:pause': [{ paused: boolean }, CloudWorkspace]
   'cloud:pauseCompany': [{ companyId: Id; paused: boolean }, CloudCompany]
   /** opens the provider's consent page in the browser; it calls back to the cloud */
@@ -916,7 +918,7 @@ export const INVOKE_CHANNELS = [
   'cloud:state', 'cloud:pair', 'cloud:unlink', 'cloud:summary', 'cloud:providers', 'cloud:providerPut', 'cloud:providerDelete',
   'cloud:providerTest', 'cloud:loginClaude', 'cloud:loginCodex', 'cloud:loginCancel', 'cloud:movePlan', 'cloud:move', 'cloud:runOnce',
   'cloud:bringBack', 'cloud:runs', 'cloud:run', 'cloud:runLog', 'cloud:runCancel', 'cloud:asks', 'cloud:answer', 'cloud:proposals',
-  'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
+  'cloud:decideProposal', 'cloud:devices', 'cloud:revokeDevice', 'cloud:loginLink', 'cloud:phoneLink', 'cloud:pause', 'cloud:pauseCompany', 'cloud:connectionAuthorize',
   'cloud:accounts', 'cloud:githubConnect', 'cloud:githubRemove', 'cloud:keyCloud', 'cloud:keysSync',
   'cloud:machine', 'cloud:machineOptions', 'cloud:machineCreate', 'cloud:machineRetry', 'cloud:machineDelete', 'cloud:machineInfo', 'cloud:machineWake',
   ...PLANS_CHANNELS,

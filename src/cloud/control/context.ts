@@ -18,6 +18,8 @@ export interface ControlConfig {
   adminTokenSha256?: string | null
   workspaceName: string
   consoleDir: string
+  /** docs/CLOUD-PHONE.md: the phone app's build (served at `/`); default: `phone` next to the console */
+  phoneDir?: string
   dataDir: string
   workspaceDir: string
   logRetentionDays: number

@@ -6,7 +6,7 @@
  * the Companies card hold the only Connect and Run in the cloud buttons.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import type { CloudDevice, LoginLinkResponse } from '@shared/cloud'
+import type { CloudDevice } from '@shared/cloud'
 import { Button, Popover, Switch } from '../ui'
 import { statusLine, usageLine } from '../../lib/cloud'
 import { confirmNative, errorMessage, hive } from '../../lib/hive'
@@ -65,7 +65,7 @@ function WorkspaceMenu({ anchor, onClose }: { anchor: DOMRect; onClose: () => vo
   const state = useCloud((s) => s.state)
   const usage = useCloud((s) => usageLine(s.summary?.usage24h))
   const [devices, setDevices] = useState<CloudDevice[] | null>(null)
-  const [phone, setPhone] = useState<LoginLinkResponse | null>(null)
+  const [phone, setPhone] = useState<{ link: string; expiresAt: string } | null>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     void hive.cloud
@@ -76,7 +76,7 @@ function WorkspaceMenu({ anchor, onClose }: { anchor: DOMRect; onClose: () => vo
   const openPhone = async (): Promise<void> => {
     setBusy(true)
     try {
-      setPhone(await hive.cloud.loginLink())
+      setPhone(await hive.cloud.phoneLink())
     } catch (e) {
       toast(errorMessage(e), 'error')
     } finally {
@@ -121,13 +121,13 @@ function WorkspaceMenu({ anchor, onClose }: { anchor: DOMRect; onClose: () => vo
           Copy URL
         </button>
         <button type="button" className="cl-menu__item" disabled={busy} onClick={() => void openPhone()}>
-          Open on your phone
+          Use on your phone
         </button>
         {phone && (
           <div className="cl-phone">
-            <QrCode text={phone.url} />
-            <p className="cl-dim">Scan with your phone's camera. The link works once, for 10 minutes.</p>
-            <Button size="sm" onClick={() => void hive.clipboard.writeText({ text: phone.url }).then(() => toast('Sign-in link copied'))}>
+            <QrCode text={phone.link} />
+            <p className="cl-dim">Scan with your phone's camera, then Add to Home Screen. Your phone talks to your cloud directly, with this Mac off. The link works once, for 10 minutes.</p>
+            <Button size="sm" onClick={() => void hive.clipboard.writeText({ text: phone.link }).then(() => toast('Phone link copied'))}>
               Copy link
             </Button>
           </div>

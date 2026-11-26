@@ -139,6 +139,19 @@ export function registerCloudHandlers(h: Hive, cloud: CloudWiring = h.cloud): vo
     if (q?.open && /^https?:\/\//.test(r.url)) await shell.openExternal(r.url)
     return r
   })
+  // docs/CLOUD-PHONE.md: the phone pairs with the cloud itself; a cloud from before that answers with its console link
+  handle('cloud:phoneLink', async () => {
+    try {
+      const r = await call((c) => c.call<{ link: string; expiresAt: string }>('phoneLink', { body: {} }))
+      // a managed machine sleeps when idle: the phone gets a wake-only token for it, in the fragment with the code
+      const wake = await cloud.machines?.phoneWake().catch(() => null)
+      return wake ? { ...r, link: `${r.link}&wake=${encodeURIComponent(wake.url)}&wt=${encodeURIComponent(wake.token)}` } : r
+    } catch (e) {
+      if ((e as { code?: string; cloudCode?: string }).code !== 'not_found' && (e as { cloudCode?: string }).cloudCode !== 'not_found') throw e
+      const r = await call((c) => c.call<LoginLinkResponse>('loginLink', { body: {} }))
+      return { link: r.url, expiresAt: r.expiresAt }
+    }
+  })
   handle('cloud:pause', ({ paused }) => call((c) => c.call<CloudWorkspace | { workspace: CloudWorkspace }>('workspacePatch', { body: { paused } })).then((r) => (r && 'workspace' in r ? r.workspace : r) as CloudWorkspace))
   handle('cloud:pauseCompany', ({ companyId, paused }) =>
     call((c) => c.call<CloudCompany | { company: CloudCompany }>('companyPatch', { params: { cid: companyId }, body: { paused } })).then((r) => (r && 'company' in r ? r.company : r) as CloudCompany)

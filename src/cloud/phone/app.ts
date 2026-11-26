@@ -11,11 +11,11 @@
 import { slashMatches, slashQuery, type ChatOp, type ChatSnapshot } from '../../shared/chat'
 import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
-import { checkMac, findMac, forgetMac, liveUrl, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
+import { checkMac, cloudWake, findMac, forgetMac, liveUrl, parseWakeHash, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
 import { ChatLoad, ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
-import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type View } from './render'
+import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, repoOf, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type View } from './render'
 
 declare const __PHONE_HOSTED__: boolean
 /** the build for its own site (vite.phone-site.config.ts); the Mac's own bundle is same-origin */
@@ -52,7 +52,7 @@ const doc = document as unknown as Parameters<typeof mount>[1]
 interface State {
   phase: 'boot' | 'pair' | 'out' | 'in'
   /** gone: hosted, the Mac's last address does not answer (the tunnel stopped or changed) */
-  outReason: 'unpaired' | 'off' | 'revoked' | 'gone'
+  outReason: 'unpaired' | 'off' | 'revoked' | 'gone' | 'waking'
   pairError: string | null
   /** hosted, signed out: why a pasted link was not a pairing link */
   pasteError: string | null
@@ -506,7 +506,9 @@ const actions: Actions = {
     const agentId = st.drafts['new:to'] || undefined
     if (!text) return
     void busy('newChat', async () => {
-      const out = await api.call<{ sessionId: string }>('newChat', { params: cid(), body: { text, ...(agentId ? { agentId } : {}), ...(!agentId && st.drafts['new:where'] === 'cloud' && st.chats?.cloud ? { cloud: true } : {}) } })
+      const onCloud = st.chats?.host === 'cloud'
+      const repo = onCloud && st.chats ? repoOf(st.chats, st) : '-'
+      const out = await api.call<{ sessionId: string }>('newChat', { params: cid(), body: { text, ...(agentId ? { agentId } : {}), ...(!agentId && st.drafts['new:where'] === 'cloud' && st.chats?.cloud ? { cloud: true } : {}), ...(onCloud && repo !== '-' ? { repo } : {}) } })
       delete st.drafts.new
       delete st.drafts['new:to']
       delete st.drafts['new:open']
@@ -605,7 +607,8 @@ const actions: Actions = {
         const out = await api.call<PhonePairResponse>('pair', { body: { code, name } })
         if (HOSTED) {
           if (!out.token) throw new Error('Your Mac does not know this phone app yet. On your Mac, check Settings › App › Phone › Phone app address.')
-          paired = { mac: p.mac!, token: out.token, device: out.device, pairedAt: new Date().toISOString() }
+          const wake = parseWakeHash(location.hash)
+          paired = { mac: p.mac!, token: out.token, device: out.device, pairedAt: new Date().toISOString(), ...(wake ? { wake } : {}) }
           saveMac(store, paired)
           live?.close()
           live = null
@@ -686,7 +689,7 @@ function updateDisabled(): void {
 let stick = true
 let deferred = false
 function view(): View {
-  return { companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, tasks: st.tasks, task: st.task, taskId: st.route.tab === 'tasks' ? (st.route.task ?? null) : null, openKind: st.route.open?.kind ?? null }
+  return { host: st.me?.host ?? 'mac', companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, tasks: st.tasks, task: st.task, taskId: st.route.tab === 'tasks' ? (st.route.task ?? null) : null, openKind: st.route.open?.kind ?? null }
 }
 function screen(v: View): VNode {
   const r = st.route
@@ -1026,6 +1029,8 @@ async function start(): Promise<void> {
     void resumeToken()
   } catch (e) {
     if (e instanceof NotPaired) return signedOut('unpaired')
+    // docs/CLOUD-PHONE.md: a sleeping cloud doesn't answer; the phone wakes it and comes in once it is up
+    if (e instanceof MacGone && paired?.wake) return void wakeCloud()
     st.phase = 'out'
     st.outReason = e instanceof MacGone ? 'gone' : 'unpaired'
     if (!(e instanceof MacGone)) st.error = e instanceof Error ? e.message : String(e)
@@ -1060,6 +1065,42 @@ window.addEventListener('hashchange', () => {
   if (HOSTED && parseMoveHash(location.hash)) return void start()
   void onRoute()
 })
+/**
+ * docs/CLOUD-PHONE.md: the cloud is asleep (a managed machine stops when nothing runs). Ask the fleet to start it, then
+ * wait until it answers (about a minute; up to 6), and go in.
+ */
+async function wakeCloud(): Promise<void> {
+  const w = paired?.wake
+  if (!w || st.busy.has('wake')) return
+  st.busy.add('wake')
+  st.phase = 'out'
+  st.outReason = 'waking'
+  st.error = null
+  render()
+  const f: typeof fetch = (...a) => fetch(...a)
+  try {
+    const first = await cloudWake(f, w, true)
+    if (!first) throw new Error('Your cloud could not be woken from here. Open Principia on your Mac, or try again.')
+    const until = Date.now() + 6 * 60_000
+    while (Date.now() < until) {
+      const s = first.up ? first : await cloudWake(f, w, false)
+      if (s?.state === 'failed') throw new Error('Your cloud machine failed to start. Open Principia on your Mac to see why.')
+      if (s?.up && (await checkMac(f, paired!.mac, paired!)) === 'ok') {
+        st.busy.delete('wake')
+        return void (await start())
+      }
+      await new Promise((r) => setTimeout(r, 5000))
+    }
+    throw new Error('Your cloud is taking long to wake. Try again in a minute.')
+  } catch (e) {
+    st.outReason = 'gone'
+    st.error = e instanceof Error ? e.message : String(e)
+    render()
+  } finally {
+    st.busy.delete('wake')
+  }
+}
+
 // RA8: the Mac keeps its address across a restart, so it comes back here by itself (the iPhone app waits the same 20 s)
 // (or, after a reboot, at the new address it left sealed on this site)
 async function macBack(): Promise<void> {
@@ -1068,10 +1109,13 @@ async function macBack(): Promise<void> {
   if (!HOSTED || !p || !(waiting() || (st.phase === 'in' && !st.online)) || st.busy.has('move') || st.busy.has('find') || document.visibilityState !== 'visible') return
   st.busy.add('find')
   try {
-    if ((await checkMac((...a) => fetch(...a), p.mac, p)) === 'ok') {
+    const r = await checkMac((...a) => fetch(...a), p.mac, p)
+    if (r === 'ok') {
       if (waiting()) void start()
       return
     }
+    // a cloud that fell asleep under an open app: wake it
+    if (r === 'gone' && p.wake) return void wakeCloud()
     const mac = await findMac((...a) => fetch(...a), location.origin, p)
     if (mac && paired?.token === p.token && !st.busy.has('move')) await settleAt(mac)
   } finally {

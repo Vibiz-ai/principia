@@ -1,11 +1,13 @@
 {
   "name": "principia-cloud-agent-clis",
   "private": true,
-  "description": "The agent CLIs baked into the Principia Cloud image (cloud/Dockerfile). Exact versions with a lockfile, so `npm ci` installs them pinned by hash. Bump them deliberately and record them in cloud/README.md.",
+  "description": "The agent CLIs baked into the Principia Cloud image (cloud/Dockerfile): Claude Code, Codex, Gemini, the vibiz CLI and pnpm. Exact versions with a lockfile, so `npm ci` installs them pinned by hash. Bump them deliberately and record them in cloud/README.md.",
   "license": "UNLICENSED",
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.309",
-    "@google/gemini-cli": "0.65.0",
-    "@openai/codex": "0.164.0"
+    "@anthropic-ai/claude-code": "2.1.332",
+    "@google/gemini-cli": "0.71.1",
+    "@openai/codex": "0.172.0",
+    "@vibiz/cli": "0.3.76",
+    "pnpm": "12.23.0"
   }
 }

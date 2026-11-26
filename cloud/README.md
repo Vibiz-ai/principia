@@ -136,9 +136,11 @@ is pinned by digest in `cloud/Dockerfile`; Dependabot proposes digest and CLI bu
 
 | CLI | Version |
 |---|---|
-| `@anthropic-ai/claude-code` | 2.1.309 |
-| `@openai/codex` | 0.164.0 |
-| `@google/gemini-cli` | 0.65.0 |
+| `@anthropic-ai/claude-code` | 2.1.332 |
+| `@openai/codex` | 0.172.0 |
+| `@google/gemini-cli` | 0.71.1 |
+| `@vibiz/cli` | 0.3.76 |
+| `pnpm` | 12.23.0 |
 
 ## Not in v1
 

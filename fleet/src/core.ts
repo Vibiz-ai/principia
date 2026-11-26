@@ -311,6 +311,32 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
     throw new FleetError(409, 'busy', 'Your machine is changing. Try again.')
   }
 
+  /**
+   * docs/CLOUD-PHONE.md: a token for the person's phone that can only wake their machine and say how it is. One per
+   * person (a new one replaces the old). It carries the user id, so it is found without an index.
+   */
+  async function phoneWakeToken(u: UserRec): Promise<Res> {
+    const token = `pfw_${u.id}.${p.random(32)}`
+    await p.store.putUser({ ...u, phoneWakeHash: sha256(token) }, u.keyHash)
+    return json(201, { url: `${p.config.publicUrl}/v1/phone/wake`, token })
+  }
+
+  async function phoneUser(r: Req): Promise<UserRec> {
+    const t = bearer(r)
+    const m = /^pfw_([0-9]{1,20})\.[A-Za-z0-9_-]{20,}$/.exec(t)
+    const u = m ? await p.store.getUser(m[1]!) : null
+    if (!u || !u.allowed || !u.phoneWakeHash || u.phoneWakeHash !== sha256(t)) throw new FleetError(401, 'unauthorized', 'Pair this phone again from your Mac.')
+    return u
+  }
+
+  /** what the phone may know: the state, and whether it is up (never the address, usage or errors) */
+  async function phoneState(u: UserRec, res?: Res): Promise<Res> {
+    const m = await p.store.getMachine(u.id)
+    const body = res?.body as { state?: string } | undefined
+    const state = body?.state ?? m?.state ?? 'none'
+    return json(res?.status ?? 200, { state, up: !!m?.up && state === 'running' })
+  }
+
   async function remove(u: UserRec): Promise<Res> {
     const m = await p.store.getMachine(u.id)
     if (!m) return json(200, { deleted: true })
@@ -363,6 +389,16 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
           return await wake(await me(r))
         case 'DELETE /v1/machine':
           return await remove(await me(r))
+        case 'POST /v1/phone-wake':
+          return await phoneWakeToken(await me(r))
+        case 'GET /v1/phone/wake': {
+          const u = await phoneUser(r)
+          return await phoneState(u)
+        }
+        case 'POST /v1/phone/wake': {
+          const u = await phoneUser(r)
+          return await phoneState(u, await wake(u))
+        }
         default:
           return json(404, { error: 'not_found', message: 'Not here.' })
       }

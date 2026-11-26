@@ -45,6 +45,8 @@ export interface Actions {
 }
 
 export interface View {
+  /** who answers: the Mac, or the cloud itself (docs/CLOUD-PHONE.md) */
+  host?: 'mac' | 'cloud'
   companies: PhoneCompany[]
   companyId: string | null
   tab: Tab
@@ -112,7 +114,8 @@ export function renderTabs(v: View, a: Actions): VNode {
     t('now', 'Now', ico('M4 12h4l2-5 4 10 2-5h4')),
     t('needs', 'Needs you', ico('M12 4 20 18H4z M12 10v3 M12 15.5v.5'), needs),
     t('chats', 'Chats', ico('M5 6h14v9H9l-4 3z')),
-    t('room', 'Team room', ico('M4 18v-2a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v2 M8 9a2.5 2.5 0 1 0 0-.01 M14 18v-1.5a3.5 3.5 0 0 1 6 0V18 M17 9.5a2 2 0 1 0 0-.01'))
+    // docs/CLOUD-PHONE.md: a cloud has no team room (that is the Mac's)
+    v.host === 'cloud' ? null : t('room', 'Team room', ico('M4 18v-2a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v2 M8 9a2.5 2.5 0 1 0 0-.01 M14 18v-1.5a3.5 3.5 0 0 1 6 0V18 M17 9.5a2 2 0 1 0 0-.01'))
   )
 }
 const ico = (d: string): VNode => h('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, h('path', { d }))
@@ -300,9 +303,17 @@ function newChat(c: PhoneChats, v: View, a: Actions): VNode {
           h('button', { type: 'button', role: 'radio', 'aria-checked': String(v.drafts['new:where'] === 'cloud'), class: v.drafts['new:where'] === 'cloud' ? 'on' : '', on: { click: () => a.draft('new:where', 'cloud') } }, 'In your cloud')
         )
       : null,
+    // docs/CLOUD-PHONE.md: the cloud starts the chat in a fresh clone of one of your GitHub repositories
+    c.host === 'cloud'
+      ? h('select', { class: 'chan', 'aria-label': 'Repository', on: { change: (e: Event) => a.draft('new:repo', (e.target as HTMLSelectElement).value) } }, ...(c.repos ?? []).map((r) => h('option', { value: r, selected: r === repoOf(c, v) }, r)), h('option', { value: '-', selected: repoOf(c, v) === '-' }, 'No repository (an empty folder)'))
+      : null,
     h('textarea', { class: 'inp', rows: '3', 'data-k': 'new', placeholder: 'What do you need?', on: { input: (e: Event) => a.draft('new', (e.target as HTMLTextAreaElement).value) } }),
     h('div', { class: 'opts' }, btn('Send', () => a.newChat(), { kind: 'primary', disabled: busy || !(v.drafts.new ?? '').trim(), small: true }), btn('Cancel', () => a.draft('new:open', ''), { kind: 'ghost', small: true }))
   )
+}
+/** the repository a New chat on a cloud starts in: the one picked, else the most recently pushed ('-': none) */
+export function repoOf(c: PhoneChats, v: Pick<View, 'drafts'>): string {
+  return v.drafts['new:repo'] || c.repos?.[0] || '-'
 }
 function chatRow(r: PhoneChatRow, a: Actions, now: number): VNode {
   return h(
@@ -577,7 +588,7 @@ export function renderPair(p: PairView, a: Actions): VNode {
 }
 
 export interface OutView {
-  reason: 'unpaired' | 'off' | 'revoked' | 'gone'
+  reason: 'unpaired' | 'off' | 'revoked' | 'gone' | 'waking'
   /** the app runs on its own site (hosted mode) */
   hosted: boolean
   /** hosted: the Mac this phone remembers */
@@ -620,6 +631,7 @@ function pasteField(o: OutView, a: Actions): VNode {
 }
 
 export function renderSignedOut(o: OutView, a: Actions): VNode {
+  if (o.reason === 'waking') return h('section', { class: 'pairing' }, ...lettering(), h('p', { class: 'lede' }, 'Your cloud was asleep, as it is when nothing runs. It is waking up: about a minute.'), status('q', 'Waking your cloud'), h('div', { class: 'fill' }))
   const line =
     o.reason === 'gone'
       ? 'Your Mac is not at its last address. Phone may be off there, or its address changed after a restart. This phone is still paired.'

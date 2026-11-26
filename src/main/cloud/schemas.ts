@@ -48,6 +48,7 @@ export const CLOUD_REQUEST_SCHEMAS = {
   'cloud:devices': none,
   'cloud:revokeDevice': z.object({ id }).strict(),
   'cloud:loginLink': z.union([z.object({ open: z.boolean().optional() }).strict(), none]),
+  'cloud:phoneLink': none,
   'cloud:pause': z.object({ paused: z.boolean() }).strict(),
   'cloud:pauseCompany': z.object({ companyId: id, paused: z.boolean() }).strict(),
   'cloud:connectionAuthorize': z.object({ companyId: id, connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/) }).strict(),

@@ -448,6 +448,22 @@ export class CloudMachines {
    * Starts a sleeping managed machine and resolves true once its cloud answers (false: not a managed machine, or it
    * didn't come up). Callers that wait share one wake.
    */
+  /**
+   * docs/CLOUD-PHONE.md: the phone's wake-only token for a managed machine, so the phone can start it with this Mac
+   * off. null for any other machine, or a fleet from before this (the phone then waits for something else to wake it).
+   */
+  async phoneWake(): Promise<{ url: string; token: string } | null> {
+    const f = this.file
+    if (!f || f.provider !== 'principia' || !this.d.fleet) return null
+    try {
+      const r = await this.fleet().phoneWake(await this.fleetKey(f))
+      return /^https:\/\//.test(r.url) && /^pfw_/.test(r.token) ? r : null
+    } catch (e) {
+      this.d.log?.warn('cloud machine: no phone wake token', { error: msg(e) })
+      return null
+    }
+  }
+
   wakeForUse(): Promise<boolean> {
     const f = this.file
     if (!f || f.provider !== 'principia' || f.phase !== 'ready' || !this.d.fleet || !f.url) return Promise.resolve(false)

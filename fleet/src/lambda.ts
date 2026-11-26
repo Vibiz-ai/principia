@@ -67,9 +67,13 @@ export function ports(publicUrl: string): Ports {
 
 export async function http(event: LambdaFunctionURLEvent): Promise<LambdaFunctionURLResult> {
   const body = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, 'base64').toString('utf8') : event.body) : null
+  // docs/CLOUD-PHONE.md: the phone app (on the person's cloud, or the hosted site) wakes the machine cross-origin with
+  // its wake-only bearer token; no cookies, so any origin may ask
+  const cors = event.rawPath.replace(/\/+$/, '') === '/v1/phone/wake' ? { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, POST', 'access-control-max-age': '600' } : {}
+  if (event.requestContext.http.method === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' }
   const handle = api(ports(`https://${event.requestContext.domainName}`))
   const r = await handle({ method: event.requestContext.http.method, path: event.rawPath, headers: event.headers ?? {}, body })
-  return { statusCode: r.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(r.body) }
+  return { statusCode: r.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors }, body: JSON.stringify(r.body) }
 }
 
 export async function tick(): Promise<void> {

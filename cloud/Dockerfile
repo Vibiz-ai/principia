@@ -20,6 +20,8 @@ COPY cloud ./cloud
 COPY vite.*.config.ts tsconfig*.json ./
 RUN npx vite build --config vite.cloud.config.ts \
  && npx vite build --config vite.console.config.ts \
+ && PHONE_SITE_OUT_DIR=out-cloud/phone npx vite build --config vite.phone-site.config.ts \
+ && rm -rf out-cloud/phone/api out-cloud/phone/vercel.json \
  && npm prune --omit=dev --ignore-scripts
 
 FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
@@ -31,11 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv build-essential pkg-config \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
-# the Claude Code, Codex and Gemini CLIs, at the versions and hashes in the lockfile, linked onto the sandbox PATH
+# the Claude Code, Codex, Gemini and vibiz CLIs and pnpm, at the versions and hashes in the lockfile, linked onto the sandbox PATH
 WORKDIR /opt/agent-clis
 COPY cloud/agent-clis/package.json cloud/agent-clis/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force \
- && ln -s /opt/agent-clis/node_modules/.bin/claude /opt/agent-clis/node_modules/.bin/codex /opt/agent-clis/node_modules/.bin/gemini /usr/local/bin/ \
+ && for b in claude codex gemini vibiz pnpm pnpx; do ln -s /opt/agent-clis/node_modules/.bin/$b /usr/local/bin/$b; done \
  && chmod -R a+rX /opt/agent-clis
 WORKDIR /opt/principia
 COPY --from=build /opt/principia/package.json ./package.json
