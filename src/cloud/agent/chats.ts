@@ -10,14 +10,14 @@
  * for IDLE_MS (so a forgotten chat never keeps a managed machine awake).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatProcInfo, ChatProcSpec, ChatSink, RepoMaterial } from '../contract'
+import type { ChatProcInfo, ChatProcSpec, ChatSink, ChatWorkspace, RepoMaterial } from '../contract'
 
 export type { ChatProcInfo, ChatProcSpec, ChatSink }
 import { materializeProviders } from './providers/materialize'
 import { repoFolderName, runAskpass } from './repos'
-import { assertSafeId, type ProcessSandbox } from './sandbox'
+import { assertSafeId, isInside, type ProcessSandbox } from './sandbox'
 
 export interface ChatProcsDeps {
   sandbox: ProcessSandbox
@@ -105,6 +105,38 @@ export class ChatProcs {
       return null
     }
     return null
+  }
+
+  /**
+   * docs/CLOUD-PHONE.md: the chat's folder, and the environment its processes get (the phone's files and terminal):
+   * the same HOME, CLI homes and git askpass the chat has, the workspace keys, never Claude's sign-in.
+   */
+  workspace(id: string, keys: { secrets: Record<string, string>; githubToken: string | null } = { secrets: {}, githubToken: null }): ChatWorkspace | null {
+    assertSafeId('chat', id)
+    const { sandbox } = this.d
+    const companyId = `chat_${id}`.slice(0, 96)
+    // read only: nothing is created, written or handed over here (the chat's own start did that, as the agent's)
+    let root: string
+    try {
+      root = realpathSync(join(sandbox.workspaceDir, companyId))
+    } catch {
+      return null
+    }
+    if (!isInside(sandbox.workspaceDir, root) || root === sandbox.workspaceDir) return null
+    let cwd = root
+    try {
+      const repo = readdirSync(root, { withFileTypes: true }).find((e) => e.isDirectory() && existsSync(join(root, e.name, '.git')))
+      if (repo) cwd = join(root, repo.name)
+    } catch {
+      /* an empty folder */
+    }
+    const box = sandbox.paths(companyId)
+    if (keys.githubToken) this.d.addSecret(keys.githubToken)
+    const overlay = sandbox.runEnv(box, {}, keys.secrets)
+    // git's askpass as the chat's process left it (with its token), never written again from here
+    const askpass = join(box.home, '.git-askpass', 'askpass.sh')
+    if (existsSync(askpass)) Object.assign(overlay, { GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: '0' })
+    return { root, cwd, env: { ...sandbox.baseEnv(), ...overlay }, user: sandbox.spawnUser() }
   }
 
   /** preparing or running: keeps a managed machine awake (activity.ts) */

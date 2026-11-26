@@ -15,7 +15,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { CHAT_IMAGE_TYPES, CHAT_IMAGE_BYTES, CHAT_IMAGE_MAX, type ChatDecision, type ChatImage, type ChatOp } from '../../shared/chat'
 import { CLOUD_TOKEN_PREFIX } from '../../shared/cloud'
 import {
-  HELLO_NONCE_RE, helloMessage, matchRemoteRoute, PHONE_SITE_URL, REMOTE_WS_AUTH_MS,
+  HELLO_NONCE_RE, helloMessage, matchRemoteRoute, PHONE_SHELL_PATH, PHONE_SITE_URL, REMOTE_WS_AUTH_MS,
   type PhoneAsk, type PhoneChats, type PhoneClientMsg, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhoneRoom, type PhoneServerMsg, type PhoneSession, type PhoneTasks
 } from '../../shared/remote'
 import { authenticate, mintToken, sha256 } from './auth'
@@ -23,6 +23,7 @@ import type { Ctx } from './context'
 import { newId } from './db'
 import { ApiError } from './http'
 import { CLOUD_CHAT_MODES, type PhoneChats as ChatService } from './phoneChats'
+import type { PhoneTools } from './phoneTools'
 
 /** the one company the phone sees on a cloud */
 export const CLOUD_COMPANY = 'cloud'
@@ -39,6 +40,8 @@ export interface PhoneApiDeps {
   repos(): Promise<string[]>
   /** something changed that keeps a managed machine awake (activity.ts) */
   touched(): void
+  /** a chat's folder: files, changes, the shell, previews (phoneTools.ts) */
+  tools: PhoneTools
 }
 
 // ---------- pairing ----------
@@ -67,11 +70,14 @@ function pairPhone(ctx: Ctx, b: { code?: unknown; name?: unknown }): { device: {
 }
 
 /** a device token (from a header or the socket's first message) -> the device, or null */
-function deviceOf(ctx: Ctx, token: string | null): { id: string; name: string } | null {
+export function deviceOf(ctx: Ctx, token: string | null): { id: string; name: string; platform: string } | null {
   if (!token) return null
   const p = authenticate(ctx, { headers: { authorization: `Bearer ${token}` } } as IncomingMessage)
-  return p?.kind === 'device' ? { id: p.device.id, name: p.device.name } : null
+  return p?.kind === 'device' ? { id: p.device.id, name: p.device.name, platform: p.device.platform } : null
 }
+
+/** a chat's folder, its shell and its previews: a paired phone only (never a Mac's token) */
+const PHONE_ONLY = new Set(['sessionFiles', 'sessionFile', 'sessionChanges', 'sessionPorts', 'sessionPreview'])
 
 // ---------- views ----------
 
@@ -178,7 +184,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
   }
 
   /** One Phone API call; the device is already known (except pair and resume). */
-  async function call(name: string, params: Record<string, string>, b: Record<string, unknown>, dev: { id: string; name: string } | null, token: string | null): Promise<unknown> {
+  async function call(name: string, params: Record<string, string>, b: Record<string, unknown>, dev: { id: string; name: string; platform: string } | null, token: string | null): Promise<unknown> {
     if (name === 'pair') return pairPhone(ctx, b)
     if (name === 'hello') {
       // RA8: this cloud proves it knows the phone at this very address (the phone checks before it sends its token)
@@ -189,6 +195,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
       return { proof: createHmac('sha256', row.token_hash).update(helloMessage(new URL(ctx.config.publicUrl).origin, nonce)).digest('hex') }
     }
     if (!dev) throw new ApiError('unauthorized', 'Pair this phone again.')
+    if (PHONE_ONLY.has(name) && dev.platform !== 'phone') throw new ApiError('forbidden', 'This is for a paired phone.')
     if (params.companyId !== undefined && params.companyId !== CLOUD_COMPANY) throw new ApiError('not_found', 'There is one place on a cloud: your cloud.')
     switch (name) {
       case 'resume':
@@ -243,6 +250,20 @@ export function createPhoneApi(d: PhoneApiDeps) {
         await wrap(() => chats.answer(params.sessionId!, requestId, decision))
         d.touched()
         return { ok: true }
+      }
+      case 'sessionFiles':
+        return d.tools.files(params.sessionId!, params.path ?? '')
+      case 'sessionFile':
+        return d.tools.file(params.sessionId!, params.path ?? '')
+      case 'sessionChanges':
+        return d.tools.changes(params.sessionId!)
+      case 'sessionPorts':
+        return d.tools.ports(params.sessionId!)
+      case 'sessionPreview': {
+        const port = typeof b.port === 'number' ? b.port : Number(b.port)
+        const out = d.tools.previewLink(dev, params.sessionId!, port)
+        ctx.audit({ kind: 'device', id: dev.id, name: dev.name }, 'chat.preview', null, params.sessionId!, { port })
+        return out
       }
       case 'room':
         return noRoom
@@ -334,10 +355,19 @@ export function createPhoneApi(d: PhoneApiDeps) {
     } catch {
       return false
     }
-    if (path !== '/api/live') return false
+    // a preview's own sockets (a dev server's live reload): its token is in the path
+    if (path.startsWith('/preview/')) {
+      d.tools.previewUpgrade(req, socket, head)
+      return true
+    }
+    if (path !== '/api/live' && path !== PHONE_SHELL_PATH) return false
     if (req.headers.origin && !allowed(req.headers.origin)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
       socket.destroy()
+      return true
+    }
+    if (path === PHONE_SHELL_PATH) {
+      d.tools.shellUpgrade(req, socket, head)
       return true
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -378,6 +408,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
 
   function revokedSockets(deviceId: string): void {
     for (const s of subs) if (s.device === deviceId) { out(s, { t: 'bye', reason: 'revoked' }); s.ws.close(4401, 'revoked') }
+    d.tools.revoked(deviceId)
   }
 
   return {

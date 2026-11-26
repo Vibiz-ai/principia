@@ -6,9 +6,10 @@
  */
 import { h, type VNode } from '../console/dom'
 import { bust } from '../console/render'
+import type { PhoneChanges, PhoneDir, PhoneFile, PhonePorts } from '../../shared/remote'
 import type { PhoneAgent, PhoneAsk, PhoneChatRow, PhoneChats, PhoneCompany, PhoneDone, PhoneNeeds, PhoneNow, PhoneRoom, PhoneRoomMember, PhoneSession, PhoneTaskCard, PhoneTaskDetail, PhoneTaskNeed, PhoneTaskRow, PhoneTasks, PhoneThreadItem, PhoneWho, PhoneWorking } from '../../shared/remote'
 import { md } from './markdown'
-import { ago, chatLines, headline, type ChatLine, type ChatReplica, type Tab } from './model'
+import { ago, chatLines, diffLines, headline, parentPath, sizeWords, statusWord, type ChatLine, type ChatReplica, type Pane, type Tab } from './model'
 
 export interface Actions {
   tab(t: Tab): void
@@ -42,6 +43,31 @@ export interface Actions {
   draft(key: string, value: string): void
   /** New chat (drafts `new`, `new:to`): starts it on the Mac and opens it */
   newChat(): void
+  /** docs/CLOUD-PHONE.md, a cloud chat: its conversation, files, changes or shell */
+  pane(p: Pane): void
+  /** a folder of the chat ('' = its folder) */
+  browse(path: string): void
+  openFile(path: string | null): void
+  reloadChanges(): void
+  /** the listening ports (and a field for another), or closes the list */
+  previewMenu(): void
+  /** opens a server of the cloud in a new tab (draft `preview:port` when port is null) */
+  preview(port: number | null): void
+  /** Ctrl-C to the shell's command; restart: a fresh shell after it ended */
+  shellInt(): void
+  shellRestart(): void
+}
+
+/** a cloud chat's folder on the phone (docs/CLOUD-PHONE.md) */
+export interface ToolsView {
+  pane: Pane
+  dir: PhoneDir | null
+  file: PhoneFile | null
+  changes: PhoneChanges | null
+  ports: PhonePorts | null
+  portsOpen: boolean
+  shell: { text: string; state: 'connecting' | 'on' | 'ended' }
+  error: string | null
 }
 
 export interface View {
@@ -68,6 +94,8 @@ export interface View {
   task: PhoneTaskDetail | null
   taskId: string | null
   openKind: 'session' | 'agent' | null
+  /** a cloud chat's own folder: present when the cloud answers and the chat is its own */
+  tools?: ToolsView | null
 }
 
 const face = (w: PhoneWho | null, size: 'sm' | 'md' = 'md'): VNode => h('span', { class: `face face--${size}`, 'aria-hidden': 'true' }, w?.bust ? bust(w.bust) : ring())
@@ -330,7 +358,9 @@ export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
   if (!s) return loading()
   const t = s.terminal
   const sub = [s.cloud ? 'In your cloud' : null, v.replica ? turnWords(v.replica) : t?.ended ? 'Ended' : t ? 'In a terminal on your Mac' : ''].filter(Boolean).join(' · ')
-  const head = h('div', { class: 'chead' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, s.title), h('span', { class: 'row__s' }, sub)))
+  // a cloud chat: its files, changes and shell beside the conversation (docs/CLOUD-PHONE.md)
+  const tv = s.cloud && v.host === 'cloud' ? (v.tools ?? null) : null
+  const head = h('div', { class: `chead${tv ? ' chead--tools' : ''}` }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back', on: { click: () => a.back() } }, '‹'), h('span', { class: 'chead__t' }, h('b', null, s.title), h('span', { class: 'row__s' }, sub)), tv ? toolBar(tv, v, a) : null)
   const lines = v.replica ? chatLines(v.replica.items) : []
   const q = v.replica?.snap.queue ?? []
   // a terminal on the Mac: its screen while there is no transcript, what it asks, and how it ended
@@ -343,6 +373,7 @@ export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
         t.ended ? terminalEnd(t, !!lines.length, v, a) : null
       ]
     : []
+  if (tv && tv.pane !== 'chat') return h('section', { class: 'page chat tools' }, head, tv.error ? h('p', { class: 'notice notice--warn' }, tv.error) : null, tv.pane === 'files' ? filesPane(tv, a) : tv.pane === 'changes' ? changesPane(tv, v, a) : shellPane(tv, a))
   if (!v.replica && !t) return h('section', { class: 'page chat' }, head)
   if (!v.replica && t && t.canType === undefined) {
     // an older Mac: only the live line, and a reply when it waits at its prompt
@@ -359,6 +390,88 @@ export function renderSession(v: View, a: Actions, now = Date.now()): VNode {
       ...q.map((x, n) => h('div', { class: 'msg me queued' }, h('p', null, x.text), h('span', { class: 'qline' }, h('span', null, v.replica!.busy ? 'Queued: sends when it finishes' : 'Waiting to send'), n === q.length - 1 ? h('button', { type: 'button', class: 'qnow', disabled: v.busy.has('sendNow'), on: { click: () => a.sendNow() } }, v.replica!.busy ? 'Stop and send now' : 'Send now') : null))),
       ...term
     )
+  )
+}
+function toolBar(tv: ToolsView, v: View, a: Actions): VNode {
+  const seg = (p: Pane, label: string): VNode => h('button', { type: 'button', class: tv.pane === p ? 'on' : '', 'aria-pressed': tv.pane === p ? 'true' : 'false', on: { click: () => a.pane(p) } }, label)
+  const ports = tv.portsOpen
+    ? h(
+        'div',
+        { class: 'card ports col' },
+        h('p', { class: 'kicker' }, 'Open a server of your cloud'),
+        !tv.ports ? h('p', { class: 'sub' }, 'Looking…') : null,
+        tv.ports && tv.ports.known && !tv.ports.ports.length ? h('p', { class: 'sub' }, 'Nothing listens yet. Ask Claude to start the dev server, then look again.') : null,
+        tv.ports ? h('div', { class: 'opts' }, ...tv.ports.ports.map((p) => btn(`${p.port}${p.chat ? ' · this chat' : ''}`, () => a.preview(p.port), { kind: p.chat ? 'primary' : undefined, disabled: v.busy.has('preview') }))) : null,
+        h('div', { class: 'free row-inline' }, h('input', { class: 'inp', type: 'number', inputmode: 'numeric', min: '1024', max: '65535', placeholder: 'Port', 'data-k': 'preview:port', on: { input: (e: Event) => a.draft('preview:port', (e.target as HTMLInputElement).value) } }), btn('Open', () => a.preview(null), { small: true, disabled: v.busy.has('preview') })),
+        h('p', { class: 'sub' }, 'It opens in a new tab, as a sandboxed page: no sign-in or cookies of its own.')
+      )
+    : null
+  return h('div', { class: 'toolbar' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Show' }, seg('chat', 'Chat'), seg('files', 'Files'), seg('changes', 'Changes'), seg('shell', 'Terminal')), h('button', { type: 'button', class: `btn btn--sm${tv.portsOpen ? ' btn--primary' : ' btn--ghost'}`, on: { click: () => a.previewMenu() } }, 'Preview'), ports)
+}
+function filesPane(tv: ToolsView, a: Actions): VNode {
+  if (tv.file) {
+    const f = tv.file
+    return h(
+      'div',
+      { class: 'files' },
+      h('div', { class: 'crumbs' }, h('button', { type: 'button', class: 'back', 'aria-label': 'Back to the folder', on: { click: () => a.openFile(null) } }, '‹'), h('b', { class: 'mono' }, f.path), h('span', { class: 'sub' }, ` · ${sizeWords(f.size)}`)),
+      f.truncated ? h('p', { class: 'notice' }, `Only the first ${sizeWords(f.text.length)} is shown.`) : null,
+      h('pre', { class: 'screen mono code' }, f.text)
+    )
+  }
+  const d = tv.dir
+  if (!d) return loading()
+  const parts = d.path ? d.path.split('/') : []
+  return h(
+    'div',
+    { class: 'files' },
+    h(
+      'div',
+      { class: 'crumbs' },
+      d.path ? h('button', { type: 'button', class: 'back', 'aria-label': 'Up one folder', on: { click: () => a.browse(parentPath(d.path)) } }, '‹') : null,
+      h('button', { type: 'button', class: 'crumb', on: { click: () => a.browse('') } }, 'Folder'),
+      ...parts.map((p, i) => h('button', { type: 'button', class: 'crumb', on: { click: () => a.browse(parts.slice(0, i + 1).join('/')) } }, `/ ${p}`))
+    ),
+    !d.entries.length ? h('p', { class: 'sub center' }, 'This folder is empty.') : null,
+    h(
+      'div',
+      { class: 'flist' },
+      ...d.entries.map((e) => {
+        const path = d.path ? `${d.path}/${e.name}` : e.name
+        const can = e.kind === 'dir' || e.kind === 'file'
+        return h('button', { type: 'button', class: `frow frow--${e.kind}`, disabled: !can, on: { click: () => (e.kind === 'dir' ? a.browse(path) : a.openFile(path)) } }, h('span', { class: 'fico', 'aria-hidden': 'true' }, e.kind === 'dir' ? '▸' : e.kind === 'link' ? '↗' : '·'), h('span', { class: 'mono fname' }, e.name), h('span', { class: 'tm' }, e.kind === 'file' ? sizeWords(e.size) : e.kind === 'link' ? 'outside' : ''))
+      })
+    ),
+    d.more ? h('p', { class: 'sub' }, `${d.more} more not listed.`) : null
+  )
+}
+function diffView(text: string, truncated: boolean): VNode {
+  return h('div', { class: 'diff mono' }, ...diffLines(text).map((l) => h('div', { class: `dl dl--${l.k}` }, l.text || ' ')), truncated ? h('div', { class: 'dl dl--meta' }, '… cut here: too long for a phone') : null)
+}
+function changesPane(tv: ToolsView, v: View, a: Actions): VNode {
+  const c = tv.changes
+  if (!c) return loading()
+  if (!c.repo) return h('div', { class: 'card quiet' }, h('p', null, 'This chat has no git repository, so there are no changes to show.'))
+  const head = [c.branch ? `On ${c.branch}` : 'No branch yet', c.ahead ? `${c.ahead} not pushed` : null].filter(Boolean).join(' · ')
+  return h(
+    'div',
+    { class: 'changes' },
+    h('div', { class: 'crumbs' }, h('b', { class: 'mono' }, c.repo), h('span', { class: 'sub' }, ` · ${head}`), btn('Refresh', () => a.reloadChanges(), { small: true, kind: 'ghost', disabled: v.busy.has('changes') })),
+    h('p', { class: 'kicker' }, c.status.length ? `Not committed · ${c.status.length} file${c.status.length === 1 ? '' : 's'}` : 'Nothing uncommitted'),
+    c.status.length ? h('div', { class: 'flist' }, ...c.status.map((f) => h('div', { class: 'frow' }, h('span', { class: `fchip fchip--${statusWord(f.code)}` }, statusWord(f.code)), h('span', { class: 'mono fname' }, f.path)))) : null,
+    c.diff ? diffView(c.diff, c.diffTruncated) : null,
+    c.base ? h('p', { class: 'kicker' }, c.commits.length ? `This branch · ${c.commits.length} commit${c.commits.length === 1 ? '' : 's'} since ${c.base}` : `No commits since ${c.base}`) : null,
+    c.commits.length ? h('div', { class: 'flist' }, ...c.commits.map((x) => h('div', { class: 'frow' }, h('span', { class: 'mono sub' }, x.sha), h('span', { class: 'fname' }, x.subject)))) : null,
+    c.branchDiff ? diffView(c.branchDiff, c.branchDiffTruncated) : null
+  )
+}
+function shellPane(tv: ToolsView, a: Actions): VNode {
+  const sh = tv.shell
+  return h(
+    'div',
+    { class: 'shell' },
+    h('div', { class: 'crumbs' }, h('span', { class: 'sub' }, sh.state === 'on' ? 'Each line runs as you send it, in this chat\'s folder.' : sh.state === 'ended' ? 'The shell ended.' : 'Connecting…'), sh.state === 'on' ? btn('Ctrl-C', () => a.shellInt(), { small: true, kind: 'ghost' }) : sh.state === 'ended' ? btn('Start again', () => a.shellRestart(), { small: true, kind: 'primary' }) : null),
+    h('pre', { class: 'screen mono term', id: 'shell-out', 'aria-live': 'polite', 'aria-label': 'Terminal' }, sh.text)
   )
 }
 function terminalEnd(t: NonNullable<PhoneSession['terminal']>, history: boolean, v: View, a: Actions): VNode {

@@ -238,6 +238,16 @@ export const REMOTE_ROUTES = {
   sessionReply: 'POST /api/c/:companyId/sessions/:sessionId/reply',
   /** an ended terminal session opens again on the Mac, same conversation; answers { sessionId } of the new one */
   sessionContinue: 'POST /api/c/:companyId/sessions/:sessionId/continue',
+  /** docs/CLOUD-PHONE.md, a cloud's own chats: a folder of the chat (?path=, '' = its folder), lazily */
+  sessionFiles: 'GET /api/c/:companyId/sessions/:sessionId/files',
+  /** a text file of the chat's folder (?path=), size-capped; binary refused */
+  sessionFile: 'GET /api/c/:companyId/sessions/:sessionId/file',
+  /** git status and diff of the chat's clone */
+  sessionChanges: 'GET /api/c/:companyId/sessions/:sessionId/changes',
+  /** ports a server listens on in the cloud (the chat's own first) */
+  sessionPorts: 'GET /api/c/:companyId/sessions/:sessionId/ports',
+  /** { port } -> { url, expiresAt }: a link to that server, for a browser tab (no bearer there) */
+  sessionPreview: 'POST /api/c/:companyId/sessions/:sessionId/preview',
   agent: 'GET /api/c/:companyId/agents/:agentId',
   agentSend: 'POST /api/c/:companyId/agents/:agentId/send',
   room: 'GET /api/c/:companyId/room',
@@ -578,6 +588,66 @@ export interface PhoneRoomPost {
 // ---------- live socket (/api/live) ----------
 
 export type PhoneLiveView = 'now' | 'needs' | 'chats' | 'room' | 'companies'
+// ---------- a cloud chat's folder (docs/CLOUD-PHONE.md) ----------
+
+export interface PhoneDir {
+  /** relative to the chat's folder ('' = the folder itself), '/'-separated */
+  path: string
+  entries: { name: string; kind: 'dir' | 'file' | 'link' | 'other'; size: number | null }[]
+  /** entries not listed (a huge folder) */
+  more: number
+}
+export interface PhoneFile {
+  path: string
+  size: number
+  text: string
+  /** only the start of it is shown */
+  truncated: boolean
+}
+export interface PhoneChanges {
+  /** the clone, relative to the chat's folder; null: the chat has no git repository */
+  repo: string | null
+  branch: string | null
+  /** what the branch is compared with (origin's default branch, else its upstream) */
+  base: string | null
+  /** git status --porcelain: XY code and path */
+  status: { code: string; path: string }[]
+  /** working tree vs HEAD (unified diff) */
+  diff: string
+  diffTruncated: boolean
+  /** the branch's own commits since base, newest first */
+  commits: { sha: string; subject: string }[]
+  /** base...HEAD */
+  branchDiff: string
+  branchDiffTruncated: boolean
+  /** commits not pushed to its upstream (null: no upstream) */
+  ahead: number | null
+}
+export interface PhonePorts {
+  /** false: this machine can not tell (no /proc) */
+  known: boolean
+  /** chat: a process working in this chat's folder holds it */
+  ports: { port: number; chat: boolean; address: 'all' | 'loopback' | 'other' }[]
+}
+/** the shell of a cloud chat: one WebSocket, the device token as its first message */
+export const PHONE_SHELL_PATH = '/api/shell'
+export type PhoneShellClientMsg =
+  | { t: 'auth'; token: string }
+  | { t: 'ping' }
+  /** the shell of this chat (started, or the running one with its scrollback) */
+  | { t: 'open'; sessionId: Id }
+  /** one line, run as it is sent */
+  | { t: 'line'; text: string }
+  /** Ctrl-C to the command in front */
+  | { t: 'int' }
+export type PhoneShellServerMsg =
+  | { t: 'hello' }
+  | { t: 'pong' }
+  | { t: 'ready'; sessionId: Id; text: string }
+  | { t: 'out'; text: string }
+  | { t: 'exit'; code: number | null }
+  | { t: 'error'; message: string }
+
 export type PhoneClientMsg =
   | { t: 'sub'; companyId: Id; sessionId?: Id | null; channelId?: Id | null }
   | { t: 'ping' }

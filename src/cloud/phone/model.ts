@@ -315,3 +315,54 @@ export function terminalComposer(t: NonNullable<PhoneSession['terminal']>, name:
   if (t.canType || t.canReply) return { placeholder: `Message ${name}`, held: false }
   return t.held ? { placeholder: t.held, held: true } : null
 }
+
+// ---------- a cloud chat's folder (docs/CLOUD-PHONE.md) ----------
+
+/** what a cloud chat's screen shows: the conversation, its files, its changes, or its shell */
+export type Pane = 'chat' | 'files' | 'changes' | 'shell'
+
+export interface DiffLine {
+  k: 'file' | 'hunk' | 'add' | 'del' | 'ctx' | 'meta'
+  text: string
+}
+/** A unified diff -> lines to color, each file's header read as its path. Capped at `max` lines (the rest: one line). */
+export function diffLines(diff: string, max = 4000): DiffLine[] {
+  const out: DiffLine[] = []
+  const lines = diff.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!
+    if (out.length >= max) {
+      out.push({ k: 'meta', text: `… ${lines.length - i} more lines` })
+      break
+    }
+    if (l.startsWith('diff --git ')) {
+      const m = / b\/(.+)$/.exec(l)
+      out.push({ k: 'file', text: m ? m[1]! : l.slice(11) })
+    } else if (l.startsWith('@@')) out.push({ k: 'hunk', text: l })
+    else if (/^(\+\+\+ |--- |index |old mode|new mode|similarity index|dissimilarity index)/.test(l)) continue
+    else if (/^(new file mode|deleted file mode|rename from|rename to|copy from|copy to|Binary files)/.test(l)) out.push({ k: 'meta', text: l })
+    else if (l.startsWith('+')) out.push({ k: 'add', text: l })
+    else if (l.startsWith('-')) out.push({ k: 'del', text: l })
+    else out.push({ k: 'ctx', text: l })
+  }
+  return out
+}
+/** git status XY -> a word */
+export function statusWord(code: string): string {
+  if (code === '??') return 'new'
+  const c = code.trim()[0] ?? ''
+  return ({ M: 'changed', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'conflict', T: 'changed' } as Record<string, string>)[c] ?? c
+}
+/** 1234 -> "1.2 KB" */
+export function sizeWords(n: number | null): string {
+  if (n === null) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+/** `src/app` -> its parent ('' for the top) */
+export function parentPath(p: string): string {
+  const i = p.lastIndexOf('/')
+  return i < 0 ? '' : p.slice(0, i)
+}

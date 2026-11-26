@@ -9,13 +9,13 @@
  * carries it. The site itself holds no data: everything comes from the Mac, which is the authority.
  */
 import { slashMatches, slashQuery, type ChatOp, type ChatSnapshot } from '../../shared/chat'
-import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks } from '../../shared/remote'
+import { macFromTyped, parseMoveHash, parsePairHash, type PhoneResumeResponse, type PhoneAgent, type PhoneChats, type PhoneCompany, type PhoneMe, type PhoneNeeds, type PhoneNow, type PhonePairResponse, type PhoneRoom, type PhoneRoomMessage, type PhoneServerMsg, type PhoneSession, type PhoneChatRef, type PhoneTaskDetail, type PhoneTasks, type PhoneChanges, type PhoneDir, type PhoneFile, type PhonePorts, type PhoneShellServerMsg, PHONE_SHELL_PATH } from '../../shared/remote'
 import { ApiError, createApi, MacGone, NotPaired } from './api'
 import { checkMac, cloudWake, findMac, forgetMac, liveUrl, parseWakeHash, pastedPairHash, loadMac, macHost, saveMac, type PairedMac, type StorageLike } from './mac'
 import { mount, type VNode } from '../console/dom'
 import { openLive, type Live } from './live'
-import { ChatLoad, ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Route, type Tab } from './model'
-import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, repoOf, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type View } from './render'
+import { ChatLoad, ChatReplica, chatMessageAction, placeMessage, deviceName, terminalComposer, insertMention, mentionAt, mentionMatches, parseRoute, routeHash, type Pane, type Route, type Tab } from './model'
+import { renderAgent, renderChats, renderHeader, renderNeeds, renderNow, renderPair, repoOf, renderRoom, renderSession, renderSignedOut, renderTabs, renderTasks, type Actions, type ToolsView, type View } from './render'
 
 declare const __PHONE_HOSTED__: boolean
 /** the build for its own site (vite.phone-site.config.ts); the Mac's own bundle is same-origin */
@@ -74,8 +74,11 @@ interface State {
   /** the board (read only) and the task open on it */
   tasks: PhoneTasks | null
   task: PhoneTaskDetail | null
+  /** a cloud chat's folder (docs/CLOUD-PHONE.md) */
+  tools: ToolsView
 }
-const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, pasteError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null, tasks: null, task: null }
+const freshTools = (): ToolsView => ({ pane: 'chat', dir: null, file: null, changes: null, ports: null, portsOpen: false, shell: { text: '', state: 'connecting' }, error: null })
+const st: State = { phase: 'boot', outReason: 'unpaired', pairError: null, pasteError: null, me: null, route: parseRoute(location.hash), online: false, error: null, toast: null, busy: new Set(), drafts: {}, picks: {}, now: null, needs: null, chats: null, room: null, session: null, replica: null, agent: null, tasks: null, task: null, tools: freshTools() }
 let live: Live | null = null
 try {
   // the app scrolls itself (a chat opens at its newest message); the browser never restores an old position
@@ -338,6 +341,8 @@ async function onRoute(): Promise<void> {
     st.replica = null
     st.agent = null
     stick = true
+    closeShell()
+    st.tools = freshTools()
   }
   render()
   const n = ++routeSeq
@@ -436,6 +441,112 @@ async function flushLive(): Promise<void> {
   } catch (e) {
     if (e instanceof NotPaired) fail(e)
   }
+}
+
+// ---------- a cloud chat's folder: files, changes, the shell, previews (docs/CLOUD-PHONE.md) ----------
+
+const openId = (): string | null => (st.route.open?.kind === 'session' ? st.route.open.id : null)
+/** a load for the open chat's folder: its failure shows in the pane (signed out still signs out) */
+async function toolLoad(f: (id: string) => Promise<void>): Promise<void> {
+  const id = openId()
+  if (!id) return
+  try {
+    st.tools.error = null
+    await f(id)
+  } catch (e) {
+    if (e instanceof NotPaired) return fail(e)
+    if (openId() === id) st.tools.error = e instanceof Error ? e.message : String(e)
+  }
+  if (openId() === id) render()
+}
+const loadFiles = (path: string): Promise<void> =>
+  toolLoad(async (id) => {
+    const d = await api.call<PhoneDir>('sessionFiles', { params: { ...cid(), sessionId: id }, query: { path } })
+    if (openId() === id) {
+      st.tools.dir = d
+      st.tools.file = null
+    }
+  })
+const loadChanges = (): Promise<void> =>
+  toolLoad(async (id) => {
+    const c = await api.call<PhoneChanges>('sessionChanges', { params: { ...cid(), sessionId: id } })
+    if (openId() === id) st.tools.changes = c
+  })
+const loadPorts = (): Promise<void> =>
+  toolLoad(async (id) => {
+    const p = await api.call<PhonePorts>('sessionPorts', { params: { ...cid(), sessionId: id } })
+    if (openId() === id) st.tools.ports = p
+  })
+
+/** the shell's socket: its own, beside the live one; the token is its first message */
+let shell: { ws: WebSocket; id: string } | null = null
+const SHELL_KEEP = 200_000
+function shellUrl(): string {
+  return liveUrl(HOSTED ? (paired?.mac ?? '') : '', location).replace(/\/api\/live$/, PHONE_SHELL_PATH)
+}
+function closeShell(): void {
+  const sh = shell
+  shell = null
+  if (sh) {
+    sh.ws.onclose = sh.ws.onmessage = sh.ws.onopen = null
+    try {
+      sh.ws.close()
+    } catch {
+      /* gone */
+    }
+  }
+}
+function openShell(): void {
+  const id = openId()
+  if (!id || (shell && shell.id === id)) return
+  closeShell()
+  st.tools.shell = { text: st.tools.shell.text, state: 'connecting' }
+  const ws = new WebSocket(shellUrl())
+  shell = { ws, id }
+  const ping = setInterval(() => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ping' })), 25_000)
+  ws.onopen = () => ws.send(JSON.stringify({ t: 'auth', token: paired?.token ?? '' }))
+  ws.onmessage = (e) => {
+    if (shell?.ws !== ws) return
+    let m: PhoneShellServerMsg
+    try {
+      m = JSON.parse(String(e.data)) as PhoneShellServerMsg
+    } catch {
+      return
+    }
+    if (m.t === 'hello') ws.send(JSON.stringify({ t: 'open', sessionId: id }))
+    else if (m.t === 'ready') {
+      st.tools.shell = { text: m.text, state: 'on' }
+      render()
+    } else if (m.t === 'out') shellOut(m.text)
+    else if (m.t === 'exit') {
+      st.tools.shell = { ...st.tools.shell, state: 'ended' }
+      render()
+    } else if (m.t === 'error') {
+      st.tools.error = m.message
+      render()
+    }
+  }
+  ws.onclose = (e) => {
+    clearInterval(ping)
+    if (shell?.ws !== ws) return
+    shell = null
+    if (st.tools.shell.state !== 'ended') st.tools.error = e.code === 4401 ? 'Pair this phone again.' : 'The connection dropped. Start again: a shell keeps running for 5 minutes without you.'
+    st.tools.shell = { ...st.tools.shell, state: 'ended' }
+    render()
+  }
+}
+/** output: added to the screen in place (never a rebuild under the field), following the end when you are there */
+function shellOut(text: string): void {
+  const sh = st.tools.shell
+  sh.text += text
+  const trimmed = sh.text.length > SHELL_KEEP
+  if (trimmed) sh.text = sh.text.slice(sh.text.length - SHELL_KEEP)
+  const el = document.getElementById('shell-out')
+  if (!el) return
+  const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 40
+  if (trimmed) el.textContent = sh.text
+  else el.append(text)
+  if (atEnd) el.scrollTop = el.scrollHeight
 }
 
 // ---------- actions ----------
@@ -669,6 +780,66 @@ const actions: Actions = {
     st.outReason = 'unpaired'
     render()
   },
+  pane(p: Pane) {
+    st.tools.pane = p
+    st.tools.error = null
+    if (p === 'files' && !st.tools.dir) void loadFiles('')
+    if (p === 'changes') void loadChanges()
+    if (p === 'shell') openShell()
+    render()
+    window.scrollTo(0, 0)
+  },
+  browse(path) {
+    void loadFiles(path)
+  },
+  openFile(path) {
+    if (!path) {
+      st.tools.file = null
+      return render()
+    }
+    void toolLoad(async (id) => {
+      const f = await api.call<PhoneFile>('sessionFile', { params: { ...cid(), sessionId: id }, query: { path } })
+      if (openId() === id) st.tools.file = f
+    })
+  },
+  reloadChanges() {
+    void busy('changes', loadChanges)
+  },
+  previewMenu() {
+    st.tools.portsOpen = !st.tools.portsOpen
+    st.tools.ports = null
+    render()
+    if (st.tools.portsOpen) void loadPorts()
+  },
+  preview(port) {
+    const p = port ?? Number(st.drafts['preview:port'] ?? '')
+    const id = openId()
+    if (!id) return
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) return say('A port from 1024 to 65535')
+    // the tab opens now, inside the tap (a pop-up blocker allows that), and goes to the link once it is minted
+    const tab = window.open('about:blank', '_blank')
+    void busy('preview', async () => {
+      try {
+        const out = await api.call<{ url: string }>('sessionPreview', { params: { ...cid(), sessionId: id }, body: { port: p } })
+        if (tab) {
+          tab.opener = null
+          tab.location.href = out.url
+        } else location.href = out.url
+      } catch (e) {
+        tab?.close()
+        throw e
+      }
+    })
+  },
+  shellInt() {
+    shell?.ws.send(JSON.stringify({ t: 'int' }))
+  },
+  shellRestart() {
+    closeShell()
+    st.tools.error = null
+    openShell()
+    render()
+  },
   draft(key, value) {
     st.drafts[key] = value
     // a draft that opens or closes something (Send back) redraws; typing does not
@@ -690,7 +861,7 @@ function updateDisabled(): void {
 let stick = true
 let deferred = false
 function view(): View {
-  return { host: st.me?.host ?? 'mac', companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, tasks: st.tasks, task: st.task, taskId: st.route.tab === 'tasks' ? (st.route.task ?? null) : null, openKind: st.route.open?.kind ?? null }
+  return { host: st.me?.host ?? 'mac', companies: companies(), companyId: companyId(), tab: st.route.tab, online: st.online, error: st.error, toast: st.toast, busy: st.busy, drafts: st.drafts, picks: st.picks, now: st.now, needs: st.needs, chats: st.chats, room: st.room, session: st.session, replica: st.replica, agent: st.agent, tasks: st.tasks, task: st.task, taskId: st.route.tab === 'tasks' ? (st.route.task ?? null) : null, openKind: st.route.open?.kind ?? null, tools: st.tools }
 }
 function screen(v: View): VNode {
   const r = st.route
@@ -752,7 +923,9 @@ function render(o: { live?: boolean } = {}): void {
   }
   document.body.classList.toggle('is-chat', chat)
   dock(dockSpec())
-  if (chat && (stick || pinned)) {
+  const out = document.getElementById('shell-out')
+  if (out) out.scrollTop = out.scrollHeight
+  if (chat && st.tools.pane === 'chat' && (stick || pinned)) {
     toBottom()
     if (st.session || st.agent || st.room) stick = false
   } else window.scrollTo(0, y)
@@ -809,6 +982,8 @@ function dockSpec(): DockSpec | null {
   if (r.open?.kind === 'session') {
     const s = st.session
     if (!s) return null
+    // a cloud chat's shell: one line at a time; its files and changes take nothing
+    if (s.cloud && st.me?.host === 'cloud' && st.tools.pane !== 'chat') return st.tools.pane === 'shell' ? { key: `shell:${s.ref.id}`, placeholder: st.tools.shell.state === 'on' ? 'A command' : 'The shell is not running', stop: false, label: 'Run', mentions: false, held: st.tools.shell.state !== 'on' } : null
     const t = s.terminal
     // a terminal on the Mac: write any time it runs (it takes the message now or right after this step); while it
     // asks something the box stays, with the reason in it and Send off
@@ -955,7 +1130,10 @@ async function send(spec: DockSpec, ta: HTMLTextAreaElement): Promise<void> {
   sendingDock = true
   const r = st.route
   try {
-    if (r.open?.kind === 'session' && spec.key.startsWith('session:')) {
+    if (spec.key.startsWith('shell:')) {
+      if (!shell || st.tools.shell.state !== 'on') return
+      shell.ws.send(JSON.stringify({ t: 'line', text }))
+    } else if (r.open?.kind === 'session' && spec.key.startsWith('session:')) {
       // an agent's ended chat reopens in a new session (same conversation): follow it there
       const out = await api.call<{ ok: boolean; sessionId?: string }>('sessionSend', { params: { ...cid(), sessionId: r.open.id }, body: { text } })
       if (out?.sessionId && out.sessionId !== r.open.id) go({ open: { kind: 'session', id: out.sessionId } })

@@ -291,3 +291,35 @@ body[data-phase='pair'] .toast, body[data-phase='out'] .toast { bottom: calc(24p
 .seg { display: flex; gap: 4px; padding: 3px; border: 1px solid rgba(195, 203, 206, .2); border-radius: 999px; align-self: flex-start; }
 .seg button { font: inherit; font-size: 13px; padding: 5px 12px; border: 0; border-radius: 999px; background: none; color: var(--silver); }
 .seg button.on { background: rgba(159, 208, 255, .14); color: #cfe7ff; }
+/* docs/CLOUD-PHONE.md: a cloud chat's files, changes, shell and previews */
+.chead--tools { flex-wrap: wrap; }
+.toolbar { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.toolbar .seg { align-self: center; }
+.toolbar .ports { flex-basis: 100%; }
+.row-inline { align-items: center; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 10px 0; min-width: 0; }
+.crumbs b { overflow-wrap: anywhere; }
+.crumbs .btn { margin-left: auto; }
+.crumb { color: var(--silver); font-size: 14px; padding: 6px 2px; min-height: 36px; }
+.flist { display: flex; flex-direction: column; }
+.frow { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; width: 100%; min-height: 46px; padding: 8px 0; border-top: 1px solid var(--line); text-align: left; }
+.frow:first-child { border-top: 0; }
+.frow:disabled { opacity: .55; }
+.frow--dir .fname { color: var(--ink); font-weight: 600; }
+.fico { width: 16px; color: var(--muted); text-align: center; }
+.fname { min-width: 0; overflow-wrap: anywhere; }
+.fchip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--soft); }
+.fchip--new, .fchip--added { color: var(--status-ok); border-color: rgba(167, 193, 176, .4); }
+.fchip--deleted, .fchip--conflict { color: var(--status-fail); border-color: rgba(227, 134, 143, .4); }
+.changes .kicker { margin-top: 14px; }
+.diff { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--page); overflow-x: auto; -webkit-overflow-scrolling: touch; font-size: 12px; line-height: 1.5; }
+.dl { white-space: pre; padding: 0 10px; min-width: max-content; }
+.dl--file { position: sticky; left: 0; padding: 8px 10px; font-weight: 600; color: var(--ink); background: var(--raised); border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.dl--file:first-child { border-top: 0; }
+.dl--hunk { color: #9fd0ff; background: rgba(159, 208, 255, .06); }
+.dl--add { color: #bfe3c9; background: rgba(120, 200, 140, .12); }
+.dl--del { color: #f2b8be; background: rgba(227, 134, 143, .12); }
+.dl--ctx { color: var(--muted); }
+.dl--meta { color: var(--faint); font-style: italic; }
+.code { max-height: none; white-space: pre; overflow-x: auto; }
+.term { max-height: calc(100vh - var(--top-h) - 260px); min-height: 40vh; white-space: pre-wrap; }

@@ -175,4 +175,22 @@ describe('cloud chat processes (docs/CLOUD-CHATS.md)', () => {
     expect(t.synced).toHaveLength(1)
     await t.procs.stop('sess_1')
   })
+
+  it("gives the phone the chat's folder and environment, never Claude's sign-in (docs/CLOUD-PHONE.md)", async () => {
+    const { procs, sandbox } = setup()
+    expect(procs.workspace('sess_ws')).toBeNull()
+    await procs.start(spec({ id: 'sess_ws', repo: { id: 'chat', name: 'app', url: 'https://github.com/acme/app', branch: null, token: 'ghp_' + 'r'.repeat(36) } }))
+    await until(() => procs.get('sess_ws')?.state !== 'preparing')
+    const w = procs.workspace('sess_ws', { secrets: { API_KEY: 'k1', PATH: '/evil' }, githubToken: 'ghp_' + 'r'.repeat(36) })!
+    expect(w.root).toBe(sandbox.companyDir('chat_sess_ws'))
+    expect(w.cwd).toBe(join(w.root, 'app'))
+    expect(w.env.HOME).toBe(join(sandbox.runDir('chat_sess_ws'), 'home'))
+    expect(w.env.API_KEY).toBe('k1')
+    expect(w.env.PATH).not.toBe('/evil')
+    expect(w.env.GIT_ASKPASS).toContain('askpass.sh')
+    expect(JSON.stringify(w.env)).not.toContain(TOKEN)
+    expect(w.user).toBeNull()
+    expect(() => procs.workspace('../x')).toThrow()
+    await procs.close()
+  })
 })

@@ -159,6 +159,23 @@ export interface CloudChats {
   live(): number
   /** Claude's transcript of the conversation (JSONL), for the Mac to show its history; null when there is none */
   transcript(id: string): string | null
+  /**
+   * docs/CLOUD-PHONE.md: the chat's folder and the shell it gets (the phone's Files, Changes and Terminal). null when
+   * the chat never had a folder on this machine. `keys`: the workspace keys and GitHub token, as the chat gets them.
+   */
+  workspace?(id: string, keys?: { secrets: Record<string, string>; githubToken: string | null }): ChatWorkspace | null
+}
+
+/** A chat's folder on this machine, and how a process runs there as the chat's own would. */
+export interface ChatWorkspace {
+  /** the chat's folder (a real path): nothing outside it is shown */
+  root: string
+  /** where its processes start: the repository's clone when there is one, else root */
+  cwd: string
+  /** the chat's environment (its HOME, the CLIs' homes, git's askpass, the workspace keys), without Claude's sign-in */
+  env: Record<string, string>
+  /** the agent user its processes run as (null: the runtime's own) */
+  user: { uid: number; gid: number } | null
 }
 
 // ---------- the runtime (package AI implements; control plane calls) ----------

@@ -29,7 +29,8 @@ import { createProviders } from './providers'
 import { createAccounts } from './accounts'
 import { activitySnapshot, writeActivity } from './activity'
 import { attachChatSockets, chatStartSpec, CHAT_ID } from './chats'
-import { attachPhoneSockets, createPhoneApi, mintPhoneLink } from './phoneApi'
+import { attachPhoneSockets, createPhoneApi, deviceOf, mintPhoneLink } from './phoneApi'
+import { createPhoneTools, type PhoneToolsDeps } from './phoneTools'
 import { dbStore, PhoneChats } from './phoneChats'
 import { githubRepos } from './githubRepos'
 import { createQueue } from './queue'
@@ -52,6 +53,8 @@ export interface ControlAppOptions {
   tickMs?: number
   /** docs/FLEET.md §6: how often <dataDir>/activity.json is written (default 30 s; 0 never) */
   activityMs?: number
+  /** tests: /proc, the shell's grace and binary (phoneTools.ts) */
+  phoneTools?: Pick<PhoneToolsDeps, 'procRoot' | 'shellGraceMs' | 'shell'>
 }
 
 type Policy = 'open' | 'device' | 'any' | 'pair' | 'session'
@@ -165,7 +168,16 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
     log
   })
   const repos = githubRepos(() => accounts.githubToken(), config.fetch ?? fetch)
-  phone = createPhoneApi({ ctx, chats: phoneChats, repos, touched: () => { lastChangeAt = now().toISOString() } })
+  const touched = (): void => { lastChangeAt = now().toISOString() }
+  // docs/CLOUD-PHONE.md: a cloud chat's folder on the phone (files, changes, a shell, previews)
+  const tools = createPhoneTools({
+    ctx, chats: phoneChats, touched,
+    workspace: (id) => ctx.runtime.chats.workspace?.(id, { secrets: material().secrets, githubToken: material().githubToken }) ?? null,
+    device: (t) => { const dv = deviceOf(ctx, t); return dv?.platform === 'phone' ? dv : null },
+    ownPort: () => { const a = httpServer?.address(); return a && typeof a === 'object' ? a.port : null },
+    ...o.phoneTools
+  })
+  phone = createPhoneApi({ ctx, chats: phoneChats, repos, touched, tools })
   const phoneApi = phone
   const limiter = new PairLimiter(now)
   const timers: NodeJS.Timeout[] = []
@@ -467,6 +479,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
     try { url = new URL(req.url ?? '/', 'http://control.local') } catch { url = new URL('http://control.local/') }
     try {
       if (config.passportProxy && config.passport && isPassportPath(url.pathname)) return void (await proxyToPassport(req, res, config.passportProxy, config.passport.publicUrl))
+      if (tools.preview(req, res, url)) return
       if (await phoneApi.handle(req, res, url)) return
       await route(req, res, url)
     } catch (e) {
@@ -490,7 +503,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
   let lastChangeAt: string | null = null
   const reportActivity = (): void => {
     try {
-      writeActivity(config.dataDir, activitySnapshot(ctx, lastChangeAt, ctx.runtime.chats.live()))
+      writeActivity(config.dataDir, activitySnapshot(ctx, lastChangeAt, ctx.runtime.chats.live() + tools.shells()))
     } catch (e) {
       log.warn('activity.json not written', { error: (e as Error).message })
     }
@@ -553,6 +566,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       chatSockets?.close()
       offPhoneSockets?.()
       phoneApi.close()
+      tools.close()
       await phoneChats.close()
       if (httpServer) await new Promise<void>(r => { httpServer!.close(() => r()); httpServer!.closeAllConnections() })
       try { await ctx.runtime.close() } catch (e) { log.warn('runtime.close failed', { error: (e as Error).message }) }
