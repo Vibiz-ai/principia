@@ -408,6 +408,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
 
   function revokedSockets(deviceId: string): void {
     for (const s of subs) if (s.device === deviceId) { out(s, { t: 'bye', reason: 'revoked' }); s.ws.close(4401, 'revoked') }
+    d.tools.revoked(deviceId)
   }
 
   return {

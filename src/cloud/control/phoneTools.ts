@@ -40,6 +40,11 @@ export const SHELL_KEEP_CHARS = 200_000
 export const SHELL_GRACE_MS = 5 * 60_000
 const SHELL_LINE_MAX = 8000
 export const PREVIEW_TTL_MS = 8 * 3600_000
+const WORKSPACE_TTL_MS = 60_000
+/** a phone that reads the shell slower than it writes: dropped (it reconnects and gets the scrollback) */
+export const SHELL_SOCKET_MAX_BUFFER = 1024 * 1024
+/** waiting for a preview's answer; a streaming answer (SSE, chunked) is not timed once it started */
+const PREVIEW_WAIT_MS = 120_000
 const PREVIEW_RE = /^\/preview\/([0-9A-Za-z_-]{1,96})\/(\d{1,5})\/([0-9A-Za-z_-]{1,64}\.\d{1,15}\.[0-9a-f]{32})(\/.*)?$/
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'cookie', 'authorization', 'origin', 'referer'])
 /** the page runs scripts and forms, as an opaque origin: never this cloud's own */
@@ -163,6 +168,8 @@ export function readText(w: ChatWorkspace, rel: unknown): PhoneFile {
   try {
     const st = fstatSync(fd)
     if (!st.isFile()) throw new ApiError('bad_request', 'That is not a file.')
+    // read as root: a hard link to a file the agent does not own (made from elsewhere) is not the chat's
+    if (w.user && st.uid !== w.user.uid && st.nlink > 1) throw new ApiError('bad_request', 'That file is linked from outside the chat\'s folder.')
     if (st.size > FILE_MAX_BYTES) throw new ApiError('bad_request', `That file is ${Math.round(st.size / 1024 / 1024)} MB: too big to show on a phone.`)
     const buf = Buffer.alloc(Math.min(st.size, FILE_SHOW_BYTES))
     let n = 0
@@ -244,6 +251,7 @@ export function runIn(w: ChatWorkspace, file: string, args: string[], o: { cwd?:
   })
 }
 
+const REF = /^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$/
 const GIT_FLAGS = ['-c', 'core.fsmonitor=false', '-c', 'core.quotepath=false', '-c', 'color.ui=false', '-c', 'diff.external=', '--no-pager']
 
 /** git status and diff of the chat's clone: the working tree against HEAD, and the branch against the default branch. */
@@ -266,27 +274,25 @@ export async function changesOf(w: ChatWorkspace, git = 'git'): Promise<PhoneCha
   const hasHead = (await g(['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0
   const diff = hasHead ? await g(['diff', 'HEAD', '--no-color', '--no-ext-diff', '-M']) : await g(['diff', '--cached', '--no-color', '--no-ext-diff'])
   // the branch against where it will merge: the remote's default branch, else its upstream
-  let base: string | null = null
-  const def = await g(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
-  if (def.code === 0 && def.out.trim()) base = def.out.trim()
-  const up = await g(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
-  const upstream = up.code === 0 && up.out.trim() ? up.out.trim() : null
-  base ??= upstream
+  // a ref name as git printed it, never one that reads as an option
+  const ref = (r: RunOut): string | null => (r.code === 0 && REF.test(r.out.trim()) ? r.out.trim() : null)
+  const upstream = ref(await g(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']))
+  const base = ref(await g(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])) ?? upstream
   let commits: PhoneChanges['commits'] = []
   let branchDiff = ''
   let branchDiffTruncated = false
-  if (base && hasHead && /^[A-Za-z0-9._/-]{1,200}$/.test(base)) {
-    const log = await g(['log', '--no-color', '--format=%h%x09%s', '-n', '50', `${base}..HEAD`, '--'])
+  if (base && hasHead) {
+    const log = await g(['log', '--no-color', '--format=%h%x09%s', '-n', '50', '--end-of-options', `${base}..HEAD`, '--'])
     commits = log.out.split('\n').filter(Boolean).map((l) => ({ sha: l.split('\t')[0]!, subject: l.split('\t').slice(1).join('\t') }))
     if (commits.length) {
-      const bd = await g(['diff', '--no-color', '--no-ext-diff', '-M', `${base}...HEAD`, '--'])
+      const bd = await g(['diff', '--no-color', '--no-ext-diff', '-M', '--end-of-options', `${base}...HEAD`, '--'])
       branchDiff = bd.out
       branchDiffTruncated = bd.truncated
     }
   }
   let ahead: number | null = null
   if (upstream && hasHead) {
-    const c = await g(['rev-list', '--count', `${upstream}..HEAD`, '--'])
+    const c = await g(['rev-list', '--count', '--end-of-options', `${upstream}..HEAD`, '--'])
     ahead = c.code === 0 ? Number(c.out.trim()) || 0 : null
   }
   return { repo: relOf(w.root, topReal), branch, base, status: files, diff: diff.out, diffTruncated: diff.truncated, commits, branchDiff, branchDiffTruncated, ahead }
@@ -366,10 +372,16 @@ export function createPhoneTools(d: PhoneToolsDeps) {
   const procRoot = d.procRoot === undefined ? (process.platform === 'linux' ? '/proc' : null) : d.procRoot
   const key = randomBytes(32)
 
+  // the folder and environment, read once a minute per chat (never on every tap)
+  const cache = new Map<string, { w: ChatWorkspace; at: number }>()
   const ws = (id: string): ChatWorkspace => {
     if (!d.chats.get(id)) throw new ApiError('not_found', 'That chat is not on your cloud.')
+    const hit = cache.get(id)
+    if (hit && Date.now() - hit.at < WORKSPACE_TTL_MS) return hit.w
     const w = d.workspace(id)
     if (!w) throw new ApiError('not_found', 'This chat has no folder yet. It gets one when it starts.')
+    if (cache.size > 200) cache.clear()
+    cache.set(id, { w, at: Date.now() })
     return w
   }
 
@@ -439,35 +451,50 @@ export function createPhoneTools(d: PhoneToolsDeps) {
       res.end()
       return true
     }
-    const up = httpRequest({ host: '127.0.0.1', port: t.port, method: req.method, path: t.rest + url.search, headers: fwdHeaders(req.headers, t.port) }, (r) => {
-      const h: OutgoingHttpHeaders = {}
-      for (const [k, v] of Object.entries(r.headers)) {
-        if (v === undefined || HOP.has(k) || k === 'set-cookie' || k.startsWith('access-control-') || k === 'cross-origin-resource-policy' || k === 'service-worker-allowed' || k === 'clear-site-data') continue
-        h[k] = v
-      }
-      // a redirect inside the server stays inside the preview
-      const loc = typeof r.headers.location === 'string' ? r.headers.location : null
-      if (loc) {
-        const local = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d+)?(\/.*)?$/i.exec(loc)
-        if (local) h.location = t.prefix + (local[1] ?? '/')
-        else if (loc.startsWith('/') && !loc.startsWith('//')) h.location = t.prefix + loc
-      }
-      const csp = r.headers['content-security-policy']
-      // two policies (theirs, then ours), both enforced: theirs can only narrow it further
-      h['content-security-policy'] = csp ? `${csp}, ${PREVIEW_CSP}` : PREVIEW_CSP
-      h['x-content-type-options'] = 'nosniff'
-      h['referrer-policy'] = 'no-referrer'
-      Object.assign(h, cors)
-      res.writeHead(r.statusCode ?? 502, h)
-      r.pipe(res)
-    })
-    up.setTimeout(120_000, () => up.destroy(new Error('timeout')))
-    up.on('error', () => {
-      if (res.headersSent) return void res.destroy()
-      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...cors })
-      res.end(`Nothing answers on port ${t.port} in your cloud. Is the server still running?`)
-    })
-    req.pipe(up)
+    const headers = fwdHeaders(req.headers, t.port)
+    // a request without a body may try ::1 too (a server that listens on IPv6 localhost only)
+    const retryable = req.method === 'GET' || req.method === 'HEAD'
+    const attempt = (host: string): void => {
+      const up = httpRequest({ host, port: t.port, method: req.method, path: t.rest + url.search, headers }, (r) => {
+        const h: OutgoingHttpHeaders = {}
+        for (const [k, v] of Object.entries(r.headers)) {
+          if (v === undefined || HOP.has(k) || k === 'set-cookie' || k.startsWith('access-control-') || k === 'cross-origin-resource-policy' || k === 'service-worker-allowed' || k === 'clear-site-data') continue
+          h[k] = v
+        }
+        // a redirect inside the server stays inside the preview
+        const loc = typeof r.headers.location === 'string' ? r.headers.location : null
+        if (loc) {
+          const local = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d+)?(\/.*)?$/i.exec(loc)
+          if (local) h.location = t.prefix + (local[1] ?? '/')
+          else if (loc.startsWith('/') && !loc.startsWith('//')) h.location = t.prefix + loc
+        }
+        const csp = r.headers['content-security-policy']
+        // two policies (theirs, then ours), both enforced: theirs can only narrow it further
+        h['content-security-policy'] = csp ? `${csp}, ${PREVIEW_CSP}` : PREVIEW_CSP
+        h['x-content-type-options'] = 'nosniff'
+        h['referrer-policy'] = 'no-referrer'
+        Object.assign(h, cors)
+        // a stream (server-sent events, a chunked answer) may stay quiet for long: it ends when either side goes
+        if (String(r.headers['content-type'] ?? '').startsWith('text/event-stream') || r.headers['content-length'] === undefined) up.setTimeout(0)
+        res.writeHead(r.statusCode ?? 502, h)
+        r.pipe(res)
+      })
+      up.setTimeout(PREVIEW_WAIT_MS, () => up.destroy(new Error('timeout')))
+      up.on('error', (e: NodeJS.ErrnoException) => {
+        if (retryable && host === '127.0.0.1' && e.code === 'ECONNREFUSED' && !res.headersSent && !res.destroyed) return attempt('::1')
+        if (res.headersSent) return void res.destroy()
+        if (res.destroyed) return
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...cors })
+        res.end(`Nothing answers on port ${t.port} in your cloud. Is the server still running?`)
+      })
+      // the tab went away: so does the request to the server
+      res.on('close', () => {
+        if (!res.writableFinished) up.destroy()
+      })
+      if (retryable) up.end()
+      else req.pipe(up)
+    }
+    attempt('127.0.0.1')
     return true
   }
 
@@ -488,30 +515,40 @@ export function createPhoneTools(d: PhoneToolsDeps) {
       return void socket.destroy()
     }
     d.touched()
-    const up = connect(t.port, '127.0.0.1', () => {
-      const h = fwdHeaders(req.headers, t.port)
-      h.connection = 'Upgrade'
-      h.upgrade = req.headers.upgrade ?? 'websocket'
-      const lines = [`${req.method ?? 'GET'} ${t.rest}${search} HTTP/1.1`]
-      for (const [k, v] of Object.entries(h)) for (const x of Array.isArray(v) ? v : [v]) if (x !== undefined && !/[\r\n]/.test(String(x))) lines.push(`${k}: ${x}`)
-      up.write(`${lines.join('\r\n')}\r\n\r\n`)
-      if (head.length) up.write(head)
-      up.pipe(socket)
-      socket.pipe(up)
-    })
-    const end = (): void => {
-      up.destroy()
-      socket.destroy()
+    const dial = (host: string): void => {
+      const up = connect(t.port, host, () => {
+        const h = fwdHeaders(req.headers, t.port)
+        h.connection = 'Upgrade'
+        h.upgrade = req.headers.upgrade ?? 'websocket'
+        const lines = [`${req.method ?? 'GET'} ${t.rest}${search} HTTP/1.1`]
+        for (const [k, v] of Object.entries(h)) for (const x of Array.isArray(v) ? v : [v]) if (x !== undefined && !/[\r\n]/.test(String(x))) lines.push(`${k}: ${x}`)
+        up.write(`${lines.join('\r\n')}\r\n\r\n`)
+        if (head.length) up.write(head)
+        up.pipe(socket)
+        socket.pipe(up)
+      })
+      let open = false
+      up.once('connect', () => (open = true))
+      const end = (): void => {
+        up.destroy()
+        socket.destroy()
+      }
+      up.on('error', (e: NodeJS.ErrnoException) => {
+        if (!open && host === '127.0.0.1' && e.code === 'ECONNREFUSED' && !socket.destroyed) return dial('::1')
+        end()
+      })
+      up.on('close', () => (open || host !== '127.0.0.1' ? end() : undefined))
+      socket.once('error', end)
+      socket.once('close', end)
     }
-    up.on('error', end)
-    socket.on('error', end)
-    up.on('close', end)
-    socket.on('close', end)
+    dial('127.0.0.1')
   }
 
   // ---------- the shell ----------
 
   interface Shell { chatId: string; child: ReturnType<typeof spawn>; buf: string; socks: Set<WebSocket>; grace: NodeJS.Timeout | null; cwd: string; ended: boolean }
+  /** each shell socket's phone: re-checked on every message, closed when it is revoked */
+  const socketDevice = new Map<WebSocket, string>()
   const shells = new Map<string, Shell>()
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
   const tell = (s: WebSocket, m: PhoneShellServerMsg): void => {
@@ -520,16 +557,35 @@ export function createPhoneTools(d: PhoneToolsDeps) {
   const put = (sh: Shell, text: string): void => {
     if (!text) return
     sh.buf += text
-    if (sh.buf.length > SHELL_KEEP_CHARS) sh.buf = sh.buf.slice(sh.buf.indexOf('\n', sh.buf.length - SHELL_KEEP_CHARS) + 1)
-    for (const s of sh.socks) tell(s, { t: 'out', text })
+    if (sh.buf.length > SHELL_KEEP_CHARS) {
+      // from a line start when there is one near the cut, else at the cut (output with no newline at all)
+      const cut = sh.buf.length - SHELL_KEEP_CHARS
+      const nl = sh.buf.indexOf('\n', cut)
+      sh.buf = sh.buf.slice(nl >= 0 && nl - cut < 4096 ? nl + 1 : cut)
+    }
+    for (const s of sh.socks) {
+      // a phone that can't keep up is dropped, never buffered for without end
+      if (s.bufferedAmount > SHELL_SOCKET_MAX_BUFFER) {
+        sh.socks.delete(s)
+        s.terminate()
+        continue
+      }
+      tell(s, { t: 'out', text })
+    }
   }
-  const killShell = (sh: Shell): void => {
-    if (sh.ended) return
+  const killGroup = (sh: Shell): void => {
     try {
       process.kill(-sh.child.pid!, 'SIGKILL')
     } catch {
-      sh.child.kill('SIGKILL')
+      try {
+        sh.child.kill('SIGKILL')
+      } catch {
+        /* gone */
+      }
     }
+  }
+  const killShell = (sh: Shell): void => {
+    if (!sh.ended) killGroup(sh)
   }
   const watchGrace = (sh: Shell): void => {
     if (sh.grace) clearTimeout(sh.grace)
@@ -553,12 +609,21 @@ export function createPhoneTools(d: PhoneToolsDeps) {
     child.stderr!.on('data', onOut)
     child.stdin!.on('error', () => undefined)
     child.on('error', (e) => put(sh, `The shell could not start: ${e.message}\n`))
-    child.on('close', (code) => {
+    // the shell itself exited: it ended, even when something it put in the background (setsid … &) still holds the
+    // pipes. Its group goes too, and the pipes are let go of.
+    const finish = (code: number | null): void => {
+      if (sh.ended) return
       sh.ended = true
       if (sh.grace) clearTimeout(sh.grace)
+      killGroup(sh)
+      child.stdout!.destroy()
+      child.stderr!.destroy()
+      child.stdin!.destroy()
       for (const s of sh.socks) tell(s, { t: 'exit', code })
       if (shells.get(chatId) === sh) shells.delete(chatId)
-    })
+    }
+    child.on('exit', (code) => finish(code))
+    child.on('close', (code) => finish(code))
     // Ctrl-C stops the command running in front, not the shell (a trapped signal resets to default in its children)
     child.stdin!.write(`trap 'printf "^C\\n"' INT\n`)
     put(sh, `Shell in ${relOf(w.root, w.cwd) || 'the chat\'s folder'}. Each line runs as you send it.\n`)
@@ -582,8 +647,11 @@ export function createPhoneTools(d: PhoneToolsDeps) {
           dev = m.t === 'auth' ? d.device(m.token) : null
           if (!dev) return sock.close(4401, 'Pair this phone again.')
           clearTimeout(authWait)
+          socketDevice.set(sock, dev.id)
           return tell(sock, { t: 'hello' })
         }
+        // signed out or revoked since: this socket ends
+        if (!ctx.db.get("SELECT id FROM devices WHERE id = ? AND platform = 'phone' AND revoked_at IS NULL", dev.id)) return sock.close(4401, 'revoked')
         if (m.t === 'ping') return tell(sock, { t: 'pong' })
         if (m.t === 'open') {
           try {
@@ -616,6 +684,7 @@ export function createPhoneTools(d: PhoneToolsDeps) {
       })
       sock.on('close', () => {
         clearTimeout(authWait)
+        socketDevice.delete(sock)
         if (sh) {
           sh.socks.delete(sock)
           watchGrace(sh)
@@ -636,6 +705,10 @@ export function createPhoneTools(d: PhoneToolsDeps) {
     preview,
     previewUpgrade,
     shellUpgrade,
+    /** a phone was revoked or signed out: its shell sockets close (the shells keep their grace) */
+    revoked(deviceId: string): void {
+      for (const [s, dev] of socketDevice) if (dev === deviceId) s.close(4401, 'revoked')
+    },
     /** shells running: a machine never sleeps under one */
     shells: (): number => [...shells.values()].filter((s) => !s.ended).length,
     close(): void {

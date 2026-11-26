@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
 import type { PhoneChanges, PhoneDir, PhoneFile, PhonePorts, PhoneShellServerMsg } from '../../../shared/remote'
-import { isBinary, listeningPorts, parseProcNet, PREVIEW_CSP } from '../phoneTools'
+import { isBinary, listeningPorts, parseProcNet, PREVIEW_CSP, SHELL_KEEP_CHARS } from '../phoneTools'
 import { fakeClaudeChats, type FakeClaude } from './fakeClaude'
 import { startHarness, type Harness } from './harness'
 
@@ -267,5 +267,89 @@ describe("a cloud chat's folder on the phone (docs/CLOUD-PHONE.md)", () => {
     await until(() => c.got.some((m) => m.t === 'ready'), 'ready, third')
     expect(c.text()).not.toContain('hi-2')
     c.ws.close()
+  })
+
+  it('reads the chat folder once a minute, not on every tap', async () => {
+    const s = await setup()
+    let calls = 0
+    const orig = s.chats.workspace!.bind(s.chats)
+    s.chats.workspace = (id, keys) => (calls++, orig(id, keys))
+    for (let i = 0; i < 4; i++) expect((await s.h.call('GET', `/api/c/cloud/sessions/${s.id}/files`, { token: s.phone })).status).toBe(200)
+    await s.h.call('GET', `/api/c/cloud/sessions/${s.id}/changes`, { token: s.phone })
+    expect(calls).toBe(1)
+  })
+
+  it('lets go of a request whose tab went away, streams without a timeout, and tries ::1 when 127.0.0.1 refuses', async () => {
+    const s = await setup()
+    let upstreamClosed = false
+    const dev = createServer((req, res) => {
+      if (req.url === '/hang') return void req.on('close', () => (upstreamClosed = true))
+      if (req.url === '/events') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        return void res.write('data: one\n\n')
+      }
+      res.end('ok')
+    })
+    servers.push(dev)
+    await new Promise<void>((r) => dev.listen(0, '127.0.0.1', () => r()))
+    const port = (dev.address() as { port: number }).port
+    const link = (await s.h.call('POST', `/api/c/cloud/sessions/${s.id}/preview`, { token: s.phone, body: { port } })).json as { url: string }
+    const ac = new AbortController()
+    const hanging = fetch(`${link.url}hang`, { signal: ac.signal }).catch(() => null)
+    await new Promise((r) => setTimeout(r, 100))
+    ac.abort()
+    await hanging
+    await until(() => upstreamClosed, 'the request to the server to end')
+    const ev = await fetch(`${link.url}events`)
+    const reader = ev.body!.getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('data: one')
+    await reader.cancel()
+
+    // a server on IPv6 localhost only
+    const six = createServer((_req, res) => res.end('six'))
+    servers.push(six)
+    const ok6 = await new Promise<boolean>((r) => { six.once('error', () => r(false)); six.listen(0, '::1', () => r(true)) })
+    if (ok6) {
+      const p6 = (six.address() as { port: number }).port
+      const l6 = (await s.h.call('POST', `/api/c/cloud/sessions/${s.id}/preview`, { token: s.phone, body: { port: p6 } })).json as { url: string }
+      expect(await (await fetch(l6.url)).text()).toBe('six')
+    }
+  })
+
+  it('keeps the shell bounded, ends it when it exits, and closes it for a phone that signs out', async () => {
+    const s = await setup()
+    const wsUrl = `${s.h.url.replace('http', 'ws')}/api/shell`
+    const open = async () => {
+      const ws = new WebSocket(wsUrl)
+      const got: PhoneShellServerMsg[] = []
+      let closed: number | null = null
+      ws.on('message', (m) => got.push(JSON.parse(String(m)) as PhoneShellServerMsg))
+      ws.on('close', (c) => (closed = c))
+      await new Promise<void>((ok, no) => { ws.once('open', () => ok()); ws.once('error', no) })
+      ws.send(JSON.stringify({ t: 'auth', token: s.phone }))
+      await until(() => got.some((m) => m.t === 'hello'), 'hello')
+      ws.send(JSON.stringify({ t: 'open', sessionId: s.id }))
+      await until(() => got.some((m) => m.t === 'ready'), 'ready')
+      return { ws, got, closed: () => closed }
+    }
+    // output with no newline at all: the scrollback still stays within its cap
+    const a = await open()
+    a.ws.send(JSON.stringify({ t: 'line', text: `head -c ${SHELL_KEEP_CHARS + 100000} /dev/zero | tr '\\0' a; printf done-it` }))
+    await until(() => a.got.some((m) => m.t === 'out' && m.text.includes('done-it')), 'the long output')
+    a.ws.close()
+    const b = await open()
+    const ready = b.got.find((m) => m.t === 'ready') as Extract<PhoneShellServerMsg, { t: 'ready' }>
+    expect(ready.text.length).toBeLessThanOrEqual(SHELL_KEEP_CHARS)
+    expect(ready.text).toContain('done-it')
+    // the shell exits while a process of its own session still holds its output: it is over all the same
+    b.ws.send(JSON.stringify({ t: 'line', text: "perl -MPOSIX -e 'POSIX::setsid(); sleep 20' & exit" }))
+    await until(() => b.got.some((m) => m.t === 'exit'), 'the exit')
+    // a new one starts at once
+    const c = await open()
+    expect((c.got.find((m) => m.t === 'ready') as { text: string }).text).not.toContain('done-it')
+    // the phone signs out: its shell socket closes, and nothing more runs on its say
+    await s.h.call('POST', '/api/sign-out', { token: s.phone })
+    await until(() => c.closed() !== null, 'the socket to close')
+    expect(c.closed()).toBe(4401)
   })
 })

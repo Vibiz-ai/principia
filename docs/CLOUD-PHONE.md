@@ -49,23 +49,30 @@ phone ◀──wss /api/live── numbered chat ops, "changed" pings (first mes
 
 Only for chats this cloud owns, only with a paired **phone's** token (a Mac's device token gets 403), and only inside
 that chat's folder (`<workspace>/chat_<id>`, the clone inside it). `runtime.chats.workspace(id)` (ChatProcs) gives the
-folder, the clone, the agent user and the chat's environment: its HOME and CLI homes, git's askpass, the workspace
-keys, never Claude's sign-in.
+folder, the clone, the agent user and the chat's environment: its HOME and CLI homes, git's askpass (the one the
+chat's own start wrote), the workspace keys. Claude's token is not put in that environment, but the shell and git run
+as the same agent user in the same HOME, so they can read whatever the chat can (Claude's sign-in in
+`~/.claude` included): the phone's owner is the chat's owner. It is read only (nothing is created, written or chowned
+for a request) and cached for a minute per chat.
 
 - **Files** (`GET …/sessions/:id/files?path=`, `…/file?path=`): a folder at a time. A path is resolved, its real path
   must be inside the folder, and on Linux the opened descriptor is checked again through `/proc/self/fd` (a link
   swapped in between leads nowhere). A link out of the folder shows as "outside" and does not open. Files over 2 MB
-  and binary files are refused; the first 256 KB of a text file shows.
+  and binary files are refused; the first 256 KB of a text file shows. The control plane reads as root, so a file with
+  more than one hard link that the agent user does not own is refused (a link to a file from outside the folder).
 - **Changes** (`GET …/changes`): git as the agent user, 10 s and 1 MB per command, `core.fsmonitor` off, no pager or
-  external diff. Status, the working tree against HEAD, and the branch's commits and diff against origin's default
+  external diff, ref names checked and passed after `--end-of-options`. Status, the working tree against HEAD, and the branch's commits and diff against origin's default
   branch (else its upstream), plus how many commits are not pushed.
 - **Terminal** (WebSocket `/api/shell`, `{ t: 'auth', token }` first, then `{ t: 'open', sessionId }`): **line mode**.
   node-pty is a dependency of the Mac app, but not of the cloud build (not external in vite.cloud.config.ts, not
   rebuilt in cloud/Dockerfile), so v1 is `bash --noprofile --norc` on pipes, as the agent user, in the clone, with
   the chat's environment. Each line runs as it is sent; Ctrl-C reaches the command in front (bash traps INT, its
   children get it). No prompt, no full-screen programs (vim, top), ANSI stripped, output redacted like logs. One shell
-  per chat, 200 K characters of scrollback replayed to a phone that comes back; nobody connected for 5 minutes: it is
-  killed (with whatever it started in the foreground or background). A running shell counts as running in
+  per chat, 200 K characters of scrollback replayed to a phone that comes back (cut at a fixed length when the output
+  has no newlines); a phone that reads slower than the shell writes (over 1 MB queued) is dropped and reconnects.
+  Nobody connected for 5 minutes: it is killed (with its process group). When bash exits the shell is over, even if
+  something it started in a new session (`setsid … &`) still holds its output. Every message re-checks the phone, and
+  signing out or revoking it closes its shell sockets. A running shell counts as running in
   activity.json, so a managed machine never sleeps under it.
 - **Preview** (`POST …/preview { port }` -> `<cloud>/preview/<chatId>/<port>/<token>/`): a reverse proxy (HTTP and
   WebSocket upgrades, for live reload) to `127.0.0.1:<port>` on this machine. Ports 1024-65535, never the control
@@ -75,7 +82,9 @@ keys, never Claude's sign-in.
   it) stops its links at once; a restart of the control plane voids them all (the key is per process).
   Caddy on a managed machine sends every path of the cloud's origin to the control plane (`reverse_proxy
   principia:8787`, src/main/cloud/machines/bootstrap.ts) and the chats run in the same container, so the path reaches
-  it and 127.0.0.1 is the chat's own.
+  it and 127.0.0.1 is the chat's own (a GET or HEAD tries `::1` when 127.0.0.1 refuses). A tab that goes away ends
+  its request to the server; an answer waits up to 120 s to start, and a stream (server-sent events, chunked) is not
+  timed once it has.
 
   **The page is sandboxed.** It is served on the cloud's own origin, where the phone keeps its device token
   (localStorage). So every preview response carries `Content-Security-Policy: sandbox allow-scripts allow-forms

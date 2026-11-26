@@ -143,11 +143,11 @@ export class ProcessSandbox {
     return join(this.runtimeDir, 'runs', assertSafeId('run', runId))
   }
 
-  /** Creates the run's folders. Idempotent. */
-  prepare(runId: string): RunSandbox {
+  /** The run's folders, as paths only (nothing is created or changed). */
+  paths(runId: string): RunSandbox {
     const root = this.runDir(runId)
     const home = join(root, 'home')
-    const box: RunSandbox = {
+    return {
       runId,
       root,
       home,
@@ -158,6 +158,12 @@ export class ProcessSandbox {
       geminiDir: join(home, '.gemini'),
       tmp: join(home, 'tmp')
     }
+  }
+
+  /** Creates the run's folders. Idempotent. */
+  prepare(runId: string): RunSandbox {
+    const box = this.paths(runId)
+    const { root, home } = box
     mkdirSync(root, { recursive: true, mode: 0o700 })
     // with an agent user the run folder is traverse-only: the agent reaches its home, never the logs beside it
     if (this.agentUser) chmodSync(root, 0o711)
