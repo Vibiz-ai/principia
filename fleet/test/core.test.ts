@@ -224,6 +224,42 @@ describe('sleep and wake', () => {
   })
 })
 
+describe('the phone wakes the machine (docs/CLOUD-PHONE.md)', () => {
+  it('gets a wake-only token from the Mac, wakes a sleeping machine with it, and learns nothing else', async () => {
+    const w = world()
+    const s = await upAndRunning(w)
+    const t = await s.as('POST', '/v1/phone-wake')
+    expect(t.status).toBe(201)
+    const { url, token } = t.body as { url: string; token: string }
+    expect(url).toMatch(/\/v1\/phone\/wake$/)
+    expect(token).toMatch(/^pfw_\d+\./)
+    expect(JSON.stringify([...w.store.users.values()])).not.toContain(token)
+    const phone = (method: string, tok = token) => api(w.ports)({ method, path: '/v1/phone/wake', headers: { authorization: `Bearer ${tok}` }, body: null })
+    expect((await phone('GET')).body).toEqual({ state: 'running', up: true })
+    // asleep: the phone wakes it
+    await s.as('POST', '/v1/machine/wake')
+    w.advance(25)
+    await beat(w, quiet(w, { lastActivityAt: new Date(w.ports.now().getTime() - 25 * 60_000).toISOString() }))
+    await reconcile(w.ports)
+    w.compute.settle()
+    await reconcile(w.ports)
+    expect((await phone('GET')).body).toEqual({ state: 'sleeping', up: false })
+    expect(await phone('POST')).toMatchObject({ status: 202, body: { state: 'starting', up: false } })
+    w.compute.settle()
+    await beat(w, quiet(w))
+    expect((await phone('GET')).body).toEqual({ state: 'running', up: true })
+    // it can do nothing else (not the Mac's routes); a second phone gets its own and the first keeps working, also
+    // after the Mac signs in again
+    expect((await api(w.ports)({ method: 'GET', path: '/v1/machine', headers: { authorization: `Bearer ${token}` }, body: null })).status).toBe(401)
+    const second = ((await s.as('POST', '/v1/phone-wake')).body as { token: string }).token
+    expect((await phone('GET')).status).toBe(200)
+    expect((await phone('GET', second)).status).toBe(200)
+    await signedIn(w)
+    expect((await phone('GET')).status).toBe(200)
+    expect((await phone('GET', 'pfw_1.' + 'x'.repeat(40))).status).toBe(401)
+  })
+})
+
 describe('money', () => {
   it('counts awake hours per month, stops at the limit and refuses a wake until next month', async () => {
     const w = world({ maxHoursPerMonth: 1 })

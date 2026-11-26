@@ -665,6 +665,8 @@ export const CLOUD_ROUTES = {
   pairComplete: 'POST /v1/pair/complete',
   me: 'GET /v1/me',
   loginLink: 'POST /v1/login-links',
+  /** docs/CLOUD-PHONE.md: a one-time link that pairs a phone with this cloud (the phone app is served at `/`) */
+  phoneLink: 'POST /v1/phone-link',
   consoleLogin: 'GET /console/login',
   logout: 'POST /v1/logout',
   devices: 'GET /v1/devices',

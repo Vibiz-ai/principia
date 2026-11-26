@@ -57,6 +57,8 @@ export function attachChatSockets(server: Server, o: { ctx: Ctx; onInput(): void
     } catch {
       return refuse(socket, '400 Bad Request')
     }
+    // the phone's live socket is phoneApi.ts's
+    if (url.pathname === '/api/live') return
     const m = ATTACH.exec(url.pathname)
     if (!m) return refuse(socket, '404 Not Found')
     const who = authenticate(o.ctx, req)

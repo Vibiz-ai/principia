@@ -123,6 +123,12 @@ const MIGRATIONS: string[] = [
   // the same name wins. The workspace GitHub account lives in `credentials` (adapter 'github', company_id NULL).
   `CREATE TABLE workspace_secrets (
     name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used_at TEXT
+  );`,
+  // 4: docs/CLOUD-PHONE.md: chats the cloud owns (started from the phone); the conversation itself is Claude's own
+  // transcript in the chat's home
+  `CREATE TABLE phone_chats (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, repo TEXT, branch TEXT, mode TEXT NOT NULL, created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL, last_line TEXT, started INTEGER NOT NULL DEFAULT 0
   );`
 ]
 

@@ -275,6 +275,10 @@ function managed(o: { allowed?: boolean; gh?: string | null; startPolls?: number
     async remove(key) {
       calls.push(`remove ${key === KEY}`)
       fm = null
+    },
+    async phoneWake(key) {
+      calls.push(`phoneWake ${key === KEY}`)
+      return { url: 'https://fleet.example/v1/phone/wake', token: 'pfw_1.' + 'w'.repeat(40) }
     }
   }
   const base = t.deps.fetch!

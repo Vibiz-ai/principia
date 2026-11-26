@@ -12,6 +12,36 @@ export interface PairedMac {
   token: string
   device: { id: string; name: string }
   pairedAt: string
+  /** docs/CLOUD-PHONE.md: a managed cloud sleeps when idle; this wakes it (the fleet's address and a wake-only token) */
+  wake?: CloudWake | null
+}
+export interface CloudWake {
+  url: string
+  token: string
+}
+const WAKE_TOKEN_RE = /^pfw_[0-9]{1,20}\.[A-Za-z0-9_-]{20,200}$/
+function wakeOf(url: unknown, token: unknown): CloudWake | null {
+  const origin = typeof url === 'string' ? siteOrigin(url) : null
+  if (!origin || typeof token !== 'string' || !WAKE_TOKEN_RE.test(token)) return null
+  const u = new URL(url as string)
+  return u.pathname === '/v1/phone/wake' ? { url: `${origin}/v1/phone/wake`, token } : null
+}
+/** `#mac=…&code=…&wake=<fleet>/v1/phone/wake&wt=pfw_…` -> the wake part, or null */
+export function parseWakeHash(hash: string): CloudWake | null {
+  const q = new URLSearchParams(hash.replace(/^#\/?/, ''))
+  return wakeOf(q.get('wake'), q.get('wt'))
+}
+export type WakeState = { state: string; up: boolean } | null
+/** Asks the fleet to start the machine (POST) or how it is (GET); null when the fleet can't be reached or says no. */
+export async function cloudWake(f: typeof fetch, w: CloudWake, start: boolean): Promise<WakeState> {
+  try {
+    const res = await f(w.url, { method: start ? 'POST' : 'GET', credentials: 'omit', mode: 'cors', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { accept: 'application/json', authorization: `Bearer ${w.token}` } })
+    const b = (await res.json().catch(() => null)) as { state?: unknown; up?: unknown } | null
+    if (!res.ok || !b || typeof b.state !== 'string') return null
+    return { state: b.state, up: b.up === true }
+  } catch {
+    return null
+  }
 }
 
 export interface StorageLike {
@@ -29,7 +59,8 @@ export function loadMac(s: StorageLike | null): PairedMac | null {
     const m = JSON.parse(raw) as Partial<PairedMac>
     const mac = siteOrigin(m.mac)
     if (!mac || typeof m.token !== 'string' || !/^[A-Za-z0-9_-]{16,200}$/.test(m.token)) return null
-    return { mac, token: m.token, device: { id: String(m.device?.id ?? ''), name: String(m.device?.name ?? 'Phone') }, pairedAt: String(m.pairedAt ?? '') }
+    const wake = m.wake ? wakeOf(m.wake.url, m.wake.token) : null
+    return { mac, token: m.token, device: { id: String(m.device?.id ?? ''), name: String(m.device?.name ?? 'Phone') }, pairedAt: String(m.pairedAt ?? ''), ...(wake ? { wake } : {}) }
   } catch {
     return null
   }

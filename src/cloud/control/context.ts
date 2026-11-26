@@ -18,6 +18,10 @@ export interface ControlConfig {
   adminTokenSha256?: string | null
   workspaceName: string
   consoleDir: string
+  /** docs/CLOUD-PHONE.md: the phone app's build (served at `/`); default: `phone` next to the console */
+  phoneDir?: string
+  /** docs/CLOUD-PHONE.md: a managed machine's fleet (the phone page may call its wake route) */
+  fleetUrl?: string | null
   dataDir: string
   workspaceDir: string
   logRetentionDays: number

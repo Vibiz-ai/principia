@@ -26,6 +26,8 @@ export interface FleetClient {
   create(key: string, b: { adminTokenSha256: string; workspaceName: string }): Promise<FleetMachine>
   wake(key: string): Promise<FleetMachine>
   remove(key: string): Promise<void>
+  /** docs/CLOUD-PHONE.md: a token the phone uses to wake this machine (and nothing else) */
+  phoneWake(key: string): Promise<{ url: string; token: string }>
 }
 
 const CODE: Record<number, HiveErrorCode> = { 400: 'bad_request', 401: 'forbidden', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 429: 'conflict', 503: 'conflict' }
@@ -69,6 +71,7 @@ export function fleetClient(url: string, f: typeof fetch = fetch): FleetClient {
     machine: (key) => call('GET', '/v1/machine', key),
     create: (key, b) => call('POST', '/v1/machine', key, b),
     wake: (key) => call('POST', '/v1/machine/wake', key, {}),
-    remove: async (key) => void (await call('DELETE', '/v1/machine', key))
+    remove: async (key) => void (await call('DELETE', '/v1/machine', key)),
+    phoneWake: (key) => call('POST', '/v1/phone-wake', key, {})
   }
 }

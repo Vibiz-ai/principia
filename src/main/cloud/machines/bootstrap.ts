@@ -295,7 +295,8 @@ PRINCIPIA_WORKSPACE=/data/workspace
 HOST=0.0.0.0
 PORT=8787
 ENV
-chmod 600 principia.env
+${i.fleet ? `echo 'PRINCIPIA_FLEET_URL=${i.fleet.url}' >> principia.env
+` : ''}chmod 600 principia.env
 cat > Caddyfile <<CADDY
 $DOMAIN {
   reverse_proxy principia:8787

@@ -431,6 +431,9 @@ export interface PhoneChats {
   team: { id: Id; who: PhoneWho }[]
   /** docs/CLOUD-CHATS.md: a New chat can run in the person's cloud (POST newChat with cloud: true) */
   cloud?: boolean
+  /** docs/CLOUD-PHONE.md: answered by the cloud itself; a New chat starts in one of these GitHub repositories (owner/name) */
+  repos?: string[]
+  host?: 'cloud'
 }
 
 export interface PhoneSession {
