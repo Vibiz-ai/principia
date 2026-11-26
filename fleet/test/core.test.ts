@@ -248,10 +248,14 @@ describe('the phone wakes the machine (docs/CLOUD-PHONE.md)', () => {
     w.compute.settle()
     await beat(w, quiet(w))
     expect((await phone('GET')).body).toEqual({ state: 'running', up: true })
-    // it can do nothing else: not the Mac's routes, and a new token replaces it
+    // it can do nothing else (not the Mac's routes); a second phone gets its own and the first keeps working, also
+    // after the Mac signs in again
     expect((await api(w.ports)({ method: 'GET', path: '/v1/machine', headers: { authorization: `Bearer ${token}` }, body: null })).status).toBe(401)
-    await s.as('POST', '/v1/phone-wake')
-    expect((await phone('GET')).status).toBe(401)
+    const second = ((await s.as('POST', '/v1/phone-wake')).body as { token: string }).token
+    expect((await phone('GET')).status).toBe(200)
+    expect((await phone('GET', second)).status).toBe(200)
+    await signedIn(w)
+    expect((await phone('GET')).status).toBe(200)
     expect((await phone('GET', 'pfw_1.' + 'x'.repeat(40))).status).toBe(401)
   })
 })

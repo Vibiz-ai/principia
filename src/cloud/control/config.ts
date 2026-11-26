@@ -163,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { consoleDir: strin
       adminTokenSha256,
       workspaceName: (env.PRINCIPIA_WORKSPACE_NAME || 'Principia Cloud').slice(0, 120),
       consoleDir: resolve(env.PRINCIPIA_CONSOLE_DIR || defaults.consoleDir),
+      fleetUrl: /^https:\/\/[A-Za-z0-9.-]+\/?$/.test(env.PRINCIPIA_FLEET_URL ?? '') ? env.PRINCIPIA_FLEET_URL!.replace(/\/+$/, '') : null,
       dataDir,
       workspaceDir: resolve(env.PRINCIPIA_WORKSPACE || './principia-workspace'),
       logRetentionDays: retention,

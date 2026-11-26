@@ -171,7 +171,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
       const code = (e as { code?: string }).code
       const msg = e instanceof Error ? e.message : String(e)
       if (status === 404 || code === 'not_found') throw new ApiError('not_found', msg)
-      if (status === 400) throw new ApiError('bad_request', msg)
+      if (status === 400 || code === 'bad_request' || code === 'validation') throw new ApiError('bad_request', msg)
       if (status === 409 || code === 'conflict') throw new ApiError('conflict', msg)
       throw e
     }
@@ -198,6 +198,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
         return { device: dev, csrf: '', host: 'cloud', companies: [company()] } satisfies PhoneMe
       case 'signOut':
         ctx.db.run('UPDATE devices SET revoked_at = ? WHERE id = ?', ctx.now().toISOString(), dev.id)
+        revokedSockets(dev.id)
         return { ok: true }
       case 'now':
         return nowView()
@@ -283,9 +284,12 @@ export function createPhoneApi(d: PhoneApiDeps) {
       res.end()
       return true
     }
-    const send = (status: number, v: unknown): void => {
+    // every answer is redacted like the /v1 routes' (a secret Claude saw never reaches the phone), except the
+    // phone's own new token (pair, resume)
+    const send = (status: number, v: unknown, raw = false): void => {
       res.writeHead(status, { ...cors, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
-      res.end(JSON.stringify(v ?? null))
+      const text = JSON.stringify(v ?? null)
+      res.end(raw ? text : ctx.redact(text))
     }
     const m = matchRemoteRoute(req.method ?? 'GET', url.pathname)
     if (!m) {
@@ -301,10 +305,11 @@ export function createPhoneApi(d: PhoneApiDeps) {
         return true
       }
       let b: Record<string, unknown> = {}
-      if (req.method === 'POST') b = await readBody(req)
+      // pair and hello are open: a small body only
+      if (req.method === 'POST') b = await readBody(req, open ? 16 * 1024 : MAX_BODY)
       const query = Object.fromEntries(url.searchParams)
       const out = await call(m.name, { ...m.params, ...query }, b, dev, token)
-      send(200, out)
+      send(200, out, m.name === 'pair' || m.name === 'resume')
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 500
       if (status === 500) ctx.log.warn('phone api: failed', { route: m.name, error: ctx.redact((e as Error).message) })
@@ -355,6 +360,8 @@ export function createPhoneApi(d: PhoneApiDeps) {
           return out(s, { t: 'hello' })
         }
         if (msg.t === 'ping') return out(s, { t: 'pong' })
+        // revoked since (or signed out elsewhere): this socket ends
+        if (!ctx.db.get('SELECT id FROM devices WHERE id = ? AND revoked_at IS NULL', s.device)) return ws.close(4401, 'revoked')
         if (msg.t === 'sub') {
           s.sessionId = msg.sessionId && chats.get(msg.sessionId) ? msg.sessionId : null
           return out(s, { t: 'subbed', sessionId: s.sessionId, seq: s.sessionId ? chats.snapshot(s.sessionId).seq : 0 })
@@ -367,6 +374,10 @@ export function createPhoneApi(d: PhoneApiDeps) {
       })
     })
     return true
+  }
+
+  function revokedSockets(deviceId: string): void {
+    for (const s of subs) if (s.device === deviceId) { out(s, { t: 'bye', reason: 'revoked' }); s.ws.close(4401, 'revoked') }
   }
 
   return {
@@ -388,9 +399,7 @@ export function createPhoneApi(d: PhoneApiDeps) {
       }
     },
     /** a revoked device's sockets close */
-    revoked(deviceId: string): void {
-      for (const s of subs) if (s.device === deviceId) { out(s, { t: 'bye', reason: 'revoked' }); s.ws.close(4401, 'revoked') }
-    },
+    revoked: (deviceId: string): void => revokedSockets(deviceId),
     close(): void {
       for (const s of subs) s.ws.terminate()
       wss.close()
@@ -399,12 +408,12 @@ export function createPhoneApi(d: PhoneApiDeps) {
 }
 export type PhoneApi = ReturnType<typeof createPhoneApi>
 
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readBody(req: IncomingMessage, max: number): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let n = 0
   for await (const c of req) {
     n += (c as Buffer).length
-    if (n > MAX_BODY) throw new ApiError('bad_request', 'That is too large to send.')
+    if (n > max) throw new ApiError('bad_request', 'That is too large to send.')
     chunks.push(c as Buffer)
   }
   if (!n) return {}

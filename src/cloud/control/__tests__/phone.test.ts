@@ -64,8 +64,22 @@ describe('the phone, straight to the cloud (docs/CLOUD-PHONE.md)', () => {
     expect(me).toMatchObject({ host: 'cloud', device: { name: 'iPhone' }, companies: [{ id: 'cloud', name: 'Your cloud' }] })
     // the phone is a device like the Mac: it shows on the cloud's device list
     expect((await s.h.call('GET', '/v1/devices', { token: s.mac })).json.map((d: { platform: string }) => d.platform)).toContain('phone')
-    // the console's routes stay the Mac's
+    // the console's routes stay the Mac's: a phone's token reaches /api only
     expect((await s.h.call('POST', '/v1/phone-link', { token: null })).status).toBe(401)
+    expect((await s.h.call('POST', '/v1/phone-link', { token: s.phone })).status).toBe(403)
+    expect((await s.h.call('GET', '/v1/devices', { token: s.phone })).status).toBe(403)
+    // revoked on the Mac: its live socket ends, its token stops working
+    const ws = new WebSocket(`${s.h.url.replace('http', 'ws')}/api/live`)
+    const got: PhoneServerMsg[] = []
+    ws.on('message', (m) => got.push(JSON.parse(String(m)) as PhoneServerMsg))
+    const closed = new Promise<number>((ok) => ws.once('close', (c) => ok(c)))
+    ws.once('open', () => ws.send(JSON.stringify({ t: 'auth', token: s.phone })))
+    await until(() => got.some((m) => m.t === 'hello'), 'hello')
+    const phoneId = ((await s.h.call('GET', '/v1/devices', { token: s.mac })).json as { id: string; platform: string }[]).find((d) => d.platform === 'phone' && d.id === me.device.id)!.id
+    expect((await s.h.call('DELETE', `/v1/devices/${phoneId}`, { token: s.mac })).status).toBe(200)
+    expect(await closed).toBe(4401)
+    expect(got.some((m) => m.t === 'bye')).toBe(true)
+    expect((await s.h.call('GET', '/api/me', { token: s.phone })).status).toBe(401)
   })
 
   it('starts a chat in a clone of a GitHub repository, asks before acting, and finishes the turn', async () => {

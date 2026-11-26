@@ -610,6 +610,7 @@ const actions: Actions = {
           const wake = parseWakeHash(location.hash)
           paired = { mac: p.mac!, token: out.token, device: out.device, pairedAt: new Date().toISOString(), ...(wake ? { wake } : {}) }
           saveMac(store, paired)
+          if (wake && 'serviceWorker' in navigator && location.origin === paired.mac) void navigator.serviceWorker.register('/sw.js').catch(() => undefined)
           live?.close()
           live = null
         }
@@ -1126,4 +1127,7 @@ setInterval(() => void macBack(), 20_000)
 document.addEventListener('visibilitychange', () => void macBack())
 // ticking times ("4m") stay true without a refetch
 setInterval(() => st.phase === 'in' && render({ live: true }), 30_000)
+// docs/CLOUD-PHONE.md: on a cloud's own page, keep a copy of the app so it opens while the cloud sleeps (the hosted
+// site's CSP refuses workers, so this does nothing there)
+if (HOSTED && 'serviceWorker' in navigator && paired?.wake && location.origin === paired.mac) void navigator.serviceWorker.register('/sw.js').catch(() => undefined)
 void start()

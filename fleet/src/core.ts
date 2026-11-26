@@ -188,7 +188,7 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
     const key = `pfk_${p.random(32)}`
     const now = p.now().toISOString()
     const prev = await p.store.getUser(gh.id)
-    const u: UserRec = { id: gh.id, login: gh.login, allowed: ok, keyHash: sha256(key), createdAt: prev?.createdAt ?? now, lastSeenAt: now, ...(prev?.usage ? { usage: prev.usage } : {}) }
+    const u: UserRec = { id: gh.id, login: gh.login, allowed: ok, keyHash: sha256(key), createdAt: prev?.createdAt ?? now, lastSeenAt: now, ...(prev?.usage ? { usage: prev.usage } : {}), ...(prev?.phoneWakeHashes?.length ? { phoneWakeHashes: prev.phoneWakeHashes } : {}) }
     await p.store.putUser(u, prev?.keyHash ?? null)
     p.log.info('fleet: enroll', { userId: u.id, login: u.login, allowed: ok })
     // the GitHub token is used for these two calls and never stored
@@ -317,7 +317,8 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
    */
   async function phoneWakeToken(u: UserRec): Promise<Res> {
     const token = `pfw_${u.id}.${p.random(32)}`
-    await p.store.putUser({ ...u, phoneWakeHash: sha256(token) }, u.keyHash)
+    // one per phone link: phones paired before keep theirs (the newest 10 are kept)
+    await p.store.putUser({ ...u, phoneWakeHashes: [...(u.phoneWakeHashes ?? []), sha256(token)].slice(-10) }, u.keyHash)
     return json(201, { url: `${p.config.publicUrl}/v1/phone/wake`, token })
   }
 
@@ -325,7 +326,7 @@ export function api(p: Ports): (r: Req) => Promise<Res> {
     const t = bearer(r)
     const m = /^pfw_([0-9]{1,20})\.[A-Za-z0-9_-]{20,}$/.exec(t)
     const u = m ? await p.store.getUser(m[1]!) : null
-    if (!u || !u.allowed || !u.phoneWakeHash || u.phoneWakeHash !== sha256(t)) throw new FleetError(401, 'unauthorized', 'Pair this phone again from your Mac.')
+    if (!u || !u.allowed || !(u.phoneWakeHashes ?? []).includes(sha256(t))) throw new FleetError(401, 'unauthorized', 'Pair this phone again from your Mac.')
     return u
   }
 

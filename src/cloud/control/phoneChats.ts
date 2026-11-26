@@ -139,6 +139,12 @@ export class RuntimeChild extends EventEmitter implements ChildLike {
         state: (i) => this.onState(i)
       })
       if (!this.detach) return this.finish(1, null, 'The chat could not start.')
+      // it ended while attaching (a failed start): don't stay subscribed to it
+      if (this.exited) {
+        this.detach()
+        this.detach = null
+        return
+      }
       if (this.killed) return void this.chats.signal(this.spec.id, this.killed)
       for (const d of this.queue.splice(0)) this.chats.write(this.spec.id, d)
       if (this.ending) this.chats.end(this.spec.id)

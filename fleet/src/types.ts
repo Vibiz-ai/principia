@@ -27,8 +27,8 @@ export interface UserRec {
   lastSeenAt: string
   /** awake time of machines this person deleted this month: a new machine starts from it, so delete + make doesn't reset the cap */
   usage?: { month: string; awakeSeconds: number }
-  /** docs/CLOUD-PHONE.md: sha256 of the phone's wake token (it can only wake this person's machine and read its state) */
-  phoneWakeHash?: string | null
+  /** docs/CLOUD-PHONE.md: sha256 of each paired phone's wake token (it can only wake this machine and read its state), newest last */
+  phoneWakeHashes?: string[]
 }
 
 export interface MachineRec {

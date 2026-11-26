@@ -55,7 +55,7 @@ export interface ControlAppOptions {
 }
 
 type Policy = 'open' | 'device' | 'any' | 'pair' | 'session'
-const SESSION_OK: CloudRouteName[] = ['phoneLink', 'me', 'logout', 'workspace', 'workspacePatch', 'companies', 'companyPatch', 'passportProposals', 'passportDecide', 'runs', 'run', 'runLog', 'runCancel', 'asks', 'askAnswer', 'events', 'usage', 'summary']
+const SESSION_OK: CloudRouteName[] = ['me', 'logout', 'workspace', 'workspacePatch', 'companies', 'companyPatch', 'passportProposals', 'passportDecide', 'runs', 'run', 'runLog', 'runCancel', 'asks', 'askAnswer', 'events', 'usage', 'summary']
 export function routePolicy(name: CloudRouteName): Policy {
   if (name === 'health' || name === 'pairComplete' || name === 'consoleLogin' || name === 'connectorCallback' || name === 'hookIngress' || name === 'hookIngressSecret') return 'open'
   if (name === 'pairStart') return 'pair'
@@ -72,10 +72,13 @@ const ROUTES: Compiled[] = (Object.keys(CLOUD_ROUTES) as CloudRouteName[]).map(n
 })
 
 /** the phone app on this cloud: its own files and this origin (the API, the live socket: Safari wants wss named) only */
-export function phoneCsp(publicUrl: string): string {
+export function phoneCsp(publicUrl: string, fleetUrl?: string | null): string {
   let ws = ''
   try { const u = new URL(publicUrl); ws = ` ${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}` } catch { /* 'self' only */ }
-  return `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; connect-src 'self'${ws}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; worker-src 'none'`
+  // a sleeping managed cloud is woken through its fleet (the page itself comes from the service worker's copy)
+  let fleet = ''
+  try { if (fleetUrl) fleet = ` ${new URL(fleetUrl).origin}` } catch { /* none */ }
+  return `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; connect-src 'self'${ws}${fleet}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; worker-src 'self'`
 }
 export const CONSOLE_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' }
@@ -227,7 +230,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
 
   /** the phone app's own files: its page, its build and its art (everything else is the API or the console) */
   function isPhonePath(path: string): boolean {
-    return path === '/' || path === '/index.html' || /^\/(assets|art|fonts)\/[A-Za-z0-9._/-]+$/.test(path) || /^\/(manifest\.webmanifest|icon[A-Za-z0-9.-]*\.(png|svg))$/.test(path)
+    return path === '/' || path === '/index.html' || path === '/sw.js' || /^\/(assets|art|fonts)\/[A-Za-z0-9._/-]+$/.test(path) || /^\/(manifest\.webmanifest|icon[A-Za-z0-9.-]*\.(png|svg))$/.test(path)
   }
   /** false when the phone app is not built here (then `/` goes to the console, as before) */
   function servePhone(res: ServerResponse, path: string, head: boolean): boolean {
@@ -239,7 +242,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
     try { file = realpathSync(resolve(root, rel)); if (!statSync(file).isFile() || !file.startsWith(root + sep)) return false } catch { return false }
     const ext = extname(file).toLowerCase()
     const body = readFileSync(file)
-    res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-cache' : path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=3600', 'content-security-policy': phoneCsp(config.publicUrl), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'cross-origin-opener-policy': 'same-origin' })
+    res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': ext === '.html' || path === '/sw.js' ? 'no-cache' : path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=3600', 'content-security-policy': phoneCsp(config.publicUrl, config.fleetUrl), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'cross-origin-opener-policy': 'same-origin' })
     res.end(head ? undefined : body)
     return true
   }
@@ -290,6 +293,8 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       principal = authenticate(ctx, req)
       if (!principal) throw new ApiError('unauthorized', 'Sign in again: this device or session is not valid.')
       if (policy === 'device' && principal.kind !== 'device') throw new ApiError('forbidden', 'Do this from Principia on your Mac.')
+      // docs/CLOUD-PHONE.md: a phone's token reaches the Phone API (/api) only, never the Mac's routes
+      if (principal.kind === 'device' && principal.device.platform === 'phone') throw new ApiError('forbidden', 'Do this from Principia on your Mac.')
       if (policy === 'session' && principal.kind !== 'session') throw new ApiError('bad_request', 'Only console sessions sign out.')
       if (method !== 'GET') checkCsrf(principal, req)
       actor = actorOf(principal, actor)
@@ -337,6 +342,7 @@ export function createControlApp(o: ControlAppOptions): ControlApp {
       case 'devices': return ok(listDevices(ctx, principal!.kind === 'device' ? principal!.device.id : null))
       case 'deviceRevoke': {
         if (!revokeDevice(ctx, params.id!)) throw notFound('No such device.')
+        phoneApi.revoked(params.id!)
         ctx.audit(actor, 'device.revoke', null, params.id!, {})
         return ok({ ok: true })
       }
