@@ -334,7 +334,8 @@ describe("a cloud chat's folder on the phone (docs/CLOUD-PHONE.md)", () => {
     }
     // output with no newline at all: the scrollback still stays within its cap
     const a = await open()
-    a.ws.send(JSON.stringify({ t: 'line', text: `head -c ${SHELL_KEEP_CHARS + 100000} /dev/zero | tr '\\0' a; printf done-it` }))
+    a.ws.send(JSON.stringify({ t: 'line', text: `head -c ${SHELL_KEEP_CHARS + 100000} /dev/zero | tr '\\0' a; printf 'done-%s' it` }))
+    // the typed line is echoed as `$ <line>`; it must not itself contain done-it, or the wait ends before the output does
     await until(() => a.got.some((m) => m.t === 'out' && m.text.includes('done-it')), 'the long output')
     a.ws.close()
     const b = await open()
