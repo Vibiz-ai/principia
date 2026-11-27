@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.12](https://github.com/Vibiz-ai/principia/compare/v0.4.11...v0.4.12) (2026-11-27)
+
+
+### Bug Fixes
+
+* **cloud:** copy phone-site into the image build so the phone app builds ([#182](https://github.com/Vibiz-ai/principia/issues/182)) ([4673402](https://github.com/Vibiz-ai/principia/commit/46734026a1bd1419dd0cfe4cece8fff3cf5b775a))
+
 ## [0.4.11](https://github.com/Vibiz-ai/principia/compare/v0.4.10...v0.4.11) (2026-11-27)
 
 

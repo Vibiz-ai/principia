@@ -25,9 +25,9 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: a
 
 echo "principia: prepare $(date -u +%FT%TZ)"
 # x-release-please-start-version
-IMAGE='ghcr.io/vibiz-ai/principia-cloud:0.4.11'
+IMAGE='ghcr.io/vibiz-ai/principia-cloud:0.4.12'
 SOURCE_REPO='https://github.com/Vibiz-ai/principia.git'
-SOURCE_REF='v0.4.11'
+SOURCE_REF='v0.4.12'
 # x-release-please-end
 
 # 1. keys only, and Docker
