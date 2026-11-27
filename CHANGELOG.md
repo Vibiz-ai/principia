@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.11](https://github.com/Vibiz-ai/principia/compare/v0.4.10...v0.4.11) (2026-11-27)
+
+
+### Features
+
+* **cloud:** one-line install on your own server + fixes from a real SSH install ([#179](https://github.com/Vibiz-ai/principia/issues/179)) ([0ec67df](https://github.com/Vibiz-ai/principia/commit/0ec67df8766bf69db4967c2d86d65c3d434e0f33))
+* **cloud:** use your cloud from your phone, with no Mac in between ([#177](https://github.com/Vibiz-ai/principia/issues/177)) ([9c31901](https://github.com/Vibiz-ai/principia/commit/9c3190182a0113933bea444069af9e819ed23faa))
+
+
+### Bug Fixes
+
+* no endless loading while the cloud sleeps; Passport watchers recover ([#171](https://github.com/Vibiz-ai/principia/issues/171)) ([f9d1ddc](https://github.com/Vibiz-ai/principia/commit/f9d1ddce64002d9e23d714e507d97d963ceed900))
+
 ## [0.4.10](https://github.com/Vibiz-ai/principia/compare/v0.4.9...v0.4.10) (2026-11-16)
 
 
