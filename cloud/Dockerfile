@@ -18,6 +18,8 @@ RUN npm ci --ignore-scripts && npm rebuild better-sqlite3
 COPY src ./src
 COPY cloud ./cloud
 COPY vite.*.config.ts tsconfig*.json ./
+# the phone site build reads its headers (vercel.json) and api/ from here
+COPY phone-site ./phone-site
 RUN npx vite build --config vite.cloud.config.ts \
  && npx vite build --config vite.console.config.ts \
  && PHONE_SITE_OUT_DIR=out-cloud/phone npx vite build --config vite.phone-site.config.ts \
